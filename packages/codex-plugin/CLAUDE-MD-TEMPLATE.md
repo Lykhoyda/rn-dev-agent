@@ -397,6 +397,11 @@ If `device_list` shows more than one booted device (e.g., both an iOS simulator 
 1. Call `cdp_status platform: "android"` or `platform: "ios"` to pin CDP to one target
 2. Pass `platform:` explicitly to **all** `device_*` tools thereafter
 
+While a `device_snapshot action=open` session is active, `cdp_status` is bound
+to that session's platform (and, on Android, its emulator/physical device
+class): requesting a different platform fails with `TARGET_SESSION_MISMATCH`
+instead of silently re-targeting — close the session first to switch.
+
 An explicit `platform:` on `device_screenshot` resolves the booted device
 directly and captures via raw `simctl` / `adb` (GH #60 — fixed), so
 wrong-platform captures should no longer occur. If routing still misbehaves

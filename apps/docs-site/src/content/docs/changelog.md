@@ -5,6 +5,226 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.70.7
+
+#### Patch Changes
+
+- 9486b9f: Keep Codex MCP sessions alive when another bridge owns the project-level singleton lock, and ship a discoverable feedback skill with its sanitized collector inside the Codex plugin package.
+
+### 0.70.6
+
+#### Patch Changes
+
+- af49c37: Return a consistent non-zero status when ffmpeg cannot be ensured.
+- 2bf6d4f: Discover React Navigation refs and state across every renderer ID registered with the React DevTools hook, while preserving the bounded numeric renderer probe so partial registries keep legacy coverage.
+- Updated dependencies [2bf6d4f]
+  - rn-dev-agent-core@0.65.5
+
+### 0.70.5
+
+#### Patch Changes
+
+- fddcfae: On Python 3.14 with an installed-but-crashing fb-idb, ensure-idb reports the interpreter incompatibility and recommends reinstalling fb-idb under Python 3.13, and stops retrying once the incompatible-Python verdict is reached.
+
+### 0.70.4
+
+#### Patch Changes
+
+- f66eb3f: Isolate the empty-Metro lifecycle integration tests from live default-port Hermes targets (#577): CDP discovery's default port list (8081/8082/19000/19006 + `RN_METRO_PORT`) is now resolved lazily per call, and a new `RN_CDP_DISCOVERY_PORTS` override replaces it entirely — so the integration suite owns its whole discovery surface and stays deterministic while a real React Native app is running on the host. Production discovery is unchanged when the variable is unset.
+- Updated dependencies [f66eb3f]
+  - rn-dev-agent-core@0.65.4
+
+### 0.70.3
+
+#### Patch Changes
+
+- 61f136e: Fix observe UI Route/Store/Tree panels staying empty while the device mirror shows the running app (#579): the panels now auto-read live state through a new `GET /api/state/(route|store|tree)` endpoint that resolves the CDP client at call time — so they populate on a healthy connection without the agent having run the introspection tools and recover after a reload/reconnect — plus a manual "read live" refresh button in each panel.
+- Updated dependencies [61f136e]
+  - rn-dev-agent-core@0.65.3
+
+### 0.70.2
+
+#### Patch Changes
+
+- 619c5fe: Accept a visually matched final proof screenshot when iOS video metadata ends up to two seconds before the assertion timestamp.
+- Updated dependencies [619c5fe]
+  - rn-dev-agent-core@0.65.2
+
+### 0.70.1
+
+#### Patch Changes
+
+- fdfa8bb: Make strict proof portable, TypeScript-native, and tolerant of clean recordings up to five seconds beyond the adaptive target.
+- Updated dependencies [fdfa8bb]
+  - rn-dev-agent-core@0.65.1
+
+### 0.70.0
+
+#### Minor Changes
+
+- 4e9bf7e: Add strict storyboard-gated video and screenshot proof receipts for unattended feature delivery.
+
+#### Patch Changes
+
+- Updated dependencies [4e9bf7e]
+  - rn-dev-agent-core@0.65.0
+
+### 0.69.1
+
+#### Patch Changes
+
+- 61c258c: Agents & skills consistency audit: new `capturing-proof` skill extracted from the `/proof-capture` command so proof/demo/PR-video intent triggers without the slash command (the command and rn-feature-dev Phase 8 now delegate to it); `creating-actions` gains a replay/repair troubleshooting step (Step 7) and triggers on replay-failure intent. Fixes shipped alongside: purged the last stale `agent-device` references (rn-tester, send-feedback), reconciled raw `xcrun simctl`/`adb` instructions in rn-tester/rn-debugger against their own `device_screenshot`/`collect_logs` red flags, removed manual `sleep` advice that contradicted the settle engine (#385), unified flow/action output paths (`.maestro/` for CI flows, `.rn-agent/actions/` for saved actions), restored the mandatory Step 0 artifact scan in `/build-and-test` Phase B, corrected `cdp_run_action`/recorder tool names in `/test-feature`, registered the missing `lock-e2e` command in the plugin manifest, hardened `/send-feedback` issue creation (`--body-file`, no shell interpolation of user text), and refreshed the `using-rn-dev-agent` router (79 tools / 15 commands / 9 skills, new decision-tree branches for doctor, lock-e2e, observe, check-vercel-rules, send-feedback, and capturing-proof).
+
+### 0.69.0
+
+#### Minor Changes
+
+- 9359723: Story 10 (GH #391) — text-input reliability recipes. iOS: the runner's `type` handler now waits (≤1 s, best-effort) for the keyboard before the first keystroke and types in Maestro's two-burst shape (first character, 500 ms pause, remainder), killing the dropped-first-keystrokes flake class; typing telemetry (`typingBurst`, `keyboardWaitMs`) surfaces in the response and threads into `device_fill`'s `meta.typing`. Android: the runner's `type` classifies its `ACTION_SET_TEXT` read-back (accepted / transformed / rejected), falls back to per-char keyevents at Maestro's 75 ms pacing when the set was ignored, and reports `SET_TEXT_REJECTED` when both tiers fail. Bridge: `device_fill`'s Android unsafe-char/length short-circuit to chunked `adb input text` is removed — emoji and long text now reach the runner's full-Unicode `setText` primary, with chunked adb demoted to a genuine last resort and `SET_TEXT_REJECTED` descending the ladder without wasted re-taps.
+
+#### Patch Changes
+
+- Updated dependencies [9359723]
+  - rn-dev-agent-core@0.64.0
+
+### 0.68.1
+
+#### Patch Changes
+
+- 53c3fb3: Auto-heal `KEYBOARD_OCCLUDED` tap refusals JS-first (GH #379): when the iOS keyboard guard refuses a `device_press`/`device_longpress` because the tap point is under an iPhone QWERTY keyboard with no dismiss control, the bridge now dismisses via the new injected `__RN_AGENT.dismissKeyboard()` helper (RN `Keyboard.dismiss()`, falling back to blurring the focused TextInput host instance), refreshes the snapshot (targets relayout when the keyboard lifts), and retries the tap exactly once — surfaced as `meta.keyboardGuard: "js_dismissed"` + `meta.keyboardAutoHeal`. The retried tap re-runs the native guard, so a dismissal that didn't take effect re-refuses instead of tapping through. Also ships the #370 review follow-ups: the iOS refusal now carries a structured `code: "KEYBOARD_OCCLUDED"`, both runners report the guard step's native duration (lifted to `meta.timings_ms.keyboardGuard`), and `surfaceKeyboardGuard` hardens its never-throws contract against non-object JSON envelopes.
+- Updated dependencies [53c3fb3]
+  - rn-dev-agent-core@0.63.1
+
+### 0.68.0
+
+#### Minor Changes
+
+- de8f1c1: Story 14 (#407): runner transport recovery — every /command carries a commandId; on an ambiguous post-send failure the client issues one short status probe against the runner's outcome journal before invalidating. Recovered results return with meta.transportRecovery; mutating verbs are never auto-resent, eliminating double-fired taps; read-only verbs may be resent once. Unresolvable probes fall through to the existing invalidation path unchanged. Both native runners (iOS rn-fast-runner, Android rn-android-runner) gained a bounded command-outcome journal (32 entries, 8 KB UTF-8 body cap, snapshot/screenshot recorded state-only, error outcomes journaled) and the read-only `status` verb that replays a prior command's retained outcome.
+
+#### Patch Changes
+
+- Updated dependencies [de8f1c1]
+  - rn-dev-agent-core@0.63.0
+
+### 0.67.3
+
+#### Patch Changes
+
+- dc5a87b: Harden observe-recorder screenshot ingestion (GH #429): the recorder now only reads screenshot files the capture pipeline itself just wrote (single-use trust grants registered by `device_screenshot`), instead of any absolute image path named in a tool observation — closing an arbitrary local-file read surface on the observe server. The read itself is now TOCTOU-safe: one descriptor for the size check and the read, `O_NOFOLLOW` (no symlink following), and a hard byte cap enforced on the bytes actually read.
+- Updated dependencies [dc5a87b]
+  - rn-dev-agent-core@0.62.3
+
+### 0.67.2
+
+#### Patch Changes
+
+- dba5eb7: Observe UI test confidence (#438, audit P1-A): the web SPA and the
+  observability server now share one wire-types module, the UI carries stable
+  `data-testid` selectors, and a Playwright e2e suite exercises the real server
+  against the committed bundle on every PR.
+
+  - `src/observability/wire-types.ts` (pure types, zero Node imports) is the
+    single source for `AgentEvent`/`AgentEventFamily`, the e2e run shapes
+    (`E2eFlowResult`, `E2eRunRecord`, `E2eRunIndexEntry`, verdict/classification
+    unions), `ActionSummary`, and the action-run result. The server modules
+    re-export it and `web/src/types.ts` re-exports it too — the hand-copied
+    twins are gone, and the web-bundle CI gate now runs `tsc --noEmit` on the
+    SPA so server↔UI drift is a compile error (previously `vite build` only
+    transpiled, so nothing checked).
+  - 27 `data-testid` attributes across Header, FilterBar, Timeline, DevicePane,
+    StatePane, ActionsPanel, and E2ePanel.
+  - 10 Playwright specs (headless chromium) boot the real `ObservabilityServer`
+    with a seeded `Recorder` + stub e2e deps on an ephemeral port: timeline
+    render + family/errors/search filters, event detail, device hero
+    screenshot, SSE live update, regression history + drill-down, and the
+    CSRF-guarded suite/action run round-trips (including a 403 negative).
+  - Server hardening from review: oversized `POST /api/e2e/*` bodies now return
+    a bounded 413 instead of becoming an unhandled rejection, and the CSRF
+    token is injected via `JSON.stringify` + `<` escaping so it can never
+    break out of the inline bootstrap script.
+
+- Updated dependencies [dba5eb7]
+  - rn-dev-agent-core@0.62.2
+
+### 0.67.1
+
+#### Patch Changes
+
+- 78700be: Golden wire-contract tests from captured runner payloads + named CI gate (#437, audit P0-B).
+
+  The biggest escaped-bug cluster (#396, #353, #418) was host↔runner wire-contract
+  drift where hand-written fixtures encoded the wrong shape, so green tests
+  certified broken behavior. This closes that hole:
+
+  - `test/contract/capture-goldens.ts` records REAL `/health`, raw
+    `POST /command snapshot`, error-envelope, and bridge `device_snapshot`
+    payloads from live rn-fast-runner / rn-android-runner sessions into committed
+    fixtures under `test/fixtures/goldens/<platform>/`, each stamped with capture
+    provenance (device, OS, runner version, date). Goldens are captured, never
+    hand-written.
+  - `gh-437-golden-contract.test.ts` pins the TS parsing layer
+    (`classifyRunnerCompatibility`, `findRefByTestID`, the ref-map oracle +
+    snapshot verdict) against those captured payloads for both platforms, and
+    pins the captured `v` stamp to `RUNNER_PROTOCOL_VERSION` — a protocol bump
+    fails CI until goldens are re-captured against the new runner (refresh
+    cadence, enforced).
+  - New named CI step "Runner wire-contract gate" runs the #418 tri-surface
+    command-enum sync, the #383 protocol-version sync, and the golden contract
+    tests via `yarn workspace rn-dev-agent-core test:contract`, so wire-contract
+    drift fails a visible gate instead of hiding in the unit blob.
+
+- Updated dependencies [78700be]
+  - rn-dev-agent-core@0.62.1
+
+### 0.67.0
+
+#### Minor Changes
+
+- 3b27e7d: Story 16 (#409) — snapshot quality verdicts: degraded captures must say so.
+
+  Every tree/snapshot capture now carries a structured quality verdict computed
+  once at capture time, so a sparse or empty result caused by a degraded walk is
+  no longer indistinguishable from a legitimately empty screen:
+
+  - `cdp_component_tree` returns `meta.treeVerdict` (`state: ok|degraded|failed`,
+    `path`, `reasons`, `rootsSeeded`, `scannedNodes`, `effectiveDepth`,
+    `droppedSubtrees`, `collapsedChildLists`, `rendererErrors`,
+    `unscannedRendererIds`). Previously-silent drop classes are now counted:
+    per-renderer exception swallows, registered-but-unscanned renderers (the #126
+    early-exit class), depth-cap subtree drops, scan-budget/wall-clock
+    exhaustion, and output truncation. Requires injected helpers v34 — a stale
+    bundle simply omits the verdict.
+  - `device_snapshot` (iOS + Android runners) returns `meta.snapshotVerdict`
+    (`state`, `source`, `nodeCount`, `refMapUpdated`, `reasons`).
+  - Sparse captures never overwrite the last-known-good @ref map: a zero-node
+    snapshot leaves refs bound to the last verified capture
+    (`meta.snapshotVerdict.refMapUpdated: false`, reason `empty-capture`) instead
+    of wiping the map self-healing taps depend on.
+  - Interactive consumers fail closed: `device_find` (exact + fuzzy) and
+    `device_focus_next` refuse a zero-node capture with `SNAPSHOT_DEGRADED`
+    rather than asserting NOT_FOUND / "nothing on screen" on evidence that
+    cannot support it.
+
+#### Patch Changes
+
+- Updated dependencies [3b27e7d]
+  - rn-dev-agent-core@0.62.0
+
+### 0.66.16
+
+#### Patch Changes
+
+- 2cc8c82: fix(device-system-dialog): make SpringBoard-owned iOS dialogs reachable (#545). `device_accept_system_dialog`/`device_dismiss_system_dialog` were Maestro-only, and Maestro's iOS driver only sees the app under test — the deeplink "Open in <app>?" confirmation and other SpringBoard dialogs timed out on every label probe (DIALOG_NOT_FOUND while the dialog sat on screen), and the `idb ui tap` escape hatch crashes upstream ("no current event loop"). With an open iOS session the tools now route through rn-fast-runner first: its snapshot returns a blocking SpringBoard modal exclusively as an Alert-rooted payload, and press resolves to a coordinate tap that lands on whatever owns the pixels. When the modal is up but no probed label matches, the tool returns the dialog's actual buttons (`DIALOG_BUTTON_NOT_FOUND` + `availableButtons`) instead of burning N×4s Maestro probes that can never match. `device_deeplink` on iOS now best-effort auto-accepts the "Open" confirmation before its picker check and annotates `meta.openDialogTapped`; the iOS DIALOG_NOT_FOUND hint documents the last-resort SpringBoard restart recovery (`launchctl kickstart -k system/com.apple.SpringBoard`). Maestro stays as the fallback for Android, in-app alerts, and session-less iOS calls. (The issue's third finding — picker dismiss being Android-only — already shipped in #523/#531.)
+- Updated dependencies [2cc8c82]
+  - rn-dev-agent-core@0.61.9
+
+### 0.66.15
+
+#### Patch Changes
+
+- 6be3bca: fix(rn-android-runner): align Android `hittable` semantics with iOS (#520). Both Android sources now route through a single shared predicate implementing the #395 definition — "enabled AND visibly on-screen": the snapshot path (window-hierarchy XML) was reporting bare `visible-to-user` (a DISABLED but visible control counted as hittable), and the find path (`UiObject2`) was reporting bare `isEnabled` (an enabled element with an empty visible region counted as hittable). Divergent semantics meant platform-dependent `device_find` ranking (+1000 hittable boost) and `device_batch` dead-control annotation for identical screens. The new `HittableSemantics` object lives in the main sourceset so the JVM CI lane pins it deterministically; a TS grep-sync test pins the dispatcher wiring (gh-397/gh-418 style). The Android runner's `/health` now advertises `HONEST_HITTABLE` like iOS. Device-verified on a Pixel 9 Pro emulator: snapshot distribution non-uniform (62/63 hittable; the fixture's new deliberately-disabled button reports `hittable=false`, which the old path reported `true`), and `findText` discriminates enabled ("Increment" → true) vs disabled ("Disabled" → false). No wire-shape change (capability list is additive, no protocol bump); existing runner artifacts pick the semantics up on their next rebuild/upgrade.
+- Updated dependencies [6be3bca]
+  - rn-dev-agent-core@0.61.8
+
 ### 0.66.14
 
 #### Patch Changes
@@ -932,6 +1152,163 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.65.5
+
+#### Patch Changes
+
+- 2bf6d4f: Discover React Navigation refs and state across every renderer ID registered with the React DevTools hook, while preserving the bounded numeric renderer probe so partial registries keep legacy coverage.
+
+### 0.65.4
+
+#### Patch Changes
+
+- f66eb3f: Isolate the empty-Metro lifecycle integration tests from live default-port Hermes targets (#577): CDP discovery's default port list (8081/8082/19000/19006 + `RN_METRO_PORT`) is now resolved lazily per call, and a new `RN_CDP_DISCOVERY_PORTS` override replaces it entirely — so the integration suite owns its whole discovery surface and stays deterministic while a real React Native app is running on the host. Production discovery is unchanged when the variable is unset.
+
+### 0.65.3
+
+#### Patch Changes
+
+- 61f136e: Fix observe UI Route/Store/Tree panels staying empty while the device mirror shows the running app (#579): the panels now auto-read live state through a new `GET /api/state/(route|store|tree)` endpoint that resolves the CDP client at call time — so they populate on a healthy connection without the agent having run the introspection tools and recover after a reload/reconnect — plus a manual "read live" refresh button in each panel.
+
+### 0.65.2
+
+#### Patch Changes
+
+- 619c5fe: Accept a visually matched final proof screenshot when iOS video metadata ends up to two seconds before the assertion timestamp.
+
+### 0.65.1
+
+#### Patch Changes
+
+- fdfa8bb: Make strict proof portable, TypeScript-native, and tolerant of clean recordings up to five seconds beyond the adaptive target.
+
+### 0.65.0
+
+#### Minor Changes
+
+- 4e9bf7e: Add strict storyboard-gated video and screenshot proof receipts for unattended feature delivery.
+
+### 0.64.0
+
+#### Minor Changes
+
+- 9359723: Story 10 (GH #391) — text-input reliability recipes. iOS: the runner's `type` handler now waits (≤1 s, best-effort) for the keyboard before the first keystroke and types in Maestro's two-burst shape (first character, 500 ms pause, remainder), killing the dropped-first-keystrokes flake class; typing telemetry (`typingBurst`, `keyboardWaitMs`) surfaces in the response and threads into `device_fill`'s `meta.typing`. Android: the runner's `type` classifies its `ACTION_SET_TEXT` read-back (accepted / transformed / rejected), falls back to per-char keyevents at Maestro's 75 ms pacing when the set was ignored, and reports `SET_TEXT_REJECTED` when both tiers fail. Bridge: `device_fill`'s Android unsafe-char/length short-circuit to chunked `adb input text` is removed — emoji and long text now reach the runner's full-Unicode `setText` primary, with chunked adb demoted to a genuine last resort and `SET_TEXT_REJECTED` descending the ladder without wasted re-taps.
+
+### 0.63.1
+
+#### Patch Changes
+
+- 53c3fb3: Auto-heal `KEYBOARD_OCCLUDED` tap refusals JS-first (GH #379): when the iOS keyboard guard refuses a `device_press`/`device_longpress` because the tap point is under an iPhone QWERTY keyboard with no dismiss control, the bridge now dismisses via the new injected `__RN_AGENT.dismissKeyboard()` helper (RN `Keyboard.dismiss()`, falling back to blurring the focused TextInput host instance), refreshes the snapshot (targets relayout when the keyboard lifts), and retries the tap exactly once — surfaced as `meta.keyboardGuard: "js_dismissed"` + `meta.keyboardAutoHeal`. The retried tap re-runs the native guard, so a dismissal that didn't take effect re-refuses instead of tapping through. Also ships the #370 review follow-ups: the iOS refusal now carries a structured `code: "KEYBOARD_OCCLUDED"`, both runners report the guard step's native duration (lifted to `meta.timings_ms.keyboardGuard`), and `surfaceKeyboardGuard` hardens its never-throws contract against non-object JSON envelopes.
+
+### 0.63.0
+
+#### Minor Changes
+
+- de8f1c1: Story 14 (#407): runner transport recovery — every /command carries a commandId; on an ambiguous post-send failure the client issues one short status probe against the runner's outcome journal before invalidating. Recovered results return with meta.transportRecovery; mutating verbs are never auto-resent, eliminating double-fired taps; read-only verbs may be resent once. Unresolvable probes fall through to the existing invalidation path unchanged. Both native runners (iOS rn-fast-runner, Android rn-android-runner) gained a bounded command-outcome journal (32 entries, 8 KB UTF-8 body cap, snapshot/screenshot recorded state-only, error outcomes journaled) and the read-only `status` verb that replays a prior command's retained outcome.
+
+### 0.62.3
+
+#### Patch Changes
+
+- dc5a87b: Harden observe-recorder screenshot ingestion (GH #429): the recorder now only reads screenshot files the capture pipeline itself just wrote (single-use trust grants registered by `device_screenshot`), instead of any absolute image path named in a tool observation — closing an arbitrary local-file read surface on the observe server. The read itself is now TOCTOU-safe: one descriptor for the size check and the read, `O_NOFOLLOW` (no symlink following), and a hard byte cap enforced on the bytes actually read.
+
+### 0.62.2
+
+#### Patch Changes
+
+- dba5eb7: Observe UI test confidence (#438, audit P1-A): the web SPA and the
+  observability server now share one wire-types module, the UI carries stable
+  `data-testid` selectors, and a Playwright e2e suite exercises the real server
+  against the committed bundle on every PR.
+
+  - `src/observability/wire-types.ts` (pure types, zero Node imports) is the
+    single source for `AgentEvent`/`AgentEventFamily`, the e2e run shapes
+    (`E2eFlowResult`, `E2eRunRecord`, `E2eRunIndexEntry`, verdict/classification
+    unions), `ActionSummary`, and the action-run result. The server modules
+    re-export it and `web/src/types.ts` re-exports it too — the hand-copied
+    twins are gone, and the web-bundle CI gate now runs `tsc --noEmit` on the
+    SPA so server↔UI drift is a compile error (previously `vite build` only
+    transpiled, so nothing checked).
+  - 27 `data-testid` attributes across Header, FilterBar, Timeline, DevicePane,
+    StatePane, ActionsPanel, and E2ePanel.
+  - 10 Playwright specs (headless chromium) boot the real `ObservabilityServer`
+    with a seeded `Recorder` + stub e2e deps on an ephemeral port: timeline
+    render + family/errors/search filters, event detail, device hero
+    screenshot, SSE live update, regression history + drill-down, and the
+    CSRF-guarded suite/action run round-trips (including a 403 negative).
+  - Server hardening from review: oversized `POST /api/e2e/*` bodies now return
+    a bounded 413 instead of becoming an unhandled rejection, and the CSRF
+    token is injected via `JSON.stringify` + `<` escaping so it can never
+    break out of the inline bootstrap script.
+
+### 0.62.1
+
+#### Patch Changes
+
+- 78700be: Golden wire-contract tests from captured runner payloads + named CI gate (#437, audit P0-B).
+
+  The biggest escaped-bug cluster (#396, #353, #418) was host↔runner wire-contract
+  drift where hand-written fixtures encoded the wrong shape, so green tests
+  certified broken behavior. This closes that hole:
+
+  - `test/contract/capture-goldens.ts` records REAL `/health`, raw
+    `POST /command snapshot`, error-envelope, and bridge `device_snapshot`
+    payloads from live rn-fast-runner / rn-android-runner sessions into committed
+    fixtures under `test/fixtures/goldens/<platform>/`, each stamped with capture
+    provenance (device, OS, runner version, date). Goldens are captured, never
+    hand-written.
+  - `gh-437-golden-contract.test.ts` pins the TS parsing layer
+    (`classifyRunnerCompatibility`, `findRefByTestID`, the ref-map oracle +
+    snapshot verdict) against those captured payloads for both platforms, and
+    pins the captured `v` stamp to `RUNNER_PROTOCOL_VERSION` — a protocol bump
+    fails CI until goldens are re-captured against the new runner (refresh
+    cadence, enforced).
+  - New named CI step "Runner wire-contract gate" runs the #418 tri-surface
+    command-enum sync, the #383 protocol-version sync, and the golden contract
+    tests via `yarn workspace rn-dev-agent-core test:contract`, so wire-contract
+    drift fails a visible gate instead of hiding in the unit blob.
+
+### 0.62.0
+
+#### Minor Changes
+
+- 3b27e7d: Story 16 (#409) — snapshot quality verdicts: degraded captures must say so.
+
+  Every tree/snapshot capture now carries a structured quality verdict computed
+  once at capture time, so a sparse or empty result caused by a degraded walk is
+  no longer indistinguishable from a legitimately empty screen:
+
+  - `cdp_component_tree` returns `meta.treeVerdict` (`state: ok|degraded|failed`,
+    `path`, `reasons`, `rootsSeeded`, `scannedNodes`, `effectiveDepth`,
+    `droppedSubtrees`, `collapsedChildLists`, `rendererErrors`,
+    `unscannedRendererIds`). Previously-silent drop classes are now counted:
+    per-renderer exception swallows, registered-but-unscanned renderers (the #126
+    early-exit class), depth-cap subtree drops, scan-budget/wall-clock
+    exhaustion, and output truncation. Requires injected helpers v34 — a stale
+    bundle simply omits the verdict.
+  - `device_snapshot` (iOS + Android runners) returns `meta.snapshotVerdict`
+    (`state`, `source`, `nodeCount`, `refMapUpdated`, `reasons`).
+  - Sparse captures never overwrite the last-known-good @ref map: a zero-node
+    snapshot leaves refs bound to the last verified capture
+    (`meta.snapshotVerdict.refMapUpdated: false`, reason `empty-capture`) instead
+    of wiping the map self-healing taps depend on.
+  - Interactive consumers fail closed: `device_find` (exact + fuzzy) and
+    `device_focus_next` refuse a zero-node capture with `SNAPSHOT_DEGRADED`
+    rather than asserting NOT_FOUND / "nothing on screen" on evidence that
+    cannot support it.
+
+### 0.61.9
+
+#### Patch Changes
+
+- 2cc8c82: fix(device-system-dialog): make SpringBoard-owned iOS dialogs reachable (#545). `device_accept_system_dialog`/`device_dismiss_system_dialog` were Maestro-only, and Maestro's iOS driver only sees the app under test — the deeplink "Open in <app>?" confirmation and other SpringBoard dialogs timed out on every label probe (DIALOG_NOT_FOUND while the dialog sat on screen), and the `idb ui tap` escape hatch crashes upstream ("no current event loop"). With an open iOS session the tools now route through rn-fast-runner first: its snapshot returns a blocking SpringBoard modal exclusively as an Alert-rooted payload, and press resolves to a coordinate tap that lands on whatever owns the pixels. When the modal is up but no probed label matches, the tool returns the dialog's actual buttons (`DIALOG_BUTTON_NOT_FOUND` + `availableButtons`) instead of burning N×4s Maestro probes that can never match. `device_deeplink` on iOS now best-effort auto-accepts the "Open" confirmation before its picker check and annotates `meta.openDialogTapped`; the iOS DIALOG_NOT_FOUND hint documents the last-resort SpringBoard restart recovery (`launchctl kickstart -k system/com.apple.SpringBoard`). Maestro stays as the fallback for Android, in-app alerts, and session-less iOS calls. (The issue's third finding — picker dismiss being Android-only — already shipped in #523/#531.)
+
+### 0.61.8
+
+#### Patch Changes
+
+- 6be3bca: fix(rn-android-runner): align Android `hittable` semantics with iOS (#520). Both Android sources now route through a single shared predicate implementing the #395 definition — "enabled AND visibly on-screen": the snapshot path (window-hierarchy XML) was reporting bare `visible-to-user` (a DISABLED but visible control counted as hittable), and the find path (`UiObject2`) was reporting bare `isEnabled` (an enabled element with an empty visible region counted as hittable). Divergent semantics meant platform-dependent `device_find` ranking (+1000 hittable boost) and `device_batch` dead-control annotation for identical screens. The new `HittableSemantics` object lives in the main sourceset so the JVM CI lane pins it deterministically; a TS grep-sync test pins the dispatcher wiring (gh-397/gh-418 style). The Android runner's `/health` now advertises `HONEST_HITTABLE` like iOS. Device-verified on a Pixel 9 Pro emulator: snapshot distribution non-uniform (62/63 hittable; the fixture's new deliberately-disabled button reports `hittable=false`, which the old path reported `true`), and `findText` discriminates enabled ("Increment" → true) vs disabled ("Disabled" → false). No wire-shape change (capability list is additive, no protocol bump); existing runner artifacts pick the semantics up on their next rebuild/upgrade.
 
 ### 0.61.7
 

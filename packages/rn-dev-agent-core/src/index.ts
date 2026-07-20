@@ -1903,7 +1903,7 @@ trackedTool(
 
 trackedTool(
   'device_batch',
-  'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level.',
+  'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT always aborts the batch (the native operation may still be completing, so later steps are never started) regardless of optional/continueOnError.',
   {
     steps: z
       .array(
@@ -1947,11 +1947,13 @@ trackedTool(
           optional: z
             .boolean()
             .optional()
-            .describe('Skip this step on failure instead of aborting'),
+            .describe('Skip this step on failure instead of aborting (timeouts still abort)'),
           timeoutMs: z
             .number()
             .optional()
-            .describe('Per-step timeout override in ms. Default 15000.'),
+            .describe(
+              'Per-step timeout override in ms. Default 15000. A timed-out step aborts the batch even when optional/continueOnError is set.',
+            ),
           settle: z
             .boolean()
             .optional()

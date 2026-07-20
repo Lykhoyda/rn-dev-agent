@@ -1358,7 +1358,7 @@ trackedTool('device_pick_date', 'Select a date in a UIDatePicker (wheels mode) /
         .describe('Maestro timeout (default 20000ms).'),
 }, createDevicePickDateHandler());
 trackedTool('device_focus_next', "Move keyboard focus to the next input field by tapping the soft keyboard's Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.", {}, createDeviceFocusNextHandler());
-trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level.', {
+trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT always aborts the batch (the native operation may still be completing, so later steps are never started) regardless of optional/continueOnError.', {
     steps: z
         .array(z.object({
         action: z
@@ -1396,11 +1396,11 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
         optional: z
             .boolean()
             .optional()
-            .describe('Skip this step on failure instead of aborting'),
+            .describe('Skip this step on failure instead of aborting (timeouts still abort)'),
         timeoutMs: z
             .number()
             .optional()
-            .describe('Per-step timeout override in ms. Default 15000.'),
+            .describe('Per-step timeout override in ms. Default 15000. A timed-out step aborts the batch even when optional/continueOnError is set.'),
         settle: z
             .boolean()
             .optional()

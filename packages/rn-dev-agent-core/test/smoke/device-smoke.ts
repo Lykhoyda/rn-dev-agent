@@ -98,7 +98,20 @@ function launchFixtureOnce() {
   } else {
     execFileSync(
       'adb',
-      ['shell', 'monkey', '-p', APP_ID, '-c', 'android.intent.category.LAUNCHER', '1'],
+      // --pct-syskeys 0: keyless AVDs (e.g. Pixel 9 Pro images) abort monkey
+      // with status 251 when the syskeys bucket is non-empty; only the launch
+      // intent is injected here, so the distribution change is a no-op.
+      [
+        'shell',
+        'monkey',
+        '--pct-syskeys',
+        '0',
+        '-p',
+        APP_ID,
+        '-c',
+        'android.intent.category.LAUNCHER',
+        '1',
+      ],
       { stdio: 'pipe', timeout: 20_000 },
     );
   }

@@ -64836,7 +64836,7 @@ var init_index = __esm({
       timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Maestro timeout (default 20000ms).")
     }, createDevicePickDateHandler());
     trackedTool("device_focus_next", "Move keyboard focus to the next input field by tapping the soft keyboard's Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.", {}, createDeviceFocusNextHandler());
-    trackedTool("device_batch", "Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level.", {
+    trackedTool("device_batch", "Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT always aborts the batch (the native operation may still be completing, so later steps are never started) regardless of optional/continueOnError.", {
       steps: external_exports.array(external_exports.object({
         action: external_exports.enum([
           "find",
@@ -64856,8 +64856,8 @@ var init_index = __esm({
         tap: external_exports.boolean().optional().describe("(find) Tap the found element"),
         direction: external_exports.enum(["up", "down", "left", "right"]).optional().describe("(scroll/swipe) Direction"),
         ms: external_exports.number().optional().describe("(wait) Milliseconds to wait"),
-        optional: external_exports.boolean().optional().describe("Skip this step on failure instead of aborting"),
-        timeoutMs: external_exports.number().optional().describe("Per-step timeout override in ms. Default 15000."),
+        optional: external_exports.boolean().optional().describe("Skip this step on failure instead of aborting (timeouts still abort)"),
+        timeoutMs: external_exports.number().optional().describe("Per-step timeout override in ms. Default 15000. A timed-out step aborts the batch even when optional/continueOnError is set."),
         settle: external_exports.boolean().optional().describe("Default true: after this step mutates the screen, wait for the UI to stabilize (capped 2500ms; see meta.settle). Set false to skip the settle wait for this step (raw speed over stability).")
       })).describe("Ordered list of UI interaction steps"),
       delayMs: external_exports.number().optional().describe("Delay between steps in ms. Default: 0 while settle is on (settle waits for actual UI stability between steps), 300 when RN_SETTLE=0. Pass an explicit value to override either way."),
