@@ -160,6 +160,19 @@ test('GH #597: a non-navigation tree in the first live renderer does not mask a 
   assertNavigationDiscovered(hook, navigated);
 });
 
+test('GH #597: a renderers iterator that never reports done degrades to the numeric probe', () => {
+  const { fiber, navigated } = createNavigationFixture();
+  const hook = {
+    renderers: {
+      keys: () => ({ next: () => ({ done: false, value: 1 }) }),
+    },
+    getFiberRoots: (rendererId: number) =>
+      rendererId === 1 ? new Set([{ current: fiber }]) : new Set<{ current: Fiber }>(),
+  } as unknown as RendererHook;
+
+  assertNavigationDiscovered(hook, navigated);
+});
+
 test('GH #597: the proven single-renderer navigation path remains supported', () => {
   const { fiber, navigated } = createNavigationFixture();
   const hook: RendererHook = {

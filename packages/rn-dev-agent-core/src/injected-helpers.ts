@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 36;
+export const HELPERS_VERSION = 37;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -15,6 +15,7 @@ export const INJECTED_HELPERS = `
   // early-exit heuristic. Root-union scans prefer the hook's registered IDs so
   // sparse or higher IDs are not missed (GH #597).
   var MAX_RENDERER_IDS = 20;
+  var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
   // Reset by every root-iteration pass; only valid when read synchronously
@@ -44,7 +45,9 @@ export const INJECTED_HELPERS = `
       if (!iterator || typeof iterator.next !== 'function') return [];
       var ids = [];
       var step;
+      var iterations = 0;
       while (!(step = iterator.next()).done) {
+        if (++iterations > MAX_REGISTERED_RENDERER_IDS) return [];
         var id = step.value;
         if (typeof id === 'number' && ids.indexOf(id) === -1) ids.push(id);
       }
@@ -3034,7 +3037,9 @@ export const REACT_READY_PROBE_JS = `(function() {
     if (h.renderers && typeof h.renderers.keys === 'function') {
       var iterator = h.renderers.keys();
       var step;
+      var iterations = 0;
       while (iterator && typeof iterator.next === 'function' && !(step = iterator.next()).done) {
+        if (++iterations > 100) { ids = []; break; }
         if (typeof step.value === 'number' && ids.indexOf(step.value) === -1) ids.push(step.value);
       }
     }
@@ -3072,6 +3077,7 @@ export interface DevToolsHookLike {
 }
 
 export const MAX_RENDERER_IDS = 20;
+export const MAX_REGISTERED_RENDERER_IDS = 100;
 export const EARLY_EXIT_EMPTY_STREAK = 3;
 
 export function findAllRootFibersForTest(
@@ -3084,7 +3090,12 @@ export function findAllRootFibersForTest(
     if (hook.renderers && typeof hook.renderers.keys === 'function') {
       const iterator = hook.renderers.keys();
       let step = iterator.next();
+      let iterations = 0;
       while (!step.done) {
+        if (++iterations > MAX_REGISTERED_RENDERER_IDS) {
+          rendererIds = [];
+          break;
+        }
         const id = step.value;
         if (typeof id === 'number' && !rendererIds.includes(id)) rendererIds.push(id);
         step = iterator.next();

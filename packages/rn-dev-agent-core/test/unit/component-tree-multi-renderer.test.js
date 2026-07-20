@@ -310,6 +310,22 @@ test('B143 A3 (Gemini 80): IIFE wraps per-renderer getFiberRoots in try/catch', 
   assert.match(slice, /catch \(_\)/, 'iterateAllRoots missing per-renderer catch');
 });
 
+test('GH #597: a renderers iterator that never reports done falls back to the numeric probe', () => {
+  const f1 = { tag: 'r1' };
+  const hook = {
+    renderers: {
+      keys: () => ({ next: () => ({ done: false, value: 1 }) }),
+    },
+    getFiberRoots(ri) {
+      return ri === 1 ? makeRootsMap([f1]) : null;
+    },
+  };
+  const result = findAllRootFibersForTest(hook);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].rendererId, 1);
+  assert.equal(result[0].fiber, f1);
+});
+
 test('B143 Codex #1 (conf 82): scan budget scales with rootsSeeded count', () => {
   // With N roots, budget = min(5000, 2000 * N) so later renderers don't
   // starve when renderer 1 has a deep/wide subtree.

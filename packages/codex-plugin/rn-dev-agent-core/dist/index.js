@@ -42338,7 +42338,7 @@ async function detectBridge(client2) {
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 36;
+var HELPERS_VERSION = 37;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -42350,6 +42350,7 @@ var INJECTED_HELPERS = `
   // early-exit heuristic. Root-union scans prefer the hook's registered IDs so
   // sparse or higher IDs are not missed (GH #597).
   var MAX_RENDERER_IDS = 20;
+  var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
   // Reset by every root-iteration pass; only valid when read synchronously
@@ -42379,7 +42380,9 @@ var INJECTED_HELPERS = `
       if (!iterator || typeof iterator.next !== 'function') return [];
       var ids = [];
       var step;
+      var iterations = 0;
       while (!(step = iterator.next()).done) {
+        if (++iterations > MAX_REGISTERED_RENDERER_IDS) return [];
         var id = step.value;
         if (typeof id === 'number' && ids.indexOf(id) === -1) ids.push(id);
       }
@@ -45355,7 +45358,9 @@ var REACT_READY_PROBE_JS = `(function() {
     if (h.renderers && typeof h.renderers.keys === 'function') {
       var iterator = h.renderers.keys();
       var step;
+      var iterations = 0;
       while (iterator && typeof iterator.next === 'function' && !(step = iterator.next()).done) {
+        if (++iterations > 100) { ids = []; break; }
         if (typeof step.value === 'number' && ids.indexOf(step.value) === -1) ids.push(step.value);
       }
     }

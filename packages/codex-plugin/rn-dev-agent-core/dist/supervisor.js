@@ -27359,7 +27359,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 36;
+    HELPERS_VERSION = 37;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -27371,6 +27371,7 @@ var init_injected_helpers = __esm({
   // early-exit heuristic. Root-union scans prefer the hook's registered IDs so
   // sparse or higher IDs are not missed (GH #597).
   var MAX_RENDERER_IDS = 20;
+  var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
   // Reset by every root-iteration pass; only valid when read synchronously
@@ -27400,7 +27401,9 @@ var init_injected_helpers = __esm({
       if (!iterator || typeof iterator.next !== 'function') return [];
       var ids = [];
       var step;
+      var iterations = 0;
       while (!(step = iterator.next()).done) {
+        if (++iterations > MAX_REGISTERED_RENDERER_IDS) return [];
         var id = step.value;
         if (typeof id === 'number' && ids.indexOf(id) === -1) ids.push(id);
       }
@@ -30376,7 +30379,9 @@ var init_injected_helpers = __esm({
     if (h.renderers && typeof h.renderers.keys === 'function') {
       var iterator = h.renderers.keys();
       var step;
+      var iterations = 0;
       while (iterator && typeof iterator.next === 'function' && !(step = iterator.next()).done) {
+        if (++iterations > 100) { ids = []; break; }
         if (typeof step.value === 'number' && ids.indexOf(step.value) === -1) ids.push(step.value);
       }
     }
