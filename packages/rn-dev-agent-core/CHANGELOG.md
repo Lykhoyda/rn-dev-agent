@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.65.6
+
+### Patch Changes
+
+- e3986d3: Make Android learned-action failures, device affinity, launch accessibility readiness, restart recovery, and batched input ordering deterministic and explicit.
+
 ## 0.65.5
 
 ### Patch Changes
