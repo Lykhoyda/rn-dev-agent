@@ -74,5 +74,7 @@ test('Codex ships a discoverable feedback skill and package-local collector', as
     /\$\{RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-\$\{CODEX_PLUGIN_ROOT:-\$\{CLAUDE_PLUGIN_ROOT:-\}\}\}/,
   );
   assert.match(command, /plugins\/cache/);
+  assert.match(command, /\| sort -V \| tail -n 1/);
+  assert.doesNotMatch(command, /-print -quit/);
   assert.match(command, /scripts\/collect-feedback\.sh/);
 });
