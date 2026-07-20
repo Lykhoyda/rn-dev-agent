@@ -1,5 +1,11 @@
 # rn-dev-agent-plugin
 
+## 0.70.7
+
+### Patch Changes
+
+- 9486b9f: Keep Codex MCP sessions alive when another bridge owns the project-level singleton lock, and ship a discoverable feedback skill with its sanitized collector inside the Codex plugin package.
+
 ## 0.70.6
 
 ### Patch Changes
