@@ -38,7 +38,14 @@ Then collect the following (skip what was already provided via $ARGUMENTS):
 Run the collection script to gather sanitized environment data:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
+if [ -z "$PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
+  PLUGIN_ROOT="packages/codex-plugin"
+fi
+if [ -z "$PLUGIN_ROOT" ]; then
+  PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" -print -quit 2>/dev/null || true)"
+  [ -n "$PLUGIN_MANIFEST" ] && PLUGIN_ROOT="$(dirname "$(dirname "$PLUGIN_MANIFEST")")"
+fi
 if [ -n "$PLUGIN_ROOT" ] && [ -x "$PLUGIN_ROOT/scripts/collect-feedback.sh" ]; then
   "$PLUGIN_ROOT/scripts/collect-feedback.sh"
 elif command -v rn-collect-feedback >/dev/null 2>&1; then
@@ -50,8 +57,11 @@ fi
 ```
 
 Codex marketplace installs do not add global executables to `PATH`; use the
-package-local script through `CODEX_PLUGIN_ROOT`. The command fallback exists
-for older Claude installations only.
+package-local script. Prefer `RN_DEV_AGENT_CODEX_PLUGIN_ROOT`, which the Codex
+MCP launcher exports for installed plugins; Claude sessions provide
+`CLAUDE_PLUGIN_ROOT`. The repo-checkout probe and plugin-cache manifest scan
+cover sessions where neither variable is set. The command fallback exists for
+older Claude installations only.
 
 This collects (all redacted):
 - Plugin version, cdp-bridge version, tool count

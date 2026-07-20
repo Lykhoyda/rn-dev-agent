@@ -49,18 +49,30 @@ test('Codex launcher bypasses the process-wide bridge lock without changing app 
 });
 
 test('Codex ships a discoverable feedback skill and package-local collector', async () => {
-  const [canonicalSkill, codexSkill, canonicalCollector, codexCollector, command] =
-    await Promise.all([
-      text('packages/shared-agent-knowledge/skills/sending-feedback/SKILL.md'),
-      text('packages/codex-plugin/skills/sending-feedback/SKILL.md'),
-      text('scripts/collect-feedback.sh'),
-      text('packages/codex-plugin/scripts/collect-feedback.sh'),
-      text('packages/codex-plugin/commands/send-feedback.md'),
-    ]);
+  const [
+    canonicalSkill,
+    codexSkill,
+    canonicalCollector,
+    codexCollector,
+    claudeCollector,
+    command,
+  ] = await Promise.all([
+    text('packages/shared-agent-knowledge/skills/sending-feedback/SKILL.md'),
+    text('packages/codex-plugin/skills/sending-feedback/SKILL.md'),
+    text('scripts/collect-feedback.sh'),
+    text('packages/codex-plugin/scripts/collect-feedback.sh'),
+    text('packages/claude-plugin/scripts/collect-feedback.sh'),
+    text('packages/codex-plugin/commands/send-feedback.md'),
+  ]);
 
   assert.equal(codexSkill, canonicalSkill);
   assert.equal(codexCollector, canonicalCollector);
+  assert.equal(claudeCollector, canonicalCollector);
   assert.match(codexSkill, /^name: sending-feedback$/m);
-  assert.match(command, /CODEX_PLUGIN_ROOT/);
+  assert.match(
+    command,
+    /\$\{RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-\$\{CODEX_PLUGIN_ROOT:-\$\{CLAUDE_PLUGIN_ROOT:-\}\}\}/,
+  );
+  assert.match(command, /plugins\/cache/);
   assert.match(command, /scripts\/collect-feedback\.sh/);
 });
