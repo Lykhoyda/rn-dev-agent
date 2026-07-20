@@ -1,5 +1,14 @@
 # rn-dev-agent-plugin
 
+## 0.70.6
+
+### Patch Changes
+
+- af49c37: Return a consistent non-zero status when ffmpeg cannot be ensured.
+- 2bf6d4f: Discover React Navigation refs and state across every renderer ID registered with the React DevTools hook, while preserving the bounded numeric renderer probe so partial registries keep legacy coverage.
+- Updated dependencies [2bf6d4f]
+  - rn-dev-agent-core@0.65.5
+
 ## 0.70.5
 
 ### Patch Changes
