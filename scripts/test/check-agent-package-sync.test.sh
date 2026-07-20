@@ -238,7 +238,7 @@ probe_cwd="$(cd "$probe_cwd" && pwd -P)"
 ( cd "$probe_cwd" && LAUNCHER_PROBE_FILE="$probe_file" node "$tmp/packages/codex-plugin/bin/cdp-supervisor.js" --probe >/dev/null 2>&1 )
 launcher_status=$?
 actual=1
-if [ "$launcher_status" -eq 0 ] && jq -e --arg cwd "$probe_cwd" '.cwd == $cwd and .argv == ["--probe"]' "$probe_file" >/dev/null; then
+if [ "$launcher_status" -eq 0 ] && jq -e --arg cwd "$probe_cwd" '.cwd == $cwd and .argv == ["--no-lock", "--probe"]' "$probe_file" >/dev/null; then
   actual=0
 fi
 check "Codex launcher uses packaged runtime and preserves app cwd/args" 0 $actual

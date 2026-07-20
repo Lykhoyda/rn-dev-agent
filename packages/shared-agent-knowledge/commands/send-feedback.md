@@ -38,8 +38,20 @@ Then collect the following (skip what was already provided via $ARGUMENTS):
 Run the collection script to gather sanitized environment data:
 
 ```bash
-rn-collect-feedback
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+if [ -n "$PLUGIN_ROOT" ] && [ -x "$PLUGIN_ROOT/scripts/collect-feedback.sh" ]; then
+  "$PLUGIN_ROOT/scripts/collect-feedback.sh"
+elif command -v rn-collect-feedback >/dev/null 2>&1; then
+  rn-collect-feedback
+else
+  echo "rn-dev-agent feedback collector is missing; reinstall or update the plugin" >&2
+  exit 1
+fi
 ```
+
+Codex marketplace installs do not add global executables to `PATH`; use the
+package-local script through `CODEX_PLUGIN_ROOT`. The command fallback exists
+for older Claude installations only.
 
 This collects (all redacted):
 - Plugin version, cdp-bridge version, tool count

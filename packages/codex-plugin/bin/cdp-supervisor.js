@@ -36,7 +36,13 @@ if (!supervisor) {
   process.exit(1);
 }
 
-const child = spawn(process.execPath, [supervisor, ...process.argv.slice(2)], {
+// Codex can keep an older MCP process alive while reconnecting or opening a
+// second session for the same project. The core's Claude-oriented singleton
+// lock exits immediately in that case, which Codex reports only as
+// `Transport closed`. Cross-process device ownership is already guarded by
+// the device lock, so keep the Codex transport alive and let each session own
+// its supervised worker.
+const child = spawn(process.execPath, [supervisor, '--no-lock', ...process.argv.slice(2)], {
   cwd: process.cwd(),
   env: {
     ...process.env,
