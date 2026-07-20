@@ -19,4 +19,4 @@ fi
 
 echo "Warning: ffmpeg not found and Homebrew not available. GIF conversion will be skipped." >&2
 echo "Install manually: brew install ffmpeg" >&2
-exit 0
+exit 1
