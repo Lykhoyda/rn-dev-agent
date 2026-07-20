@@ -140,6 +140,11 @@ Example calls:
    `cdp_run_action`'s side-effect, not from `data.runRecord` (which is
    not present in the response).
 
+   On failure (`ok: false`), the envelope's `error` message and
+   `meta.underlyingFailure` carry the exact underlying Maestro failure
+   (the runner's headline error, or the failing step name) — read those
+   directly instead of digging through the maestro report output.
+
    Branch on `data.autoRepair.outcome`:
    - **`outcome === 'skipped'`** with `attempted: false`: happy path —
      report `✅ <flow-name> passed in <durationMs>ms` and stop.
@@ -149,7 +154,8 @@ Example calls:
      is present) print the one-line patch summary. Suggest the user `git
      diff .rn-agent/actions/<id>.yaml` to inspect.
    - **`outcome === 'failed'`**: post-repair retry still failed —
-     `data.retryOutput` carries the trailing maestro output for
+     `meta.underlyingFailure` carries the exact failure;
+     `data.retryOutput` has the trailing maestro output for deeper
      diagnosis.
    - **`outcome === 'refused'`** with `refusedReason`: auto-repair declined
      (user disabled, file edited since load, repair budget exhausted, or

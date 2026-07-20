@@ -83,6 +83,7 @@ intent = 'default') {
     const mergedFilters = ctx.getConnectFilters();
     const filtersForDiscover = {
         platform: mergedFilters.platform,
+        deviceKind: mergedFilters.deviceKind,
         targetId: mergedFilters.targetId,
         bundleId: mergedFilters.bundleId,
         preferredBundleId: mergedFilters.preferredBundleId,

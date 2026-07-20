@@ -5,7 +5,7 @@ sidebar:
   order: 21
 ---
 
-Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).
+Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).
 
 ## Parameters
 
@@ -14,6 +14,7 @@ Manage device sessions and capture UI snapshots. action=open starts a session (r
 | `action` | `unknown` | No | `'snapshot'` |  |  |
 | `appId` | `unknown` | No |  |  | App bundle ID — required for action=open (e.g. "com.example.app") |
 | `platform` | `unknown` | No |  |  | Target platform — used with action=open to select device |
+| `deviceId` | `unknown` | No |  |  | Exact iOS simulator UDID or Android adb serial to use for action=open |
 | `sessionName` | `string` | No |  |  | Session name override (default: auto-generated) |
 | `attachOnly` | `unknown` | No |  |  |  |
 

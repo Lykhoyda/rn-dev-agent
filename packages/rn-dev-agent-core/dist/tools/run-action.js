@@ -83,6 +83,20 @@ function readMaestroOutput(env) {
     return env.error ?? '';
 }
 /**
+ * maestro_run builds its headline from the full runner stream before slicing
+ * data.output/meta.output. Keep that headline as the authoritative failure
+ * detail so cdp_run_action never reduces a useful terminal step to UNKNOWN just
+ * because the report preamble consumed the bounded output field.
+ */
+function readMaestroFailureDetail(env, output) {
+    if (typeof env.error === 'string' && env.error.trim())
+        return env.error.trim();
+    const failedStep = env.meta?.failedStep;
+    if (typeof failedStep?.name === 'string')
+        return `Maestro flow failed at step "${failedStep.name}"`;
+    return output.trim().slice(0, 1000) || 'Maestro runner returned no failure detail';
+}
+/**
  * Map repair-action's failResult code → an AutoRepairRefusedReason.
  *
  * TODO(repair-action structural disambiguation): the STALE_TARGET branch
@@ -303,6 +317,7 @@ export function createRunActionHandler(deps = {}) {
             const firstEnv = parseEnvelope(firstResult, 'maestro_run');
             const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
             const firstOutput = readMaestroOutput(firstEnv);
+            const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
             if (firstPassed) {
                 // Happy path — append RunRecord with no auto-repair.
                 const autoRepair = {
@@ -463,18 +478,19 @@ export function createRunActionHandler(deps = {}) {
                     durationMs: Date.now() - t0,
                     status: 'fail',
                     failureCode: actionCode,
-                    failureDetail: firstOutput.slice(0, 500),
+                    failureDetail: firstFailureDetail.slice(0, 1000),
                     trigger,
                     autoRepair,
                 });
                 const meta = {
                     actionId: args.actionId,
                     failureKind: failure.kind,
+                    underlyingFailure: firstFailureDetail,
                     autoRepair,
                     firstAttemptOutput: firstOutput.slice(0, 500),
                     ...(cdpJsFallback ? { cdpJsFallback } : {}),
                 };
-                let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}`;
+                let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
                 // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an
                 // opaque dead end in the field — say why and what to do next.
                 if (cdpJsFallback?.reason === 'cdp-unreachable') {
@@ -562,6 +578,7 @@ export function createRunActionHandler(deps = {}) {
             const retryEnv = parseEnvelope(retryResult, 'maestro_run');
             const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
             const retryOutput = readMaestroOutput(retryEnv);
+            const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
             // Issue #120: pull the repair-engine's similarity score and the
             // RepairRecord's timestamp into the AutoRepairOutcome so MTTR can
             // both rank patches by confidence and cross-reference to the
@@ -610,7 +627,7 @@ export function createRunActionHandler(deps = {}) {
                 durationMs: Date.now() - t0,
                 status: retryPassed ? 'pass' : 'fail',
                 failureCode: retryPassed ? undefined : 'SELECTOR_NOT_FOUND',
-                failureDetail: retryPassed ? undefined : retryOutput.slice(0, 500),
+                failureDetail: retryPassed ? undefined : retryFailureDetail.slice(0, 1000),
                 trigger,
                 autoRepair,
             });
@@ -625,11 +642,12 @@ export function createRunActionHandler(deps = {}) {
                     retryOutput: retryOutput.slice(0, 500),
                 });
             }
-            return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}). Retry output suggests a deeper screen change — manual investigation needed.`, 'TESTID_NOT_FOUND', {
+            return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`, 'TESTID_NOT_FOUND', {
                 actionId: args.actionId,
                 autoRepair,
                 firstAttemptOutput: firstOutput.slice(0, 500),
                 retryOutput: retryOutput.slice(0, 500),
+                underlyingFailure: retryFailureDetail,
             });
         }
         catch (err) {

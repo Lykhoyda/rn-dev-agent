@@ -215,6 +215,7 @@ export interface EvaluateResult {
 }
 
 export type ToolErrorCode =
+  | 'TARGET_SESSION_MISMATCH'
   | 'STALE_TARGET'
   | 'HELPERS_STALE'
   | 'RECONNECT_TIMEOUT'

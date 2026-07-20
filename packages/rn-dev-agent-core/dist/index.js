@@ -13,7 +13,7 @@ import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
-import { createStatusHandler } from './tools/status.js';
+import { createStatusHandler, targetMatchesSession } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
@@ -871,7 +871,7 @@ trackedTool('device_screenshot', 'Capture a screenshot of the active device scre
         .optional()
         .describe('JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.'),
 }, createDeviceScreenshotHandler(getClient));
-trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
+trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
     action: z
         .enum(['open', 'close', 'snapshot'])
         .default('snapshot')
@@ -893,7 +893,36 @@ trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots.
         .boolean()
         .optional()
         .describe('action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.'),
-}, createDeviceSnapshotHandler());
+}, createDeviceSnapshotHandler({
+    probeReactNativeUi: async (platform, deviceId, appId) => {
+        const client = getClient();
+        const filters = {
+            platform,
+            bundleId: appId,
+            ...(platform === 'android'
+                ? {
+                    deviceKind: deviceId.startsWith('emulator-')
+                        ? 'emulator'
+                        : 'physical',
+                }
+                : {}),
+        };
+        if (!client.isConnected || !client.helpersInjected)
+            return false;
+        if (!targetMatchesSession(client.connectedTarget, filters))
+            return false;
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+            const probe = await client
+                .evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true')
+                .catch(() => ({ value: false }));
+            if (probe.value === true)
+                return true;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        return false;
+    },
+}));
 trackedTool('device_find', 'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
     text: z.string().describe('Visible text, accessibility label, or identifier to find'),
     action: z
@@ -1329,7 +1358,7 @@ trackedTool('device_pick_date', 'Select a date in a UIDatePicker (wheels mode) /
         .describe('Maestro timeout (default 20000ms).'),
 }, createDevicePickDateHandler());
 trackedTool('device_focus_next', "Move keyboard focus to the next input field by tapping the soft keyboard's Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.", {}, createDeviceFocusNextHandler());
-trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level.', {
+trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT always aborts the batch (the native operation may still be completing, so later steps are never started) regardless of optional/continueOnError.', {
     steps: z
         .array(z.object({
         action: z
@@ -1367,11 +1396,11 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
         optional: z
             .boolean()
             .optional()
-            .describe('Skip this step on failure instead of aborting'),
+            .describe('Skip this step on failure instead of aborting (timeouts still abort)'),
         timeoutMs: z
             .number()
             .optional()
-            .describe('Per-step timeout override in ms. Default 15000.'),
+            .describe('Per-step timeout override in ms. Default 15000. A timed-out step aborts the batch even when optional/continueOnError is set.'),
         settle: z
             .boolean()
             .optional()

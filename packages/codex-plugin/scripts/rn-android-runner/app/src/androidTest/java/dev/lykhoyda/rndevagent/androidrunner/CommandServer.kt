@@ -54,6 +54,8 @@ class CommandServer(port: Int, private val pluginVersion: String? = null) : Nano
             errorResponse(command, "SET_TEXT_REJECTED", e.message ?: "set text rejected", Response.Status.OK)
         } catch (e: SnapshotParseException) {
             errorResponse(command, "SNAPSHOT_PARSE_FAILED", e.message ?: "snapshot parse failed", Response.Status.OK)
+        } catch (e: AccessibilityUnavailableException) {
+            errorResponse(command, "ACCESSIBILITY_UNAVAILABLE", e.message ?: "accessibility unavailable", Response.Status.OK)
         } catch (t: Throwable) {
             errorResponse(command, "RUNNER_ERROR", t.message ?: t.javaClass.name, Response.Status.INTERNAL_ERROR)
         }

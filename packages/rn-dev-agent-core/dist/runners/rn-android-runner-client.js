@@ -797,6 +797,9 @@ function mapRunnerNodesToFlat(nodes) {
     }
     return out;
 }
+export function shouldRecoverAndroidAccessibility(command, response) {
+    return (command === 'snapshot' && !response.ok && response.error?.code === 'ACCESSIBILITY_UNAVAILABLE');
+}
 export async function runAndroid(args) {
     if (args._staleRef) {
         return failResult(`Element at ref ${args._staleRef} no longer hittable - UI re-rendered since snapshot`, 'STALE_REF', {
@@ -860,11 +863,26 @@ export async function runAndroid(args) {
         }
         throw err;
     }
+    // A foreground app can survive an inline stop/relaunch while UiAutomation's
+    // accessibility connection does not. One instrumentation restart is the
+    // smallest recovery: it preserves app state, rebinds accessibility, and
+    // retries the read exactly once. A second failure remains explicit.
+    let accessibilityRecovery;
+    if (shouldRecoverAndroidAccessibility(args.command, resp)) {
+        await stopAndroidRunner(args.deviceId);
+        await startAndroidRunner(args.deviceId, args.bundleId);
+        ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+        if (resp.ok)
+            accessibilityRecovery = 'runner-restarted';
+    }
     // Story 14 (#407): recovery happened INSIDE postCommandWithRecovery (before the
     // catch above), so an unrecovered ambiguous failure still maps to
     // RN_ANDROID_RUNNER_DOWN — only a resolved recovery reaches here, folded into
     // every result the tool builds.
-    const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
+    const recoveryMeta = {
+        ...(recovery ? { transportRecovery: recovery } : {}),
+        ...(accessibilityRecovery ? { accessibilityRecovery } : {}),
+    };
     if (!resp.ok) {
         const message = resp.error?.message ?? 'Android runner returned !ok with no error';
         const code = resp.error?.code;
