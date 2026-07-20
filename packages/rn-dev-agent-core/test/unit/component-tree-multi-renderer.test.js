@@ -224,17 +224,16 @@ test('B143 A3 (Gemini 80) + Issue #126: per-renderer throw does NOT poison the u
 
 // ── Regression guard against IIFE/TS-mirror drift ─────────────────────
 
-test('B143 + Issue #126: injected helpers contain findAllRootFibers with MAX_RENDERER_IDS loop', () => {
+test('B143 + GH #597: injected root iteration prefers registered renderer IDs', () => {
   const src = INJECTED_HELPERS;
   assert.match(
     src,
     /function findAllRootFibers\(\)/,
     'findAllRootFibers function missing from injected helpers',
   );
-  // GH #126 Gap B Task 3 refactor: findAllRootFibers now delegates to
-  // iterateAllRoots — the renderer-loop invariants live there. The shared
-  // primitive still walks 1..MAX_RENDERER_IDS, uses hook.getFiberRoots(ri),
-  // and the wrapper still emits the {rendererId, fiber} shape via cb args.
+  // findAllRootFibers delegates to iterateAllRoots. The shared primitive
+  // enumerates the DevTools renderer registry first, while retaining bounded
+  // numeric probing for older hook shims that do not expose renderers.keys().
   assert.match(
     src,
     /function iterateAllRoots\(cb\)/,
@@ -242,9 +241,15 @@ test('B143 + Issue #126: injected helpers contain findAllRootFibers with MAX_REN
   );
   assert.match(
     src,
-    /for \(var ri = 1; ri <= MAX_RENDERER_IDS; ri\+\+\)/,
-    'renderer loop missing or no longer uses MAX_RENDERER_IDS constant',
+    /function getRegisteredRendererIds\(hook\)/,
+    'registered renderer ID enumeration missing',
   );
+  assert.match(
+    src,
+    /hook\.renderers\.keys\(\)/,
+    'renderer IDs are not sourced from the DevTools registry',
+  );
+  assert.match(src, /fallbackId <= MAX_RENDERER_IDS/, 'legacy MAX_RENDERER_IDS fallback missing');
   assert.match(src, /var MAX_RENDERER_IDS = 20;/, 'MAX_RENDERER_IDS constant missing or not 20');
   assert.match(src, /hook\.getFiberRoots\(ri\)/, 'hook.getFiberRoots(ri) iteration missing');
   // findAllRootFibers cb pushes {rendererId, fiber} into the output array.
@@ -303,6 +308,22 @@ test('B143 A3 (Gemini 80): IIFE wraps per-renderer getFiberRoots in try/catch', 
   const slice = src.split('function iterateAllRoots')[1]?.split('function ')[0] ?? '';
   assert.match(slice, /try \{/, 'iterateAllRoots missing try guard around getFiberRoots');
   assert.match(slice, /catch \(_\)/, 'iterateAllRoots missing per-renderer catch');
+});
+
+test('GH #597: a renderers iterator that never reports done falls back to the numeric probe', () => {
+  const f1 = { tag: 'r1' };
+  const hook = {
+    renderers: {
+      keys: () => ({ next: () => ({ done: false, value: 1 }) }),
+    },
+    getFiberRoots(ri) {
+      return ri === 1 ? makeRootsMap([f1]) : null;
+    },
+  };
+  const result = findAllRootFibersForTest(hook);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].rendererId, 1);
+  assert.equal(result[0].fiber, f1);
 });
 
 test('B143 Codex #1 (conf 82): scan budget scales with rootsSeeded count', () => {

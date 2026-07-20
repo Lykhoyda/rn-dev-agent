@@ -102,7 +102,7 @@ test('getTree: a throwing renderer degrades the verdict (renderer-error)', () =>
   assert.ok(result.tree, 'partial tree is still returned, just marked degraded');
 });
 
-test('getTree: renderer registered beyond the early-exit window fails with renderers-unscanned (#126 class)', () => {
+test('getTree: renderer registered beyond the legacy early-exit window is scanned (GH #597, was #126 class)', () => {
   const fiber = userComp('App', null);
   const hook = {
     renderers: new Map([[9, {}]]),
@@ -110,11 +110,15 @@ test('getTree: renderer registered beyond the early-exit window fails with rende
   };
   const sandbox = createSandbox({ hook });
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ maxDepth: 4 }));
-  assert.ok(result.error, 'walk still bails (behavior unchanged)');
-  assert.equal(result.verdict.state, 'failed');
-  assert.ok(result.verdict.reasons.includes('no-renderer'));
-  assert.ok(result.verdict.reasons.includes('renderers-unscanned'));
-  assert.ok(result.verdict.unscannedRendererIds.includes(9));
+  assert.equal(
+    result.error,
+    undefined,
+    'registered renderer 9 is discovered via the registry union',
+  );
+  assert.ok(result.tree, 'tree from the high-id renderer is returned');
+  assert.equal(result.verdict.state, 'ok');
+  assert.ok(!result.verdict.reasons.includes('renderers-unscanned'));
+  assert.deepEqual(result.verdict.unscannedRendererIds ?? [], []);
 });
 
 test('getTree: filter no-match after budget exhaustion is degraded, not a clean empty', () => {

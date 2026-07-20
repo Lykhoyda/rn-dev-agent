@@ -27359,20 +27359,19 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 35;
+    HELPERS_VERSION = 38;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
   if (globalThis.__RN_AGENT && globalThis.__RN_AGENT.__v === __HELPERS_VERSION__) return;
   if (globalThis.__RN_AGENT) delete globalThis.__RN_AGENT;
 
-  // Issue #126 \u2014 renderer iteration cap. Was hard-coded 5; bumped to 20
-  // with an early-exit-after-3-empty heuristic so the common case (1-3
-  // renderers) still exits fast. Each getFiberRoots(N) call is a Map
-  // lookup so iteration cost is negligible. Kept as a single constant
-  // so all call sites stay in sync (multi-LLM review of issue #126
-  // identified 5 hard-coded sites that previously drifted).
+  // Issue #126 \u2014 legacy renderer iteration cap. Root-union scans combine this
+  // numeric range with the hook's registered IDs so sparse/higher IDs are not
+  // missed and partially implemented hook registries retain legacy coverage
+  // (GH #597). The early-exit heuristic applies only when no registry is usable.
   var MAX_RENDERER_IDS = 20;
+  var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
   // Reset by every root-iteration pass; only valid when read synchronously
@@ -27391,22 +27390,53 @@ var init_injected_helpers = __esm({
     } catch (_) { return []; }
   }
 
+  // Read the renderer IDs React DevTools actually registered. A malformed or
+  // overflowing iterator returns an empty list and is isolated from discovery.
+  // Callers union successful results with the legacy numeric range so partial
+  // hook-shim registries cannot hide otherwise discoverable roots.
+  function getRegisteredRendererIds(hook) {
+    try {
+      if (!hook || !hook.renderers || typeof hook.renderers.keys !== 'function') return [];
+      var iterator = hook.renderers.keys();
+      if (!iterator || typeof iterator.next !== 'function') return [];
+      var ids = [];
+      var step;
+      var iterations = 0;
+      while (!(step = iterator.next()).done) {
+        if (++iterations > MAX_REGISTERED_RENDERER_IDS) return [];
+        var id = step.value;
+        if (typeof id === 'number' && ids.indexOf(id) === -1) ids.push(id);
+      }
+      return ids;
+    } catch (_) {
+      return [];
+    }
+  }
+
   function findActiveRenderer() {
     lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
+    var rendererIds = getRegisteredRendererIds(hook);
+    var usingRegisteredIds = rendererIds.length > 0;
+    for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+      if (rendererIds.indexOf(fallbackId) === -1) rendererIds.push(fallbackId);
+    }
     var emptyStreak = 0;
-    for (var i = 1; i <= MAX_RENDERER_IDS; i++) {
-      lastRootScan.probedUpTo = i;
+    for (var rii = 0; rii < rendererIds.length; rii++) {
+      var ri = rendererIds[rii];
+      if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
       try {
-        var roots = hook.getFiberRoots(i);
+        var roots = hook.getFiberRoots(ri);
         if (roots && roots.size > 0) {
-          return { rendererId: i, roots: roots };
+          return { rendererId: ri, roots: roots };
         }
-        emptyStreak++;
-        if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && i >= 5) return null;
+        if (!usingRegisteredIds) {
+          emptyStreak++;
+          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
+        }
       } catch (_) {
-        emptyStreak++;
+        if (!usingRegisteredIds) emptyStreak++;
         lastRootScan.rendererErrors++;
       }
     }
@@ -27429,9 +27459,15 @@ var init_injected_helpers = __esm({
     lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
+      var rendererIds = getRegisteredRendererIds(hook);
+      var usingRegisteredIds = rendererIds.length > 0;
+      for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+        if (rendererIds.indexOf(fallbackId) === -1) rendererIds.push(fallbackId);
+      }
       var emptyStreak = 0;
-      for (var ri = 1; ri <= MAX_RENDERER_IDS; ri++) {
-        lastRootScan.probedUpTo = ri;
+      for (var rii = 0; rii < rendererIds.length; rii++) {
+        var ri = rendererIds[rii];
+        if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
         try {
           var roots = hook.getFiberRoots(ri);
           if (roots && roots.size) {
@@ -27444,12 +27480,12 @@ var init_injected_helpers = __esm({
                 if (result) return result;
               }
             }
-          } else {
+          } else if (!usingRegisteredIds) {
             emptyStreak++;
             if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) break;
           }
         } catch (_) {
-          emptyStreak++;
+          if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
         }
       }
@@ -30344,12 +30380,24 @@ var init_injected_helpers = __esm({
     REACT_READY_PROBE_JS = `(function() {
   var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!h || typeof h.getFiberRoots !== 'function') return false;
-  // Scan the same 1..20 rendererID range as findActiveRenderer/findAllRootFibers
-  // so the readiness gate can't miss a late-registered renderer (Bridgeless +
-  // Reanimated register secondary renderers above id 5).
-  for (var i = 1; i <= 20; i++) {
+  var ids = [];
+  try {
+    if (h.renderers && typeof h.renderers.keys === 'function') {
+      var iterator = h.renderers.keys();
+      var step;
+      var iterations = 0;
+      while (iterator && typeof iterator.next === 'function' && !(step = iterator.next()).done) {
+        if (++iterations > 100) { ids = []; break; }
+        if (typeof step.value === 'number' && ids.indexOf(step.value) === -1) ids.push(step.value);
+      }
+    }
+  } catch (_) { ids = []; }
+  for (var fallbackId = 1; fallbackId <= 20; fallbackId++) {
+    if (ids.indexOf(fallbackId) === -1) ids.push(fallbackId);
+  }
+  for (var i = 0; i < ids.length; i++) {
     try {
-      var r = h.getFiberRoots(i);
+      var r = h.getFiberRoots(ids[i]);
       if (r && r.size > 0) return true;
     } catch (_) { /* one throwing renderer must not abort the readiness scan */ }
   }
