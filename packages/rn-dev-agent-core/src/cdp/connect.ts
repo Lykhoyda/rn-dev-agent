@@ -54,6 +54,7 @@ export function shouldRunPickerProbe(intent: ConnectIntent, target: HermesTarget
 
 export interface ConnectFilters {
   platform?: string;
+  deviceKind?: 'emulator' | 'physical';
   targetId?: string;
   bundleId?: string;
   preferredBundleId?: string;
@@ -143,6 +144,7 @@ export async function discoverAndConnect(
   const mergedFilters = ctx.getConnectFilters();
   const filtersForDiscover: SelectTargetFilters = {
     platform: mergedFilters.platform,
+    deviceKind: mergedFilters.deviceKind,
     targetId: mergedFilters.targetId,
     bundleId: mergedFilters.bundleId,
     preferredBundleId: mergedFilters.preferredBundleId,

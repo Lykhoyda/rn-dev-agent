@@ -239,6 +239,22 @@ export function selectTarget(validTargets, filtersOrPlatform) {
         : (filtersOrPlatform ?? {});
     let filteredTargets = validTargets;
     const warnings = [];
+    if (filters.deviceKind) {
+        const deviceMatched = filteredTargets.filter((target) => {
+            if (!target.deviceName)
+                return false;
+            const emulator = /sdk_gphone|emulator|\bapi\s+\d+\b/i.test(target.deviceName);
+            return filters.deviceKind === (emulator ? 'emulator' : 'physical');
+        });
+        if (deviceMatched.length === 0) {
+            return {
+                targets: [],
+                warning: `No ${filters.deviceKind} CDP target matched the active Android session. ` +
+                    `Available devices: ${filteredTargets.map((target) => target.deviceName ?? '<identity unavailable>').join(', ')}`,
+            };
+        }
+        filteredTargets = deviceMatched;
+    }
     // B111 (D643): explicit targetId hard-fails on no match — silent fallthrough
     // would silently connect the caller to a different target than requested.
     if (filters.targetId) {
@@ -362,6 +378,8 @@ export async function discover(currentPort, platformFilterOrFilters) {
     const hints = [];
     if (filters.platform)
         hints.push(`platform=${filters.platform}`);
+    if (filters.deviceKind)
+        hints.push(`deviceKind=${filters.deviceKind}`);
     if (filters.targetId)
         hints.push(`targetId=${filters.targetId}`);
     if (filters.bundleId)

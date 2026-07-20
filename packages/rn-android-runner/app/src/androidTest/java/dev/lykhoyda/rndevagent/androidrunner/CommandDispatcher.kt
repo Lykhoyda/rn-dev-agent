@@ -37,6 +37,7 @@ class NoFocusedInputException(message: String) : IllegalStateException(message)
 class SetTextRejectedException(message: String) : IllegalStateException(message)
 
 class SnapshotParseException(message: String) : IllegalStateException(message)
+class AccessibilityUnavailableException(message: String) : IllegalStateException(message)
 
 class CommandDispatcher(
     private val instrumentation: Instrumentation,
@@ -165,7 +166,12 @@ class CommandDispatcher(
 
     private fun snapshot(appPackage: String?): JSONObject {
         if (appPackage != null) {
-            device.wait(Until.hasObject(By.pkg(appPackage)), 10_000)
+            val accessible = device.wait(Until.hasObject(By.pkg(appPackage)), 10_000)
+            if (!accessible) {
+                throw AccessibilityUnavailableException(
+                    "App $appPackage is foreground but absent from UIAutomator accessibility after 10000ms; restart the rn-android-runner session or fix the app's accessibility exposure"
+                )
+            }
         }
 
         val bytes = ByteArrayOutputStream()

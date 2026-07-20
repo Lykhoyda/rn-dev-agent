@@ -13,7 +13,7 @@ import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
-import { createStatusHandler } from './tools/status.js';
+import { createStatusHandler, targetMatchesSession } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
@@ -871,7 +871,7 @@ trackedTool('device_screenshot', 'Capture a screenshot of the active device scre
         .optional()
         .describe('JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.'),
 }, createDeviceScreenshotHandler(getClient));
-trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
+trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
     action: z
         .enum(['open', 'close', 'snapshot'])
         .default('snapshot')
@@ -893,7 +893,36 @@ trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots.
         .boolean()
         .optional()
         .describe('action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.'),
-}, createDeviceSnapshotHandler());
+}, createDeviceSnapshotHandler({
+    probeReactNativeUi: async (platform, deviceId, appId) => {
+        const client = getClient();
+        const filters = {
+            platform,
+            bundleId: appId,
+            ...(platform === 'android'
+                ? {
+                    deviceKind: deviceId.startsWith('emulator-')
+                        ? 'emulator'
+                        : 'physical',
+                }
+                : {}),
+        };
+        if (!client.isConnected || !client.helpersInjected)
+            return false;
+        if (!targetMatchesSession(client.connectedTarget, filters))
+            return false;
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+            const probe = await client
+                .evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true')
+                .catch(() => ({ value: false }));
+            if (probe.value === true)
+                return true;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        return false;
+    },
+}));
 trackedTool('device_find', 'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
     text: z.string().describe('Visible text, accessibility label, or identifier to find'),
     action: z

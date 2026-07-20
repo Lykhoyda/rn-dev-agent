@@ -19,6 +19,7 @@ import {
   stopAndroidRunner,
   resolveAndroidSerial,
   startAndroidRunner,
+  runAndroid,
   consumePendingAndroidUpgradeNote,
 } from '../runners/rn-android-runner-client.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
@@ -159,13 +160,27 @@ async function defaultAndroidProbe(bundleId: string): Promise<boolean> {
   }
 }
 
-export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<ToolResult> {
+export function createDeviceSnapshotHandler(
+  deps: {
+    probeAndroidUi?: (deviceId: string, appId: string) => Promise<ToolResult>;
+    probeReactNativeUi?: (
+      platform: 'ios' | 'android',
+      deviceId: string,
+      appId: string,
+    ) => Promise<boolean>;
+  } = {},
+): (args: SnapshotArgs) => Promise<ToolResult> {
+  const probeAndroidUi =
+    deps.probeAndroidUi ??
+    ((deviceId: string, appId: string) =>
+      runAndroid({ command: 'snapshot', deviceId, bundleId: appId, interactiveOnly: false }));
   return async (args) => {
     const action = args.action ?? 'snapshot';
 
     if (action === 'open') {
       let appId = args.appId;
       let autoDetected = false;
+      let reactNativeUiReady: boolean | null = null;
 
       if (!appId) {
         const platform = args.platform ?? 'ios';
@@ -311,6 +326,19 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
               { timeout: 10_000, encoding: 'utf8' },
             );
           }
+          const readiness = await probeAndroidUi(deviceId, appId);
+          if (readiness.isError) {
+            const envelope = JSON.parse(readiness.content[0]?.text ?? '{}') as {
+              error?: string;
+              code?: string;
+            };
+            throw new Error(
+              `${envelope.code ?? 'ANDROID_UI_NOT_READY'}: ${envelope.error ?? 'the app did not expose its UI through accessibility after launch'}`,
+            );
+          }
+          reactNativeUiReady = deps.probeReactNativeUi
+            ? await deps.probeReactNativeUi('android', deviceId, appId).catch(() => false)
+            : null;
         }
       } catch (err) {
         releaseDeviceLockForSession();
@@ -437,12 +465,31 @@ export function createDeviceSnapshotHandler(): (args: SnapshotArgs) => Promise<T
         }
       }
 
-      const data = { ok: true, sessionName, platform, deviceId, appId };
+      const data = {
+        ok: true,
+        sessionName,
+        platform,
+        deviceId,
+        appId,
+        readiness:
+          platform === 'android'
+            ? {
+                appForeground: true,
+                accessibilityUi: true,
+                reactNativeUi: reactNativeUiReady === true ? 'ready' : ('unverified' as const),
+              }
+            : { appForeground: true },
+      };
+      const readinessWarning =
+        platform === 'android' && reactNativeUiReady !== true
+          ? 'Android app accessibility is ready, but the React Native helper boundary is unverified; run cdp_status and require capabilities.fiberTree=true before treating launch as RN-ready'
+          : null;
       let result: ToolResult;
-      if (autoDetected || foreign) {
+      if (autoDetected || foreign || readinessWarning) {
         const warning = [
           autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
           foreign ? foreign.warning : null,
+          readinessWarning,
         ]
           .filter(Boolean)
           .join('; ');

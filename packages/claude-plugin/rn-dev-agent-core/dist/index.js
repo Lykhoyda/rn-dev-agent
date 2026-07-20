@@ -18750,6 +18750,21 @@ function selectTarget(validTargets, filtersOrPlatform) {
   const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
   let filteredTargets = validTargets;
   const warnings = [];
+  if (filters.deviceKind) {
+    const deviceMatched = filteredTargets.filter((target) => {
+      if (!target.deviceName)
+        return false;
+      const emulator = /sdk_gphone|emulator|\bapi\s+\d+\b/i.test(target.deviceName);
+      return filters.deviceKind === (emulator ? "emulator" : "physical");
+    });
+    if (deviceMatched.length === 0) {
+      return {
+        targets: [],
+        warning: `No ${filters.deviceKind} CDP target matched the active Android session. Available devices: ${filteredTargets.map((target) => target.deviceName ?? "<identity unavailable>").join(", ")}`
+      };
+    }
+    filteredTargets = deviceMatched;
+  }
   if (filters.targetId) {
     const idMatched = validTargets.filter((t) => t.id === filters.targetId);
     if (idMatched.length === 0) {
@@ -18844,6 +18859,8 @@ async function discover(currentPort, platformFilterOrFilters) {
   const hints = [];
   if (filters.platform)
     hints.push(`platform=${filters.platform}`);
+  if (filters.deviceKind)
+    hints.push(`deviceKind=${filters.deviceKind}`);
   if (filters.targetId)
     hints.push(`targetId=${filters.targetId}`);
   if (filters.bundleId)
@@ -21311,6 +21328,7 @@ __export(rn_android_runner_client_exports, {
   resolveAndroidInstallAction: () => resolveAndroidInstallAction,
   resolveAndroidSerial: () => resolveAndroidSerial,
   runAndroid: () => runAndroid,
+  shouldRecoverAndroidAccessibility: () => shouldRecoverAndroidAccessibility,
   shouldReuseAndroidRunner: () => shouldReuseAndroidRunner,
   startAndroidRunner: () => startAndroidRunner,
   stopAndroidRunner: () => stopAndroidRunner,
@@ -21909,6 +21927,9 @@ function mapRunnerNodesToFlat2(nodes) {
   }
   return out;
 }
+function shouldRecoverAndroidAccessibility(command, response) {
+  return command === "snapshot" && !response.ok && response.error?.code === "ACCESSIBILITY_UNAVAILABLE";
+}
 async function runAndroid(args) {
   if (args._staleRef) {
     return failResult(`Element at ref ${args._staleRef} no longer hittable - UI re-rendered since snapshot`, "STALE_REF", {
@@ -21964,7 +21985,18 @@ async function runAndroid(args) {
     }
     throw err;
   }
-  const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
+  let accessibilityRecovery;
+  if (shouldRecoverAndroidAccessibility(args.command, resp)) {
+    await stopAndroidRunner(args.deviceId);
+    await startAndroidRunner(args.deviceId, args.bundleId);
+    ({ resp, recovery } = await postCommandWithRecovery2(withKeyboardGuard(body, args.command, process.env)));
+    if (resp.ok)
+      accessibilityRecovery = "runner-restarted";
+  }
+  const recoveryMeta = {
+    ...recovery ? { transportRecovery: recovery } : {},
+    ...accessibilityRecovery ? { accessibilityRecovery } : {}
+  };
   if (!resp.ok) {
     const message = resp.error?.message ?? "Android runner returned !ok with no error";
     const code = resp.error?.code;
@@ -25087,12 +25119,14 @@ async function defaultAndroidProbe(bundleId) {
     return false;
   }
 }
-function createDeviceSnapshotHandler() {
+function createDeviceSnapshotHandler(deps = {}) {
+  const probeAndroidUi = deps.probeAndroidUi ?? ((deviceId, appId) => runAndroid({ command: "snapshot", deviceId, bundleId: appId, interactiveOnly: false }));
   return async (args) => {
     const action = args.action ?? "snapshot";
     if (action === "open") {
       let appId = args.appId;
       let autoDetected = false;
+      let reactNativeUiReady = null;
       if (!appId) {
         const platform2 = args.platform ?? "ios";
         appId = resolveBundleId(platform2) ?? void 0;
@@ -25167,6 +25201,12 @@ function createDeviceSnapshotHandler() {
               "1"
             ], { timeout: 1e4, encoding: "utf8" });
           }
+          const readiness = await probeAndroidUi(deviceId, appId);
+          if (readiness.isError) {
+            const envelope = JSON.parse(readiness.content[0]?.text ?? "{}");
+            throw new Error(`${envelope.code ?? "ANDROID_UI_NOT_READY"}: ${envelope.error ?? "the app did not expose its UI through accessibility after launch"}`);
+          }
+          reactNativeUiReady = deps.probeReactNativeUi ? await deps.probeReactNativeUi("android", deviceId, appId).catch(() => false) : null;
         }
       } catch (err) {
         releaseDeviceLockForSession();
@@ -25243,12 +25283,25 @@ function createDeviceSnapshotHandler() {
           }
         }
       }
-      const data = { ok: true, sessionName, platform, deviceId, appId };
+      const data = {
+        ok: true,
+        sessionName,
+        platform,
+        deviceId,
+        appId,
+        readiness: platform === "android" ? {
+          appForeground: true,
+          accessibilityUi: true,
+          reactNativeUi: reactNativeUiReady === true ? "ready" : "unverified"
+        } : { appForeground: true }
+      };
+      const readinessWarning = platform === "android" && reactNativeUiReady !== true ? "Android app accessibility is ready, but the React Native helper boundary is unverified; run cdp_status and require capabilities.fiberTree=true before treating launch as RN-ready" : null;
       let result2;
-      if (autoDetected || foreign) {
+      if (autoDetected || foreign || readinessWarning) {
         const warning = [
           autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
-          foreign ? foreign.warning : null
+          foreign ? foreign.warning : null,
+          readinessWarning
         ].filter(Boolean).join("; ");
         const meta = { ...foreign ? foreign.meta : {} };
         if (foreignDetectMs !== void 0)
@@ -45823,6 +45876,7 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
   const mergedFilters = ctx.getConnectFilters();
   const filtersForDiscover = {
     platform: mergedFilters.platform,
+    deviceKind: mergedFilters.deviceKind,
     targetId: mergedFilters.targetId,
     bundleId: mergedFilters.bundleId,
     preferredBundleId: mergedFilters.preferredBundleId
@@ -48002,6 +48056,33 @@ function getEngineStatus(resolvers) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/status.js
+init_agent_device_wrapper();
+function sessionConnectFilters(session) {
+  if (!session || session.platform !== "ios" && session.platform !== "android")
+    return null;
+  return {
+    platform: session.platform,
+    ...session.appId ? { bundleId: session.appId } : {},
+    ...session.platform === "android" && session.deviceId ? { deviceKind: session.deviceId.startsWith("emulator-") ? "emulator" : "physical" } : {}
+  };
+}
+function targetMatchesSession(target, filters) {
+  if (!target)
+    return false;
+  if (filters.platform && target.platform !== filters.platform)
+    return false;
+  if (filters.bundleId && (target.description ?? "").toLowerCase() !== filters.bundleId.toLowerCase()) {
+    return false;
+  }
+  if (filters.deviceKind) {
+    if (!target.deviceName)
+      return false;
+    const targetKind = /sdk_gphone|emulator|\bapi\s+\d+\b/i.test(target.deviceName) ? "emulator" : "physical";
+    if (targetKind !== filters.deviceKind)
+      return false;
+  }
+  return true;
+}
 function narrowArchitecture(raw) {
   return raw === "new" || raw === "old" ? raw : "unknown";
 }
@@ -48143,6 +48224,12 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
     }
     try {
       let client2 = getClient2();
+      const session = getActiveSession();
+      const sessionFilters = sessionConnectFilters(session);
+      if (args.platform && sessionFilters?.platform && args.platform.toLowerCase() !== sessionFilters.platform) {
+        return failResult(`cdp_status requested ${args.platform}, but the active device session is bound to ${sessionFilters.platform} ${session?.deviceId}. Close that session or request the same platform; refusing to target a different device silently.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
+      }
+      const connectFilters = sessionFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
       if (args.metroPort && args.metroPort !== client2.metroPort) {
         await client2.disconnect();
         client2 = createClient2(args.metroPort);
@@ -48155,7 +48242,7 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
           }
         } catch {
         }
-        if (client2.reconnectState.active && !args.platform) {
+        if (client2.reconnectState.active && !args.platform && !sessionFilters) {
           await client2.softReconnect();
         } else {
           if (client2.reconnectState.active) {
@@ -48163,19 +48250,13 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
             client2 = createClient2(client2.metroPort);
             setClient2(client2);
           }
-          await client2.autoConnect(args.metroPort, args.platform, "status");
+          await client2.autoConnect(args.metroPort, connectFilters, "status");
         }
-      } else if (args.platform) {
-        const currentTarget = client2.connectedTarget;
-        const requestedPlatform = args.platform.toLowerCase();
-        const currentPlatform = currentTarget?.platform?.toLowerCase();
-        const titleMatch = `${currentTarget?.title ?? ""} ${currentTarget?.description ?? ""}`.toLowerCase().includes(requestedPlatform);
-        if (currentPlatform !== requestedPlatform && !titleMatch) {
-          await client2.disconnect();
-          client2 = createClient2(client2.metroPort);
-          setClient2(client2);
-          await client2.autoConnect(args.metroPort, args.platform, "status");
-        }
+      } else if (!targetMatchesSession(client2.connectedTarget, connectFilters)) {
+        await client2.disconnect();
+        client2 = createClient2(client2.metroPort);
+        setClient2(client2);
+        await client2.autoConnect(args.metroPort, connectFilters, "status");
       }
       const status = await buildStatusResult(client2);
       let autoRecoveredMessage;
@@ -50476,10 +50557,14 @@ function createDeviceBatchHandler() {
       const stepStart = Date.now();
       const stepTimeout = step.timeoutMs ?? 15e3;
       let stepTimer;
+      let stepTimedOut = false;
       const result = await Promise.race([
         executeStep(step),
         new Promise((resolve5) => {
-          stepTimer = setTimeout(() => resolve5(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms`)), stepTimeout);
+          stepTimer = setTimeout(() => {
+            stepTimedOut = true;
+            resolve5(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
+          }, stepTimeout);
         })
       ]);
       if (stepTimer)
@@ -50505,7 +50590,7 @@ function createDeviceBatchHandler() {
         stepResult.data = extractData(result);
       }
       results.push(stepResult);
-      if (!success && !step.optional) {
+      if (!success && (!step.optional || stepTimedOut)) {
         if (screenshotOn === "failure" || screenshotOn === "each") {
           try {
             const ssResult = await captureAndResizeScreenshot({});
@@ -50515,7 +50600,7 @@ function createDeviceBatchHandler() {
           } catch {
           }
         }
-        if (continueOnError) {
+        if (continueOnError && !stepTimedOut) {
           failureRecords.push(stepResult);
         } else {
           failedStep = stepResult;
@@ -53236,6 +53321,14 @@ function readMaestroOutput(env) {
     return metaOutput;
   return env.error ?? "";
 }
+function readMaestroFailureDetail(env, output) {
+  if (typeof env.error === "string" && env.error.trim())
+    return env.error.trim();
+  const failedStep = env.meta?.failedStep;
+  if (typeof failedStep?.name === "string")
+    return `Maestro flow failed at step "${failedStep.name}"`;
+  return output.trim().slice(0, 1e3) || "Maestro runner returned no failure detail";
+}
 function mapRefusedReason(repairCode, repairError) {
   if (repairCode === "SNAPSHOT_FAILED")
     return "SNAPSHOT_FAILED";
@@ -53388,6 +53481,7 @@ function createRunActionHandler(deps = {}) {
       const firstEnv = parseEnvelope(firstResult, "maestro_run");
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
       const firstOutput = readMaestroOutput(firstEnv);
+      const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
       if (firstPassed) {
         const autoRepair2 = {
           attempted: false,
@@ -53517,18 +53611,19 @@ function createRunActionHandler(deps = {}) {
           durationMs: Date.now() - t0,
           status: "fail",
           failureCode: actionCode,
-          failureDetail: firstOutput.slice(0, 500),
+          failureDetail: firstFailureDetail.slice(0, 1e3),
           trigger,
           autoRepair: autoRepair2
         });
         const meta = {
           actionId: args.actionId,
           failureKind: failure.kind,
+          underlyingFailure: firstFailureDetail,
           autoRepair: autoRepair2,
           firstAttemptOutput: firstOutput.slice(0, 500),
           ...cdpJsFallback ? { cdpJsFallback } : {}
         };
-        let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}`;
+        let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
         if (cdpJsFallback?.reason === "cdp-unreachable") {
           message += ". Maestro failed before completing the flow (on iOS 26.x WDA often dies at startup) and the CDP/JS replay fallback was skipped: CDP was unreachable after the flow. Check cdp_status and reconnect, then retry; if another XCUITest automation is driving this simulator, stop it first.";
         }
@@ -53601,6 +53696,7 @@ function createRunActionHandler(deps = {}) {
       const retryEnv = parseEnvelope(retryResult, "maestro_run");
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
       const retryOutput = readMaestroOutput(retryEnv);
+      const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
       const repairScore = repairEnv.data?.score;
       const repairTimestamp = reloadedAction.state.repairHistory.length > 0 ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp : void 0;
       let nextFailedSelector;
@@ -53632,7 +53728,7 @@ function createRunActionHandler(deps = {}) {
         durationMs: Date.now() - t0,
         status: retryPassed ? "pass" : "fail",
         failureCode: retryPassed ? void 0 : "SELECTOR_NOT_FOUND",
-        failureDetail: retryPassed ? void 0 : retryOutput.slice(0, 500),
+        failureDetail: retryPassed ? void 0 : retryFailureDetail.slice(0, 1e3),
         trigger,
         autoRepair
       });
@@ -53647,11 +53743,12 @@ function createRunActionHandler(deps = {}) {
           retryOutput: retryOutput.slice(0, 500)
         });
       }
-      return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}). Retry output suggests a deeper screen change \u2014 manual investigation needed.`, "TESTID_NOT_FOUND", {
+      return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`, "TESTID_NOT_FOUND", {
         actionId: args.actionId,
         autoRepair,
         firstAttemptOutput: firstOutput.slice(0, 500),
-        retryOutput: retryOutput.slice(0, 500)
+        retryOutput: retryOutput.slice(0, 500),
+        underlyingFailure: retryFailureDetail
       });
     } catch (err) {
       const msg3 = err instanceof Error ? err.message : String(err);
@@ -62668,14 +62765,37 @@ trackedTool("device_screenshot", "Capture a screenshot of the active device scre
   maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
   quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
 }, createDeviceScreenshotHandler(getClient));
-trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).", {
+trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).", {
   action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
   appId: external_exports.string().optional().describe('App bundle ID \u2014 required for action=open (e.g. "com.example.app")'),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),
   deviceId: external_exports.string().optional().describe("Exact iOS simulator UDID or Android adb serial to use for action=open"),
   sessionName: external_exports.string().optional().describe("Session name override (default: auto-generated)"),
   attachOnly: external_exports.boolean().optional().describe("action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.")
-}, createDeviceSnapshotHandler());
+}, createDeviceSnapshotHandler({
+  probeReactNativeUi: async (platform, deviceId, appId) => {
+    const client2 = getClient();
+    const filters = {
+      platform,
+      bundleId: appId,
+      ...platform === "android" ? {
+        deviceKind: deviceId.startsWith("emulator-") ? "emulator" : "physical"
+      } : {}
+    };
+    if (!client2.isConnected || !client2.helpersInjected)
+      return false;
+    if (!targetMatchesSession(client2.connectedTarget, filters))
+      return false;
+    const deadline = Date.now() + 1e4;
+    while (Date.now() < deadline) {
+      const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
+      if (probe.value === true)
+        return true;
+      await new Promise((resolve5) => setTimeout(resolve5, 250));
+    }
+    return false;
+  }
+}));
 trackedTool("device_find", 'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly \u2014 both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
   text: external_exports.string().describe("Visible text, accessibility label, or identifier to find"),
   action: external_exports.string().optional().describe('Action to perform: "click" to tap, omit for search-only'),

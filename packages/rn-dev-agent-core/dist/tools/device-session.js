@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, attachMetaNote, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { consumePendingFastRunnerArtifactNote, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
+import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, runAndroid, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice, } from '../runners/external-runner-detect.js';
@@ -93,12 +93,15 @@ async function defaultAndroidProbe(bundleId) {
         return false;
     }
 }
-export function createDeviceSnapshotHandler() {
+export function createDeviceSnapshotHandler(deps = {}) {
+    const probeAndroidUi = deps.probeAndroidUi ??
+        ((deviceId, appId) => runAndroid({ command: 'snapshot', deviceId, bundleId: appId, interactiveOnly: false }));
     return async (args) => {
         const action = args.action ?? 'snapshot';
         if (action === 'open') {
             let appId = args.appId;
             let autoDetected = false;
+            let reactNativeUiReady = null;
             if (!appId) {
                 const platform = args.platform ?? 'ios';
                 appId = resolveBundleId(platform) ?? undefined;
@@ -214,6 +217,14 @@ export function createDeviceSnapshotHandler() {
                             '1',
                         ], { timeout: 10_000, encoding: 'utf8' });
                     }
+                    const readiness = await probeAndroidUi(deviceId, appId);
+                    if (readiness.isError) {
+                        const envelope = JSON.parse(readiness.content[0]?.text ?? '{}');
+                        throw new Error(`${envelope.code ?? 'ANDROID_UI_NOT_READY'}: ${envelope.error ?? 'the app did not expose its UI through accessibility after launch'}`);
+                    }
+                    reactNativeUiReady = deps.probeReactNativeUi
+                        ? await deps.probeReactNativeUi('android', deviceId, appId).catch(() => false)
+                        : null;
                 }
             }
             catch (err) {
@@ -328,12 +339,29 @@ export function createDeviceSnapshotHandler() {
                     }
                 }
             }
-            const data = { ok: true, sessionName, platform, deviceId, appId };
+            const data = {
+                ok: true,
+                sessionName,
+                platform,
+                deviceId,
+                appId,
+                readiness: platform === 'android'
+                    ? {
+                        appForeground: true,
+                        accessibilityUi: true,
+                        reactNativeUi: reactNativeUiReady === true ? 'ready' : 'unverified',
+                    }
+                    : { appForeground: true },
+            };
+            const readinessWarning = platform === 'android' && reactNativeUiReady !== true
+                ? 'Android app accessibility is ready, but the React Native helper boundary is unverified; run cdp_status and require capabilities.fiberTree=true before treating launch as RN-ready'
+                : null;
             let result;
-            if (autoDetected || foreign) {
+            if (autoDetected || foreign || readinessWarning) {
                 const warning = [
                     autoDetected ? `appId auto-detected from app.json: ${appId}` : null,
                     foreign ? foreign.warning : null,
+                    readinessWarning,
                 ]
                     .filter(Boolean)
                     .join('; ');

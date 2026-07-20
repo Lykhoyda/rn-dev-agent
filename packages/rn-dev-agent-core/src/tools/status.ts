@@ -18,6 +18,44 @@ import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
 import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 import { storeMode } from '../domain/action-state-store.js';
 import { getEngineStatus } from '../domain/engine-pin.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import type { ConnectFilters } from '../cdp/connect.js';
+import type { HermesTarget } from '../types.js';
+
+export function sessionConnectFilters(
+  session: ReturnType<typeof getActiveSession>,
+): ConnectFilters | null {
+  if (!session || (session.platform !== 'ios' && session.platform !== 'android')) return null;
+  return {
+    platform: session.platform,
+    ...(session.appId ? { bundleId: session.appId } : {}),
+    ...(session.platform === 'android' && session.deviceId
+      ? { deviceKind: session.deviceId.startsWith('emulator-') ? 'emulator' : 'physical' }
+      : {}),
+  };
+}
+
+export function targetMatchesSession(
+  target: HermesTarget | null,
+  filters: ConnectFilters,
+): boolean {
+  if (!target) return false;
+  if (filters.platform && target.platform !== filters.platform) return false;
+  if (
+    filters.bundleId &&
+    (target.description ?? '').toLowerCase() !== filters.bundleId.toLowerCase()
+  ) {
+    return false;
+  }
+  if (filters.deviceKind) {
+    if (!target.deviceName) return false;
+    const targetKind = /sdk_gphone|emulator|\bapi\s+\d+\b/i.test(target.deviceName)
+      ? 'emulator'
+      : 'physical';
+    if (targetKind !== filters.deviceKind) return false;
+  }
+  return true;
+}
 
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
@@ -209,6 +247,21 @@ export function createStatusHandler(
     }
     try {
       let client = getClient();
+      const session = getActiveSession();
+      const sessionFilters = sessionConnectFilters(session);
+      if (
+        args.platform &&
+        sessionFilters?.platform &&
+        args.platform.toLowerCase() !== sessionFilters.platform
+      ) {
+        return failResult(
+          `cdp_status requested ${args.platform}, but the active device session is bound to ${sessionFilters.platform} ${session?.deviceId}. Close that session or request the same platform; refusing to target a different device silently.`,
+          'TARGET_SESSION_MISMATCH',
+          { deviceSession: session },
+        );
+      }
+      const connectFilters: ConnectFilters =
+        sessionFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
 
       if (args.metroPort && args.metroPort !== client.metroPort) {
         await client.disconnect();
@@ -240,7 +293,7 @@ export function createStatusHandler(
         // pinned a different target. If they pinned an explicit platform, tear the
         // storm down first (mirrors the metroPort-change path above) so autoConnect
         // honors it instead of returning wrong-platform data.
-        if (client.reconnectState.active && !args.platform) {
+        if (client.reconnectState.active && !args.platform && !sessionFilters) {
           await client.softReconnect();
         } else {
           if (client.reconnectState.active) {
@@ -248,22 +301,16 @@ export function createStatusHandler(
             client = createClient(client.metroPort);
             setClient(client);
           }
-          await client.autoConnect(args.metroPort, args.platform, 'status');
+          await client.autoConnect(args.metroPort, connectFilters, 'status');
         }
-      } else if (args.platform) {
-        // GH #21: Already connected — check if the current target matches the requested platform
-        const currentTarget = client.connectedTarget;
-        const requestedPlatform = args.platform.toLowerCase();
-        const currentPlatform = currentTarget?.platform?.toLowerCase();
-        const titleMatch = `${currentTarget?.title ?? ''} ${currentTarget?.description ?? ''}`
-          .toLowerCase()
-          .includes(requestedPlatform);
-        if (currentPlatform !== requestedPlatform && !titleMatch) {
-          await client.disconnect();
-          client = createClient(client.metroPort);
-          setClient(client);
-          await client.autoConnect(args.metroPort, args.platform, 'status');
-        }
+      } else if (!targetMatchesSession(client.connectedTarget, connectFilters)) {
+        // A live CDP socket is not sufficient evidence of affinity. Re-select
+        // with hard platform/app/device-class filters instead of reporting an
+        // emulator target alongside a physical-device session.
+        await client.disconnect();
+        client = createClient(client.metroPort);
+        setClient(client);
+        await client.autoConnect(args.metroPort, connectFilters, 'status');
       }
 
       const status = await buildStatusResult(client);

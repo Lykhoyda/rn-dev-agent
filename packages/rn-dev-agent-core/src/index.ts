@@ -13,7 +13,7 @@ import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
-import { createStatusHandler } from './tools/status.js';
+import { createStatusHandler, targetMatchesSession } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
@@ -1222,7 +1222,7 @@ trackedTool(
 
 trackedTool(
   'device_snapshot',
-  'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools). Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).',
+  'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).',
   {
     action: z
       .enum(['open', 'close', 'snapshot'])
@@ -1250,7 +1250,35 @@ trackedTool(
         'action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.',
       ),
   },
-  createDeviceSnapshotHandler(),
+  createDeviceSnapshotHandler({
+    probeReactNativeUi: async (platform, deviceId, appId) => {
+      const client = getClient();
+      const filters = {
+        platform,
+        bundleId: appId,
+        ...(platform === 'android'
+          ? {
+              deviceKind: deviceId.startsWith('emulator-')
+                ? ('emulator' as const)
+                : ('physical' as const),
+            }
+          : {}),
+      };
+      if (!client.isConnected || !client.helpersInjected) return false;
+      if (!targetMatchesSession(client.connectedTarget, filters)) return false;
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const probe = await client
+          .evaluate(
+            'typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true',
+          )
+          .catch(() => ({ value: false }));
+        if (probe.value === true) return true;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return false;
+    },
+  }),
 );
 
 trackedTool(

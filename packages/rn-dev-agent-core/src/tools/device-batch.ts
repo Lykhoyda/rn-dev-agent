@@ -481,13 +481,18 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
       // but the underlying action may complete after the timeout fires.
       const stepTimeout = step.timeoutMs ?? 15_000;
       let stepTimer: ReturnType<typeof setTimeout> | undefined;
+      let stepTimedOut = false;
       const result = await Promise.race([
         executeStep(step),
         new Promise<ToolResult>((resolve) => {
-          stepTimer = setTimeout(
-            () => resolve(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms`)),
-            stepTimeout,
-          );
+          stepTimer = setTimeout(() => {
+            stepTimedOut = true;
+            resolve(
+              failResult(
+                `Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`,
+              ),
+            );
+          }, stepTimeout);
         }),
       ]);
       if (stepTimer) clearTimeout(stepTimer);
@@ -523,7 +528,11 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
 
       results.push(stepResult);
 
-      if (!success && !step.optional) {
+      // A native command cannot be cancelled after Promise.race returns. Never
+      // start a later OTP/form fill behind a timed-out mutation: that is the
+      // interleaving boundary. Timeout therefore overrides optional and
+      // continueOnError, while ordinary failures retain their legacy policy.
+      if (!success && (!step.optional || stepTimedOut)) {
         // Capture failure screenshot regardless of continueOnError so the
         // diagnostic trail isn't lost.
         if (screenshotOn === 'failure' || screenshotOn === 'each') {
@@ -538,7 +547,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
           }
         }
 
-        if (continueOnError) {
+        if (continueOnError && !stepTimedOut) {
           // Phase 125: record the failure and proceed. failedStep stays null
           // so the batch returns success-shape with failure_count populated.
           failureRecords.push(stepResult);
