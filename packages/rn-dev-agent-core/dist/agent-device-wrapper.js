@@ -2,10 +2,10 @@ import { unlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { failResult } from './utils.js';
-import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, } from './runners/rn-fast-runner-client.js';
+import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, getRunnerPostMortem, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, refreshRef, getLastSnapshotHash, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getFreshRefTarget, refreshRef, getLastSnapshotHash, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
 import { recordNoUiChange, recordUiChange, WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
@@ -218,7 +218,24 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                 if (!center) {
                     return { command: 'tap', _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
                 }
-                return { command: 'tap', x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
+                const target = getFreshRefTarget(ref);
+                const built = {
+                    command: 'tap',
+                    x: center.x,
+                    y: center.y,
+                    ...(target
+                        ? {
+                            targetBounds: target.rect,
+                            snapshotGeneration: target.snapshotGeneration,
+                            keyboardStateAtSnapshot: target.keyboardStateAtSnapshot,
+                        }
+                        : {}),
+                    ...(bundleId ? { bundleId } : {}),
+                };
+                // Client-only identity must not leak onto the JSON wire or perturb the
+                // legacy argv-adapter shape inspected by callers.
+                Object.defineProperty(built, '_targetRef', { value: ref, enumerable: false });
+                return built;
             }
             const [xS, yS] = positionals;
             const x = Number(xS), y = Number(yS);
@@ -1026,12 +1043,17 @@ export async function runNative(cliArgs, opts = {}) {
             if (!ready.ok) {
                 // GH #382: discard any pending artifact note from a failed start.
                 consumePendingFastRunnerArtifactNote();
-                return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
+                return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN', {
+                    runnerPostMortem: getRunnerPostMortem(),
+                });
             }
             upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
         const ios = buildRunIOSArgs(cliArgs, appId);
+        if (ios.command === 'type' && opts.verifyTypeReadback) {
+            ios._verifyExactReadback = opts.verifyTypeReadback;
+        }
         let healMeta = null;
         if (ios._staleRef && selfHealEnabled(process.env)) {
             const healed = await healStaleRef(ios._staleRef, () => runIOS({

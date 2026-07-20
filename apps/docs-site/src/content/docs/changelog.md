@@ -5,6 +5,14 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.70.8
+
+#### Patch Changes
+
+- e3986d3: Make Android learned-action failures, device affinity, launch accessibility readiness, restart recovery, and batched input ordering deterministic and explicit.
+- Updated dependencies [e3986d3]
+  - rn-dev-agent-core@0.65.6
+
 ### 0.70.7
 
 #### Patch Changes
@@ -1152,6 +1160,12 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.65.6
+
+#### Patch Changes
+
+- e3986d3: Make Android learned-action failures, device affinity, launch accessibility readiness, restart recovery, and batched input ordering deterministic and explicit.
 
 ### 0.65.5
 

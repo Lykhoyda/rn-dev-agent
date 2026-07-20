@@ -1,16 +1,16 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T18:21:08.341Z",
+    "capturedAt": "2026-07-20T22:31:03.378Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=android node test/contract/capture-goldens.ts)",
     "platform": "android",
-    "device": "sdk_gphone16k_arm64",
-    "os": "Android 17",
+    "device": "sdk_gphone64_arm64",
+    "os": "Android 16",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.1",
-    "protocolVersion": 1,
-    "runnerPort": 56849,
+    "runnerVersion": "0.70.8",
+    "protocolVersion": 2,
+    "runnerPort": 49629,
     "note": "deliberately unknown verb — pins the error-envelope shape"
   },
   "payload": {
@@ -19,6 +19,6 @@
       "code": "UNSUPPORTED_COMMAND",
       "message": "Unsupported Android runner command: gh437-unknown-command-probe"
     },
-    "v": 1
+    "v": 2
   }
 }

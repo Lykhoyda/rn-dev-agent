@@ -54,6 +54,8 @@ export interface RefSignature {
 interface StoredRefRecord extends RefMetadata {
   flatIndex: number;
   nodeCount: number;
+  snapshotGeneration: number;
+  keyboardStateAtSnapshot: boolean | null;
 }
 
 let refMap = new Map<string, ElementRect>();
@@ -61,6 +63,8 @@ let metadataMap = new Map<string, StoredRefRecord>();
 let screenRect: ElementRect | null = null;
 let lastUpdated = 0;
 let lastSnapshotHash: string | null = null;
+let snapshotGeneration = 0;
+let keyboardStateAtSnapshot: boolean | null = null;
 
 // Screen-rect derivation: hittable-seeded union GROWN BY OVERLAP.
 //
@@ -228,6 +232,8 @@ export function clearRefMap(): void {
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
+  snapshotGeneration = 0;
+  keyboardStateAtSnapshot = null;
 }
 
 export function hasRefMap(): boolean {
@@ -306,7 +312,10 @@ export function buildSnapshotVerdict(
   };
 }
 
-export function updateRefMapFromFlat(nodes: FlatNode[]): RefMapUpdateOutcome {
+export function updateRefMapFromFlat(
+  nodes: FlatNode[],
+  freshness: { snapshotGeneration?: number; keyboardVisible?: boolean } = {},
+): RefMapUpdateOutcome {
   // GH #409: a zero-node capture is indistinguishable from a degraded walk
   // (AX failure, wedged runner, mid-transition screen). It must never wipe the
   // last-known-good map — refs stay bound to the last verified capture, and a
@@ -329,6 +338,8 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): RefMapUpdateOutcome {
   // Colliding keys are overwritten by metadataMap.set below.
   refMap.clear();
   screenRect = null;
+  snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
+  keyboardStateAtSnapshot = freshness.keyboardVisible ?? null;
 
   const hashed: FlatNode[] = [];
   // Screen rect: hittable-first union with an all-nodes fallback — same
@@ -341,7 +352,13 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): RefMapUpdateOutcome {
     const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
     refMap.set(key, node.rect);
 
-    const meta: StoredRefRecord = { type: node.type, flatIndex: i, nodeCount: nodes.length };
+    const meta: StoredRefRecord = {
+      type: node.type,
+      flatIndex: i,
+      nodeCount: nodes.length,
+      snapshotGeneration,
+      keyboardStateAtSnapshot,
+    };
     if (node.label !== undefined) meta.label = node.label;
     if (node.identifier !== undefined) meta.identifier = node.identifier;
     metadataMap.set(key, meta);
@@ -363,6 +380,31 @@ export function updateRefMapFromFlat(nodes: FlatNode[]): RefMapUpdateOutcome {
   }
   lastUpdated = Date.now();
   return { applied: true };
+}
+
+export interface FreshRefTarget {
+  rect: ElementRect;
+  snapshotGeneration: number;
+  keyboardStateAtSnapshot: boolean | null;
+}
+
+export function getFreshRefTarget(ref: string): FreshRefTarget | null {
+  if (!isRefMapFresh()) return null;
+  const key = ref.startsWith('@') ? ref.slice(1) : ref;
+  const rect = refMap.get(key);
+  const record = metadataMap.get(key);
+  if (
+    !rect ||
+    !record ||
+    record.snapshotGeneration !== snapshotGeneration ||
+    record.keyboardStateAtSnapshot === null
+  )
+    return null;
+  return {
+    rect,
+    snapshotGeneration: record.snapshotGeneration,
+    keyboardStateAtSnapshot: record.keyboardStateAtSnapshot,
+  };
 }
 
 export function getCachedMetadata(ref: string): RefMetadata | null {

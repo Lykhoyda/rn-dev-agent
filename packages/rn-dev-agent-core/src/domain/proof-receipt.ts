@@ -103,6 +103,27 @@ export const proofRuntimeSchema = z
   })
   .strict();
 
+/**
+ * Candidate plugin authority for cross-repository strict proof. The app fixture
+ * remains bound by `git`/`storyboard`; this block independently binds the MCP
+ * runtime that drove it to the plugin PR head and immutable package bytes.
+ */
+export const proofCandidateRuntimeSchema = z
+  .object({
+    repo: z.literal('Lykhoyda/rn-dev-agent'),
+    sha: gitShaSchema,
+    coreBundleSha256: sha256Schema,
+    runnerManifestSha256: sha256Schema,
+    mcp: z
+      .object({
+        pid: z.number().int().positive(),
+        argv: z.array(z.string()).min(1),
+        cwd: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const proofFixtureSchema = z
   .object({
     name: z.string().min(1),
@@ -226,6 +247,7 @@ const sharedReceiptShape = {
   git: proofGitSchema,
   device: proofDeviceSchema,
   runtime: proofRuntimeSchema,
+  candidateRuntime: proofCandidateRuntimeSchema.optional(),
   fixture: proofFixtureSchema,
   action: proofActionSchema,
   storyboard: proofStoryboardIdentitySchema,
@@ -291,6 +313,7 @@ export type AcceptanceMapping = z.infer<typeof acceptanceMappingSchema>;
 export type ProofGit = z.infer<typeof proofGitSchema>;
 export type ProofDevice = z.infer<typeof proofDeviceSchema>;
 export type ProofRuntime = z.infer<typeof proofRuntimeSchema>;
+export type ProofCandidateRuntime = z.infer<typeof proofCandidateRuntimeSchema>;
 export type ProofFixture = z.infer<typeof proofFixtureSchema>;
 export type ProofAction = z.infer<typeof proofActionSchema>;
 export type ProofStoryboardIdentity = z.infer<typeof proofStoryboardIdentitySchema>;

@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { logger } from '../logger.js';
 import { metroOrigin } from '../ws-origin.js';
 import { resolveBundleId } from '../project-config.js';
-import { discover } from './discovery.js';
+import { discover, TargetSelectionError } from './discovery.js';
 import { sleep } from './state.js';
 import { CDP_TIMEOUT_FAST } from './timeout-config.js';
 import { probeReactReachable } from './setup.js';
@@ -96,8 +96,12 @@ intent = 'default') {
         ctx.setState('disconnected');
         throw err;
     }
-    const { port: metroPort, targets: sorted, warning: selectionWarning } = result;
+    const { port: metroPort, targets: sorted, warning: selectionWarning, errorCode, candidates, } = result;
     ctx.setPort(metroPort);
+    if (errorCode) {
+        ctx.setState('disconnected');
+        throw new TargetSelectionError(errorCode, selectionWarning ?? errorCode, candidates ?? []);
+    }
     // B111 (D643/G9): selectTarget hard-fails (returns []) on explicit filter
     // mismatch — surface that as a connect error rather than crashing on the
     // candidate loop's connectedTarget! non-null assertion below.

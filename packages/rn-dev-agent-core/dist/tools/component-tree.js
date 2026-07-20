@@ -35,6 +35,12 @@ export function createComponentTreeHandler(getClient) {
                     'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.',
             }, 'APP_HAS_REDBOX', meta);
         }
+        if (parsed.tree === null &&
+            Array.isArray(verdict?.reasons) &&
+            verdict.reasons.includes('scan-budget-exhausted')) {
+            parsed.message =
+                'Component tree is unavailable because the renderer scan budget was exhausted; narrow the existing filter/depth or retry after the UI settles.';
+        }
         if (verdict)
             delete parsed.verdict;
         return okResult(parsed, meta ? { meta } : undefined);

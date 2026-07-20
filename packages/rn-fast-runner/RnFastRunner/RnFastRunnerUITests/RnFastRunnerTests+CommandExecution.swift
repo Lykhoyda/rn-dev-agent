@@ -42,7 +42,9 @@ extension RnFastRunnerTests {
     }
     let waitResult = semaphore.wait(timeout: .now() + mainThreadExecutionTimeout)
     if waitResult == .timedOut {
-      // The main queue work may still be running; we stop waiting and report timeout.
+      // The queued mutation is non-cancellable. Publish the wedge off-main so
+      // /health makes old and new clients reap this XCTest process.
+      markRunnerWedged()
       throw NSError(
         domain: RunnerErrorDomain.general,
         code: RunnerErrorCode.mainThreadExecutionTimedOut,
@@ -66,6 +68,16 @@ extension RnFastRunnerTests {
   // MARK: - Command Handling
 
   private func executeOnMainSafely(command: Command) throws -> Response {
+#if RN_FAST_RUNNER_TEST_FAULTS
+    // Deterministic, test-only wedge. The branch is compile-time absent from
+    // release builds and is one-shot so recovery can lazily respawn normally.
+    if !testFaultConsumed,
+       command.command == .type,
+       ProcessInfo.processInfo.environment["RN_FAST_RUNNER_TEST_FAULT"] == "block-main-35s" {
+      testFaultConsumed = true
+      Thread.sleep(forTimeInterval: 35)
+    }
+#endif
     var hasRetried = false
     while true {
       var response: Response?
@@ -212,12 +224,24 @@ extension RnFastRunnerTests {
       if let x = command.x, let y = command.y {
         let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
         let keyboardGuardStartMs = currentUptimeMs()
-        let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
+        let keyboardGuardStatus = applyKeyboardGuard(
+          app: activeApp,
+          tapX: x,
+          tapY: y,
+          command: command,
+          enabled: command.guardKeyboard != false
+        )
         let keyboardGuardMs = currentUptimeMs() - keyboardGuardStartMs
         if keyboardGuardStatus == "dismiss_failed" {
           return Response(
             ok: false,
-            error: ErrorPayload(code: "KEYBOARD_OCCLUDED", message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
+            error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native swipe/control; no tap was performed. The client may attempt its JS tier.")
+          )
+        }
+        if keyboardGuardStatus == "auto_dismissed_requires_reresolve" {
+          return Response(
+            ok: false,
+            error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No tap was performed.")
           )
         }
         var outcome = RunnerInteractionOutcome.performed
@@ -344,12 +368,24 @@ extension RnFastRunnerTests {
       let duration = (command.durationMs ?? 800) / 1000.0
       let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
       let keyboardGuardStartMs = currentUptimeMs()
-      let keyboardGuardStatus = applyKeyboardGuard(app: activeApp, tapX: x, tapY: y, enabled: command.guardKeyboard != false)
+      let keyboardGuardStatus = applyKeyboardGuard(
+        app: activeApp,
+        tapX: x,
+        tapY: y,
+        command: command,
+        enabled: command.guardKeyboard != false
+      )
       let keyboardGuardMs = currentUptimeMs() - keyboardGuardStartMs
       if keyboardGuardStatus == "dismiss_failed" {
         return Response(
           ok: false,
-          error: ErrorPayload(code: "KEYBOARD_OCCLUDED", message: "KEYBOARD_OCCLUDED: tap (\(x), \(y)) is under the visible keyboard and this keyboard has no dismiss control, so auto-dismiss failed. Dismiss the keyboard first (device_fill/cdp_interact use the JS path; or tap a non-input area), then retry. keyboardGuard=dismiss_failed")
+          error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native swipe/control; no tap was performed. The client may attempt its JS tier.")
+        )
+      }
+      if keyboardGuardStatus == "auto_dismissed_requires_reresolve" {
+        return Response(
+          ok: false,
+          error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No tap was performed.")
         )
       }
       var outcome = RunnerInteractionOutcome.performed
@@ -594,6 +630,7 @@ extension RnFastRunnerTests {
       }
       return Response(ok: true, data: DataPayload(text: text))
     case .snapshot:
+      currentSnapshotGeneration += 1
       let options = SnapshotOptions(
         interactiveOnly: command.interactiveOnly ?? false,
         compact: command.compact ?? false,
@@ -704,8 +741,8 @@ extension RnFastRunnerTests {
         return Response(
           ok: false,
           error: ErrorPayload(
-            code: "UNSUPPORTED_OPERATION",
-            message: "Unable to dismiss the iOS keyboard without a native dismiss gesture or control"
+            code: "KEYBOARD_DISMISS_FAILED",
+            message: "Unable to dismiss the iOS keyboard via native swipe or dismiss control"
           )
         )
       }
@@ -715,7 +752,8 @@ extension RnFastRunnerTests {
           message: "keyboardDismiss",
           visible: result.visible,
           wasVisible: result.wasVisible,
-          dismissed: result.dismissed
+          dismissed: result.dismissed,
+          via: result.via
         )
       )
     case .alert:

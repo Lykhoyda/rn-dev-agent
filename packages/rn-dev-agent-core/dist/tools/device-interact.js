@@ -670,6 +670,23 @@ async function nativeSettle(client, testID, text, settleAnchor, stabilityPrior) 
         value: settled.value,
     };
 }
+function exactTypeReadback(client, testID) {
+    if (!client || !testID)
+        return undefined;
+    return async (expected) => {
+        const result = await client.evaluate(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`);
+        if (typeof result.value !== 'string')
+            return { matches: false };
+        try {
+            const parsed = JSON.parse(result.value);
+            const actual = typeof parsed.value === 'string' ? parsed.value : null;
+            return { matches: actual === expected, actual };
+        }
+        catch {
+            return { matches: false };
+        }
+    };
+}
 async function readValueBefore(client, testID) {
     if (!client || !testID)
         return null;
@@ -750,7 +767,10 @@ export function createDeviceFillHandler(getClient) {
             if (delay > 0)
                 await sleep(delay);
         }
-        const primary = await runNative(['fill', ref, args.text, ...pinArgs], settleOpts(args));
+        const primary = await runNative(['fill', ref, args.text, ...pinArgs], {
+            ...settleOpts(args),
+            verifyTypeReadback: exactTypeReadback(client, jsTestId),
+        });
         if (!primary.isError) {
             // #191 prong 2/3 — native read-back verification + corrective clear/retype.
             // iOS-only: the corrective retype needs the runner's --clear-first, which the
@@ -854,7 +874,10 @@ export function createDeviceFillHandler(getClient) {
                         const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
                         if (delay > 0)
                             await sleep(delay);
-                        const resolved = await runNative(['fill', resolvedRef, args.text, ...innerPinArgs], settleOpts(args));
+                        const resolved = await runNative(['fill', resolvedRef, args.text, ...innerPinArgs], {
+                            ...settleOpts(args),
+                            verifyTypeReadback: exactTypeReadback(client, resolveCachedIdentifier(resolvedRef) ?? null),
+                        });
                         if (!resolved.isError) {
                             try {
                                 const envelope = JSON.parse(resolved.content[0].text);
@@ -882,7 +905,9 @@ export function createDeviceFillHandler(getClient) {
             const retryTap = await runNative(['press', ref]);
             if (!retryTap.isError) {
                 await sleep(300);
-                const retry = await runNative(['fill', ref, args.text]);
+                const retry = await runNative(['fill', ref, args.text], {
+                    verifyTypeReadback: exactTypeReadback(client, jsTestId),
+                });
                 if (!retry.isError) {
                     // Re-wrap the okResult to attach the fallback marker.
                     try {

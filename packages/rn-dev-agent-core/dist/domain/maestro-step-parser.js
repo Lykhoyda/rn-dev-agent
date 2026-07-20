@@ -89,7 +89,7 @@ export function lastObservedStep(steps) {
 // must not be re-embedded into the result (it would defeat the output slice).
 export function summarizeReason(output) {
     const f = parseMaestroFailure(output);
-    if (f.kind === 'UNKNOWN')
+    if (f.kind === 'UNKNOWN' || f.kind === 'WDA_BOOTSTRAP_FAILED')
         return null;
     const selector = 'selector' in f ? (f.selector ?? null) : null;
     return { kind: f.kind, selector: selector === null ? null : cap(selector) };
@@ -104,6 +104,34 @@ export function buildStepSummary(output, opts) {
         failedStep: opts.failed ? findFailedStep(steps) : null,
         reason: opts.failed ? summarizeReason(output) : null,
         lastStep: lastObservedStep(steps),
+    };
+}
+const WDA_EVIDENCE_RE = /(?:\bWDA\b|WebDriverAgent|Checking WDA installation|Downloading WebDriverAgent)/i;
+export function buildTerminalEvidence(output, opts = {}) {
+    const summary = buildStepSummary(output, { failed: true });
+    const bootstrapEvidence = stripAnsi(output)
+        .split('\n')
+        .filter((line) => WDA_EVIDENCE_RE.test(line))
+        .join('\n')
+        .slice(0, 500);
+    const exitClass = opts.timedOut
+        ? 'timed-out'
+        : opts.spawnError
+            ? 'spawn-error'
+            : summary.steps.length === 0
+                ? 'before-first-step'
+                : 'step-failure';
+    return {
+        completedSteps: summary.steps.filter((step) => step.status === 'pass').length,
+        ...(summary.failedStep ? { failedStep: summary.failedStep.name } : {}),
+        exitClass,
+        ...(bootstrapEvidence ? { bootstrapEvidence } : {}),
+        ...(summary.reason
+            ? {
+                failureKind: summary.reason.kind,
+                failureSelector: summary.reason.selector,
+            }
+            : {}),
     };
 }
 // execFile timeout kills the child (killed===true, signal 'SIGTERM', code null).

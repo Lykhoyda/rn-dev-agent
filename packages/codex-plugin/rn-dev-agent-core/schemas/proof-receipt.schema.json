@@ -83,6 +83,61 @@
       "minItems": 3,
       "type": "array"
     },
+    "candidateRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "coreBundleSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "mcp": {
+          "additionalProperties": false,
+          "properties": {
+            "argv": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "cwd": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "pid": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pid",
+            "argv",
+            "cwd"
+          ],
+          "type": "object"
+        },
+        "repo": {
+          "const": "Lykhoyda/rn-dev-agent",
+          "type": "string"
+        },
+        "runnerManifestSha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "sha": {
+          "pattern": "^[0-9a-f]{7,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "sha",
+        "coreBundleSha256",
+        "runnerManifestSha256",
+        "mcp"
+      ],
+      "type": "object"
+    },
     "contactSheet": {
       "additionalProperties": false,
       "properties": {

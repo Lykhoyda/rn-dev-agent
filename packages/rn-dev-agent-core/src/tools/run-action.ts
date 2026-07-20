@@ -78,6 +78,8 @@ function classifyFailure(failure: MaestroFailure): {
       return { actionCode: 'TIMEOUT', toolCode: undefined };
     case 'ASSERTION_FAILED':
       return { actionCode: 'STATE_MISMATCH', toolCode: 'ASSERTION_FAILED' };
+    case 'WDA_BOOTSTRAP_FAILED':
+      return { actionCode: 'WDA_BOOTSTRAP_FAILED', toolCode: 'WDA_BOOTSTRAP_FAILED' };
     case 'UNKNOWN':
     default:
       return { actionCode: 'UNKNOWN', toolCode: undefined };
@@ -131,9 +133,24 @@ export interface RunActionArgs {
   proofReplay?: boolean;
 }
 
+interface MaestroTerminal {
+  completedSteps?: number;
+  failedStep?: string;
+  exitClass?: 'before-first-step' | 'step-failure' | 'timed-out' | 'spawn-error';
+  bootstrapEvidence?: string;
+  failureKind?: 'SELECTOR_NOT_FOUND' | 'TIMEOUT' | 'ASSERTION_FAILED';
+  failureSelector?: string | null;
+}
+
 interface MaestroEnvelope {
   ok?: boolean;
-  data?: { passed?: boolean; output?: string; flowFile?: string; platform?: string };
+  data?: {
+    passed?: boolean;
+    output?: string;
+    flowFile?: string;
+    platform?: string;
+    terminal?: MaestroTerminal;
+  };
   error?: string;
   meta?: Record<string, unknown>;
 }
@@ -153,6 +170,13 @@ function parseEnvelope(toolResult: ToolResult, toolName: string): MaestroEnvelop
  * parser still sees the underlying failure even when devices are slow
  * — that's the failure mode auto-repair is most valuable for.
  */
+function readMaestroTerminal(env: MaestroEnvelope): MaestroTerminal | undefined {
+  const fromData = env.data?.terminal;
+  if (fromData) return fromData;
+  const fromMeta = (env.meta as { terminal?: MaestroTerminal } | undefined)?.terminal;
+  return fromMeta;
+}
+
 function readMaestroOutput(env: MaestroEnvelope): string {
   if (typeof env.data?.output === 'string') return env.data.output;
   const metaOutput = (env.meta as { output?: unknown } | undefined)?.output;
@@ -495,7 +519,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       }
 
       // ─── First attempt failed — classify ─────────────────────────────
-      const failure = parseMaestroFailure(firstOutput);
+      const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
 
       // GH #186: structural route-drift takes precedence over selector repair.
       // If the action recorded an expected route sequence and the LIVE route is
@@ -625,8 +649,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         const autoRepair: AutoRepairOutcome = autoRepairEnabled
           ? {
               attempted: false,
-              outcome: 'skipped',
-              refusedReason: 'NOT_REPAIRABLE_KIND',
+              outcome: failure.kind === 'WDA_BOOTSTRAP_FAILED' ? 'refused' : 'skipped',
+              refusedReason:
+                failure.kind === 'WDA_BOOTSTRAP_FAILED' ? 'WDA_BOOTSTRAP' : 'NOT_REPAIRABLE_KIND',
               phases: { firstAttemptMs },
             }
           : {
@@ -651,9 +676,14 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           underlyingFailure: firstFailureDetail,
           autoRepair,
           firstAttemptOutput: firstOutput.slice(0, 500),
+          terminal: readMaestroTerminal(firstEnv),
+          runnerResume: (firstEnv.meta as { runnerResume?: unknown } | undefined)?.runnerResume,
           ...(cdpJsFallback ? { cdpJsFallback } : {}),
         };
-        let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
+        let message =
+          failure.kind === 'WDA_BOOTSTRAP_FAILED'
+            ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; inspect ~/.maestro-runner/bin/maestro-runner wda version. No preparation or cache mutation was attempted.`
+            : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
         // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an
         // opaque dead end in the field — say why and what to do next.
         if (cdpJsFallback?.reason === 'cdp-unreachable') {
@@ -785,7 +815,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       let nextFailedSelector: string | undefined;
       if (!retryPassed) {
         try {
-          const retryFailure = parseMaestroFailure(retryOutput);
+          const retryFailure = parseMaestroFailure(retryOutput, readMaestroTerminal(retryEnv));
           if (
             retryFailure.kind === 'SELECTOR_NOT_FOUND' &&
             retryFailure.selector &&

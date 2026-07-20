@@ -170,7 +170,7 @@ test('heal: happy path — dismiss, re-snapshot, retry once, tagged meta', async
   assert.equal(calls.snapshot, 1);
   assert.equal(calls.retry, 1);
   const envelope = JSON.parse(healed.content[0].text);
-  assert.equal(envelope.meta.keyboardGuard, 'js_dismissed');
+  assert.equal(envelope.meta.keyboardGuard, 'auto_dismissed');
   assert.equal(envelope.meta.keyboardAutoHeal.dismissed, true);
   assert.equal(typeof envelope.meta.keyboardAutoHeal.healMs, 'number');
 });
@@ -190,7 +190,7 @@ test('heal: snapshot refresh failure does not abort the bounded retry', async ()
   const healed = await healKeyboardOccludedTap(occludedRefusal(), deps);
   assert.equal(calls.retry, 1);
   const envelope = JSON.parse(healed.content[0].text);
-  assert.equal(envelope.meta.keyboardGuard, 'js_dismissed');
+  assert.equal(envelope.meta.keyboardGuard, 'auto_dismissed');
 });
 
 test('heal: retry that refuses again is returned as-is (bounded, keyboardGuard not overwritten)', async () => {
@@ -206,7 +206,7 @@ test('heal: retry that refuses again is returned as-is (bounded, keyboardGuard n
   assert.equal(healed.isError, true);
   const envelope = JSON.parse(healed.content[0].text);
   assert.equal(envelope.meta.keyboardAutoHeal.dismissed, true);
-  assert.notEqual(envelope.meta.keyboardGuard, 'js_dismissed');
+  assert.notEqual(envelope.meta.keyboardGuard, 'auto_dismissed');
 });
 
 test('heal: retried result with unparseable content is returned without throwing', async () => {

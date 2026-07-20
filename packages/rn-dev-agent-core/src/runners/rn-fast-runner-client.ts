@@ -17,6 +17,7 @@ import {
   updateRefMapFromFlat,
   buildSnapshotVerdict,
   getCachedMetadata,
+  getFreshRefTarget,
   type FlatNode,
 } from '../fast-runner-ref-map.js';
 import { isPortFree } from './free-port.js';
@@ -31,6 +32,7 @@ import {
 } from '../util/secure-state-file.js';
 import {
   RUNNER_PROTOCOL_VERSION,
+  MIN_SUPPORTED_RUNNER_PROTOCOL,
   REQUIRED_IOS_COMMANDS,
   getPluginVersion,
   classifyRunnerCompatibility,
@@ -155,6 +157,32 @@ export function createReadySignalParser(): ReadySignalParser {
 
 let runnerProcess: ChildProcess | null = null;
 let runnerState: FastRunnerState | null = null;
+let runnerPoisoned = false;
+let poisonReap: Promise<void> | null = null;
+let runnerOutputTail = '';
+let lastRunnerCommand: string | null = null;
+export interface RunnerPostMortem {
+  available: boolean;
+  provenance: 'spawned' | 'adopted';
+  lastCommand?: string | null;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
+  outputTail?: string;
+}
+let lastRunnerPostMortem: RunnerPostMortem | null = null;
+
+function appendRunnerOutput(stream: 'stdout' | 'stderr', chunk: string): void {
+  runnerOutputTail = `${runnerOutputTail}${stream}: ${chunk}`.slice(-8_000);
+}
+
+export function getRunnerPostMortem(): RunnerPostMortem {
+  return (
+    lastRunnerPostMortem ?? {
+      available: false,
+      provenance: runnerProcess ? 'spawned' : 'adopted',
+    }
+  );
+}
 
 // Story 04 (#385): capabilities from the last successful /health probe. Warm
 // before any mutating verb — ensureRunnerForCommand probes /health ahead of
@@ -171,6 +199,8 @@ export function _resetCapabilitiesForTest(): void {
 
 export function _setFastRunnerStateForTest(state: FastRunnerState | null): void {
   runnerState = state;
+  runnerProcess = null;
+  lastRunnerPostMortem = null;
 }
 
 // GH #384: announce the runner's quiescence-bypass status on the FIRST
@@ -597,6 +627,9 @@ export async function startFastRunner(
     });
 
     runnerProcess = child;
+    runnerOutputTail = '';
+    lastRunnerCommand = null;
+    lastRunnerPostMortem = null;
     const parser = createReadySignalParser();
     let resolved = false;
     const timer = setTimeout(() => {
@@ -604,7 +637,8 @@ export async function startFastRunner(
       reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
     }, READY_TIMEOUT_MS);
 
-    const handleChunk = (chunk: string): void => {
+    const handleChunk = (chunk: string, stream: 'stdout' | 'stderr'): void => {
+      appendRunnerOutput(stream, chunk);
       if (resolved) return;
       const result = parser.feed(chunk);
       if (!result) return;
@@ -638,10 +672,10 @@ export async function startFastRunner(
     };
 
     child.stdout!.setEncoding('utf-8');
-    child.stdout!.on('data', handleChunk);
+    child.stdout!.on('data', (chunk: string) => handleChunk(chunk, 'stdout'));
 
     child.stderr!.setEncoding('utf-8');
-    child.stderr!.on('data', handleChunk);
+    child.stderr!.on('data', (chunk: string) => handleChunk(chunk, 'stderr'));
 
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -651,12 +685,22 @@ export async function startFastRunner(
       reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
 
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
+      lastRunnerPostMortem = {
+        available: true,
+        provenance: 'spawned',
+        lastCommand: lastRunnerCommand,
+        exitCode: code,
+        signal,
+        outputTail: runnerOutputTail,
+      };
       if (runnerProcess === child) {
         clearStateFile();
       }
       clearTimeout(timer);
-      reject(new Error(`xcodebuild exited unexpectedly (code ${code})`));
+      reject(
+        new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? 'none'})`),
+      );
     });
   });
 }
@@ -1025,6 +1069,15 @@ export interface RunIOSArgs {
    * directly.
    */
   _staleRef?: string;
+  /** Ref identity retained client-side for post-keyboard relayout resolution. */
+  _targetRef?: string;
+  targetBounds?: { x: number; y: number; width: number; height: number };
+  snapshotGeneration?: number;
+  keyboardStateAtSnapshot?: boolean;
+  /** Independent CDP/helper readback; never serialized onto the runner wire. */
+  _verifyExactReadback?: (
+    expected: string,
+  ) => Promise<{ matches: boolean; actual?: string | null }>;
 }
 
 interface RunnerResponse {
@@ -1086,9 +1139,12 @@ async function sendCommandOnce(
     // GH #383: defense-in-depth — the liveness gate already reaps a
     // protocol-mismatched runner, but a runner that flipped protocol mid-session
     // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
-    if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
+    if (
+      typeof parsed.v === 'number' &&
+      (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)
+    ) {
       throw new Error(
-        `RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`,
+        `RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`,
       );
     }
     return parsed;
@@ -1135,7 +1191,13 @@ async function probeCommandStatus(
 // meta (fastSwipe, settle probes) discard it with the response.
 async function postCommandWithRecovery(body: {
   command?: unknown;
+  [key: string]: unknown;
 }): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
+  if (runnerPoisoned && body.command !== 'status') {
+    throw new Error(
+      'RUNNER_TIMEOUT: rn-fast-runner is poisoned after a non-cancellable main-thread timeout; command refused before dispatch while the runner is reaped',
+    );
+  }
   const state = runnerState;
   if (!state) {
     throw new Error(
@@ -1143,6 +1205,7 @@ async function postCommandWithRecovery(body: {
     );
   }
   const commandId = generateCommandId();
+  lastRunnerCommand = typeof body.command === 'string' ? body.command : String(body.command);
   const timeoutMs = commandTimeoutMs(body.command);
   try {
     return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
@@ -1168,7 +1231,10 @@ async function postCommandWithRecovery(body: {
   }
 }
 
-async function postCommand(body: { command?: unknown }): Promise<RunnerResponse> {
+async function postCommand(body: {
+  command?: unknown;
+  [key: string]: unknown;
+}): Promise<RunnerResponse> {
   return (await postCommandWithRecovery(body)).resp;
 }
 
@@ -1177,6 +1243,56 @@ async function postCommand(body: { command?: unknown }): Promise<RunnerResponse>
  * for the ref-map. Each runner node gets a synthetic ref `@e<index>` so
  * downstream press/fill can target it.
  */
+async function containTypeTimeout(args: RunIOSArgs): Promise<ToolResult> {
+  // Poison before any asynchronous readback: concurrently queued mutators are
+  // refused at postCommandWithRecovery and cannot reach this XCTest instance.
+  runnerPoisoned = true;
+  let verification: { matches: boolean; actual?: string | null } = { matches: false };
+  try {
+    if (args._verifyExactReadback && typeof args.text === 'string') {
+      verification = await args._verifyExactReadback(args.text);
+    }
+  } catch {
+    verification = { matches: false };
+  }
+
+  poisonReap ??= reapStaleFastRunner();
+  try {
+    await poisonReap;
+  } finally {
+    poisonReap = null;
+    runnerPoisoned = false;
+  }
+  const runnerTimeoutRecovery = {
+    poisoned: true,
+    reaped: true,
+    verification: verification.matches ? 'exact-readback' : 'unverified',
+    targetApp: {
+      wasRunningBeforeRecovery: 'unverified',
+      pidPreserved: 'unverified',
+      activateLaunchedApp: 'unverified',
+      semantics: 'runner host is lazily relaunched; target activation semantics are unchanged',
+    },
+    ...(verification.actual !== undefined ? { actual: verification.actual } : {}),
+  };
+  if (verification.matches) {
+    return okResult(
+      {
+        typed: true,
+        text: args.text,
+        recovered: true,
+        verification: 'exact-readback',
+      },
+      { meta: { runnerTimeoutRecovery } },
+    );
+  }
+  return failResult(
+    'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was reaped before any further mutation.',
+    'RUNNER_TIMEOUT',
+    { runnerTimeoutRecovery },
+  );
+}
+
 function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
   const out: FlatNode[] = [];
   let synthCounter = 0;
@@ -1230,6 +1346,76 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.compact !== undefined) body.compact = args.compact;
   if (args.depth !== undefined) body.depth = args.depth;
   if (args.scope !== undefined) body.scope = args.scope;
+  if (args.targetBounds !== undefined) body.targetBounds = args.targetBounds;
+  if (args.snapshotGeneration !== undefined) body.snapshotGeneration = args.snapshotGeneration;
+  if (args.keyboardStateAtSnapshot !== undefined)
+    body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+
+  let keyboardRelayoutRecovered = false;
+  // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
+  // policy client-side instead of silently downgrading to point containment.
+  if (
+    withKeyboardGuard({}, args.command, process.env).guardKeyboard === true &&
+    runnerState?.protocolVersion === 1
+  ) {
+    const legacyDismiss = await postCommand({
+      command: 'keyboardDismiss',
+      ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+    });
+    const data = (legacyDismiss.data ?? {}) as {
+      wasVisible?: boolean;
+      dismissed?: boolean;
+      visible?: boolean;
+    };
+    if (data.wasVisible && (!data.dismissed || data.visible)) {
+      return failResult(
+        'KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.',
+        'KEYBOARD_DISMISS_FAILED',
+        { attemptedTiers: ['native-swipe', 'native-control'], protocolVersion: 1 },
+      );
+    }
+    if (data.wasVisible && data.dismissed) keyboardRelayoutRecovered = true;
+  }
+
+  const refreshTargetAfterKeyboard = async (): Promise<boolean> => {
+    if (!args._targetRef) return true; // raw coordinates remain meaningful after dismissal
+    const snapshot = await postCommand({
+      command: 'snapshot',
+      interactiveOnly: true,
+      ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+    });
+    if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== 'object') return false;
+    const data = snapshot.data as {
+      nodes?: RunnerSnapshotNode[];
+      snapshotGeneration?: number;
+      keyboardVisible?: boolean;
+    };
+    if (!Array.isArray(data.nodes)) return false;
+    updateRefMapFromFlat(mapRunnerNodesToFlat(data.nodes), {
+      ...(typeof data.snapshotGeneration === 'number'
+        ? { snapshotGeneration: data.snapshotGeneration }
+        : {}),
+      ...(typeof data.keyboardVisible === 'boolean'
+        ? { keyboardVisible: data.keyboardVisible }
+        : {}),
+    });
+    const target = getFreshRefTarget(args._targetRef);
+    if (!target) return false;
+    body.x = Math.round(target.rect.x + target.rect.width / 2);
+    body.y = Math.round(target.rect.y + target.rect.height / 2);
+    body.targetBounds = target.rect;
+    body.snapshotGeneration = target.snapshotGeneration;
+    if (target.keyboardStateAtSnapshot !== null)
+      body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
+    return true;
+  };
+  if (keyboardRelayoutRecovered && !(await refreshTargetAfterKeyboard())) {
+    return failResult(
+      'KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the target could not be re-resolved from a fresh snapshot; no tap was performed.',
+      'KEYBOARD_DISMISS_FAILED',
+      { keyboardGuard: 'auto_dismissed', reResolved: false },
+    );
+  }
 
   let resp: RunnerResponse;
   let recovery: TransportRecovery | undefined;
@@ -1242,38 +1428,38 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
       return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
     }
+    if (m.startsWith('RUNNER_TIMEOUT') && runnerPoisoned) {
+      return failResult(m, 'RUNNER_TIMEOUT', { poisoned: true, dispatched: false });
+    }
+    if (args.command === 'type' && m.startsWith('RUNNER_TIMEOUT')) {
+      return containTypeTimeout(args);
+    }
     throw err;
+  }
+  if (!resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
+    if (!(await refreshTargetAfterKeyboard())) {
+      return failResult(
+        'KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the ref target could not be re-resolved from a fresh snapshot; no tap was performed.',
+        'KEYBOARD_DISMISS_FAILED',
+        { keyboardGuard: 'auto_dismissed', reResolved: false },
+      );
+    }
+    ({ resp, recovery } = await postCommandWithRecovery(
+      withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+    ));
+    keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
-    // GH #105 iOS-MVP follow-up: XCUIElement.typeText() runs its own internal
-    // snapshot/quiescence synchronization that bypasses skipPostEventQuiescence
-    // — even with both target resolution AND the typing call wrapped in
-    // withTemporaryScrollIdleTimeoutIfSupported, the post-action wait still
-    // hits XCTest's 30s mainThreadExecutionTimeout because RN's main thread
-    // never reports quiescence (Reanimated keeps it active). Live validation
-    // confirms the text DOES land in the field every time. Treat this specific
-    // timeout shape as success for the type command and surface a meta marker
-    // so callers can audit telemetry. Any other error remains a failure.
     if (
       args.command === 'type' &&
       typeof message === 'string' &&
       message.includes('main thread execution timed out')
     ) {
-      return okResult(
-        { typed: true, text: args.text },
-        {
-          meta: {
-            sideEffectSucceeded: true,
-            runnerTimeoutShim: true,
-            ...announce,
-            ...recoveryMeta,
-          },
-        },
-      );
+      return containTypeTimeout(args);
     }
     const failExtras = recovery ? { transportRecovery: recovery } : undefined;
     if (code) {
@@ -1285,15 +1471,38 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   // Snapshot post-processing: feed the ref map so future press/fill calls
   // can resolve @refs without a separate fetch.
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
-    const data = resp.data as { nodes?: RunnerSnapshotNode[]; tree?: unknown };
+    const data = resp.data as {
+      nodes?: RunnerSnapshotNode[];
+      tree?: unknown;
+      snapshotGeneration?: number;
+      keyboardVisible?: boolean;
+    };
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
-      const outcome = updateRefMapFromFlat(flat);
+      const outcome = updateRefMapFromFlat(flat, {
+        ...(typeof data.snapshotGeneration === 'number'
+          ? { snapshotGeneration: data.snapshotGeneration }
+          : {}),
+        ...(typeof data.keyboardVisible === 'boolean'
+          ? { keyboardVisible: data.keyboardVisible }
+          : {}),
+      });
       // GH #409: verdict rendered from the same call that decided whether the
       // ref map was overwritten — an empty capture is reported as degraded and
       // leaves the last-known-good refs bound.
       const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
+      return okResult(
+        {
+          nodes: flat,
+          ...(typeof data.keyboardVisible === 'boolean'
+            ? { keyboardVisible: data.keyboardVisible }
+            : {}),
+          ...(typeof data.snapshotGeneration === 'number'
+            ? { snapshotGeneration: data.snapshotGeneration }
+            : {}),
+        },
+        { meta: { ...announce, snapshotVerdict, ...recoveryMeta } },
+      );
     }
     // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
     const fallbackMeta = { ...announce, ...recoveryMeta };
@@ -1303,6 +1512,10 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     );
   }
 
-  const finalMeta = { ...announce, ...recoveryMeta };
+  const finalMeta = {
+    ...announce,
+    ...recoveryMeta,
+    ...(keyboardRelayoutRecovered ? { keyboardGuard: 'auto_dismissed' } : {}),
+  };
   return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : undefined);
 }

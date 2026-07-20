@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 38;
+export const HELPERS_VERSION = 39;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -255,7 +255,7 @@ export const INJECTED_HELPERS = `
         return JSON.stringify({
           __agent_truncated: true,
           originalLength: str.length,
-          hint: 'Use a filter or narrower path to reduce output size.'
+          hint: 'State exceeds the payload budget; target a smaller component via testID, or read specific values via cdp_store_state / cdp_evaluate.'
         });
       }
       return str;

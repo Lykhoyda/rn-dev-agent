@@ -36,6 +36,11 @@ class RnFastRunnerTests: XCTestCase {
   lazy var springboard = XCUIApplication(bundleIdentifier: Self.springboardBundleId)
   var currentApp: XCUIApplication?
   var currentBundleId: String?
+  private let wedgeLock = NSLock()
+  private var runnerWedged = false
+#if RN_FAST_RUNNER_TEST_FAULTS
+  var testFaultConsumed = false
+#endif
   let maxRequestBytes = 2 * 1024 * 1024
   let maxSnapshotElements = 600
   let fastSnapshotLimit = 300
@@ -46,6 +51,7 @@ class RnFastRunnerTests: XCTestCase {
   let firstInteractionAfterActivateDelay: TimeInterval = 0.25
   let scrollInteractionIdleTimeoutDefault: TimeInterval = 1.0
   var needsPostSnapshotInteractionDelay = false
+  var currentSnapshotGeneration = 0
   var needsFirstInteractionDelay = false
   let interactiveTypes: Set<XCUIElement.ElementType> = [
     .button,
@@ -74,6 +80,18 @@ class RnFastRunnerTests: XCTestCase {
     .checkBox,
     .switch
   ]
+
+  func markRunnerWedged() {
+    wedgeLock.lock()
+    runnerWedged = true
+    wedgeLock.unlock()
+  }
+
+  func isRunnerWedged() -> Bool {
+    wedgeLock.lock()
+    defer { wedgeLock.unlock() }
+    return runnerWedged
+  }
 
   // MARK: - XCTest Entry
 

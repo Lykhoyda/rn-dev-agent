@@ -49,6 +49,14 @@ export function createComponentTreeHandler(getClient: () => CDPClient) {
         );
       }
 
+      if (
+        parsed.tree === null &&
+        Array.isArray(verdict?.reasons) &&
+        verdict.reasons.includes('scan-budget-exhausted')
+      ) {
+        parsed.message =
+          'Component tree is unavailable because the renderer scan budget was exhausted; narrow the existing filter/depth or retry after the UI settles.';
+      }
       if (verdict) delete parsed.verdict;
       return okResult(parsed, meta ? { meta } : undefined);
     },

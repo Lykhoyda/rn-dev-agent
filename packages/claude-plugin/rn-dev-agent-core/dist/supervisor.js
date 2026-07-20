@@ -27359,7 +27359,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 38;
+    HELPERS_VERSION = 39;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -27611,7 +27611,7 @@ var init_injected_helpers = __esm({
         return JSON.stringify({
           __agent_truncated: true,
           originalLength: str.length,
-          hint: 'Use a filter or narrower path to reduce output size.'
+          hint: 'State exceeds the payload budget; target a smaller component via testID, or read specific values via cdp_store_state / cdp_evaluate.'
         });
       }
       return str;
@@ -38758,6 +38758,7 @@ function inferPlatforms(targets, readers = {}) {
     const fromDeviceName = inferPlatformFromDeviceName(t.deviceName);
     if (fromDeviceName) {
       t.platform = fromDeviceName;
+      t.platformInference = "probed";
       continue;
     }
     const desc = t.description ?? "";
@@ -38765,15 +38766,23 @@ function inferPlatforms(targets, readers = {}) {
     const inIOS = iosPackages?.has(desc) ?? false;
     if (inAndroid && !inIOS) {
       t.platform = "android";
+      t.platformInference = "probed";
     } else if (inIOS && !inAndroid) {
       t.platform = "ios";
+      t.platformInference = "probed";
     } else if (inAndroid && inIOS) {
       t.platform = "ios";
       t.ambiguousPlatform = true;
+      t.platformInference = "ambiguous";
     } else {
       t.platform = "ios";
+      t.platformInference = "defaulted";
     }
   }
+}
+function describeTarget(target) {
+  const confidence = target.platformInference ?? "probed";
+  return `${target.id} title="${target.title || "?"}" device="${target.deviceName ?? "?"}" description="${target.description ?? "?"}" platform=${target.platform ?? "?"} confidence=${confidence}`;
 }
 function classifyAndroidDeviceKind(deviceName) {
   if (!deviceName)
@@ -38788,6 +38797,31 @@ function selectTarget(validTargets, filtersOrPlatform) {
   const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
   let filteredTargets = validTargets;
   const warnings = [];
+  if (filters.targetId) {
+    const idMatched = validTargets.filter((t) => t.id === filters.targetId);
+    if (idMatched.length === 0) {
+      return {
+        targets: [],
+        warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(", ")}`
+      };
+    }
+    filteredTargets = idMatched;
+  }
+  if (filters.platform) {
+    const platform = filters.platform.toLowerCase();
+    const platformMatched = filteredTargets.filter((target) => target.platform === platform && (target.platformInference === void 0 || target.platformInference === "probed"));
+    if (platformMatched.length === 0) {
+      const code = filters.targetId ? "TARGET_PLATFORM_CONFLICT" : "PLATFORM_TARGET_NOT_FOUND";
+      return {
+        targets: [],
+        errorCode: code,
+        warning: `${code}: requested platform "${filters.platform}" cannot be proven for the live target set. Candidates: ${validTargets.map(describeTarget).join("; ")}. Run cdp_targets, relaunch the requested app, or pass a targetId from a proven target.`
+      };
+    }
+    filteredTargets = platformMatched;
+  } else if (validTargets.length > 0 && !filters.targetId && !filters.bundleId && !filters.deviceKind && !filters.preferredBundleId) {
+    warnings.push(`No platform filter was supplied; connecting to the best available target without cross-platform affinity (${describeTarget(validTargets[0])}). Pass platform to fail closed.`);
+  }
   if (filters.deviceKind) {
     const kind = filters.deviceKind;
     const deviceMatched = filteredTargets.filter((target) => androidTargetMatchesKind(target.deviceName, kind));
@@ -38803,16 +38837,6 @@ function selectTarget(validTargets, filtersOrPlatform) {
       warnings.push(`No CDP target was positively identified as an emulator for the active Android session (devices: ${availableDevices}). Connecting to best available target.`);
     }
   }
-  if (filters.targetId) {
-    const idMatched = validTargets.filter((t) => t.id === filters.targetId);
-    if (idMatched.length === 0) {
-      return {
-        targets: [],
-        warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(", ")}`
-      };
-    }
-    filteredTargets = idMatched;
-  }
   if (filters.bundleId) {
     const bundleLower = filters.bundleId.toLowerCase();
     const bundleMatched = filteredTargets.filter((t) => (t.description ?? "").toLowerCase() === bundleLower);
@@ -38823,21 +38847,6 @@ function selectTarget(validTargets, filtersOrPlatform) {
       };
     }
     filteredTargets = bundleMatched;
-  }
-  if (filters.platform && filteredTargets.length > 1) {
-    const pf = filters.platform.toLowerCase();
-    let platformMatched = filteredTargets.filter((t) => t.platform === pf);
-    if (platformMatched.length === 0) {
-      platformMatched = filteredTargets.filter((t) => {
-        const haystack = `${t.title ?? ""} ${t.description ?? ""} ${t.vm ?? ""}`.toLowerCase();
-        return haystack.includes(pf);
-      });
-    }
-    if (platformMatched.length > 0) {
-      filteredTargets = platformMatched;
-    } else {
-      warnings.push(`Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map((t) => `${t.description || t.id} [${t.platform ?? "?"}]`).join(", ")}). Connecting to best available target.`);
-    }
   }
   const prefLower = filters.preferredBundleId?.toLowerCase();
   if (prefLower && filteredTargets.length > 1) {
@@ -38936,10 +38945,15 @@ async function discover(currentPort, platformFilterOrFilters) {
   logger.info("CDP", `Metro selected on port ${metroPort} (running: ${runningPorts.join(", ")})`);
   const validTargets = attached.find((pp) => pp.port === metroPort).targets;
   inferPlatforms(validTargets);
-  const { targets: sorted, warning: selectWarning } = selectTarget(validTargets, filters);
+  const { targets: sorted, warning: selectWarning, errorCode } = selectTarget(validTargets, filters);
   const warning = [portWarning, selectWarning].filter(Boolean).join(" | ") || void 0;
   logger.debug("CDP", `Found ${sorted.length} valid target(s): ${sorted.map((t) => `${t.id} (${t.title}, platform=${t.platform ?? "?"})`).join(", ")}`);
-  return { port: metroPort, targets: sorted, warning };
+  return {
+    port: metroPort,
+    targets: sorted,
+    warning,
+    ...errorCode ? { errorCode, candidates: validTargets } : {}
+  };
 }
 async function discoverForList(currentPort, portHint) {
   const ports = [.../* @__PURE__ */ new Set([portHint ?? currentPort, ...resolveDefaultPorts()])];
@@ -38999,7 +39013,7 @@ async function enumerateMetroCandidates(connectedPort, projectRoot) {
     timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe }
   };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
@@ -39021,6 +39035,16 @@ var init_discovery = __esm({
       }
     };
     DISCOVERY_TIMEOUT_MS = 1500;
+    TargetSelectionError = class extends Error {
+      code;
+      candidates;
+      constructor(code, message, candidates) {
+        super(message);
+        this.code = code;
+        this.candidates = candidates;
+        this.name = "TargetSelectionError";
+      }
+    };
   }
 });
 
@@ -39264,8 +39288,12 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
     ctx.setState("disconnected");
     throw err;
   }
-  const { port: metroPort, targets: sorted, warning: selectionWarning } = result;
+  const { port: metroPort, targets: sorted, warning: selectionWarning, errorCode, candidates } = result;
   ctx.setPort(metroPort);
+  if (errorCode) {
+    ctx.setState("disconnected");
+    throw new TargetSelectionError(errorCode, selectionWarning ?? errorCode, candidates ?? []);
+  }
   if (sorted.length === 0) {
     ctx.setState("disconnected");
     throw new Error(selectionWarning ?? "No matching CDP targets found.");
@@ -40270,6 +40298,8 @@ function clearRefMap() {
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
+  snapshotGeneration = 0;
+  keyboardStateAtSnapshot = null;
 }
 function buildSnapshotVerdict(source, nodeCount, outcome) {
   const reasons = [];
@@ -40283,7 +40313,7 @@ function buildSnapshotVerdict(source, nodeCount, outcome) {
     reasons
   };
 }
-function updateRefMapFromFlat(nodes) {
+function updateRefMapFromFlat(nodes, freshness = {}) {
   let validCount = 0;
   for (const node of nodes) {
     if (node.ref && node.rect)
@@ -40294,6 +40324,8 @@ function updateRefMapFromFlat(nodes) {
   }
   refMap.clear();
   screenRect = null;
+  snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
+  keyboardStateAtSnapshot = freshness.keyboardVisible ?? null;
   const hashed = [];
   const entries = [];
   for (let i = 0; i < nodes.length; i++) {
@@ -40302,7 +40334,13 @@ function updateRefMapFromFlat(nodes) {
       continue;
     const key = node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
     refMap.set(key, node.rect);
-    const meta = { type: node.type, flatIndex: i, nodeCount: nodes.length };
+    const meta = {
+      type: node.type,
+      flatIndex: i,
+      nodeCount: nodes.length,
+      snapshotGeneration,
+      keyboardStateAtSnapshot
+    };
     if (node.label !== void 0)
       meta.label = node.label;
     if (node.identifier !== void 0)
@@ -40319,6 +40357,20 @@ function updateRefMapFromFlat(nodes) {
   }
   lastUpdated = Date.now();
   return { applied: true };
+}
+function getFreshRefTarget(ref) {
+  if (!isRefMapFresh())
+    return null;
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  const rect = refMap.get(key);
+  const record2 = metadataMap.get(key);
+  if (!rect || !record2 || record2.snapshotGeneration !== snapshotGeneration || record2.keyboardStateAtSnapshot === null)
+    return null;
+  return {
+    rect,
+    snapshotGeneration: record2.snapshotGeneration,
+    keyboardStateAtSnapshot: record2.keyboardStateAtSnapshot
+  };
 }
 function getCachedMetadata(ref) {
   const key = ref.startsWith("@") ? ref.slice(1) : ref;
@@ -40374,7 +40426,7 @@ function refreshRef(sig, nodes) {
   }
   return { kind: "ambiguous", candidates: matches.map((m) => m.node) };
 }
-var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
+var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, snapshotGeneration, keyboardStateAtSnapshot, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
 var init_fast_runner_ref_map = __esm({
   "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
     "use strict";
@@ -40384,6 +40436,8 @@ var init_fast_runner_ref_map = __esm({
     screenRect = null;
     lastUpdated = 0;
     lastSnapshotHash = null;
+    snapshotGeneration = 0;
+    keyboardStateAtSnapshot = null;
     WINDOW_TYPES = /* @__PURE__ */ new Set(["Application", "Window"]);
     MAX_REF_MAP_AGE_MS = 6e4;
   }
@@ -40483,9 +40537,9 @@ function isKeyboardOccludedRefusal(result) {
   if (envelope === null || typeof envelope !== "object")
     return false;
   const { code, error: error2 } = envelope;
-  if (code === "KEYBOARD_OCCLUDED")
+  if (code === "KEYBOARD_OCCLUDED" || code === "KEYBOARD_DISMISS_FAILED")
     return true;
-  return typeof error2 === "string" && error2.startsWith("KEYBOARD_OCCLUDED");
+  return typeof error2 === "string" && (error2.startsWith("KEYBOARD_OCCLUDED") || error2.startsWith("KEYBOARD_DISMISS_FAILED"));
 }
 async function healKeyboardOccludedTap(first, deps) {
   if (!deps || !isKeyboardOccludedRefusal(first))
@@ -40500,7 +40554,13 @@ async function healKeyboardOccludedTap(first, deps) {
   if (!dismissed)
     return first;
   try {
-    await deps.refreshSnapshot();
+    const refreshed = await deps.refreshSnapshot();
+    const text = refreshed?.content?.[0]?.text;
+    if (typeof text === "string") {
+      const envelope = JSON.parse(text);
+      if (envelope.data?.keyboardVisible === true)
+        return first;
+    }
   } catch {
   }
   const retried = await deps.retryTap();
@@ -40523,8 +40583,8 @@ function tagKeyboardAutoHeal(result, healMs) {
     ...meta,
     // A retry that refused again keeps its own guard status; only a served
     // tap is stamped as JS-dismissed.
-    ...result.isError ? {} : { keyboardGuard: "js_dismissed" },
-    keyboardAutoHeal: { dismissed: true, healMs }
+    ...result.isError ? {} : { keyboardGuard: "auto_dismissed", via: "js" },
+    keyboardAutoHeal: { dismissed: true, via: "js", healMs }
   };
   return {
     ...result,
@@ -40731,7 +40791,7 @@ var init_protocol2 = __esm({
   "packages/rn-dev-agent-core/dist/runners/protocol.js"() {
     "use strict";
     init_runtime_paths();
-    RUNNER_PROTOCOL_VERSION = 1;
+    RUNNER_PROTOCOL_VERSION = 2;
     MIN_SUPPORTED_RUNNER_PROTOCOL = 1;
     REQUIRED_IOS_COMMANDS = [
       "tap",
@@ -41116,6 +41176,7 @@ __export(rn_fast_runner_client_exports, {
   fastSwipe: () => fastSwipe,
   getFastRunnerCapabilities: () => getFastRunnerCapabilities,
   getFastRunnerState: () => getFastRunnerState,
+  getRunnerPostMortem: () => getRunnerPostMortem,
   hasBuiltTestProduct: () => hasBuiltTestProduct,
   iosStatePath: () => iosStatePath,
   isFastRunnerAvailable: () => isFastRunnerAvailable,
@@ -41188,6 +41249,15 @@ function createReadySignalParser() {
     }
   };
 }
+function appendRunnerOutput(stream, chunk) {
+  runnerOutputTail = `${runnerOutputTail}${stream}: ${chunk}`.slice(-8e3);
+}
+function getRunnerPostMortem() {
+  return lastRunnerPostMortem ?? {
+    available: false,
+    provenance: runnerProcess ? "spawned" : "adopted"
+  };
+}
 function getFastRunnerCapabilities() {
   return lastKnownCapabilities;
 }
@@ -41196,6 +41266,8 @@ function _resetCapabilitiesForTest() {
 }
 function _setFastRunnerStateForTest(state) {
   runnerState = state;
+  runnerProcess = null;
+  lastRunnerPostMortem = null;
 }
 function _resetQuiescenceAnnouncementForTest(pending2) {
   quiescenceAnnouncementPending = pending2;
@@ -41446,13 +41518,17 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       stdio: ["ignore", "pipe", "pipe"]
     });
     runnerProcess = child;
+    runnerOutputTail = "";
+    lastRunnerCommand = null;
+    lastRunnerPostMortem = null;
     const parser = createReadySignalParser();
     let resolved = false;
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1e3}s`));
     }, READY_TIMEOUT_MS);
-    const handleChunk = (chunk) => {
+    const handleChunk = (chunk, stream) => {
+      appendRunnerOutput(stream, chunk);
       if (resolved)
         return;
       const result = parser.feed(chunk);
@@ -41486,9 +41562,9 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       resolve5(state);
     };
     child.stdout.setEncoding("utf-8");
-    child.stdout.on("data", handleChunk);
+    child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
     child.stderr.setEncoding("utf-8");
-    child.stderr.on("data", handleChunk);
+    child.stderr.on("data", (chunk) => handleChunk(chunk, "stderr"));
     child.on("error", (err) => {
       clearTimeout(timer);
       if (runnerProcess === child) {
@@ -41496,12 +41572,20 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       }
       reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
-    child.on("exit", (code) => {
+    child.on("exit", (code, signal) => {
+      lastRunnerPostMortem = {
+        available: true,
+        provenance: "spawned",
+        lastCommand: lastRunnerCommand,
+        exitCode: code,
+        signal,
+        outputTail: runnerOutputTail
+      };
       if (runnerProcess === child) {
         clearStateFile();
       }
       clearTimeout(timer);
-      reject(new Error(`xcodebuild exited unexpectedly (code ${code})`));
+      reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? "none"})`));
     });
   });
 }
@@ -41691,8 +41775,8 @@ async function sendCommandOnce(port, body, timeoutMs) {
       signal: controller.signal
     });
     const parsed = await resp.json();
-    if (typeof parsed.v === "number" && parsed.v !== RUNNER_PROTOCOL_VERSION) {
-      throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`);
+    if (typeof parsed.v === "number" && (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
+      throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
     }
     return parsed;
   } catch (err) {
@@ -41713,11 +41797,15 @@ async function probeCommandStatus(port, commandId) {
   }
 }
 async function postCommandWithRecovery(body) {
+  if (runnerPoisoned && body.command !== "status") {
+    throw new Error("RUNNER_TIMEOUT: rn-fast-runner is poisoned after a non-cancellable main-thread timeout; command refused before dispatch while the runner is reaped");
+  }
   const state = runnerState;
   if (!state) {
     throw new Error("rn-fast-runner not started \u2014 run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).");
   }
   const commandId = generateCommandId();
+  lastRunnerCommand = typeof body.command === "string" ? body.command : String(body.command);
   const timeoutMs = commandTimeoutMs(body.command);
   try {
     return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
@@ -41741,6 +41829,45 @@ async function postCommandWithRecovery(body) {
 }
 async function postCommand(body) {
   return (await postCommandWithRecovery(body)).resp;
+}
+async function containTypeTimeout(args) {
+  runnerPoisoned = true;
+  let verification = { matches: false };
+  try {
+    if (args._verifyExactReadback && typeof args.text === "string") {
+      verification = await args._verifyExactReadback(args.text);
+    }
+  } catch {
+    verification = { matches: false };
+  }
+  poisonReap ??= reapStaleFastRunner();
+  try {
+    await poisonReap;
+  } finally {
+    poisonReap = null;
+    runnerPoisoned = false;
+  }
+  const runnerTimeoutRecovery = {
+    poisoned: true,
+    reaped: true,
+    verification: verification.matches ? "exact-readback" : "unverified",
+    targetApp: {
+      wasRunningBeforeRecovery: "unverified",
+      pidPreserved: "unverified",
+      activateLaunchedApp: "unverified",
+      semantics: "runner host is lazily relaunched; target activation semantics are unchanged"
+    },
+    ...verification.actual !== void 0 ? { actual: verification.actual } : {}
+  };
+  if (verification.matches) {
+    return okResult({
+      typed: true,
+      text: args.text,
+      recovered: true,
+      verification: "exact-readback"
+    }, { meta: { runnerTimeoutRecovery } });
+  }
+  return failResult("RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was reaped before any further mutation.", "RUNNER_TIMEOUT", { runnerTimeoutRecovery });
 }
 function mapRunnerNodesToFlat(nodes) {
   const out = [];
@@ -41806,6 +41933,56 @@ async function runIOS(args) {
     body.depth = args.depth;
   if (args.scope !== void 0)
     body.scope = args.scope;
+  if (args.targetBounds !== void 0)
+    body.targetBounds = args.targetBounds;
+  if (args.snapshotGeneration !== void 0)
+    body.snapshotGeneration = args.snapshotGeneration;
+  if (args.keyboardStateAtSnapshot !== void 0)
+    body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+  let keyboardRelayoutRecovered = false;
+  if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true && runnerState?.protocolVersion === 1) {
+    const legacyDismiss = await postCommand({
+      command: "keyboardDismiss",
+      ...args.bundleId ? { appBundleId: args.bundleId } : {}
+    });
+    const data = legacyDismiss.data ?? {};
+    if (data.wasVisible && (!data.dismissed || data.visible)) {
+      return failResult("KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers: ["native-swipe", "native-control"], protocolVersion: 1 });
+    }
+    if (data.wasVisible && data.dismissed)
+      keyboardRelayoutRecovered = true;
+  }
+  const refreshTargetAfterKeyboard = async () => {
+    if (!args._targetRef)
+      return true;
+    const snapshot = await postCommand({
+      command: "snapshot",
+      interactiveOnly: true,
+      ...args.bundleId ? { appBundleId: args.bundleId } : {}
+    });
+    if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== "object")
+      return false;
+    const data = snapshot.data;
+    if (!Array.isArray(data.nodes))
+      return false;
+    updateRefMapFromFlat(mapRunnerNodesToFlat(data.nodes), {
+      ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {},
+      ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {}
+    });
+    const target = getFreshRefTarget(args._targetRef);
+    if (!target)
+      return false;
+    body.x = Math.round(target.rect.x + target.rect.width / 2);
+    body.y = Math.round(target.rect.y + target.rect.height / 2);
+    body.targetBounds = target.rect;
+    body.snapshotGeneration = target.snapshotGeneration;
+    if (target.keyboardStateAtSnapshot !== null)
+      body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
+    return true;
+  };
+  if (keyboardRelayoutRecovered && !await refreshTargetAfterKeyboard()) {
+    return failResult("KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the target could not be re-resolved from a fresh snapshot; no tap was performed.", "KEYBOARD_DISMISS_FAILED", { keyboardGuard: "auto_dismissed", reResolved: false });
+  }
   let resp;
   let recovery;
   try {
@@ -41815,7 +41992,20 @@ async function runIOS(args) {
     if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
       return failResult(m, "RUNNER_PROTOCOL_MISMATCH");
     }
+    if (m.startsWith("RUNNER_TIMEOUT") && runnerPoisoned) {
+      return failResult(m, "RUNNER_TIMEOUT", { poisoned: true, dispatched: false });
+    }
+    if (args.command === "type" && m.startsWith("RUNNER_TIMEOUT")) {
+      return containTypeTimeout(args);
+    }
     throw err;
+  }
+  if (!resp.ok && resp.error?.code === "KEYBOARD_RELAYOUT_REQUIRED") {
+    if (!await refreshTargetAfterKeyboard()) {
+      return failResult("KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the ref target could not be re-resolved from a fresh snapshot; no tap was performed.", "KEYBOARD_DISMISS_FAILED", { keyboardGuard: "auto_dismissed", reResolved: false });
+    }
+    ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+    keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
@@ -41823,14 +42013,7 @@ async function runIOS(args) {
     const message = resp.error?.message ?? "runner returned !ok with no error";
     const code = resp.error?.code;
     if (args.command === "type" && typeof message === "string" && message.includes("main thread execution timed out")) {
-      return okResult({ typed: true, text: args.text }, {
-        meta: {
-          sideEffectSucceeded: true,
-          runnerTimeoutShim: true,
-          ...announce,
-          ...recoveryMeta
-        }
-      });
+      return containTypeTimeout(args);
     }
     const failExtras = recovery ? { transportRecovery: recovery } : void 0;
     if (code) {
@@ -41842,17 +42025,28 @@ async function runIOS(args) {
     const data = resp.data;
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
-      const outcome = updateRefMapFromFlat(flat);
+      const outcome = updateRefMapFromFlat(flat, {
+        ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {},
+        ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {}
+      });
       const snapshotVerdict = buildSnapshotVerdict("rn-fast-runner", flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
+      return okResult({
+        nodes: flat,
+        ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {},
+        ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {}
+      }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
     }
     const fallbackMeta = { ...announce, ...recoveryMeta };
     return okResult(resp.data, Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : void 0);
   }
-  const finalMeta = { ...announce, ...recoveryMeta };
+  const finalMeta = {
+    ...announce,
+    ...recoveryMeta,
+    ...keyboardRelayoutRecovered ? { keyboardGuard: "auto_dismissed" } : {}
+  };
   return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
 }
-var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS;
+var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS;
 var init_rn_fast_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
     "use strict";
@@ -41873,6 +42067,11 @@ var init_rn_fast_runner_client = __esm({
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
     runnerProcess = null;
     runnerState = null;
+    runnerPoisoned = false;
+    poisonReap = null;
+    runnerOutputTail = "";
+    lastRunnerCommand = null;
+    lastRunnerPostMortem = null;
     lastKnownCapabilities = [];
     quiescenceAnnouncementPending = false;
     QUIESCENCE_STATUSES = /* @__PURE__ */ new Set(["active", "disabled", "unavailable"]);
@@ -42821,8 +43020,8 @@ async function sendCommandOnce2(hostPort, body, timeoutMs) {
   } catch {
     throw new Error("rn-android-runner returned a non-JSON response body");
   }
-  if (typeof parsed.v === "number" && parsed.v !== RUNNER_PROTOCOL_VERSION) {
-    throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`);
+  if (typeof parsed.v === "number" && (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
+    throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
   }
   return parsed;
 }
@@ -43301,7 +43500,20 @@ function buildRunIOSArgs(cliArgs, bundleId) {
         if (!center) {
           return { command: "tap", _staleRef: ref, ...bundleId ? { bundleId } : {} };
         }
-        return { command: "tap", x: center.x, y: center.y, ...bundleId ? { bundleId } : {} };
+        const target = getFreshRefTarget(ref);
+        const built = {
+          command: "tap",
+          x: center.x,
+          y: center.y,
+          ...target ? {
+            targetBounds: target.rect,
+            snapshotGeneration: target.snapshotGeneration,
+            keyboardStateAtSnapshot: target.keyboardStateAtSnapshot
+          } : {},
+          ...bundleId ? { bundleId } : {}
+        };
+        Object.defineProperty(built, "_targetRef", { value: ref, enumerable: false });
+        return built;
       }
       const [xS, yS] = positionals;
       const x = Number(xS), y = Number(yS);
@@ -43898,12 +44110,17 @@ async function runNative(cliArgs, opts = {}) {
       const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? "");
       if (!ready.ok) {
         consumePendingFastRunnerArtifactNote();
-        return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN");
+        return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN", {
+          runnerPostMortem: getRunnerPostMortem()
+        });
       }
       upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
     }
     const { runIOS: runIOS2 } = await Promise.resolve().then(() => (init_rn_fast_runner_client(), rn_fast_runner_client_exports));
     const ios = buildRunIOSArgs(cliArgs, appId);
+    if (ios.command === "type" && opts.verifyTypeReadback) {
+      ios._verifyExactReadback = opts.verifyTypeReadback;
+    }
     let healMeta = null;
     if (ios._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(ios._staleRef, () => runIOS2({
@@ -44543,10 +44760,33 @@ var init_maestro_dispatch = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
-function parseMaestroFailure(output) {
-  if (!output || typeof output !== "string") {
+function parseMaestroFailure(output, terminal) {
+  const raw = typeof output === "string" ? output : "";
+  if (terminal?.failureKind === "SELECTOR_NOT_FOUND") {
+    return {
+      kind: "SELECTOR_NOT_FOUND",
+      selectorKind: "unknown",
+      selector: terminal.failureSelector ?? "",
+      raw
+    };
+  }
+  if (terminal?.failureKind === "TIMEOUT") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.failureKind === "ASSERTION_FAILED") {
+    return { kind: "ASSERTION_FAILED", selector: terminal.failureSelector ?? null, raw };
+  }
+  if (terminal?.exitClass === "before-first-step" && terminal.bootstrapEvidence) {
+    return {
+      kind: "WDA_BOOTSTRAP_FAILED",
+      detail: terminal.bootstrapEvidence.slice(0, 500),
+      raw
+    };
+  }
+  if (!raw) {
     return { kind: "UNKNOWN", raw: "" };
   }
+  output = raw;
   const lines = output.split("\n");
   for (const { re, build } of PATTERNS) {
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -47070,6 +47310,22 @@ async function nativeSettle(client2, testID, text, settleAnchor, stabilityPrior)
     value: settled.value
   };
 }
+function exactTypeReadback(client2, testID) {
+  if (!client2 || !testID)
+    return void 0;
+  return async (expected) => {
+    const result = await client2.evaluate(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`);
+    if (typeof result.value !== "string")
+      return { matches: false };
+    try {
+      const parsed = JSON.parse(result.value);
+      const actual = typeof parsed.value === "string" ? parsed.value : null;
+      return { matches: actual === expected, actual };
+    } catch {
+      return { matches: false };
+    }
+  };
+}
 async function readValueBefore(client2, testID) {
   if (!client2 || !testID)
     return null;
@@ -47113,7 +47369,10 @@ function createDeviceFillHandler(getClient2) {
       if (delay > 0)
         await sleep3(delay);
     }
-    const primary = await runNative(["fill", ref, args.text, ...pinArgs], settleOpts(args));
+    const primary = await runNative(["fill", ref, args.text, ...pinArgs], {
+      ...settleOpts(args),
+      verifyTypeReadback: exactTypeReadback(client2, jsTestId)
+    });
     if (!primary.isError) {
       if (client2 && jsTestId && !androidSession) {
         const tNative = Date.now();
@@ -47189,7 +47448,10 @@ function createDeviceFillHandler(getClient2) {
             const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
             if (delay > 0)
               await sleep3(delay);
-            const resolved = await runNative(["fill", resolvedRef, args.text, ...innerPinArgs], settleOpts(args));
+            const resolved = await runNative(["fill", resolvedRef, args.text, ...innerPinArgs], {
+              ...settleOpts(args),
+              verifyTypeReadback: exactTypeReadback(client2, resolveCachedIdentifier(resolvedRef) ?? null)
+            });
             if (!resolved.isError) {
               try {
                 const envelope = JSON.parse(resolved.content[0].text);
@@ -47209,7 +47471,9 @@ function createDeviceFillHandler(getClient2) {
       const retryTap = await runNative(["press", ref]);
       if (!retryTap.isError) {
         await sleep3(300);
-        const retry = await runNative(["fill", ref, args.text]);
+        const retry = await runNative(["fill", ref, args.text], {
+          verifyTypeReadback: exactTypeReadback(client2, jsTestId)
+        });
         if (!retry.isError) {
           try {
             const envelope = JSON.parse(retry.content[0].text);
@@ -49460,10 +49724,15 @@ function sessionConnectFilters(session) {
 function targetMatchesSession(target, filters) {
   if (!target)
     return false;
-  if (filters.platform && target.platform !== filters.platform)
+  if (filters.platform && (target.platform !== filters.platform || target.platformInference === "defaulted" || target.platformInference === "ambiguous"))
     return false;
-  if (filters.bundleId && (target.description ?? "").toLowerCase() !== filters.bundleId.toLowerCase()) {
-    return false;
+  if (filters.bundleId) {
+    const description = (target.description ?? "").toLowerCase();
+    const bundle = filters.bundleId.toLowerCase();
+    const escaped = bundle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!new RegExp(`(^|[^A-Za-z0-9._-])${escaped}([^A-Za-z0-9._-]|$)`).test(description)) {
+      return false;
+    }
   }
   if (filters.deviceKind === "physical" && !androidTargetMatchesKind(target.deviceName, filters.deviceKind)) {
     return false;
@@ -49540,7 +49809,13 @@ async function buildStatusResult(client2) {
       device: client2.connectedTarget?.title ?? null,
       pageId: client2.connectedTarget?.id ?? null,
       platform: client2.connectedTarget?.platform ?? null,
-      bundleId: client2.connectedTarget?.description ?? null
+      bundleId: client2.connectedTarget?.description ?? null,
+      affinityScope: (() => {
+        const active = getActiveSession();
+        if (!active)
+          return "best-available";
+        return active.platform === "android" ? "platform-bundle-device-kind" : "platform-bundle-class";
+      })()
     },
     app: {
       platform: appInfo?.platform ?? null,
@@ -49601,9 +49876,16 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
       const session = getActiveSession();
       const sessionFilters = sessionConnectFilters(session);
       if (args.platform && sessionFilters?.platform && args.platform.toLowerCase() !== sessionFilters.platform) {
-        return failResult(`cdp_status requested ${args.platform}, but the active device session is bound to ${sessionFilters.platform} ${session?.deviceId}. Close that session or request the same platform; refusing to target a different device silently.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
+        return failResult(`cdp_status requested ${args.platform}, but the active device session is ${sessionFilters.platform} (${session?.deviceId}). Refusing a cross-platform target; this guarantees platform+bundle class only and does not claim iOS UDID identity because Metro does not expose it. Close the session or request the same platform.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
       }
       const connectFilters = sessionFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
+      const validateConnectedTarget = async () => {
+        if (targetMatchesSession(client2.connectedTarget, connectFilters))
+          return;
+        const wrong = client2.connectedTarget;
+        await client2.disconnect();
+        throw new TargetSelectionError(connectFilters.platform ? "PLATFORM_TARGET_NOT_FOUND" : "TARGET_PLATFORM_CONFLICT", `Connected target failed post-connect affinity validation for platform=${connectFilters.platform ?? "unspecified"} bundleId=${connectFilters.bundleId ?? "unspecified"}. The socket was disconnected; run cdp_targets and relaunch the requested app.`, wrong ? [wrong] : []);
+      };
       if (args.metroPort && args.metroPort !== client2.metroPort) {
         await client2.disconnect();
         client2 = createClient2(args.metroPort);
@@ -49625,12 +49907,16 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
             setClient2(client2);
           }
           await client2.autoConnect(args.metroPort, connectFilters, "status");
+          await validateConnectedTarget();
         }
       } else if (!targetMatchesSession(client2.connectedTarget, connectFilters)) {
         await client2.disconnect();
         client2 = createClient2(client2.metroPort);
         setClient2(client2);
         await client2.autoConnect(args.metroPort, connectFilters, "status");
+        await validateConnectedTarget();
+      } else {
+        await validateConnectedTarget();
       }
       const status = await buildStatusResult(client2);
       let autoRecoveredMessage;
@@ -49710,6 +49996,20 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
       return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : void 0);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof TargetSelectionError) {
+        await getClient2().disconnect().catch(() => void 0);
+        return failResult(message, err.code, {
+          candidates: err.candidates.map((target) => ({
+            id: target.id,
+            title: target.title,
+            deviceName: target.deviceName ?? null,
+            description: target.description ?? null,
+            platform: target.platform ?? null,
+            confidence: target.platformInference ?? "probed"
+          })),
+          affinity: "cross-platform-only; iOS UDID identity is unavailable from Metro"
+        });
+      }
       if (err instanceof AppDetachedError) {
         const callerPinnedNonIos = !!args.platform && args.platform.toLowerCase() !== "ios";
         const recovery = callerPinnedNonIos ? { recovered: false, reason: "unsupported-platform", attempt: 0 } : await recoverDetachedFn(getClient2(), { snapshotHint: snapshotHintForBundleId });
@@ -49744,7 +50044,14 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
           try {
             let retryClient = getClient2();
             if (!retryClient.isConnected) {
-              await retryClient.autoConnect(args.metroPort, args.platform);
+              const activeFilters = sessionConnectFilters(getActiveSession());
+              const retryFilters = activeFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
+              await retryClient.autoConnect(args.metroPort, retryFilters, "status");
+              if (!targetMatchesSession(retryClient.connectedTarget, retryFilters)) {
+                const wrong = retryClient.connectedTarget;
+                await retryClient.disconnect();
+                return failResult("Picker dismissal connected a target that failed post-connect platform/session validation; the socket was disconnected.", retryFilters.platform ? "PLATFORM_TARGET_NOT_FOUND" : "TARGET_PLATFORM_CONFLICT", { target: wrong, affinity: "cross-platform-only; not iOS UDID identity" });
+              }
             }
             if (retryClient.isConnected) {
               return warnResult(await buildStatusResult(retryClient), `Dev Client picker was blocking \u2014 auto-dismissed (${pickerResult.reason}). Connection recovered.`);
@@ -49855,6 +50162,9 @@ function createComponentTreeHandler(getClient2) {
       return warnResult({
         message: parsed.message ?? "App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload."
       }, "APP_HAS_REDBOX", meta);
+    }
+    if (parsed.tree === null && Array.isArray(verdict?.reasons) && verdict.reasons.includes("scan-budget-exhausted")) {
+      parsed.message = "Component tree is unavailable because the renderer scan budget was exhausted; narrow the existing filter/depth or retry after the UI settles.";
     }
     if (verdict)
       delete parsed.verdict;
@@ -51910,7 +52220,56 @@ function resolveBatchDelayMs(explicit, env) {
 function sleep4(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
-async function executeStep(step) {
+async function guardedBatchPress(cliArgs, opts, getClient2) {
+  const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, opts));
+  const first = await tap();
+  if (!first.isError || !getClient2)
+    return first;
+  const client2 = getClient2();
+  if (!client2.isConnected || !client2.helpersInjected)
+    return first;
+  return healKeyboardOccludedTap(first, {
+    dismissViaJs: async () => {
+      const result = await client2.evaluate("__RN_AGENT.dismissKeyboard()");
+      if (typeof result.value !== "string")
+        return false;
+      try {
+        return JSON.parse(result.value).dismissed === true;
+      } catch {
+        return false;
+      }
+    },
+    refreshSnapshot: () => runNative(["snapshot", "-i"]),
+    retryTap: tap
+  });
+}
+async function dismissKeyboardWithParity(getClient2) {
+  const native = await runNative(["keyboard", "dismiss"]);
+  if (!native.isError)
+    return native;
+  const attemptedTiers = ["native-swipe", "native-control"];
+  if (getClient2) {
+    const client2 = getClient2();
+    if (client2.isConnected && client2.helpersInjected) {
+      attemptedTiers.push("js");
+      try {
+        const js = await client2.evaluate("__RN_AGENT.dismissKeyboard()");
+        const parsed = typeof js.value === "string" ? JSON.parse(js.value) : null;
+        if (parsed?.dismissed) {
+          const check2 = await runNative(["snapshot", "-i"]);
+          const text = check2.content?.[0]?.text;
+          const visible = typeof text === "string" ? JSON.parse(text).data?.keyboardVisible : void 0;
+          if (visible === false) {
+            return okResult({ dismissed: true, via: "js", attemptedTiers });
+          }
+        }
+      } catch {
+      }
+    }
+  }
+  return failResult("KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; keyboard visibility was not proven false.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers });
+}
+async function executeStep(step, getClient2) {
   switch (step.action) {
     case "find": {
       if (step.testID) {
@@ -51932,7 +52291,7 @@ async function executeStep(step) {
           });
         }
         if (step.tap)
-          return runNative(["press", `@${ref}`], stepSettleOpts(step));
+          return guardedBatchPress(["press", `@${ref}`], stepSettleOpts(step), getClient2);
         return okResult({
           resolved: ref,
           testID: step.testID,
@@ -51977,12 +52336,12 @@ async function executeStep(step) {
             testID: step.testID
           });
         }
-        return runNative(["press", `@${ref2}`], stepSettleOpts(step));
+        return guardedBatchPress(["press", `@${ref2}`], stepSettleOpts(step), getClient2);
       }
       if (!step.ref)
         return failResult("press requires ref or testID");
       const ref = step.ref.startsWith("@") ? step.ref : `@${step.ref}`;
-      return runNative(["press", ref], stepSettleOpts(step));
+      return guardedBatchPress(["press", ref], stepSettleOpts(step), getClient2);
     }
     case "fill": {
       if (!step.text)
@@ -52021,7 +52380,7 @@ async function executeStep(step) {
       return runNative(["back"], stepSettleOpts(step));
     }
     case "hideKeyboard": {
-      return runNative(["keyboard", "dismiss"], stepSettleOpts(step));
+      return dismissKeyboardWithParity(getClient2);
     }
     case "snapshot": {
       return runNative(["snapshot", "-i"]);
@@ -52053,7 +52412,7 @@ function extractData(result) {
     return null;
   }
 }
-function createDeviceBatchHandler() {
+function createDeviceBatchHandler(getClient2) {
   return withSession(async (args) => {
     const { steps, screenshotOn = "failure", continueOnError = false, finalSnapshot: finalSnapshotMode = "salient" } = args;
     const delayMs = resolveBatchDelayMs(args.delayMs, process.env);
@@ -52072,7 +52431,7 @@ function createDeviceBatchHandler() {
       let stepTimer;
       let stepTimedOut = false;
       const result = await Promise.race([
-        executeStep(step),
+        executeStep(step, getClient2),
         new Promise((resolve5) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
@@ -52181,6 +52540,7 @@ var init_device_batch = __esm({
     init_settle();
     init_device_interact();
     init_utils();
+    init_keyboard_guard();
     init_device_list();
     INTERACTIVE_A11Y_TYPES = /* @__PURE__ */ new Set([
       "Button",
@@ -54310,7 +54670,7 @@ function lastObservedStep(steps) {
 }
 function summarizeReason(output) {
   const f = parseMaestroFailure(output);
-  if (f.kind === "UNKNOWN")
+  if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
     return null;
   const selector = "selector" in f ? f.selector ?? null : null;
   return { kind: f.kind, selector: selector === null ? null : cap(selector) };
@@ -54322,6 +54682,21 @@ function buildStepSummary(output, opts) {
     failedStep: opts.failed ? findFailedStep(steps) : null,
     reason: opts.failed ? summarizeReason(output) : null,
     lastStep: lastObservedStep(steps)
+  };
+}
+function buildTerminalEvidence(output, opts = {}) {
+  const summary = buildStepSummary(output, { failed: true });
+  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => WDA_EVIDENCE_RE.test(line)).join("\n").slice(0, 500);
+  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : summary.steps.length === 0 ? "before-first-step" : "step-failure";
+  return {
+    completedSteps: summary.steps.filter((step) => step.status === "pass").length,
+    ...summary.failedStep ? { failedStep: summary.failedStep.name } : {},
+    exitClass,
+    ...bootstrapEvidence ? { bootstrapEvidence } : {},
+    ...summary.reason ? {
+      failureKind: summary.reason.kind,
+      failureSelector: summary.reason.selector
+    } : {}
   };
 }
 function classifyExecError(err) {
@@ -54348,7 +54723,7 @@ function formatFailureHeadline(summary, cls, fallbackMsg) {
   }
   return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
 }
-var ANSI_RE, STEP_RE, MAX_FIELD, MAX_STEPS;
+var ANSI_RE, STEP_RE, MAX_FIELD, MAX_STEPS, WDA_EVIDENCE_RE;
 var init_maestro_step_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
     "use strict";
@@ -54357,6 +54732,7 @@ var init_maestro_step_parser = __esm({
     STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
     MAX_FIELD = 200;
     MAX_STEPS = 1e3;
+    WDA_EVIDENCE_RE = /(?:\bWDA\b|WebDriverAgent|Checking WDA installation|Downloading WebDriverAgent)/i;
   }
 });
 
@@ -54539,6 +54915,10 @@ function createMaestroRunHandler() {
       const output = combineRunnerOutput(stdout, stderr);
       const passed = !outputIndicatesFlowFailure(output);
       const summary = buildStepSummary(output, { failed: !passed });
+      const runnerResume = !passed ? {
+        attempted: true,
+        healthy: await fastHealthCheck().catch(() => false)
+      } : void 0;
       const meta = {
         passed,
         flowFile,
@@ -54546,6 +54926,7 @@ function createMaestroRunHandler() {
         runner: dispatch.runner,
         output: output.slice(0, 2e3),
         ...summary,
+        ...!passed ? { terminal: buildTerminalEvidence(output), runnerResume } : {},
         timedOut: false,
         outputTruncated: false,
         ...dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {},
@@ -54570,6 +54951,12 @@ function createMaestroRunHandler() {
       const combined = combineRunnerOutput(stdout, stderr);
       const { timedOut, outputTruncated } = classifyExecError(err);
       const summary = buildStepSummary(combined, { failed: true });
+      const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(err?.code ?? ""));
+      const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+      const runnerResume = {
+        attempted: true,
+        healthy: await fastHealthCheck().catch(() => false)
+      };
       const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
       const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
         flowFile,
@@ -54580,6 +54967,8 @@ function createMaestroRunHandler() {
         // it the same way regardless of which path they hit.
         output: combined.slice(0, 4e3),
         ...summary,
+        terminal,
+        runnerResume,
         timedOut,
         outputTruncated,
         // GH #397: a drifted/mismatched engine causing a real failure is
@@ -54951,6 +55340,8 @@ function classifyFailure(failure) {
       return { actionCode: "TIMEOUT", toolCode: void 0 };
     case "ASSERTION_FAILED":
       return { actionCode: "STATE_MISMATCH", toolCode: "ASSERTION_FAILED" };
+    case "WDA_BOOTSTRAP_FAILED":
+      return { actionCode: "WDA_BOOTSTRAP_FAILED", toolCode: "WDA_BOOTSTRAP_FAILED" };
     case "UNKNOWN":
     default:
       return { actionCode: "UNKNOWN", toolCode: void 0 };
@@ -54962,6 +55353,13 @@ function parseEnvelope(toolResult, toolName) {
   } catch {
     return { ok: false, error: `Unparseable ${toolName} envelope` };
   }
+}
+function readMaestroTerminal(env) {
+  const fromData = env.data?.terminal;
+  if (fromData)
+    return fromData;
+  const fromMeta = env.meta?.terminal;
+  return fromMeta;
 }
 function readMaestroOutput(env) {
   if (typeof env.data?.output === "string")
@@ -55155,7 +55553,7 @@ function createRunActionHandler(deps = {}) {
           firstAttemptOutput: firstOutput.slice(0, 500)
         });
       }
-      const failure = parseMaestroFailure(firstOutput);
+      const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === "SELECTOR_NOT_FOUND" && expectedSeq && expectedSeq.length > 0) {
         const liveRoute = await getLiveRoute().catch(() => null);
@@ -55246,8 +55644,8 @@ function createRunActionHandler(deps = {}) {
       if (!autoRepairEnabled || !isAutoRepairable(failure)) {
         const autoRepair2 = autoRepairEnabled ? {
           attempted: false,
-          outcome: "skipped",
-          refusedReason: "NOT_REPAIRABLE_KIND",
+          outcome: failure.kind === "WDA_BOOTSTRAP_FAILED" ? "refused" : "skipped",
+          refusedReason: failure.kind === "WDA_BOOTSTRAP_FAILED" ? "WDA_BOOTSTRAP" : "NOT_REPAIRABLE_KIND",
           phases: { firstAttemptMs }
         } : {
           attempted: false,
@@ -55271,9 +55669,11 @@ function createRunActionHandler(deps = {}) {
           underlyingFailure: firstFailureDetail,
           autoRepair: autoRepair2,
           firstAttemptOutput: firstOutput.slice(0, 500),
+          terminal: readMaestroTerminal(firstEnv),
+          runnerResume: firstEnv.meta?.runnerResume,
           ...cdpJsFallback ? { cdpJsFallback } : {}
         };
-        let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
+        let message = failure.kind === "WDA_BOOTSTRAP_FAILED" ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; inspect ~/.maestro-runner/bin/maestro-runner wda version. No preparation or cache mutation was attempted.` : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
         if (cdpJsFallback?.reason === "cdp-unreachable") {
           message += ". Maestro failed before completing the flow (on iOS 26.x WDA often dies at startup) and the CDP/JS replay fallback was skipped: CDP was unreachable after the flow. Check cdp_status and reconnect, then retry; if another XCUITest automation is driving this simulator, stop it first.";
         }
@@ -55352,7 +55752,7 @@ function createRunActionHandler(deps = {}) {
       let nextFailedSelector;
       if (!retryPassed) {
         try {
-          const retryFailure = parseMaestroFailure(retryOutput);
+          const retryFailure = parseMaestroFailure(retryOutput, readMaestroTerminal(retryEnv));
           if (retryFailure.kind === "SELECTOR_NOT_FOUND" && retryFailure.selector && retryFailure.selector !== repairData.newSelector) {
             nextFailedSelector = retryFailure.selector;
           }
@@ -57835,7 +58235,7 @@ var init_proof_capture = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/proof-receipt.js
-var gitShaSchema, sha256Schema, kebabIdSchema, stableReasonCodeSchema, proofClassSchema, proofStageSchema, storyboardStepSchema, storyboardSchema, proofEventSchema, proofIssueSchema, proofPullRequestSchema, acceptanceMappingSchema, proofGitSchema, proofDeviceSchema, proofRuntimeSchema, proofFixtureSchema, proofActionSchema, proofStoryboardIdentitySchema, proofRehearsalSchema, proofVideoSchema, proofScreenshotSchema, proofAssertionSchema, acceptedProofAssertionSchema, proofEventTraceSchema, proofFrameMatchSchema, proofContactSheetSchema, proofErrorBaselineSchema, evidenceReviewSchema, sharedReceiptShape, acceptedEvidenceShape, mechanicallyAcceptedProofReceiptSchema, rejectedProofReceiptSchema, mechanicalProofReceiptSchema, finalProofReceiptSchema;
+var gitShaSchema, sha256Schema, kebabIdSchema, stableReasonCodeSchema, proofClassSchema, proofStageSchema, storyboardStepSchema, storyboardSchema, proofEventSchema, proofIssueSchema, proofPullRequestSchema, acceptanceMappingSchema, proofGitSchema, proofDeviceSchema, proofRuntimeSchema, proofCandidateRuntimeSchema, proofFixtureSchema, proofActionSchema, proofStoryboardIdentitySchema, proofRehearsalSchema, proofVideoSchema, proofScreenshotSchema, proofAssertionSchema, acceptedProofAssertionSchema, proofEventTraceSchema, proofFrameMatchSchema, proofContactSheetSchema, proofErrorBaselineSchema, evidenceReviewSchema, sharedReceiptShape, acceptedEvidenceShape, mechanicallyAcceptedProofReceiptSchema, rejectedProofReceiptSchema, mechanicalProofReceiptSchema, finalProofReceiptSchema;
 var init_proof_receipt = __esm({
   "packages/rn-dev-agent-core/dist/domain/proof-receipt.js"() {
     "use strict";
@@ -57913,6 +58313,17 @@ var init_proof_receipt = __esm({
       metroPort: external_exports.number().int().positive().max(65535),
       metroReady: external_exports.boolean(),
       pluginVersion: external_exports.string().min(1)
+    }).strict();
+    proofCandidateRuntimeSchema = external_exports.object({
+      repo: external_exports.literal("Lykhoyda/rn-dev-agent"),
+      sha: gitShaSchema,
+      coreBundleSha256: sha256Schema,
+      runnerManifestSha256: sha256Schema,
+      mcp: external_exports.object({
+        pid: external_exports.number().int().positive(),
+        argv: external_exports.array(external_exports.string()).min(1),
+        cwd: external_exports.string().min(1)
+      }).strict()
     }).strict();
     proofFixtureSchema = external_exports.object({
       name: external_exports.string().min(1),
@@ -57998,6 +58409,7 @@ var init_proof_receipt = __esm({
       git: proofGitSchema,
       device: proofDeviceSchema,
       runtime: proofRuntimeSchema,
+      candidateRuntime: proofCandidateRuntimeSchema.optional(),
       fixture: proofFixtureSchema,
       action: proofActionSchema,
       storyboard: proofStoryboardIdentitySchema
@@ -58072,6 +58484,44 @@ function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
 }
 function hashBytes(bytes) {
   return createHash7("sha256").update(bytes).digest("hex");
+}
+function readProofCandidateRuntime(candidateRoot) {
+  const root = resolve4(candidateRoot);
+  if (root !== candidateRoot)
+    throw new Error("CANDIDATE_ROOT_NOT_NORMALIZED");
+  const sha = execFileSync7("git", ["-C", root, "rev-parse", "HEAD"], {
+    encoding: "utf8"
+  }).trim();
+  const remote = execFileSync7("git", ["-C", root, "remote", "get-url", "origin"], {
+    encoding: "utf8"
+  }).trim();
+  if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
+    throw new Error("CANDIDATE_REPOSITORY_MISMATCH");
+  }
+  const argv = [...process.argv];
+  const loadedBundle = argv.filter(isAbsolute3).map((arg) => resolve4(arg)).find((arg) => arg.startsWith(`${join30(root, "packages")}${sep5}`) && /\/rn-dev-agent-core\/dist\/(?:index|supervisor)\.js$/.test(arg));
+  const host = loadedBundle?.includes(`${sep5}claude-plugin${sep5}`) ? "claude-plugin" : loadedBundle?.includes(`${sep5}codex-plugin${sep5}`) ? "codex-plugin" : null;
+  if (!host || !loadedBundle)
+    throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
+  const coreBundle = loadedBundle;
+  const runnerManifest = join30(root, "packages", host, "runner-manifest.json");
+  return proofCandidateRuntimeSchema.parse({
+    repo: "Lykhoyda/rn-dev-agent",
+    sha,
+    coreBundleSha256: hashBytes(readFileSync20(coreBundle)),
+    runnerManifestSha256: hashBytes(readFileSync20(runnerManifest)),
+    mcp: { pid: process.pid, argv, cwd: process.cwd() }
+  });
+}
+function sameCandidateRuntime(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+function candidateAuthorityReasons(expected, current, pullRequestHeadSha, crossRepository) {
+  return [
+    ...!expected && crossRepository ? ["CANDIDATE_RUNTIME_REQUIRED"] : [],
+    ...expected && expected.sha !== pullRequestHeadSha ? ["CANDIDATE_SHA_MISMATCH"] : [],
+    ...expected && (!current || !sameCandidateRuntime(expected, current)) ? ["CANDIDATE_RUNTIME_MISMATCH"] : []
+  ];
 }
 function sameProofAction(left, right) {
   return left.id === right.id && left.version === right.version && left.sha256 === right.sha256;
@@ -58413,6 +58863,16 @@ function createProofCaptureHandler(deps) {
       return { ok: false, reasons: ["GIT_READ_FAILED"] };
     }
   };
+  const readCandidate = (active) => {
+    if (!active.context.candidateRoot)
+      return { ok: true, value: null };
+    try {
+      const reader = deps.readCandidateRuntime ?? readProofCandidateRuntime;
+      return { ok: true, value: reader(active.context.candidateRoot) };
+    } catch {
+      return { ok: false, reasons: ["CANDIDATE_RUNTIME_READ_FAILED"] };
+    }
+  };
   const readCurrentActionIdentity = (active) => {
     try {
       const value = deps.readActionIdentity(active.context.proofAction.id);
@@ -58452,10 +58912,14 @@ function createProofCaptureHandler(deps) {
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
+    const candidate = readCandidate(active);
+    const authorityReasons = candidateAuthorityReasons(active.candidateRuntime, candidate.ok ? candidate.value : null, active.context.pullRequest.headSha, git.sha !== active.context.pullRequest.headSha);
     return [
       ...invalidChange || unrelated || git.dirty !== git.changes.length > 0 ? ["GIT_DIRTY"] : [],
       ...missing ? ["PROOF_OUTPUT_MISSING"] : [],
-      ...git.sha !== active.context.storyboard.sourceTreeSha || git.sha !== active.context.pullRequest.headSha ? ["SOURCE_SHA_MISMATCH"] : []
+      ...git.sha !== active.context.storyboard.sourceTreeSha ? ["SOURCE_SHA_MISMATCH"] : [],
+      ...authorityReasons,
+      ...!candidate.ok ? candidate.reasons : []
     ];
   };
   const readReadiness = async () => {
@@ -58595,10 +59059,23 @@ function createProofCaptureHandler(deps) {
       if (proofRootExists(args)) {
         return proofFailure(["PROOF_ROOT_NOT_FRESH"], "idle");
       }
+      let candidateRuntime = null;
+      if (args.candidateRoot) {
+        try {
+          const reader = deps.readCandidateRuntime ?? readProofCandidateRuntime;
+          candidateRuntime = reader(args.candidateRoot);
+        } catch {
+          return proofFailure(["CANDIDATE_RUNTIME_READ_FAILED"], "idle");
+        }
+        if (candidateRuntime.sha !== args.pullRequest.headSha) {
+          return proofFailure(["CANDIDATE_SHA_MISMATCH"], "idle");
+        }
+      }
       const startedAt = deps.now();
       session = {
         context: args,
         actionIdentity,
+        candidateRuntime,
         stage: "rehearsing",
         invalidationReasons: [],
         rehearsalStartedAt: startedAt,
@@ -58896,6 +59373,7 @@ function createProofCaptureHandler(deps) {
           },
           device: ready.value.device,
           runtime: ready.value.runtime,
+          ...active.candidateRuntime ? { candidateRuntime: active.candidateRuntime } : {},
           fixture: active.context.fixture,
           action: active.context.proofAction,
           storyboard: { id: active.context.storyboard.id, sha256: hashBytes(storyboardBytes) },
@@ -59000,6 +59478,8 @@ var init_proof_capture2 = __esm({
     beginRehearsalSchema = external_exports.object({
       action: external_exports.literal("begin_rehearsal"),
       projectRoot: absolutePathSchema,
+      /** Plugin worktree whose packaged runtime is driving a cross-repo proof. */
+      candidateRoot: absolutePathSchema.optional(),
       receiptPath: absolutePathSchema,
       videoPath: absolutePathSchema,
       contactSheetPath: absolutePathSchema,
@@ -60883,21 +61363,29 @@ var init_proof_step = __esm({
 function createConnectHandler(getClient2, setClient2, createClient2) {
   return async (args) => {
     let client2 = getClient2();
+    const session = getActiveSession();
+    const sessionFilters = sessionConnectFilters(session);
+    if (args.platform && sessionFilters?.platform && args.platform.toLowerCase() !== sessionFilters.platform) {
+      return failResult(`cdp_connect requested ${args.platform}, but the active session is bound to ${sessionFilters.platform}; refusing cross-platform fallback. This is platform affinity, not iOS UDID identity.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
+    }
+    if (args.bundleId && sessionFilters?.bundleId && args.bundleId.toLowerCase() !== sessionFilters.bundleId.toLowerCase()) {
+      return failResult(`cdp_connect requested bundleId ${args.bundleId}, but the active session is bound to ${sessionFilters.bundleId}.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
+    }
+    const effectiveFilters = {
+      ...sessionFilters,
+      ...args.platform ? { platform: args.platform.toLowerCase() } : {},
+      ...args.bundleId ? { bundleId: args.bundleId } : {},
+      ...args.targetId ? { targetId: args.targetId } : {}
+    };
     if (client2.isConnected && !args.force) {
       const target = client2.connectedTarget;
       const haystack = `${target?.title ?? ""} ${target?.description ?? ""}`.toLowerCase();
       const portMismatch = typeof args.metroPort === "number" && args.metroPort !== client2.metroPort;
-      const targetIdMismatch = typeof args.targetId === "string" && args.targetId.length > 0 && args.targetId !== target?.id;
-      const bundleIdLower = typeof args.bundleId === "string" ? args.bundleId.toLowerCase() : "";
+      const targetIdMismatch = typeof effectiveFilters.targetId === "string" && effectiveFilters.targetId.length > 0 && effectiveFilters.targetId !== target?.id;
+      const bundleIdLower = effectiveFilters.bundleId?.toLowerCase() ?? "";
       const bundleMatched = bundleIdLower.length > 0 && new RegExp(`(^|[^A-Za-z0-9._-])${bundleIdLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Za-z0-9._-]|$)`).test(haystack);
-      const bundleMismatch = typeof args.bundleId === "string" && args.bundleId.length > 0 && !bundleMatched;
-      let platformMismatch = false;
-      if (typeof args.platform === "string" && args.platform.length > 0) {
-        const requestedPlatform = args.platform.toLowerCase();
-        const currentPlatform = target?.platform?.toLowerCase();
-        const titleMatch = haystack.includes(requestedPlatform);
-        platformMismatch = currentPlatform !== requestedPlatform && !titleMatch;
-      }
+      const bundleMismatch = typeof effectiveFilters.bundleId === "string" && effectiveFilters.bundleId.length > 0 && !bundleMatched;
+      const platformMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
       if (portMismatch || targetIdMismatch || bundleMismatch || platformMismatch) {
         const port = args.metroPort ?? client2.metroPort;
         await client2.disconnect();
@@ -60926,12 +61414,12 @@ function createConnectHandler(getClient2, setClient2, createClient2) {
       setClient2(client2);
     }
     try {
-      const msg3 = await client2.autoConnect(args.metroPort, {
-        platform: args.platform,
-        targetId: args.targetId,
-        bundleId: args.bundleId
-      });
+      const msg3 = await client2.autoConnect(args.metroPort, effectiveFilters);
       const target = client2.connectedTarget;
+      if (!targetMatchesSession(target, effectiveFilters)) {
+        await client2.disconnect();
+        throw new TargetSelectionError(effectiveFilters.targetId ? "TARGET_PLATFORM_CONFLICT" : "PLATFORM_TARGET_NOT_FOUND", `Connected target failed post-connect affinity validation for platform=${effectiveFilters.platform ?? "unspecified"} bundleId=${effectiveFilters.bundleId ?? "unspecified"}. The socket was disconnected; run cdp_targets and relaunch the requested app.`, target ? [target] : []);
+      }
       return okResult({
         connected: true,
         message: msg3,
@@ -60945,6 +61433,20 @@ function createConnectHandler(getClient2, setClient2, createClient2) {
         } : null
       });
     } catch (err) {
+      if (err instanceof TargetSelectionError) {
+        await client2.disconnect().catch(() => void 0);
+        return failResult(err.message, err.code, {
+          candidates: err.candidates.map((target) => ({
+            id: target.id,
+            title: target.title,
+            deviceName: target.deviceName ?? null,
+            description: target.description ?? null,
+            platform: target.platform ?? null,
+            confidence: target.platformInference ?? "probed"
+          })),
+          affinity: "cross-platform-only; iOS UDID identity is unavailable from Metro"
+        });
+      }
       return failResult(err instanceof Error ? err.message : String(err));
     }
   };
@@ -60990,6 +61492,9 @@ var init_connection = __esm({
   "packages/rn-dev-agent-core/dist/tools/connection.js"() {
     "use strict";
     init_utils();
+    init_agent_device_wrapper();
+    init_status();
+    init_discovery();
   }
 });
 
@@ -64864,7 +65369,7 @@ var init_index = __esm({
       screenshotOn: external_exports.enum(["none", "failure", "end", "each"]).default("failure").describe("When to capture screenshots"),
       continueOnError: external_exports.boolean().default(false).describe("When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results > first-failure abort."),
       finalSnapshot: external_exports.enum(["salient", "full", "none"]).default("salient").describe("Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) \u2014 far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.")
-    }, createDeviceBatchHandler());
+    }, createDeviceBatchHandler(getClient));
     trackedTool("cdp_auto_login", "Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns { loggedIn: true/false, reason, flow }. Call before proof capture or feature testing when app may be logged out.", {
       appId: external_exports.string().optional().describe("App bundle ID override (auto-detected from app.json if omitted)"),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Platform override (auto-detected from session if omitted)")

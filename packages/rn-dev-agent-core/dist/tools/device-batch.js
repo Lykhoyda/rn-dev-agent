@@ -2,6 +2,7 @@ import { runNative } from '../agent-device-wrapper.js';
 import { settleEnabled } from '../lifecycle/settle.js';
 import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate, } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
+import { healKeyboardOccludedTap, surfaceKeyboardGuard } from '../runners/keyboard-guard.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 // GH #321: a11y node types that represent something the agent can act on. Used
 // to compact the batch's final payload to just the actionable surface.
@@ -180,7 +181,61 @@ export function resolveBatchDelayMs(explicit, env) {
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
-async function executeStep(step) {
+async function guardedBatchPress(cliArgs, opts, getClient) {
+    const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, opts));
+    const first = await tap();
+    if (!first.isError || !getClient)
+        return first;
+    const client = getClient();
+    if (!client.isConnected || !client.helpersInjected)
+        return first;
+    return healKeyboardOccludedTap(first, {
+        dismissViaJs: async () => {
+            const result = await client.evaluate('__RN_AGENT.dismissKeyboard()');
+            if (typeof result.value !== 'string')
+                return false;
+            try {
+                return JSON.parse(result.value).dismissed === true;
+            }
+            catch {
+                return false;
+            }
+        },
+        refreshSnapshot: () => runNative(['snapshot', '-i']),
+        retryTap: tap,
+    });
+}
+async function dismissKeyboardWithParity(getClient) {
+    const native = await runNative(['keyboard', 'dismiss']);
+    if (!native.isError)
+        return native;
+    const attemptedTiers = ['native-swipe', 'native-control'];
+    if (getClient) {
+        const client = getClient();
+        if (client.isConnected && client.helpersInjected) {
+            attemptedTiers.push('js');
+            try {
+                const js = await client.evaluate('__RN_AGENT.dismissKeyboard()');
+                const parsed = typeof js.value === 'string' ? JSON.parse(js.value) : null;
+                if (parsed?.dismissed) {
+                    const check = await runNative(['snapshot', '-i']);
+                    const text = check.content?.[0]?.text;
+                    const visible = typeof text === 'string'
+                        ? JSON.parse(text).data?.keyboardVisible
+                        : undefined;
+                    if (visible === false) {
+                        return okResult({ dismissed: true, via: 'js', attemptedTiers });
+                    }
+                }
+            }
+            catch {
+                // Fall through to the honest typed refusal below.
+            }
+        }
+    }
+    return failResult('KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; keyboard visibility was not proven false.', 'KEYBOARD_DISMISS_FAILED', { attemptedTiers });
+}
+async function executeStep(step, getClient) {
     switch (step.action) {
         case 'find': {
             // Phase 125: testID-keyed find re-resolves via snapshot per call.
@@ -208,7 +263,7 @@ async function executeStep(step) {
                     });
                 }
                 if (step.tap)
-                    return runNative(['press', `@${ref}`], stepSettleOpts(step));
+                    return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
                 return okResult({
                     resolved: ref,
                     testID: step.testID,
@@ -255,12 +310,12 @@ async function executeStep(step) {
                         testID: step.testID,
                     });
                 }
-                return runNative(['press', `@${ref}`], stepSettleOpts(step));
+                return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
             }
             if (!step.ref)
                 return failResult('press requires ref or testID');
             const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-            return runNative(['press', ref], stepSettleOpts(step));
+            return guardedBatchPress(['press', ref], stepSettleOpts(step), getClient);
         }
         case 'fill': {
             if (!step.text)
@@ -301,7 +356,7 @@ async function executeStep(step) {
             return runNative(['back'], stepSettleOpts(step));
         }
         case 'hideKeyboard': {
-            return runNative(['keyboard', 'dismiss'], stepSettleOpts(step));
+            return dismissKeyboardWithParity(getClient);
         }
         case 'snapshot': {
             return runNative(['snapshot', '-i']);
@@ -337,7 +392,7 @@ function extractData(result) {
         return null;
     }
 }
-export function createDeviceBatchHandler() {
+export function createDeviceBatchHandler(getClient) {
     return withSession(async (args) => {
         const { steps, screenshotOn = 'failure', continueOnError = false, finalSnapshot: finalSnapshotMode = 'salient', } = args;
         const delayMs = resolveBatchDelayMs(args.delayMs, process.env);
@@ -360,7 +415,7 @@ export function createDeviceBatchHandler() {
             let stepTimer;
             let stepTimedOut = false;
             const result = await Promise.race([
-                executeStep(step),
+                executeStep(step, getClient),
                 new Promise((resolve) => {
                     stepTimer = setTimeout(() => {
                         stepTimedOut = true;

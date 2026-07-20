@@ -24,6 +24,15 @@ test('cdp_status: payload includes autoConnect resolution', async () => {
     _isConnected: true,
     _helpersInjected: true,
     autoConnectState: { enabled: false, source: 'env' },
+    _connectedTarget: {
+      id: 'page-1',
+      title: 'iPhone',
+      vm: 'Hermes',
+      description: 'com.test.app',
+      platform: 'ios',
+      platformInference: 'probed',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:8081/page-1',
+    },
     evaluate: async () => ({ value: makeStatusProbe() }),
   });
   const handler = createStatusHandler(

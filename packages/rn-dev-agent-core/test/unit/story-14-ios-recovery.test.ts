@@ -15,7 +15,7 @@ function state() {
     deviceId: 'UDID-TEST',
     bundleId: 'com.test.app',
     startedAt: new Date().toISOString(),
-    protocolVersion: 1,
+    protocolVersion: 2,
   };
 }
 

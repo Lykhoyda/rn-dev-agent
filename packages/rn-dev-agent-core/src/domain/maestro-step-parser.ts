@@ -108,7 +108,7 @@ export interface ReasonSummary {
 // must not be re-embedded into the result (it would defeat the output slice).
 export function summarizeReason(output: string): ReasonSummary | null {
   const f = parseMaestroFailure(output);
-  if (f.kind === 'UNKNOWN') return null;
+  if (f.kind === 'UNKNOWN' || f.kind === 'WDA_BOOTSTRAP_FAILED') return null;
   const selector = 'selector' in f ? (f.selector ?? null) : null;
   return { kind: f.kind, selector: selector === null ? null : cap(selector) };
 }
@@ -130,6 +130,56 @@ export function buildStepSummary(output: string, opts: { failed: boolean }): Ste
     failedStep: opts.failed ? findFailedStep(steps) : null,
     reason: opts.failed ? summarizeReason(output) : null,
     lastStep: lastObservedStep(steps),
+  };
+}
+
+export type MaestroTerminalExitClass =
+  | 'before-first-step'
+  | 'step-failure'
+  | 'timed-out'
+  | 'spawn-error';
+
+export interface MaestroTerminalEvidence {
+  completedSteps: number;
+  failedStep?: string;
+  exitClass: MaestroTerminalExitClass;
+  bootstrapEvidence?: string;
+  /** Full-output classification projected before the human output is capped. */
+  failureKind?: ReasonSummary['kind'];
+  failureSelector?: string | null;
+}
+
+const WDA_EVIDENCE_RE =
+  /(?:\bWDA\b|WebDriverAgent|Checking WDA installation|Downloading WebDriverAgent)/i;
+
+export function buildTerminalEvidence(
+  output: string,
+  opts: { timedOut?: boolean; spawnError?: boolean } = {},
+): MaestroTerminalEvidence {
+  const summary = buildStepSummary(output, { failed: true });
+  const bootstrapEvidence = stripAnsi(output)
+    .split('\n')
+    .filter((line) => WDA_EVIDENCE_RE.test(line))
+    .join('\n')
+    .slice(0, 500);
+  const exitClass: MaestroTerminalExitClass = opts.timedOut
+    ? 'timed-out'
+    : opts.spawnError
+      ? 'spawn-error'
+      : summary.steps.length === 0
+        ? 'before-first-step'
+        : 'step-failure';
+  return {
+    completedSteps: summary.steps.filter((step) => step.status === 'pass').length,
+    ...(summary.failedStep ? { failedStep: summary.failedStep.name } : {}),
+    exitClass,
+    ...(bootstrapEvidence ? { bootstrapEvidence } : {}),
+    ...(summary.reason
+      ? {
+          failureKind: summary.reason.kind,
+          failureSelector: summary.reason.selector,
+        }
+      : {}),
   };
 }
 

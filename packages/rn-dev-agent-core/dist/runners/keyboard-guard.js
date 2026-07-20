@@ -63,9 +63,10 @@ export function isKeyboardOccludedRefusal(result) {
     if (envelope === null || typeof envelope !== 'object')
         return false;
     const { code, error } = envelope;
-    if (code === 'KEYBOARD_OCCLUDED')
+    if (code === 'KEYBOARD_OCCLUDED' || code === 'KEYBOARD_DISMISS_FAILED')
         return true;
-    return typeof error === 'string' && error.startsWith('KEYBOARD_OCCLUDED');
+    return (typeof error === 'string' &&
+        (error.startsWith('KEYBOARD_OCCLUDED') || error.startsWith('KEYBOARD_DISMISS_FAILED')));
 }
 /**
  * #379 KEYBOARD_OCCLUDED auto-heal (JS-first, per D1250's fill pattern).
@@ -88,7 +89,13 @@ export async function healKeyboardOccludedTap(first, deps) {
     if (!dismissed)
         return first;
     try {
-        await deps.refreshSnapshot();
+        const refreshed = await deps.refreshSnapshot();
+        const text = refreshed?.content?.[0]?.text;
+        if (typeof text === 'string') {
+            const envelope = JSON.parse(text);
+            if (envelope.data?.keyboardVisible === true)
+                return first;
+        }
     }
     catch {
         // Stale coords are survivable: the retry either re-binds by identity
@@ -115,8 +122,8 @@ function tagKeyboardAutoHeal(result, healMs) {
         ...meta,
         // A retry that refused again keeps its own guard status; only a served
         // tap is stamped as JS-dismissed.
-        ...(result.isError ? {} : { keyboardGuard: 'js_dismissed' }),
-        keyboardAutoHeal: { dismissed: true, healMs },
+        ...(result.isError ? {} : { keyboardGuard: 'auto_dismissed', via: 'js' }),
+        keyboardAutoHeal: { dismissed: true, via: 'js', healMs },
     };
     return {
         ...result,

@@ -65,14 +65,15 @@ test('selectTarget with platform filter returns matching targets only', () => {
   assert.ok(sorted.every((t) => t.platform === 'ios'));
 });
 
-test('selectTarget falls back to text match when no platform property matches', () => {
+test('selectTarget refuses title-only platform guesses under an explicit filter', () => {
   const targets = [
     { id: 'page-1', title: 'Hermes ios', description: 'org.foo.ios' },
     { id: 'page-2', title: 'Android Metro' },
   ];
-  const { targets: sorted } = selectTarget(targets, 'ios');
-  assert.equal(sorted.length, 1);
-  assert.equal(sorted[0].id, 'page-1');
+  const { targets: sorted, errorCode, warning } = selectTarget(targets, 'ios');
+  assert.equal(sorted.length, 0);
+  assert.equal(errorCode, 'PLATFORM_TARGET_NOT_FOUND');
+  assert.match(warning, /cannot be proven/);
 });
 
 test('selectTarget returns warning when platform filter matches nothing', () => {
@@ -80,20 +81,21 @@ test('selectTarget returns warning when platform filter matches nothing', () => 
     { id: 'page-1', platform: 'ios', description: 'org.foo.a' },
     { id: 'page-2', platform: 'ios', description: 'org.foo.b' },
   ];
-  const { targets: sorted, warning } = selectTarget(targets, 'android');
-  assert.equal(sorted.length, 2);
+  const { targets: sorted, warning, errorCode } = selectTarget(targets, 'android');
+  assert.equal(sorted.length, 0);
+  assert.equal(errorCode, 'PLATFORM_TARGET_NOT_FOUND');
   assert.ok(warning);
   assert.match(warning, /android/);
 });
 
-test('selectTarget with no filter returns every target sorted', () => {
+test('selectTarget with no filter returns every target sorted with a best-available warning', () => {
   const targets = [
     { id: 'page-1', platform: 'ios' },
     { id: 'page-2', platform: 'android' },
   ];
   const { targets: sorted, warning } = selectTarget(targets);
   assert.equal(sorted.length, 2);
-  assert.equal(warning, undefined);
+  assert.match(warning, /No platform filter/);
 });
 
 // ── B111 / D635: targetId + bundleId filters ──────────────────────────

@@ -60,11 +60,15 @@ struct Command: Codable {
   let raw: Bool?
   let fullscreen: Bool?
   var guardKeyboard: Bool? = nil
+  var targetBounds: SnapshotRect? = nil
+  var snapshotGeneration: Int? = nil
+  var keyboardStateAtSnapshot: Bool? = nil
 }
 
 struct Response: Codable {
   let ok: Bool
   let v: Int
+  let reason: String?
   let protocolVersion: Int?
   let runnerVersion: String?
   let capabilities: [String]?
@@ -76,6 +80,7 @@ struct Response: Codable {
     ok: Bool,
     data: DataPayload? = nil,
     error: ErrorPayload? = nil,
+    reason: String? = nil,
     protocolVersion: Int? = nil,
     runnerVersion: String? = nil,
     capabilities: [String]? = nil,
@@ -83,6 +88,7 @@ struct Response: Codable {
   ) {
     self.ok = ok
     self.v = RunnerProtocol.version
+    self.reason = reason
     self.data = data
     self.error = error
     self.protocolVersion = protocolVersion
@@ -114,6 +120,9 @@ struct DataPayload: Codable {
   let orientation: String?
   let keyboardGuard: String?
   let keyboardGuardMs: Double?
+  let keyboardVisible: Bool?
+  let snapshotGeneration: Int?
+  let via: String?
   let `static`: Bool?
   // Story 10 (#391): typing telemetry — whether the two-burst recipe ran and
   // how long the keyboard-presence wait blocked before the first keystroke.
@@ -142,6 +151,9 @@ struct DataPayload: Codable {
     orientation: String? = nil,
     keyboardGuard: String? = nil,
     keyboardGuardMs: Double? = nil,
+    keyboardVisible: Bool? = nil,
+    snapshotGeneration: Int? = nil,
+    via: String? = nil,
     `static`: Bool? = nil,
     typingBurst: Bool? = nil,
     keyboardWaitMs: Int? = nil
@@ -167,6 +179,9 @@ struct DataPayload: Codable {
     self.orientation = orientation
     self.keyboardGuard = keyboardGuard
     self.keyboardGuardMs = keyboardGuardMs
+    self.keyboardVisible = keyboardVisible
+    self.snapshotGeneration = snapshotGeneration
+    self.via = via
     self.`static` = `static`
     self.typingBurst = typingBurst
     self.keyboardWaitMs = keyboardWaitMs

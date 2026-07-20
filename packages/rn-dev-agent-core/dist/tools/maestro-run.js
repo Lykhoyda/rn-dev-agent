@@ -12,8 +12,8 @@ import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
-import { buildStepSummary, classifyExecError, combineRunnerOutput, formatFailureHeadline, } from '../domain/maestro-step-parser.js';
-import { stopFastRunner as defaultStopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { buildStepSummary, buildTerminalEvidence, classifyExecError, combineRunnerOutput, formatFailureHeadline, } from '../domain/maestro-step-parser.js';
+import { fastHealthCheck as defaultFastHealthCheck, stopFastRunner as defaultStopFastRunner, } from '../runners/rn-fast-runner-client.js';
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 const execFile = promisify(execFileCb);
@@ -201,6 +201,12 @@ export function createMaestroRunHandler() {
             // substring false-flagged passing runs whose app logs contained the token).
             const passed = !outputIndicatesFlowFailure(output);
             const summary = buildStepSummary(output, { failed: !passed });
+            const runnerResume = !passed
+                ? {
+                    attempted: true,
+                    healthy: await defaultFastHealthCheck().catch(() => false),
+                }
+                : undefined;
             const meta = {
                 passed,
                 flowFile,
@@ -208,6 +214,7 @@ export function createMaestroRunHandler() {
                 runner: dispatch.runner,
                 output: output.slice(0, 2000),
                 ...summary,
+                ...(!passed ? { terminal: buildTerminalEvidence(output), runnerResume } : {}),
                 timedOut: false,
                 outputTruncated: false,
                 ...(dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {}),
@@ -253,6 +260,15 @@ export function createMaestroRunHandler() {
             const combined = combineRunnerOutput(stdout, stderr);
             const { timedOut, outputTruncated } = classifyExecError(err);
             const summary = buildStepSummary(combined, { failed: true });
+            const spawnError = combined.length === 0 &&
+                ['ENOENT', 'EACCES'].includes(String(err?.code ?? ''));
+            const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
+            // Read-only verification of the already-existing parked-runner resume
+            // state. This never launches or prepares anything.
+            const runnerResume = {
+                attempted: true,
+                healthy: await defaultFastHealthCheck().catch(() => false),
+            };
             // Headline from structured data (raw-free); the raw err.message is the
             // fallback only for system errors with no step output (e.g. spawn ENOENT).
             const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
@@ -267,6 +283,8 @@ export function createMaestroRunHandler() {
                 // it the same way regardless of which path they hit.
                 output: combined.slice(0, 4000),
                 ...summary,
+                terminal,
+                runnerResume,
                 timedOut,
                 outputTruncated,
                 // GH #397: a drifted/mismatched engine causing a real failure is

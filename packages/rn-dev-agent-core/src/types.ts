@@ -33,6 +33,8 @@ export interface HermesTarget {
    * should pass `targetId` or `bundleId + platform` for exact selection.
    */
   ambiguousPlatform?: boolean;
+  /** Internal discovery evidence; public platform remains the legacy union. */
+  platformInference?: 'probed' | 'defaulted' | 'ambiguous';
 }
 
 export interface ConsoleEntry {
@@ -103,6 +105,8 @@ export interface StatusResult {
     platform: string | null;
     /** B111 (D643): target.description (bundleId from Metro) — surfaces which app the MCP attached to. */
     bundleId: string | null;
+    /** iOS sessions bind only to platform+bundle class; Metro exposes no UDID. */
+    affinityScope?: 'best-available' | 'platform-bundle-class' | 'platform-bundle-device-kind';
   };
   app: {
     platform: string | null;
@@ -216,6 +220,8 @@ export interface EvaluateResult {
 
 export type ToolErrorCode =
   | 'TARGET_SESSION_MISMATCH'
+  | 'PLATFORM_TARGET_NOT_FOUND'
+  | 'TARGET_PLATFORM_CONFLICT'
   | 'STALE_TARGET'
   | 'HELPERS_STALE'
   | 'RECONNECT_TIMEOUT'
@@ -290,6 +296,9 @@ export type ToolErrorCode =
   // under a keyboard with no dismiss control. The TS layer auto-heals via the
   // injected Keyboard.dismiss() when CDP is connected (#379).
   | 'KEYBOARD_OCCLUDED'
+  | 'KEYBOARD_DISMISS_FAILED'
+  | 'RUNNER_TIMEOUT'
+  | 'WDA_BOOTSTRAP_FAILED'
   // Audit B5: cross_platform_verify verdict FAIL (elements differ across
   // platforms) — distinct from the partial-coverage missing-snapshot warning.
   | 'CROSS_PLATFORM_MISMATCH'

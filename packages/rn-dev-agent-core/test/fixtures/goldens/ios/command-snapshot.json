@@ -1,1021 +1,1023 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T18:21:07.357Z",
+    "capturedAt": "2026-07-20T22:27:46.246Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=ios node test/contract/capture-goldens.ts)",
     "platform": "ios",
-    "device": "iPhone 17 (3C6085C0-2F72-4C82-87AF-5F2807AC55F1)",
-    "os": "iOS-26-5",
+    "device": "iPhone 17 Pro (7A6033C8-9291-4B0B-80B9-46024EEDF7D7)",
+    "os": "iOS-26-2",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.1",
-    "protocolVersion": 1,
+    "runnerVersion": "0.70.8",
+    "protocolVersion": 2,
     "runnerPort": 22088
   },
   "payload": {
-    "v": 1,
+    "ok": true,
     "data": {
-      "truncated": false,
       "nodes": [
         {
           "label": "Fixture",
+          "hittable": true,
           "rect": {
+            "y": 0,
             "height": 874,
             "width": 402,
-            "x": 0,
-            "y": 0
+            "x": 0
           },
-          "hittable": true,
+          "enabled": true,
           "type": "Application",
           "index": 0,
-          "enabled": true,
           "depth": 0
         },
         {
-          "rect": {
-            "height": 874,
-            "width": 402,
-            "x": 0,
-            "y": 0
-          },
           "hittable": true,
           "type": "Window",
-          "index": 1,
           "enabled": true,
           "depth": 1,
+          "rect": {
+            "y": 0,
+            "width": 402,
+            "x": 0,
+            "height": 874
+          },
+          "index": 1,
           "parentIndex": 0
         },
         {
-          "label": "Increment",
-          "rect": {
-            "height": 874,
-            "width": 402,
-            "x": 0,
-            "y": 0
-          },
           "hittable": true,
           "type": "Other",
-          "index": 2,
           "enabled": true,
           "depth": 2,
+          "rect": {
+            "height": 874,
+            "y": 0,
+            "width": 402,
+            "x": 0
+          },
+          "index": 2,
+          "label": "Increment",
           "parentIndex": 1
         },
         {
-          "label": "Increment",
+          "enabled": true,
+          "index": 3,
           "identifier": "fixture_button",
+          "hittable": true,
           "rect": {
             "height": 20.33333333333333,
+            "y": 78,
             "width": 76.66666666666666,
-            "x": 162.66666666666666,
-            "y": 78
+            "x": 162.66666666666666
           },
-          "hittable": true,
           "type": "Button",
-          "index": 3,
-          "enabled": true,
-          "depth": 3,
-          "parentIndex": 2
+          "label": "Increment",
+          "parentIndex": 2,
+          "depth": 3
         },
         {
-          "identifier": "fixture_count",
+          "depth": 3,
           "label": "count: 0",
+          "enabled": true,
           "rect": {
-            "x": 169.66666666666666,
+            "height": 20.33333333333333,
             "y": 106.33333333333339,
             "width": 62.66666666666666,
-            "height": 20.33333333333333
+            "x": 169.66666666666666
           },
+          "identifier": "fixture_count",
+          "parentIndex": 2,
           "hittable": true,
           "type": "StaticText",
-          "index": 4,
-          "enabled": true,
-          "depth": 3,
-          "parentIndex": 2
+          "index": 4
         },
         {
-          "identifier": "fixture_input",
+          "depth": 3,
+          "enabled": true,
           "rect": {
-            "x": 16,
+            "height": 34,
             "y": 134.66666666666666,
             "width": 370,
-            "height": 34
+            "x": 16
           },
+          "identifier": "fixture_input",
+          "parentIndex": 2,
           "hittable": true,
           "type": "TextField",
-          "index": 5,
-          "enabled": true,
+          "index": 5
+        },
+        {
           "depth": 3,
-          "parentIndex": 2
-        },
-        {
-          "identifier": "fixture_list",
           "label": "Vertical scroll bar, 10 pages",
-          "rect": {
-            "x": 0,
-            "y": 176.66666666666666,
-            "width": 402,
-            "height": 577
-          },
-          "hittable": true,
-          "type": "CollectionView",
-          "index": 6,
           "enabled": true,
-          "depth": 3,
-          "parentIndex": 2
-        },
-        {
-          "rect": {
-            "x": -16,
-            "y": -977.3333333333334,
-            "width": 434,
-            "height": 7563
-          },
-          "hittable": false,
-          "type": "Other",
-          "index": 7,
-          "depth": 4,
-          "enabled": true,
-          "parentIndex": 6
-        },
-        {
-          "label": "row 1",
-          "rect": {
-            "x": 16,
-            "y": 211.66666666666666,
-            "width": 370,
-            "height": 51.99999999999997
-          },
-          "hittable": true,
-          "type": "Cell",
-          "index": 8,
-          "enabled": true,
-          "depth": 4,
-          "parentIndex": 6
-        },
-        {
-          "rect": {
-            "x": 16,
-            "y": 211.66666666666666,
-            "width": 370,
-            "height": 51.99999999999997
-          },
-          "hittable": true,
-          "type": "Other",
-          "index": 9,
-          "depth": 5,
-          "enabled": true,
-          "parentIndex": 8
-        },
-        {
-          "label": "row 1",
-          "rect": {
-            "x": 16,
-            "y": 211.66666666666666,
-            "width": 370,
-            "height": 51.99999999999997
-          },
-          "hittable": true,
-          "type": "Other",
-          "index": 10,
-          "enabled": true,
-          "depth": 5,
-          "parentIndex": 8
-        },
-        {
-          "identifier": "fixture_row_1",
-          "label": "row 1",
-          "rect": {
-            "x": 16,
-            "y": 211.66666666666666,
-            "width": 370,
-            "height": 51.99999999999997
-          },
-          "hittable": true,
-          "type": "StaticText",
-          "index": 11,
-          "enabled": true,
-          "depth": 6,
-          "parentIndex": 10
-        },
-        {
-          "label": "row 2",
-          "rect": {
-            "x": 16,
-            "y": 263.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "hittable": true,
-          "type": "Cell",
-          "index": 12,
-          "enabled": true,
-          "depth": 4,
-          "parentIndex": 6
-        },
-        {
-          "rect": {
-            "x": 16,
-            "y": 263.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "hittable": true,
-          "type": "Other",
-          "index": 13,
-          "depth": 5,
-          "enabled": true,
-          "parentIndex": 12
-        },
-        {
-          "label": "row 2",
-          "rect": {
-            "x": 16,
-            "y": 263.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "hittable": true,
-          "type": "Other",
-          "index": 14,
-          "enabled": true,
-          "depth": 5,
-          "parentIndex": 12
-        },
-        {
-          "identifier": "fixture_row_2",
-          "label": "row 2",
-          "rect": {
-            "x": 16,
-            "y": 263.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "hittable": true,
-          "type": "StaticText",
-          "index": 15,
-          "enabled": true,
-          "depth": 6,
-          "parentIndex": 14
-        },
-        {
-          "rect": {
-            "x": 32,
-            "y": 262.66666666666663,
-            "width": 338,
-            "height": 1
-          },
-          "hittable": true,
-          "type": "Other",
-          "index": 16,
-          "depth": 4,
-          "enabled": true,
-          "parentIndex": 6
-        },
-        {
-          "label": "row 3",
-          "rect": {
-            "x": 16,
-            "y": 315.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "hittable": true,
-          "type": "Cell",
-          "index": 17,
-          "enabled": true,
-          "depth": 4,
-          "parentIndex": 6
-        },
-        {
-          "rect": {
-            "x": 16,
-            "y": 315.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "hittable": true,
-          "type": "Other",
-          "index": 18,
-          "depth": 5,
-          "enabled": true,
-          "parentIndex": 17
-        },
-        {
-          "label": "row 3",
-          "rect": {
-            "x": 16,
-            "y": 315.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "hittable": true,
-          "type": "Other",
-          "index": 19,
-          "enabled": true,
-          "depth": 5,
-          "parentIndex": 17
-        },
-        {
-          "identifier": "fixture_row_3",
-          "enabled": true,
-          "type": "StaticText",
-          "hittable": true,
-          "depth": 6,
-          "parentIndex": 19,
-          "label": "row 3",
-          "rect": {
-            "x": 16,
-            "y": 315.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 20
-        },
-        {
-          "enabled": true,
-          "depth": 4,
-          "hittable": true,
-          "type": "Other",
-          "parentIndex": 6,
-          "rect": {
-            "x": 32,
-            "y": 314.66666666666663,
-            "width": 338,
-            "height": 1
-          },
-          "index": 21
-        },
-        {
-          "enabled": true,
-          "type": "Cell",
-          "hittable": true,
-          "depth": 4,
-          "parentIndex": 6,
-          "label": "row 4",
-          "rect": {
-            "x": 16,
-            "y": 367.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 22
-        },
-        {
-          "enabled": true,
-          "depth": 5,
-          "hittable": true,
-          "type": "Other",
-          "parentIndex": 22,
-          "rect": {
-            "x": 16,
-            "y": 367.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 23
-        },
-        {
-          "enabled": true,
-          "type": "Other",
-          "hittable": true,
-          "depth": 5,
-          "parentIndex": 22,
-          "label": "row 4",
-          "rect": {
-            "x": 16,
-            "y": 367.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 24
-        },
-        {
-          "identifier": "fixture_row_4",
-          "enabled": true,
-          "type": "StaticText",
-          "hittable": true,
-          "depth": 6,
-          "parentIndex": 24,
-          "label": "row 4",
-          "rect": {
-            "x": 16,
-            "y": 367.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 25
-        },
-        {
-          "enabled": true,
-          "depth": 4,
-          "hittable": true,
-          "type": "Other",
-          "parentIndex": 6,
-          "rect": {
-            "x": 32,
-            "y": 366.66666666666663,
-            "width": 338,
-            "height": 1
-          },
-          "index": 26
-        },
-        {
-          "enabled": true,
-          "type": "Cell",
-          "hittable": true,
-          "depth": 4,
-          "parentIndex": 6,
-          "label": "row 5",
-          "rect": {
-            "x": 16,
-            "y": 419.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 27
-        },
-        {
-          "enabled": true,
-          "depth": 5,
-          "hittable": true,
-          "type": "Other",
-          "parentIndex": 27,
-          "rect": {
-            "x": 16,
-            "y": 419.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 28
-        },
-        {
-          "enabled": true,
-          "type": "Other",
-          "hittable": true,
-          "depth": 5,
-          "parentIndex": 27,
-          "label": "row 5",
-          "rect": {
-            "x": 16,
-            "y": 419.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 29
-        },
-        {
-          "identifier": "fixture_row_5",
-          "enabled": true,
-          "type": "StaticText",
-          "hittable": true,
-          "depth": 6,
-          "parentIndex": 29,
-          "label": "row 5",
-          "rect": {
-            "x": 16,
-            "y": 419.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 30
-        },
-        {
-          "enabled": true,
-          "depth": 4,
-          "hittable": true,
-          "type": "Other",
-          "parentIndex": 6,
-          "rect": {
-            "x": 32,
-            "y": 418.66666666666663,
-            "width": 338,
-            "height": 1
-          },
-          "index": 31
-        },
-        {
-          "enabled": true,
-          "type": "Cell",
-          "hittable": true,
-          "depth": 4,
-          "parentIndex": 6,
-          "label": "row 6",
-          "rect": {
-            "x": 16,
-            "y": 471.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 32
-        },
-        {
-          "enabled": true,
-          "depth": 5,
-          "hittable": true,
-          "type": "Other",
-          "parentIndex": 32,
-          "rect": {
-            "x": 16,
-            "y": 471.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 33
-        },
-        {
-          "enabled": true,
-          "type": "Other",
-          "hittable": true,
-          "depth": 5,
-          "parentIndex": 32,
-          "label": "row 6",
-          "rect": {
-            "x": 16,
-            "y": 471.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 34
-        },
-        {
-          "identifier": "fixture_row_6",
-          "enabled": true,
-          "type": "StaticText",
-          "hittable": true,
-          "depth": 6,
-          "parentIndex": 34,
-          "label": "row 6",
-          "rect": {
-            "x": 16,
-            "y": 471.66666666666663,
-            "width": 370,
-            "height": 52
-          },
-          "index": 35
-        },
-        {
-          "enabled": true,
-          "depth": 4,
-          "hittable": true,
-          "type": "Other",
-          "parentIndex": 6,
-          "rect": {
-            "x": 32,
-            "y": 470.66666666666663,
-            "width": 338,
-            "height": 1
-          },
-          "index": 36
-        },
-        {
-          "enabled": true,
-          "type": "Cell",
-          "hittable": true,
-          "depth": 4,
-          "parentIndex": 6,
-          "label": "row 7",
-          "rect": {
-            "x": 16,
-            "y": 523.6666666666666,
-            "width": 370,
-            "height": 52
-          },
-          "index": 37
-        },
-        {
-          "enabled": true,
-          "depth": 5,
-          "type": "Other",
-          "hittable": true,
-          "parentIndex": 37,
-          "rect": {
-            "width": 370,
-            "x": 16,
-            "height": 52,
-            "y": 523.6666666666666
-          },
-          "index": 38
-        },
-        {
-          "enabled": true,
-          "type": "Other",
-          "hittable": true,
-          "depth": 5,
-          "parentIndex": 37,
-          "label": "row 7",
-          "rect": {
-            "height": 52,
-            "width": 370,
-            "x": 16,
-            "y": 523.6666666666666
-          },
-          "index": 39
-        },
-        {
-          "identifier": "fixture_row_7",
-          "type": "StaticText",
-          "enabled": true,
-          "hittable": true,
-          "depth": 6,
-          "parentIndex": 39,
-          "label": "row 7",
-          "rect": {
-            "height": 52,
-            "y": 523.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "index": 40
-        },
-        {
-          "rect": {
-            "height": 1,
-            "y": 522.6666666666666,
-            "x": 32,
-            "width": 338
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Other",
-          "index": 41,
-          "depth": 4,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 575.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Cell",
-          "index": 42,
-          "label": "row 8",
-          "hittable": true,
-          "depth": 4
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 575.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 42,
-          "enabled": true,
-          "type": "Other",
-          "index": 43,
-          "depth": 5,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 575.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 42,
-          "enabled": true,
-          "type": "Other",
-          "index": 44,
-          "label": "row 8",
-          "hittable": true,
-          "depth": 5
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 575.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 44,
-          "enabled": true,
-          "type": "StaticText",
-          "identifier": "fixture_row_8",
-          "index": 45,
-          "label": "row 8",
-          "hittable": true,
-          "depth": 6
-        },
-        {
-          "rect": {
-            "height": 1,
-            "y": 574.6666666666666,
-            "x": 32,
-            "width": 338
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Other",
-          "index": 46,
-          "depth": 4,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 627.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Cell",
-          "index": 47,
-          "label": "row 9",
-          "hittable": true,
-          "depth": 4
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 627.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 47,
-          "enabled": true,
-          "type": "Other",
-          "index": 48,
-          "depth": 5,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 627.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 47,
-          "enabled": true,
-          "type": "Other",
-          "index": 49,
-          "label": "row 9",
-          "hittable": true,
-          "depth": 5
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 627.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 49,
-          "enabled": true,
-          "type": "StaticText",
-          "identifier": "fixture_row_9",
-          "index": 50,
-          "label": "row 9",
-          "hittable": true,
-          "depth": 6
-        },
-        {
-          "rect": {
-            "height": 1,
-            "y": 626.6666666666666,
-            "x": 32,
-            "width": 338
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Other",
-          "index": 51,
-          "depth": 4,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 679.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Cell",
-          "index": 52,
-          "label": "row 10",
-          "hittable": true,
-          "depth": 4
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 679.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 52,
-          "enabled": true,
-          "type": "Other",
-          "index": 53,
-          "depth": 5,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 679.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 52,
-          "enabled": true,
-          "type": "Other",
-          "index": 54,
-          "label": "row 10",
-          "hittable": true,
-          "depth": 5
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 679.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 54,
-          "enabled": true,
-          "type": "StaticText",
-          "identifier": "fixture_row_10",
-          "index": 55,
-          "label": "row 10",
-          "hittable": true,
-          "depth": 6
-        },
-        {
-          "rect": {
-            "height": 1,
-            "y": 678.6666666666666,
-            "x": 32,
-            "width": 338
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Other",
-          "index": 56,
-          "depth": 4,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 731.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Cell",
-          "index": 57,
-          "label": "row 11",
-          "hittable": true,
-          "depth": 4
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 731.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 57,
-          "enabled": true,
-          "type": "Other",
-          "index": 58,
-          "depth": 5,
-          "hittable": true
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 731.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 57,
-          "enabled": true,
-          "type": "Other",
-          "index": 59,
-          "label": "row 11",
-          "hittable": true,
-          "depth": 5
-        },
-        {
-          "rect": {
-            "height": 52,
-            "y": 731.6666666666666,
-            "x": 16,
-            "width": 370
-          },
-          "parentIndex": 59,
-          "enabled": true,
-          "type": "StaticText",
-          "identifier": "fixture_row_11",
-          "index": 60,
-          "label": "row 11",
-          "hittable": true,
-          "depth": 6
-        },
-        {
-          "rect": {
-            "height": 1,
-            "y": 730.6666666666666,
-            "x": 32,
-            "width": 338
-          },
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Other",
-          "index": 61,
-          "depth": 4,
-          "hittable": true
-        },
-        {
-          "hittable": true,
-          "index": 62,
-          "label": "Vertical scroll bar, 10 pages",
-          "depth": 4,
-          "parentIndex": 6,
-          "enabled": true,
-          "type": "Other",
           "rect": {
             "height": 577,
-            "y": 176.66666666666666,
-            "x": 369,
-            "width": 30
+            "x": 0,
+            "width": 402,
+            "y": 176.66666666666666
           },
-          "value": "0 %"
+          "identifier": "fixture_list",
+          "parentIndex": 2,
+          "hittable": true,
+          "type": "CollectionView",
+          "index": 6
         },
         {
+          "depth": 4,
+          "enabled": true,
+          "rect": {
+            "width": 434,
+            "x": -16,
+            "height": 7563,
+            "y": -977.3333333333334
+          },
+          "parentIndex": 6,
+          "hittable": false,
+          "type": "Other",
+          "index": 7
+        },
+        {
+          "depth": 4,
+          "label": "row 1",
+          "enabled": true,
+          "rect": {
+            "width": 370,
+            "x": 16,
+            "height": 51.99999999999997,
+            "y": 211.66666666666666
+          },
+          "parentIndex": 6,
           "hittable": true,
-          "index": 63,
+          "type": "Cell",
+          "index": 8
+        },
+        {
           "depth": 5,
-          "parentIndex": 62,
+          "enabled": true,
+          "rect": {
+            "width": 370,
+            "x": 16,
+            "height": 51.99999999999997,
+            "y": 211.66666666666666
+          },
+          "parentIndex": 8,
+          "hittable": true,
+          "type": "Other",
+          "index": 9
+        },
+        {
+          "label": "row 1",
+          "parentIndex": 8,
+          "rect": {
+            "x": 16,
+            "y": 211.66666666666666,
+            "width": 370,
+            "height": 51.99999999999997
+          },
+          "type": "Other",
+          "enabled": true,
+          "index": 10,
+          "hittable": true,
+          "depth": 5
+        },
+        {
+          "depth": 6,
+          "label": "row 1",
+          "parentIndex": 10,
+          "rect": {
+            "height": 51.99999999999997,
+            "width": 370,
+            "x": 16,
+            "y": 211.66666666666666
+          },
+          "type": "StaticText",
+          "enabled": true,
+          "index": 11,
+          "hittable": true,
+          "identifier": "fixture_row_1"
+        },
+        {
+          "enabled": true,
+          "rect": {
+            "y": 263.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
+          },
+          "hittable": true,
+          "label": "row 2",
+          "type": "Cell",
+          "depth": 4,
+          "parentIndex": 6,
+          "index": 12
+        },
+        {
           "enabled": true,
           "type": "Other",
+          "depth": 5,
+          "index": 13,
+          "hittable": true,
+          "parentIndex": 12,
           "rect": {
-            "height": 62.66666666666666,
-            "y": 179.66666666666666,
-            "x": 396,
-            "width": 3
+            "y": 263.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
           }
         },
         {
-          "hittable": true,
-          "index": 64,
-          "depth": 3,
-          "parentIndex": 2,
-          "enabled": true,
-          "type": "TextField",
+          "type": "Other",
           "rect": {
-            "height": 34,
-            "y": 761.6666666666666,
-            "x": 16,
-            "width": 334.3333333333333
+            "y": 263.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
           },
-          "identifier": "fixture_bottom_input"
+          "enabled": true,
+          "hittable": true,
+          "label": "row 2",
+          "depth": 5,
+          "parentIndex": 12,
+          "index": 14
+        },
+        {
+          "enabled": true,
+          "label": "row 2",
+          "hittable": true,
+          "depth": 6,
+          "rect": {
+            "y": 263.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
+          },
+          "parentIndex": 14,
+          "type": "StaticText",
+          "identifier": "fixture_row_2",
+          "index": 15
+        },
+        {
+          "enabled": true,
+          "depth": 4,
+          "hittable": true,
+          "parentIndex": 6,
+          "rect": {
+            "y": 262.66666666666663,
+            "width": 338,
+            "height": 1,
+            "x": 32
+          },
+          "type": "Other",
+          "index": 16
+        },
+        {
+          "enabled": true,
+          "hittable": true,
+          "label": "row 3",
+          "depth": 4,
+          "rect": {
+            "width": 370,
+            "height": 52,
+            "y": 315.66666666666663,
+            "x": 16
+          },
+          "parentIndex": 6,
+          "type": "Cell",
+          "index": 17
         },
         {
           "hittable": true,
-          "index": 65,
-          "label": "Tap",
-          "depth": 3,
-          "parentIndex": 2,
+          "index": 18,
+          "parentIndex": 17,
+          "type": "Other",
           "enabled": true,
-          "type": "Button",
           "rect": {
-            "height": 20.33333333333337,
-            "y": 768.6666666666666,
-            "x": 358.3333333333333,
-            "width": 27.666666666666686
+            "width": 370,
+            "height": 52,
+            "y": 315.66666666666663,
+            "x": 16
           },
+          "depth": 5
+        },
+        {
+          "hittable": true,
+          "index": 19,
+          "label": "row 3",
+          "parentIndex": 17,
+          "type": "Other",
+          "enabled": true,
+          "rect": {
+            "width": 370,
+            "height": 52,
+            "y": 315.66666666666663,
+            "x": 16
+          },
+          "depth": 5
+        },
+        {
+          "enabled": true,
+          "label": "row 3",
+          "type": "StaticText",
+          "parentIndex": 19,
+          "hittable": true,
+          "rect": {
+            "width": 370,
+            "height": 52,
+            "y": 315.66666666666663,
+            "x": 16
+          },
+          "depth": 6,
+          "index": 20,
+          "identifier": "fixture_row_3"
+        },
+        {
+          "enabled": true,
+          "parentIndex": 6,
+          "type": "Other",
+          "hittable": true,
+          "rect": {
+            "width": 338,
+            "height": 1,
+            "y": 314.66666666666663,
+            "x": 32
+          },
+          "depth": 4,
+          "index": 21
+        },
+        {
+          "depth": 4,
+          "index": 22,
+          "parentIndex": 6,
+          "type": "Cell",
+          "hittable": true,
+          "label": "row 4",
+          "rect": {
+            "width": 370,
+            "height": 52,
+            "y": 367.66666666666663,
+            "x": 16
+          },
+          "enabled": true
+        },
+        {
+          "enabled": true,
+          "parentIndex": 22,
+          "rect": {
+            "width": 370,
+            "height": 52,
+            "y": 367.66666666666663,
+            "x": 16
+          },
+          "index": 23,
+          "type": "Other",
+          "depth": 5,
+          "hittable": true
+        },
+        {
+          "type": "Other",
+          "index": 24,
+          "enabled": true,
+          "rect": {
+            "width": 370,
+            "height": 52,
+            "y": 367.66666666666663,
+            "x": 16
+          },
+          "hittable": true,
+          "label": "row 4",
+          "depth": 5,
+          "parentIndex": 22
+        },
+        {
+          "identifier": "fixture_row_4",
+          "parentIndex": 24,
+          "hittable": true,
+          "enabled": true,
+          "rect": {
+            "width": 370,
+            "height": 52,
+            "y": 367.66666666666663,
+            "x": 16
+          },
+          "index": 25,
+          "type": "StaticText",
+          "label": "row 4",
+          "depth": 6
+        },
+        {
+          "rect": {
+            "width": 338,
+            "height": 1,
+            "y": 366.66666666666663,
+            "x": 32
+          },
+          "hittable": true,
+          "index": 26,
+          "depth": 4,
+          "parentIndex": 6,
+          "type": "Other",
+          "enabled": true
+        },
+        {
+          "enabled": true,
+          "index": 27,
+          "hittable": true,
+          "depth": 4,
+          "parentIndex": 6,
+          "rect": {
+            "x": 16,
+            "width": 370,
+            "height": 52,
+            "y": 419.66666666666663
+          },
+          "type": "Cell",
+          "label": "row 5"
+        },
+        {
+          "enabled": true,
+          "index": 28,
+          "depth": 5,
+          "hittable": true,
+          "parentIndex": 27,
+          "rect": {
+            "y": 419.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
+          },
+          "type": "Other"
+        },
+        {
+          "enabled": true,
+          "index": 29,
+          "hittable": true,
+          "depth": 5,
+          "parentIndex": 27,
+          "rect": {
+            "y": 419.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
+          },
+          "type": "Other",
+          "label": "row 5"
+        },
+        {
+          "enabled": true,
+          "index": 30,
+          "hittable": true,
+          "identifier": "fixture_row_5",
+          "depth": 6,
+          "rect": {
+            "y": 419.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
+          },
+          "parentIndex": 29,
+          "type": "StaticText",
+          "label": "row 5"
+        },
+        {
+          "enabled": true,
+          "index": 31,
+          "depth": 4,
+          "hittable": true,
+          "parentIndex": 6,
+          "rect": {
+            "y": 418.66666666666663,
+            "width": 338,
+            "height": 1,
+            "x": 32
+          },
+          "type": "Other"
+        },
+        {
+          "enabled": true,
+          "index": 32,
+          "hittable": true,
+          "depth": 4,
+          "parentIndex": 6,
+          "rect": {
+            "y": 471.66666666666663,
+            "width": 370,
+            "height": 52,
+            "x": 16
+          },
+          "type": "Cell",
+          "label": "row 6"
+        },
+        {
+          "enabled": true,
+          "index": 33,
+          "depth": 5,
+          "hittable": true,
+          "parentIndex": 32,
+          "rect": {
+            "x": 16,
+            "width": 370,
+            "height": 52,
+            "y": 471.66666666666663
+          },
+          "type": "Other"
+        },
+        {
+          "enabled": true,
+          "index": 34,
+          "hittable": true,
+          "depth": 5,
+          "parentIndex": 32,
+          "rect": {
+            "x": 16,
+            "width": 370,
+            "height": 52,
+            "y": 471.66666666666663
+          },
+          "type": "Other",
+          "label": "row 6"
+        },
+        {
+          "enabled": true,
+          "index": 35,
+          "hittable": true,
+          "identifier": "fixture_row_6",
+          "depth": 6,
+          "rect": {
+            "x": 16,
+            "width": 370,
+            "height": 52,
+            "y": 471.66666666666663
+          },
+          "parentIndex": 34,
+          "type": "StaticText",
+          "label": "row 6"
+        },
+        {
+          "index": 36,
+          "depth": 4,
+          "hittable": true,
+          "enabled": true,
+          "rect": {
+            "x": 32,
+            "width": 338,
+            "height": 1,
+            "y": 470.66666666666663
+          },
+          "parentIndex": 6,
+          "type": "Other"
+        },
+        {
+          "depth": 4,
+          "rect": {
+            "height": 52,
+            "y": 523.6666666666666,
+            "width": 370,
+            "x": 16
+          },
+          "enabled": true,
+          "index": 37,
+          "hittable": true,
+          "parentIndex": 6,
+          "label": "row 7",
+          "type": "Cell"
+        },
+        {
+          "index": 38,
+          "parentIndex": 37,
+          "enabled": true,
+          "hittable": true,
+          "type": "Other",
+          "depth": 5,
+          "rect": {
+            "width": 370,
+            "y": 523.6666666666666,
+            "height": 52,
+            "x": 16
+          }
+        },
+        {
+          "index": 39,
+          "hittable": true,
+          "enabled": true,
+          "label": "row 7",
+          "rect": {
+            "width": 370,
+            "y": 523.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "type": "Other",
+          "depth": 5,
+          "parentIndex": 37
+        },
+        {
+          "enabled": true,
+          "label": "row 7",
+          "hittable": true,
+          "parentIndex": 39,
+          "depth": 6,
+          "index": 40,
+          "rect": {
+            "width": 370,
+            "y": 523.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "identifier": "fixture_row_7",
+          "type": "StaticText"
+        },
+        {
+          "index": 41,
+          "type": "Other",
+          "depth": 4,
+          "hittable": true,
+          "rect": {
+            "width": 338,
+            "y": 522.6666666666666,
+            "height": 1,
+            "x": 32
+          },
+          "enabled": true,
+          "parentIndex": 6
+        },
+        {
+          "depth": 4,
+          "index": 42,
+          "parentIndex": 6,
+          "label": "row 8",
+          "rect": {
+            "width": 370,
+            "y": 575.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "enabled": true,
+          "hittable": true,
+          "type": "Cell"
+        },
+        {
+          "type": "Other",
+          "enabled": true,
+          "depth": 5,
+          "rect": {
+            "width": 370,
+            "y": 575.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "index": 43,
+          "parentIndex": 42,
+          "hittable": true
+        },
+        {
+          "depth": 5,
+          "parentIndex": 42,
+          "hittable": true,
+          "type": "Other",
+          "enabled": true,
+          "label": "row 8",
+          "index": 44,
+          "rect": {
+            "width": 370,
+            "y": 575.6666666666666,
+            "height": 52,
+            "x": 16
+          }
+        },
+        {
+          "parentIndex": 44,
+          "enabled": true,
+          "depth": 6,
+          "index": 45,
+          "label": "row 8",
+          "hittable": true,
+          "rect": {
+            "width": 370,
+            "y": 575.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "type": "StaticText",
+          "identifier": "fixture_row_8"
+        },
+        {
+          "hittable": true,
+          "parentIndex": 6,
+          "rect": {
+            "width": 338,
+            "y": 574.6666666666666,
+            "height": 1,
+            "x": 32
+          },
+          "index": 46,
+          "enabled": true,
+          "depth": 4,
+          "type": "Other"
+        },
+        {
+          "depth": 4,
+          "hittable": true,
+          "type": "Cell",
+          "rect": {
+            "width": 370,
+            "y": 627.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "parentIndex": 6,
+          "enabled": true,
+          "index": 47,
+          "label": "row 9"
+        },
+        {
+          "parentIndex": 47,
+          "enabled": true,
+          "depth": 5,
+          "rect": {
+            "width": 370,
+            "y": 627.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "hittable": true,
+          "type": "Other",
+          "index": 48
+        },
+        {
+          "label": "row 9",
+          "rect": {
+            "width": 370,
+            "y": 627.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "index": 49,
+          "parentIndex": 47,
+          "enabled": true,
+          "depth": 5,
+          "hittable": true,
+          "type": "Other"
+        },
+        {
+          "rect": {
+            "width": 370,
+            "y": 627.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "index": 50,
+          "enabled": true,
+          "hittable": true,
+          "label": "row 9",
+          "depth": 6,
+          "identifier": "fixture_row_9",
+          "type": "StaticText",
+          "parentIndex": 49
+        },
+        {
+          "rect": {
+            "width": 338,
+            "y": 626.6666666666666,
+            "height": 1,
+            "x": 32
+          },
+          "enabled": true,
+          "depth": 4,
+          "parentIndex": 6,
+          "index": 51,
+          "type": "Other",
+          "hittable": true
+        },
+        {
+          "index": 52,
+          "type": "Cell",
+          "depth": 4,
+          "parentIndex": 6,
+          "rect": {
+            "width": 370,
+            "y": 679.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "enabled": true,
+          "hittable": true,
+          "label": "row 10"
+        },
+        {
+          "parentIndex": 52,
+          "index": 53,
+          "hittable": true,
+          "type": "Other",
+          "depth": 5,
+          "enabled": true,
+          "rect": {
+            "width": 370,
+            "y": 679.6666666666666,
+            "height": 52,
+            "x": 16
+          }
+        },
+        {
+          "depth": 5,
+          "index": 54,
+          "enabled": true,
+          "label": "row 10",
+          "hittable": true,
+          "type": "Other",
+          "parentIndex": 52,
+          "rect": {
+            "width": 370,
+            "y": 679.6666666666666,
+            "height": 52,
+            "x": 16
+          }
+        },
+        {
+          "depth": 6,
+          "index": 55,
+          "identifier": "fixture_row_10",
+          "enabled": true,
+          "label": "row 10",
+          "hittable": true,
+          "type": "StaticText",
+          "parentIndex": 54,
+          "rect": {
+            "width": 370,
+            "y": 679.6666666666666,
+            "height": 52,
+            "x": 16
+          }
+        },
+        {
+          "enabled": true,
+          "depth": 4,
+          "parentIndex": 6,
+          "hittable": true,
+          "rect": {
+            "width": 338,
+            "y": 678.6666666666666,
+            "height": 1,
+            "x": 32
+          },
+          "index": 56,
+          "type": "Other"
+        },
+        {
+          "type": "Cell",
+          "enabled": true,
+          "parentIndex": 6,
+          "rect": {
+            "width": 370,
+            "y": 731.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "hittable": true,
+          "depth": 4,
+          "label": "row 11",
+          "index": 57
+        },
+        {
+          "depth": 5,
+          "index": 58,
+          "hittable": true,
+          "enabled": true,
+          "type": "Other",
+          "parentIndex": 57,
+          "rect": {
+            "width": 370,
+            "y": 731.6666666666666,
+            "height": 52,
+            "x": 16
+          }
+        },
+        {
+          "enabled": true,
+          "label": "row 11",
+          "index": 59,
+          "rect": {
+            "width": 370,
+            "y": 731.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "hittable": true,
+          "type": "Other",
+          "parentIndex": 57,
+          "depth": 5
+        },
+        {
+          "identifier": "fixture_row_11",
+          "hittable": true,
+          "enabled": true,
+          "rect": {
+            "width": 370,
+            "y": 731.6666666666666,
+            "height": 52,
+            "x": 16
+          },
+          "label": "row 11",
+          "depth": 6,
+          "index": 60,
+          "type": "StaticText",
+          "parentIndex": 59
+        },
+        {
+          "index": 61,
+          "rect": {
+            "width": 338,
+            "y": 730.6666666666666,
+            "height": 1,
+            "x": 32
+          },
+          "depth": 4,
+          "enabled": true,
+          "type": "Other",
+          "parentIndex": 6,
+          "hittable": true
+        },
+        {
+          "value": "0 %",
+          "hittable": true,
+          "label": "Vertical scroll bar, 10 pages",
+          "depth": 4,
+          "enabled": true,
+          "type": "Other",
+          "parentIndex": 6,
+          "rect": {
+            "width": 30,
+            "y": 176.66666666666666,
+            "height": 577,
+            "x": 369
+          },
+          "index": 62
+        },
+        {
+          "type": "Other",
+          "index": 63,
+          "rect": {
+            "width": 3,
+            "y": 179.66666666666666,
+            "height": 62.66666666666666,
+            "x": 396
+          },
+          "enabled": true,
+          "depth": 5,
+          "parentIndex": 62,
+          "hittable": true
+        },
+        {
+          "parentIndex": 2,
+          "depth": 3,
+          "index": 64,
+          "type": "TextField",
+          "enabled": true,
+          "hittable": true,
+          "identifier": "fixture_bottom_input",
+          "rect": {
+            "width": 334.3333333333333,
+            "y": 761.6666666666666,
+            "height": 34,
+            "x": 16
+          }
+        },
+        {
+          "parentIndex": 2,
+          "index": 65,
+          "rect": {
+            "width": 27.666666666666686,
+            "y": 768.6666666666666,
+            "height": 20.33333333333337,
+            "x": 358.3333333333333
+          },
+          "label": "Tap",
+          "type": "Button",
+          "hittable": true,
+          "depth": 3,
+          "enabled": true,
           "identifier": "fixture_bottom_button"
         },
         {
-          "hittable": true,
-          "index": 66,
-          "label": "bottom taps: 0",
-          "depth": 3,
           "parentIndex": 2,
-          "enabled": true,
-          "type": "StaticText",
+          "label": "bottom taps: 0",
+          "index": 66,
+          "identifier": "fixture_bottom_count",
           "rect": {
-            "height": 20.33333333333337,
+            "width": 111.66666666666669,
             "y": 803.6666666666666,
-            "x": 145.16666666666669,
-            "width": 111.66666666666669
+            "height": 20.33333333333337,
+            "x": 145.16666666666669
           },
-          "identifier": "fixture_bottom_count"
+          "enabled": true,
+          "hittable": true,
+          "type": "StaticText",
+          "depth": 3
         }
-      ]
+      ],
+      "truncated": false,
+      "keyboardVisible": false,
+      "snapshotGeneration": 2
     },
-    "ok": true
+    "v": 2
   }
 }

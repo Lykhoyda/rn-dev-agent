@@ -133,7 +133,7 @@ test('gh-383: iOS session health reports runnerProtocol from the detailed probe'
     });
     assert.equal(health.rnFastRunner, 'stale');
     assert.deepEqual(health.runnerProtocol, {
-      expected: 1,
+      expected: 2,
       runner: 1,
       runnerVersion: '0.57.1',
       compatible: false,
@@ -164,7 +164,7 @@ test('gh-383: dead runner → no runnerProtocol block; alive runner → compatib
       adopt: () => {},
     });
     assert.deepEqual(alive.runnerProtocol, {
-      expected: 1,
+      expected: 2,
       runner: 1,
       runnerVersion: '0.57.1',
       compatible: true,

@@ -101,10 +101,35 @@ const PATTERNS = [
  *
  * Returns `UNKNOWN` if no pattern matches at all.
  */
-export function parseMaestroFailure(output) {
-    if (!output || typeof output !== 'string') {
+export function parseMaestroFailure(output, terminal) {
+    const raw = typeof output === 'string' ? output : '';
+    // A terminal step classification, derived from the full uncapped stream,
+    // always outranks an earlier WDA banner.
+    if (terminal?.failureKind === 'SELECTOR_NOT_FOUND') {
+        return {
+            kind: 'SELECTOR_NOT_FOUND',
+            selectorKind: 'unknown',
+            selector: terminal.failureSelector ?? '',
+            raw,
+        };
+    }
+    if (terminal?.failureKind === 'TIMEOUT') {
+        return { kind: 'TIMEOUT', selector: terminal.failureSelector ?? null, raw };
+    }
+    if (terminal?.failureKind === 'ASSERTION_FAILED') {
+        return { kind: 'ASSERTION_FAILED', selector: terminal.failureSelector ?? null, raw };
+    }
+    if (terminal?.exitClass === 'before-first-step' && terminal.bootstrapEvidence) {
+        return {
+            kind: 'WDA_BOOTSTRAP_FAILED',
+            detail: terminal.bootstrapEvidence.slice(0, 500),
+            raw,
+        };
+    }
+    if (!raw) {
         return { kind: 'UNKNOWN', raw: '' };
     }
+    output = raw;
     const lines = output.split('\n');
     for (const { re, build } of PATTERNS) {
         for (let i = lines.length - 1; i >= 0; i--) {

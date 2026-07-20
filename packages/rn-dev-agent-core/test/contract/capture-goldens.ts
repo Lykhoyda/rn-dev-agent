@@ -33,6 +33,7 @@ import { runnerStatePath, readJsonStateFile } from '../../dist/util/secure-state
 
 const PLATFORM = process.env.GOLDEN_PLATFORM;
 const APP_ID = process.env.GOLDEN_APP_ID ?? 'dev.lykhoyda.rndevagent.fixture';
+const DEVICE_ID = process.env.GOLDEN_DEVICE_ID;
 const OUT_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -53,7 +54,7 @@ function sh(cmd: string, args: string[], timeout = 15_000): string {
 function assertFixtureInstalled(): void {
   try {
     if (PLATFORM === 'ios') {
-      sh('xcrun', ['simctl', 'get_app_container', 'booted', APP_ID]);
+      sh('xcrun', ['simctl', 'get_app_container', DEVICE_ID ?? 'booted', APP_ID]);
     } else if (!sh('adb', ['shell', 'pm', 'path', APP_ID]).includes('package:')) {
       throw new Error('not installed');
     }
@@ -68,13 +69,9 @@ function assertFixtureInstalled(): void {
 
 function launchFixture(): void {
   if (PLATFORM === 'ios') {
-    sh('xcrun', ['simctl', 'launch', 'booted', APP_ID], 30_000);
+    sh('xcrun', ['simctl', 'launch', DEVICE_ID ?? 'booted', APP_ID], 30_000);
   } else {
-    sh(
-      'adb',
-      ['shell', 'monkey', '-p', APP_ID, '-c', 'android.intent.category.LAUNCHER', '1'],
-      30_000,
-    );
+    sh('adb', ['shell', 'am', 'start', '-W', '-n', `${APP_ID}/.MainActivity`], 30_000);
   }
 }
 
@@ -86,9 +83,10 @@ function deviceProvenance(): { device: string; os: string } {
       }
     ).devices;
     for (const [runtime, devs] of Object.entries(booted)) {
-      if (devs.length > 0) {
+      const device = DEVICE_ID ? devs.find((candidate) => candidate.udid === DEVICE_ID) : devs[0];
+      if (device) {
         return {
-          device: `${devs[0].name} (${devs[0].udid})`,
+          device: `${device.name} (${device.udid})`,
           os: runtime.replace('com.apple.CoreSimulator.SimRuntime.', ''),
         };
       }
@@ -103,6 +101,7 @@ function deviceProvenance(): { device: string; os: string } {
 
 /** UDID of the booted simulator (iOS) or the adb serial (Android). */
 function deviceKey(): string {
+  if (DEVICE_ID) return DEVICE_ID;
   if (PLATFORM === 'ios') {
     const booted = (
       JSON.parse(sh('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'])) as {
@@ -236,6 +235,7 @@ async function main(): Promise<void> {
       platform: PLATFORM,
       appId: APP_ID,
       attachOnly: true,
+      ...(DEVICE_ID ? { deviceId: DEVICE_ID } : {}),
     });
     if (open.envelope?.ok !== true) {
       console.error('--- supervisor stderr tail ---\n' + s.stderrText().slice(-4000));

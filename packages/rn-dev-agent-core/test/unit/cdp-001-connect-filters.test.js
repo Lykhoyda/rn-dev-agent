@@ -31,6 +31,12 @@ function buildHarness(
   let autoConnectArgs = null;
   client.autoConnect = async (port, opts) => {
     autoConnectArgs = { port, opts };
+    client._connectedTarget = {
+      ...client._connectedTarget,
+      ...(opts.targetId ? { id: opts.targetId } : {}),
+      ...(opts.bundleId ? { description: opts.bundleId } : {}),
+      ...(opts.platform ? { platform: opts.platform, platformInference: 'probed' } : {}),
+    };
     client._isConnected = true;
     return 'connected';
   };

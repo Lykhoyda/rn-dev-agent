@@ -8,6 +8,8 @@ import {
 } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
+import type { CDPClient } from '../cdp-client.js';
+import { healKeyboardOccludedTap, surfaceKeyboardGuard } from '../runners/keyboard-guard.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 
 export interface BatchStep {
@@ -277,7 +279,67 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function executeStep(step: BatchStep): Promise<ToolResult> {
+async function guardedBatchPress(
+  cliArgs: string[],
+  opts: { settle: { enabled?: boolean; timeoutMs?: number } },
+  getClient?: () => CDPClient,
+): Promise<ToolResult> {
+  const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, opts));
+  const first = await tap();
+  if (!first.isError || !getClient) return first;
+  const client = getClient();
+  if (!client.isConnected || !client.helpersInjected) return first;
+  return healKeyboardOccludedTap(first, {
+    dismissViaJs: async () => {
+      const result = await client.evaluate('__RN_AGENT.dismissKeyboard()');
+      if (typeof result.value !== 'string') return false;
+      try {
+        return (JSON.parse(result.value) as { dismissed?: boolean }).dismissed === true;
+      } catch {
+        return false;
+      }
+    },
+    refreshSnapshot: () => runNative(['snapshot', '-i']),
+    retryTap: tap,
+  });
+}
+
+async function dismissKeyboardWithParity(getClient?: () => CDPClient): Promise<ToolResult> {
+  const native = await runNative(['keyboard', 'dismiss']);
+  if (!native.isError) return native;
+  const attemptedTiers = ['native-swipe', 'native-control'];
+  if (getClient) {
+    const client = getClient();
+    if (client.isConnected && client.helpersInjected) {
+      attemptedTiers.push('js');
+      try {
+        const js = await client.evaluate('__RN_AGENT.dismissKeyboard()');
+        const parsed =
+          typeof js.value === 'string' ? (JSON.parse(js.value) as { dismissed?: boolean }) : null;
+        if (parsed?.dismissed) {
+          const check = await runNative(['snapshot', '-i']);
+          const text = check.content?.[0]?.text;
+          const visible =
+            typeof text === 'string'
+              ? (JSON.parse(text) as { data?: { keyboardVisible?: unknown } }).data?.keyboardVisible
+              : undefined;
+          if (visible === false) {
+            return okResult({ dismissed: true, via: 'js', attemptedTiers });
+          }
+        }
+      } catch {
+        // Fall through to the honest typed refusal below.
+      }
+    }
+  }
+  return failResult(
+    'KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; keyboard visibility was not proven false.',
+    'KEYBOARD_DISMISS_FAILED',
+    { attemptedTiers },
+  );
+}
+
+async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promise<ToolResult> {
   switch (step.action) {
     case 'find': {
       // Phase 125: testID-keyed find re-resolves via snapshot per call.
@@ -311,7 +373,8 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
             },
           );
         }
-        if (step.tap) return runNative(['press', `@${ref}`], stepSettleOpts(step));
+        if (step.tap)
+          return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
         return okResult({
           resolved: ref,
           testID: step.testID,
@@ -363,11 +426,11 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
             },
           );
         }
-        return runNative(['press', `@${ref}`], stepSettleOpts(step));
+        return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
       }
       if (!step.ref) return failResult('press requires ref or testID');
       const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-      return runNative(['press', ref], stepSettleOpts(step));
+      return guardedBatchPress(['press', ref], stepSettleOpts(step), getClient);
     }
     case 'fill': {
       if (!step.text) return failResult('fill requires text');
@@ -414,7 +477,7 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
       return runNative(['back'], stepSettleOpts(step));
     }
     case 'hideKeyboard': {
-      return runNative(['keyboard', 'dismiss'], stepSettleOpts(step));
+      return dismissKeyboardWithParity(getClient);
     }
     case 'snapshot': {
       return runNative(['snapshot', '-i']);
@@ -451,7 +514,9 @@ function extractData(result: ToolResult): unknown {
   }
 }
 
-export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolResult> {
+export function createDeviceBatchHandler(
+  getClient?: () => CDPClient,
+): (args: BatchArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
     const {
       steps,
@@ -483,7 +548,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
       let stepTimer: ReturnType<typeof setTimeout> | undefined;
       let stepTimedOut = false;
       const result = await Promise.race([
-        executeStep(step),
+        executeStep(step, getClient),
         new Promise<ToolResult>((resolve) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;

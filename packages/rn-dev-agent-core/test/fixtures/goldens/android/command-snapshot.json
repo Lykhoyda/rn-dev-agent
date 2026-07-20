@@ -1,16 +1,16 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T18:21:08.285Z",
+    "capturedAt": "2026-07-20T22:31:03.058Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=android node test/contract/capture-goldens.ts)",
     "platform": "android",
-    "device": "sdk_gphone16k_arm64",
-    "os": "Android 17",
+    "device": "sdk_gphone64_arm64",
+    "os": "Android 16",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.1",
-    "protocolVersion": 1,
-    "runnerPort": 56849
+    "runnerVersion": "0.70.8",
+    "protocolVersion": 2,
+    "runnerPort": 49629
   },
   "payload": {
     "ok": true,
@@ -18,6 +18,160 @@
       "nodes": [
         {
           "index": 0,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "",
+          "rect": {
+            "x": 0,
+            "y": 2712,
+            "width": 1280,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 1,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "taskbar_container",
+          "rect": {
+            "x": 0,
+            "y": 2712,
+            "width": 1280,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 2,
+          "type": "android.view.View",
+          "label": "",
+          "identifier": "taskbar_scrim",
+          "rect": {
+            "x": 0,
+            "y": 2712,
+            "width": 1280,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 3,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "navbuttons_view",
+          "rect": {
+            "x": 0,
+            "y": 2712,
+            "width": 1280,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 4,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "start_contextual_buttons",
+          "rect": {
+            "x": 24,
+            "y": 2712,
+            "width": 123,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 5,
+          "type": "android.widget.LinearLayout",
+          "label": "",
+          "identifier": "end_nav_buttons",
+          "rect": {
+            "x": 147,
+            "y": 2712,
+            "width": 985,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 6,
+          "type": "android.widget.ImageView",
+          "label": "Back",
+          "identifier": "back",
+          "rect": {
+            "x": 147,
+            "y": 2718,
+            "width": 246,
+            "height": 132
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 7,
+          "type": "android.widget.ImageView",
+          "label": "Home",
+          "identifier": "home",
+          "rect": {
+            "x": 519,
+            "y": 2718,
+            "width": 240,
+            "height": 132
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 8,
+          "type": "android.widget.ImageView",
+          "label": "Recents",
+          "identifier": "recent_apps",
+          "rect": {
+            "x": 885,
+            "y": 2718,
+            "width": 246,
+            "height": 132
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 9,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "end_contextual_buttons",
+          "rect": {
+            "x": 1133,
+            "y": 2712,
+            "width": 123,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 10,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "taskbar_bubbles_container",
+          "rect": {
+            "x": 0,
+            "y": 2712,
+            "width": 1280,
+            "height": 144
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 11,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "",
@@ -31,7 +185,7 @@
           "enabled": true
         },
         {
-          "index": 1,
+          "index": 12,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "status_bar_launch_animation_container",
@@ -45,7 +199,21 @@
           "enabled": true
         },
         {
-          "index": 2,
+          "index": 13,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "container",
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 156
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 14,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "status_bar_container",
@@ -59,49 +227,7 @@
           "enabled": true
         },
         {
-          "index": 3,
-          "type": "androidx.compose.ui.platform.ComposeView",
-          "label": "",
-          "identifier": "",
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 1280,
-            "height": 156
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 4,
-          "type": "android.view.View",
-          "label": "",
-          "identifier": "",
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 1280,
-            "height": 156
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 5,
-          "type": "androidx.compose.ui.viewinterop.ViewFactoryHolder",
-          "label": "",
-          "identifier": "",
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 1280,
-            "height": 156
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 6,
+          "index": 15,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "status_bar",
@@ -115,7 +241,7 @@
           "enabled": true
         },
         {
-          "index": 7,
+          "index": 16,
           "type": "android.widget.LinearLayout",
           "label": "",
           "identifier": "status_bar_contents",
@@ -129,7 +255,7 @@
           "enabled": true
         },
         {
-          "index": 8,
+          "index": 17,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "status_bar_start_side_container",
@@ -143,68 +269,54 @@
           "enabled": true
         },
         {
-          "index": 9,
+          "index": 18,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "status_bar_start_side_content",
           "rect": {
             "x": 48,
             "y": 0,
-            "width": 196,
+            "width": 208,
             "height": 156
           },
           "hittable": true,
           "enabled": true
         },
         {
-          "index": 10,
+          "index": 19,
           "type": "android.widget.LinearLayout",
           "label": "",
           "identifier": "status_bar_start_side_except_heads_up",
           "rect": {
             "x": 48,
             "y": 0,
-            "width": 196,
+            "width": 208,
             "height": 156
           },
           "hittable": true,
           "enabled": true
         },
         {
-          "index": 11,
+          "index": 20,
           "type": "android.widget.TextView",
-          "label": "8:21",
+          "label": "12:31",
           "identifier": "clock",
           "rect": {
             "x": 48,
-            "y": 45,
-            "width": 130,
-            "height": 66
+            "y": 53,
+            "width": 142,
+            "height": 49
           },
           "hittable": true,
           "enabled": true
         },
         {
-          "index": 12,
-          "type": "android.widget.FrameLayout",
-          "label": "",
-          "identifier": "start_side_notif_and_chip_container",
-          "rect": {
-            "x": 178,
-            "y": 0,
-            "width": 66,
-            "height": 156
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 13,
+          "index": 21,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "notification_icon_area",
           "rect": {
-            "x": 178,
+            "x": 190,
             "y": 0,
             "width": 66,
             "height": 156
@@ -213,12 +325,12 @@
           "enabled": true
         },
         {
-          "index": 14,
+          "index": 22,
           "type": "android.view.ViewGroup",
           "label": "",
           "identifier": "notificationIcons",
           "rect": {
-            "x": 178,
+            "x": 190,
             "y": 0,
             "width": 66,
             "height": 156
@@ -227,12 +339,12 @@
           "enabled": true
         },
         {
-          "index": 15,
+          "index": 23,
           "type": "android.widget.ImageView",
           "label": "Security & privacy notification: ",
           "identifier": "Security & privacy notification: ",
           "rect": {
-            "x": 178,
+            "x": 190,
             "y": 0,
             "width": 66,
             "height": 156
@@ -241,7 +353,7 @@
           "enabled": true
         },
         {
-          "index": 16,
+          "index": 24,
           "type": "android.view.View",
           "label": "",
           "identifier": "cutout_space_view",
@@ -255,7 +367,7 @@
           "enabled": true
         },
         {
-          "index": 17,
+          "index": 25,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "status_bar_end_side_container",
@@ -269,217 +381,189 @@
           "enabled": true
         },
         {
-          "index": 18,
+          "index": 26,
           "type": "android.widget.LinearLayout",
           "label": "",
           "identifier": "status_bar_end_side_content",
           "rect": {
-            "x": 952,
+            "x": 1048,
             "y": 0,
-            "width": 256,
+            "width": 160,
             "height": 156
           },
           "hittable": true,
           "enabled": true
         },
         {
-          "index": 19,
+          "index": 27,
           "type": "android.widget.LinearLayout",
           "label": "",
           "identifier": "system_icons",
           "rect": {
-            "x": 952,
+            "x": 1048,
             "y": 45,
-            "width": 256,
+            "width": 160,
             "height": 66
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 20,
-          "type": "android.widget.LinearLayout",
-          "label": "",
-          "identifier": "statusIcons",
-          "rect": {
-            "x": 961,
-            "y": 45,
-            "width": 144,
-            "height": 66
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 21,
-          "type": "android.widget.FrameLayout",
-          "label": "T-Mobile, one bar.",
-          "identifier": "mobile_combo",
-          "rect": {
-            "x": 961,
-            "y": 45,
-            "width": 69,
-            "height": 66
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 22,
-          "type": "android.widget.LinearLayout",
-          "label": "",
-          "identifier": "mobile_group",
-          "rect": {
-            "x": 970,
-            "y": 45,
-            "width": 51,
-            "height": 66
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 23,
-          "type": "android.widget.FrameLayout",
-          "label": "",
-          "identifier": "",
-          "rect": {
-            "x": 970,
-            "y": 60,
-            "width": 51,
-            "height": 36
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 24,
-          "type": "android.widget.ImageView",
-          "label": "",
-          "identifier": "mobile_signal",
-          "rect": {
-            "x": 970,
-            "y": 60,
-            "width": 51,
-            "height": 36
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 25,
-          "type": "android.widget.FrameLayout",
-          "label": "",
-          "identifier": "wifi_combo",
-          "rect": {
-            "x": 1030,
-            "y": 45,
-            "width": 66,
-            "height": 66
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 26,
-          "type": "android.widget.LinearLayout",
-          "label": "",
-          "identifier": "wifi_group",
-          "rect": {
-            "x": 1039,
-            "y": 45,
-            "width": 48,
-            "height": 66
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 27,
-          "type": "android.widget.FrameLayout",
-          "label": "",
-          "identifier": "wifi_combo",
-          "rect": {
-            "x": 1039,
-            "y": 60,
-            "width": 48,
-            "height": 36
           },
           "hittable": true,
           "enabled": true
         },
         {
           "index": 28,
-          "type": "android.widget.ImageView",
-          "label": "Wifi signal full.",
-          "identifier": "wifi_signal",
+          "type": "android.widget.LinearLayout",
+          "label": "",
+          "identifier": "statusIcons",
           "rect": {
-            "x": 1039,
-            "y": 60,
-            "width": 48,
-            "height": 36
+            "x": 1057,
+            "y": 45,
+            "width": 116,
+            "height": 66
           },
           "hittable": true,
           "enabled": true
         },
         {
           "index": 29,
-          "type": "androidx.compose.ui.platform.ComposeView",
+          "type": "android.widget.FrameLayout",
           "label": "",
-          "identifier": "",
+          "identifier": "wifi_combo",
           "rect": {
-            "x": 1105,
-            "y": 58,
-            "width": 91,
-            "height": 39
+            "x": 1057,
+            "y": 45,
+            "width": 53,
+            "height": 66
           },
           "hittable": true,
           "enabled": true
         },
         {
           "index": 30,
-          "type": "android.view.View",
+          "type": "android.widget.LinearLayout",
           "label": "",
-          "identifier": "",
+          "identifier": "wifi_group",
           "rect": {
-            "x": 1105,
-            "y": 58,
-            "width": 91,
-            "height": 39
+            "x": 1065,
+            "y": 45,
+            "width": 45,
+            "height": 66
           },
           "hittable": true,
           "enabled": true
         },
         {
           "index": 31,
-          "type": "android.view.View",
+          "type": "android.widget.FrameLayout",
           "label": "",
-          "identifier": "battery",
+          "identifier": "wifi_combo",
           "rect": {
-            "x": 1105,
-            "y": 58,
-            "width": 91,
-            "height": 39
+            "x": 1065,
+            "y": 55,
+            "width": 45,
+            "height": 45
           },
           "hittable": true,
           "enabled": true
         },
         {
           "index": 32,
-          "type": "android.view.View",
-          "label": "Battery charging, 100 percent.",
-          "identifier": "Battery charging, 100 percent.",
+          "type": "android.widget.ImageView",
+          "label": "Wifi signal full.",
+          "identifier": "wifi_signal",
           "rect": {
-            "x": 1105,
-            "y": 58,
-            "width": 72,
-            "height": 39
+            "x": 1065,
+            "y": 55,
+            "width": 45,
+            "height": 45
           },
           "hittable": true,
           "enabled": true
         },
         {
           "index": 33,
+          "type": "android.widget.FrameLayout",
+          "label": "T-Mobile, signal full.",
+          "identifier": "mobile_combo",
+          "rect": {
+            "x": 1110,
+            "y": 45,
+            "width": 45,
+            "height": 66
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 34,
+          "type": "android.widget.LinearLayout",
+          "label": "",
+          "identifier": "mobile_group",
+          "rect": {
+            "x": 1110,
+            "y": 45,
+            "width": 45,
+            "height": 66
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 35,
+          "type": "android.widget.FrameLayout",
+          "label": "",
+          "identifier": "",
+          "rect": {
+            "x": 1110,
+            "y": 55,
+            "width": 45,
+            "height": 45
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 36,
+          "type": "android.widget.ImageView",
+          "label": "",
+          "identifier": "mobile_signal",
+          "rect": {
+            "x": 1110,
+            "y": 55,
+            "width": 45,
+            "height": 45
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 37,
+          "type": "android.widget.LinearLayout",
+          "label": "Battery charging, 100 percent.",
+          "identifier": "battery",
+          "rect": {
+            "x": 1173,
+            "y": 58,
+            "width": 23,
+            "height": 39
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 38,
+          "type": "android.widget.ImageView",
+          "label": "",
+          "identifier": "",
+          "rect": {
+            "x": 1173,
+            "y": 58,
+            "width": 23,
+            "height": 39
+          },
+          "hittable": true,
+          "enabled": true
+        },
+        {
+          "index": 39,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "",
@@ -493,7 +577,7 @@
           "enabled": true
         },
         {
-          "index": 34,
+          "index": 40,
           "type": "android.view.ViewGroup",
           "label": "",
           "identifier": "decor_content_parent",
@@ -507,7 +591,7 @@
           "enabled": true
         },
         {
-          "index": 35,
+          "index": 41,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "content",
@@ -521,7 +605,7 @@
           "enabled": true
         },
         {
-          "index": 36,
+          "index": 42,
           "type": "android.widget.LinearLayout",
           "label": "",
           "identifier": "",
@@ -535,7 +619,7 @@
           "enabled": true
         },
         {
-          "index": 37,
+          "index": 43,
           "type": "android.widget.Button",
           "label": "Increment",
           "identifier": "fixture_button",
@@ -549,7 +633,7 @@
           "enabled": true
         },
         {
-          "index": 38,
+          "index": 44,
           "type": "android.widget.TextView",
           "label": "count: 0",
           "identifier": "fixture_count",
@@ -563,7 +647,7 @@
           "enabled": true
         },
         {
-          "index": 39,
+          "index": 45,
           "type": "android.widget.Button",
           "label": "Disabled",
           "identifier": "fixture_disabled_button",
@@ -577,7 +661,7 @@
           "enabled": false
         },
         {
-          "index": 40,
+          "index": 46,
           "type": "android.widget.EditText",
           "label": "type here",
           "identifier": "fixture_input",
@@ -591,7 +675,7 @@
           "enabled": true
         },
         {
-          "index": 41,
+          "index": 47,
           "type": "android.widget.ListView",
           "label": "",
           "identifier": "fixture_list",
@@ -599,13 +683,13 @@
             "x": 0,
             "y": 805,
             "width": 1280,
-            "height": 1778
+            "height": 1706
           },
           "hittable": true,
           "enabled": true
         },
         {
-          "index": 42,
+          "index": 48,
           "type": "android.widget.TextView",
           "label": "row 1",
           "identifier": "text1",
@@ -619,7 +703,7 @@
           "enabled": true
         },
         {
-          "index": 43,
+          "index": 49,
           "type": "android.widget.TextView",
           "label": "row 2",
           "identifier": "text1",
@@ -633,7 +717,7 @@
           "enabled": true
         },
         {
-          "index": 44,
+          "index": 50,
           "type": "android.widget.TextView",
           "label": "row 3",
           "identifier": "text1",
@@ -647,7 +731,7 @@
           "enabled": true
         },
         {
-          "index": 45,
+          "index": 51,
           "type": "android.widget.TextView",
           "label": "row 4",
           "identifier": "text1",
@@ -661,7 +745,7 @@
           "enabled": true
         },
         {
-          "index": 46,
+          "index": 52,
           "type": "android.widget.TextView",
           "label": "row 5",
           "identifier": "text1",
@@ -675,7 +759,7 @@
           "enabled": true
         },
         {
-          "index": 47,
+          "index": 53,
           "type": "android.widget.TextView",
           "label": "row 6",
           "identifier": "text1",
@@ -689,7 +773,7 @@
           "enabled": true
         },
         {
-          "index": 48,
+          "index": 54,
           "type": "android.widget.TextView",
           "label": "row 7",
           "identifier": "text1",
@@ -703,7 +787,7 @@
           "enabled": true
         },
         {
-          "index": 49,
+          "index": 55,
           "type": "android.widget.TextView",
           "label": "row 8",
           "identifier": "text1",
@@ -717,7 +801,7 @@
           "enabled": true
         },
         {
-          "index": 50,
+          "index": 56,
           "type": "android.widget.TextView",
           "label": "row 9",
           "identifier": "text1",
@@ -731,7 +815,7 @@
           "enabled": true
         },
         {
-          "index": 51,
+          "index": 57,
           "type": "android.widget.TextView",
           "label": "row 10",
           "identifier": "text1",
@@ -745,7 +829,7 @@
           "enabled": true
         },
         {
-          "index": 52,
+          "index": 58,
           "type": "android.widget.TextView",
           "label": "row 11",
           "identifier": "text1",
@@ -759,7 +843,7 @@
           "enabled": true
         },
         {
-          "index": 53,
+          "index": 59,
           "type": "android.widget.TextView",
           "label": "row 12",
           "identifier": "text1",
@@ -767,33 +851,19 @@
             "x": 0,
             "y": 2422,
             "width": 1280,
-            "height": 144
+            "height": 89
           },
           "hittable": true,
           "enabled": true
         },
         {
-          "index": 54,
-          "type": "android.widget.TextView",
-          "label": "row 13",
-          "identifier": "text1",
-          "rect": {
-            "x": 0,
-            "y": 2569,
-            "width": 1280,
-            "height": 14
-          },
-          "hittable": true,
-          "enabled": true
-        },
-        {
-          "index": 55,
+          "index": 60,
           "type": "android.widget.LinearLayout",
           "label": "",
           "identifier": "",
           "rect": {
             "x": 0,
-            "y": 2583,
+            "y": 2511,
             "width": 1280,
             "height": 144
           },
@@ -801,13 +871,13 @@
           "enabled": true
         },
         {
-          "index": 56,
+          "index": 61,
           "type": "android.widget.EditText",
           "label": "bottom",
           "identifier": "fixture_bottom_input",
           "rect": {
             "x": 0,
-            "y": 2583,
+            "y": 2511,
             "width": 1016,
             "height": 136
           },
@@ -815,13 +885,13 @@
           "enabled": true
         },
         {
-          "index": 57,
+          "index": 62,
           "type": "android.widget.Button",
           "label": "Tap",
           "identifier": "fixture_bottom_button",
           "rect": {
             "x": 1016,
-            "y": 2583,
+            "y": 2511,
             "width": 264,
             "height": 144
           },
@@ -829,13 +899,13 @@
           "enabled": true
         },
         {
-          "index": 58,
+          "index": 63,
           "type": "android.widget.TextView",
           "label": "bottom taps: 0",
           "identifier": "fixture_bottom_count",
           "rect": {
             "x": 0,
-            "y": 2727,
+            "y": 2655,
             "width": 274,
             "height": 57
           },
@@ -843,7 +913,7 @@
           "enabled": true
         },
         {
-          "index": 59,
+          "index": 64,
           "type": "android.widget.FrameLayout",
           "label": "",
           "identifier": "action_bar_container",
@@ -857,7 +927,7 @@
           "enabled": true
         },
         {
-          "index": 60,
+          "index": 65,
           "type": "android.view.ViewGroup",
           "label": "",
           "identifier": "action_bar",
@@ -871,7 +941,7 @@
           "enabled": true
         },
         {
-          "index": 61,
+          "index": 66,
           "type": "android.widget.TextView",
           "label": "Fixture",
           "identifier": "",
@@ -886,6 +956,6 @@
         }
       ]
     },
-    "v": 1
+    "v": 2
   }
 }

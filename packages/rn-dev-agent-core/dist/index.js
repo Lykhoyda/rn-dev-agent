@@ -1423,7 +1423,7 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
         .enum(['salient', 'full', 'none'])
         .default('salient')
         .describe('Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.'),
-}, createDeviceBatchHandler());
+}, createDeviceBatchHandler(getClient));
 trackedTool('cdp_auto_login', 'Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns { loggedIn: true/false, reason, flow }. Call before proof capture or feature testing when app may be logged out.', {
     appId: z
         .string()

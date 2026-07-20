@@ -238,6 +238,7 @@ export function inferPlatforms(
     const fromDeviceName = inferPlatformFromDeviceName(t.deviceName);
     if (fromDeviceName) {
       t.platform = fromDeviceName;
+      t.platformInference = 'probed';
       continue;
     }
 
@@ -247,17 +248,21 @@ export function inferPlatforms(
 
     if (inAndroid && !inIOS) {
       t.platform = 'android';
+      t.platformInference = 'probed';
     } else if (inIOS && !inAndroid) {
       t.platform = 'ios';
+      t.platformInference = 'probed';
     } else if (inAndroid && inIOS) {
       // Ambiguous — same bundleId installed on both. Default to iOS but mark
       // for downstream so callers can notice and pass targetId/bundleId filter.
       t.platform = 'ios';
       t.ambiguousPlatform = true;
+      t.platformInference = 'ambiguous';
     } else {
       // No information (adb/simctl both failed, or target bundle unknown) —
       // default to iOS to preserve prior behavior for iOS-only setups.
       t.platform = 'ios';
+      t.platformInference = 'defaulted';
     }
   }
 }
@@ -265,6 +270,23 @@ export function inferPlatforms(
 export interface SelectTargetResult {
   targets: HermesTarget[];
   warning?: string;
+  errorCode?: 'PLATFORM_TARGET_NOT_FOUND' | 'TARGET_PLATFORM_CONFLICT';
+}
+
+function describeTarget(target: HermesTarget): string {
+  const confidence = target.platformInference ?? 'probed';
+  return `${target.id} title="${target.title || '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
+}
+
+export class TargetSelectionError extends Error {
+  constructor(
+    readonly code: 'PLATFORM_TARGET_NOT_FOUND' | 'TARGET_PLATFORM_CONFLICT',
+    message: string,
+    readonly candidates: readonly HermesTarget[],
+  ) {
+    super(message);
+    this.name = 'TargetSelectionError';
+  }
 }
 
 export type AndroidDeviceKind = 'emulator' | 'physical';
@@ -313,6 +335,50 @@ export function selectTarget(
   let filteredTargets = validTargets;
   const warnings: string[] = [];
 
+  // Selection precedence starts with an exact target id. It is exact identity,
+  // but it never overrides an explicit/session platform constraint.
+  if (filters.targetId) {
+    const idMatched = validTargets.filter((t) => t.id === filters.targetId);
+    if (idMatched.length === 0) {
+      return {
+        targets: [],
+        warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
+      };
+    }
+    filteredTargets = idMatched;
+  }
+
+  if (filters.platform) {
+    const platform = filters.platform.toLowerCase();
+    const platformMatched = filteredTargets.filter(
+      (target) =>
+        target.platform === platform &&
+        (target.platformInference === undefined || target.platformInference === 'probed'),
+    );
+    if (platformMatched.length === 0) {
+      const code = filters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND';
+      return {
+        targets: [],
+        errorCode: code,
+        warning:
+          `${code}: requested platform "${filters.platform}" cannot be proven for the live target set. ` +
+          `Candidates: ${validTargets.map(describeTarget).join('; ')}. ` +
+          `Run cdp_targets, relaunch the requested app, or pass a targetId from a proven target.`,
+      };
+    }
+    filteredTargets = platformMatched;
+  } else if (
+    validTargets.length > 0 &&
+    !filters.targetId &&
+    !filters.bundleId &&
+    !filters.deviceKind &&
+    !filters.preferredBundleId
+  ) {
+    warnings.push(
+      `No platform filter was supplied; connecting to the best available target without cross-platform affinity (${describeTarget(validTargets[0])}). Pass platform to fail closed.`,
+    );
+  }
+
   if (filters.deviceKind) {
     const kind = filters.deviceKind;
     const deviceMatched = filteredTargets.filter((target) =>
@@ -337,21 +403,7 @@ export function selectTarget(
     }
   }
 
-  // B111 (D643): explicit targetId hard-fails on no match — silent fallthrough
-  // would silently connect the caller to a different target than requested.
-  if (filters.targetId) {
-    const idMatched = validTargets.filter((t) => t.id === filters.targetId);
-    if (idMatched.length === 0) {
-      return {
-        targets: [],
-        warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
-      };
-    }
-    filteredTargets = idMatched;
-  }
-
-  // B111 (D643): explicit bundleId hard-fails on no match (case-insensitive).
-  // Runs even with 1 target — single non-matching target is still wrong.
+  // bundleId is hard and platform-scoped whenever a platform authority exists.
   if (filters.bundleId) {
     const bundleLower = filters.bundleId.toLowerCase();
     const bundleMatched = filteredTargets.filter(
@@ -364,24 +416,6 @@ export function selectTarget(
       };
     }
     filteredTargets = bundleMatched;
-  }
-
-  if (filters.platform && filteredTargets.length > 1) {
-    const pf = filters.platform.toLowerCase();
-    let platformMatched = filteredTargets.filter((t) => t.platform === pf);
-    if (platformMatched.length === 0) {
-      platformMatched = filteredTargets.filter((t) => {
-        const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
-        return haystack.includes(pf);
-      });
-    }
-    if (platformMatched.length > 0) {
-      filteredTargets = platformMatched;
-    } else {
-      warnings.push(
-        `Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map((t) => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`,
-      );
-    }
   }
 
   // B111 (D643): preferredBundleId is a SOFT filter — auto-selection hint
@@ -490,6 +524,8 @@ export interface DiscoveryResult {
   port: number;
   targets: HermesTarget[];
   warning?: string;
+  errorCode?: 'PLATFORM_TARGET_NOT_FOUND' | 'TARGET_PLATFORM_CONFLICT';
+  candidates?: HermesTarget[];
 }
 
 export async function discover(
@@ -557,7 +593,11 @@ export async function discover(
 
   inferPlatforms(validTargets);
 
-  const { targets: sorted, warning: selectWarning } = selectTarget(validTargets, filters);
+  const {
+    targets: sorted,
+    warning: selectWarning,
+    errorCode,
+  } = selectTarget(validTargets, filters);
   const warning = [portWarning, selectWarning].filter(Boolean).join(' | ') || undefined;
 
   logger.debug(
@@ -565,7 +605,12 @@ export async function discover(
     `Found ${sorted.length} valid target(s): ${sorted.map((t) => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`,
   );
 
-  return { port: metroPort, targets: sorted, warning };
+  return {
+    port: metroPort,
+    targets: sorted,
+    warning,
+    ...(errorCode ? { errorCode, candidates: validTargets } : {}),
+  };
 }
 
 export async function discoverForList(
