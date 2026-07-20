@@ -42,6 +42,8 @@ Package-owned artifacts:
 - `agents/`
 - `scripts/rn-fast-runner/`
 - `scripts/rn-android-runner/`
+- `scripts/collect-feedback.sh`
+- `skills/sending-feedback/`
 
 Codex consumes the same `rn-dev-agent-core` MCP server as Claude Code, but the
 Codex artifact carries a bundled runtime and native runner sources so installed

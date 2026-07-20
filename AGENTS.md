@@ -61,8 +61,9 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
 
 `scripts/build-host-runtimes.ts` is the single writer for host package runtime
 artifacts: bundled core runtime entries, observe web assets, runner manifests,
-`CLAUDE-MD-TEMPLATE.md`, native runner copies, `record_proof.sh`, and Claude
-helper scripts. If those outputs drift, edit the source and rerun:
+`CLAUDE-MD-TEMPLATE.md`, native runner copies, `record_proof.sh`, shared host
+helper scripts (`collect-feedback.sh`, copied into both host packages), and
+Claude helper scripts. If those outputs drift, edit the source and rerun:
 
 ```bash
 corepack yarn build:host-runtimes

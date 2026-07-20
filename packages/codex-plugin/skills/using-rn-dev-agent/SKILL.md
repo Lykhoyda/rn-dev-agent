@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code and Codex. **79 MCP tools**, **5 agents**, **15 commands**, **9 skills**.
+The React Native development plugin for Claude Code and Codex. **79 MCP tools**, **5 agents**, **15 commands**, **10 skills**.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -116,7 +116,7 @@ What is the user asking for?
 │   └─► /rn-dev-agent:check-vercel-rules
 │
 ├── REPORT a plugin bug / send feedback
-│   └─► /rn-dev-agent:send-feedback
+│   └─► Load `sending-feedback` (or run /rn-dev-agent:send-feedback in Claude)
 │       (Sanitized environment context → GitHub issue, user-confirmed)
 │
 ├── Understand an existing feature (read, don't write)
@@ -184,6 +184,7 @@ These apply to every RN task:
 | `rn-debugging` | Reference + process | Diagnosing crashes, errors, blank screens |
 | `rn-device-control` | Reference | Simulator / emulator commands, screenshots |
 | `capturing-proof` | Process | Recording proof artifacts (video + screenshots + PR body) for a verified feature |
+| `sending-feedback` | Process | Reporting plugin bugs or requests with reviewed, sanitized diagnostics |
 | `rn-best-practices` | Reference | 118 review rules (48 RN-applicable) for architecture + review |
 
 ---

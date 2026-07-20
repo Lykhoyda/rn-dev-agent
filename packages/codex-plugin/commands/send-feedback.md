@@ -38,8 +38,33 @@ Then collect the following (skip what was already provided via $ARGUMENTS):
 Run the collection script to gather sanitized environment data:
 
 ```bash
-rn-collect-feedback
+PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
+if [ -z "$PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
+  PLUGIN_ROOT="packages/codex-plugin"
+fi
+if [ -z "$PLUGIN_ROOT" ]; then
+  PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" 2>/dev/null | sort -V | tail -n 1)"
+  [ -n "$PLUGIN_MANIFEST" ] && PLUGIN_ROOT="$(dirname "$(dirname "$PLUGIN_MANIFEST")")"
+fi
+if [ -n "$PLUGIN_ROOT" ] && [ -x "$PLUGIN_ROOT/scripts/collect-feedback.sh" ]; then
+  "$PLUGIN_ROOT/scripts/collect-feedback.sh"
+elif command -v rn-collect-feedback >/dev/null 2>&1; then
+  rn-collect-feedback
+else
+  echo "rn-dev-agent feedback collector is missing; reinstall or update the plugin" >&2
+  exit 1
+fi
 ```
+
+Codex marketplace installs do not add global executables to `PATH`; use the
+package-local script. Claude sessions provide `CLAUDE_PLUGIN_ROOT`; installed
+Codex plugins resolve via the plugin-cache scan, which version-sorts the
+cached manifests (Codex stores each version under
+`plugins/cache/<marketplace>/rn-dev-agent/<version>/`) and picks the newest.
+`RN_DEV_AGENT_CODEX_PLUGIN_ROOT` and `CODEX_PLUGIN_ROOT` are explicit
+overrides only — the Codex launcher exports the former to the MCP supervisor
+process, not to this shell. The repo-checkout probe covers development
+checkouts. The command fallback exists for older Claude installations only.
 
 This collects (all redacted):
 - Plugin version, cdp-bridge version, tool count

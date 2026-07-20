@@ -37,6 +37,8 @@ const RUNTIME_ENTRIES = ['supervisor.js', 'index.js', 'learned-actions.js'];
 // Helper scripts the Claude package's hooks and skills invoke at runtime.
 // The SessionStart hook (hooks/detect-rn-project.sh) resolves them from
 // ${CLAUDE_PLUGIN_ROOT}/scripts; a marketplace install has no repo scripts/.
+const SHARED_HOST_HELPER_SCRIPTS = ['collect-feedback.sh'];
+
 const CLAUDE_HELPER_SCRIPTS = [
   'mcp-bridge-probe.mjs',
   'ensure-cdp-deps.sh',
@@ -164,6 +166,12 @@ for (const hostRoot of [codexPluginRoot, claudePluginRoot]) {
   for (const runnerName of ['rn-fast-runner', 'rn-android-runner']) {
     const target = join(hostRoot, 'scripts', runnerName);
     copyCleanDir(join(repoRoot, 'packages', runnerName), target, RUNNER_BUILD_OUTPUT[runnerName]);
+  }
+}
+
+for (const hostRoot of [codexPluginRoot, claudePluginRoot]) {
+  for (const script of SHARED_HOST_HELPER_SCRIPTS) {
+    copyFileSync(join(repoRoot, 'scripts', script), join(hostRoot, 'scripts', script));
   }
 }
 

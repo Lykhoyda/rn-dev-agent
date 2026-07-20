@@ -192,6 +192,7 @@ for path in \
   packages/claude-plugin/.claude-plugin/marketplace.json \
   packages/claude-plugin/hooks/hooks.json \
   packages/claude-plugin/scripts/record_proof.sh \
+  packages/claude-plugin/scripts/collect-feedback.sh \
   packages/claude-plugin/runner-manifest.json \
   packages/claude-plugin/rn-dev-agent-core/package.json \
   packages/claude-plugin/rn-dev-agent-core/dist/index.js \
@@ -211,6 +212,7 @@ for path in \
   packages/codex-plugin/bin/cdp-supervisor.js \
   packages/codex-plugin/runner-manifest.json \
   packages/codex-plugin/scripts/record_proof.sh \
+  packages/codex-plugin/scripts/collect-feedback.sh \
   packages/codex-plugin/rn-dev-agent-core/package.json \
   packages/codex-plugin/rn-dev-agent-core/dist/index.js \
   packages/codex-plugin/rn-dev-agent-core/dist/learned-actions.js \
@@ -314,6 +316,12 @@ if ! cmp -s "$ROOT/scripts/record_proof.sh" "$ROOT/packages/claude-plugin/script
 fi
 if ! cmp -s "$ROOT/scripts/record_proof.sh" "$ROOT/packages/codex-plugin/scripts/record_proof.sh"; then
   fail "Codex package record_proof.sh must match scripts/record_proof.sh"
+fi
+if ! cmp -s "$ROOT/scripts/collect-feedback.sh" "$ROOT/packages/claude-plugin/scripts/collect-feedback.sh"; then
+  fail "Claude package collect-feedback.sh must match scripts/collect-feedback.sh"
+fi
+if ! cmp -s "$ROOT/scripts/collect-feedback.sh" "$ROOT/packages/codex-plugin/scripts/collect-feedback.sh"; then
+  fail "Codex package collect-feedback.sh must match scripts/collect-feedback.sh"
 fi
 
 expect_eq "$(json '.packageManager // empty' "$ROOT/package.json")" "yarn@$EXPECTED_YARN_VERSION" "root packageManager"
