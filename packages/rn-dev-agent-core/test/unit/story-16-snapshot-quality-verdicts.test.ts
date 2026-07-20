@@ -110,7 +110,11 @@ test('getTree: renderer registered beyond the legacy early-exit window is scanne
   };
   const sandbox = createSandbox({ hook });
   const result = JSON.parse(sandbox.__RN_AGENT.getTree({ maxDepth: 4 }));
-  assert.equal(result.error, undefined, 'registered renderer 9 is discovered via the registry union');
+  assert.equal(
+    result.error,
+    undefined,
+    'registered renderer 9 is discovered via the registry union',
+  );
   assert.ok(result.tree, 'tree from the high-id renderer is returned');
   assert.equal(result.verdict.state, 'ok');
   assert.ok(!result.verdict.reasons.includes('renderers-unscanned'));
