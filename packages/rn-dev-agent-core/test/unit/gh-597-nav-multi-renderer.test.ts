@@ -77,6 +77,7 @@ function createSandbox(hook: RendererHook) {
       | {
           navigateTo: (screen: string) => string;
           getNavState: () => string;
+          getTree: (opts?: object) => string;
         }
       | undefined,
   };
@@ -181,6 +182,36 @@ test('GH #597: a renderers iterator that never reports done degrades to the nume
   } as unknown as RendererHook;
 
   assertNavigationDiscovered(hook, navigated);
+});
+
+test('GH #597: getTree readiness gate honors a high registered renderer after empty low IDs', () => {
+  const { fiber } = createNavigationFixture();
+  const hook: RendererHook = {
+    renderers: new Map([[21, {}]]),
+    getFiberRoots: (rendererId) => (rendererId === 21 ? new Set([{ current: fiber }]) : new Set()),
+  };
+
+  const agent = createSandbox(hook);
+  const treeResult = JSON.parse(agent.getTree());
+
+  assert.equal(treeResult.error, undefined);
+  assert.equal(treeResult.rootsSeeded, 1);
+  assert.equal(treeResult.tree?.component, 'NavigationContainer');
+});
+
+test('GH #597: getTree readiness gate keeps numeric-probe coverage for a partial registry', () => {
+  const { fiber } = createNavigationFixture();
+  const hook: RendererHook = {
+    renderers: new Map([[1, {}]]),
+    getFiberRoots: (rendererId) => (rendererId === 2 ? new Set([{ current: fiber }]) : new Set()),
+  };
+
+  const agent = createSandbox(hook);
+  const treeResult = JSON.parse(agent.getTree());
+
+  assert.equal(treeResult.error, undefined);
+  assert.equal(treeResult.rootsSeeded, 1);
+  assert.equal(treeResult.tree?.component, 'NavigationContainer');
 });
 
 test('GH #597: the proven single-renderer navigation path remains supported', () => {

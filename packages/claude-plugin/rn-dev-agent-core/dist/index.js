@@ -42338,7 +42338,7 @@ async function detectBridge(client2) {
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 37;
+var HELPERS_VERSION = 38;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -42396,18 +42396,26 @@ var INJECTED_HELPERS = `
     lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
+    var rendererIds = getRegisteredRendererIds(hook);
+    var usingRegisteredIds = rendererIds.length > 0;
+    for (var fallbackId = 1; fallbackId <= MAX_RENDERER_IDS; fallbackId++) {
+      if (rendererIds.indexOf(fallbackId) === -1) rendererIds.push(fallbackId);
+    }
     var emptyStreak = 0;
-    for (var i = 1; i <= MAX_RENDERER_IDS; i++) {
-      lastRootScan.probedUpTo = i;
+    for (var rii = 0; rii < rendererIds.length; rii++) {
+      var ri = rendererIds[rii];
+      if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
       try {
-        var roots = hook.getFiberRoots(i);
+        var roots = hook.getFiberRoots(ri);
         if (roots && roots.size > 0) {
-          return { rendererId: i, roots: roots };
+          return { rendererId: ri, roots: roots };
         }
-        emptyStreak++;
-        if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && i >= 5) return null;
+        if (!usingRegisteredIds) {
+          emptyStreak++;
+          if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
+        }
       } catch (_) {
-        emptyStreak++;
+        if (!usingRegisteredIds) emptyStreak++;
         lastRootScan.rendererErrors++;
       }
     }

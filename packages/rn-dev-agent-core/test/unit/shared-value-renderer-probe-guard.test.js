@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url';
 // B133 / M8 regression guard. M8 (D663) replaced renderers.keys() in the
 // single-active-renderer readiness path with a numeric getFiberRoots probe;
 // B133 (D664) ported that fix into index.ts::cdp_set_shared_value. GH #597
-// intentionally uses renderers.keys() in the all-roots iterator, with the M8
-// numeric probe retained as fallback when the registry is empty or malformed.
+// routes all registry enumeration through getRegisteredRendererIds (which
+// isolates malformed/overflowing iterators), with the M8 numeric probe
+// retained as fallback when the registry is empty or malformed. Direct
+// renderers.keys() access stays confined to that single helper.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(__dirname, '../../src');
@@ -46,6 +48,16 @@ test('B133 + GH #597: renderers.keys is limited to the all-roots iterator', () =
   assert.doesNotMatch(
     findActive,
     /renderers\.keys\s*\(/,
+    'findActiveRenderer must not touch renderers.keys() directly — registry access goes through getRegisteredRendererIds',
+  );
+  assert.match(
+    findActive,
+    /getRegisteredRendererIds\(hook\)/,
+    'findActiveRenderer must union registered renderer IDs with the numeric probe (GH #597)',
+  );
+  assert.match(
+    findActive,
+    /fallbackId <= MAX_RENDERER_IDS/,
     'findActiveRenderer must retain the numeric probe for empty renderer registries',
   );
   assert.match(
