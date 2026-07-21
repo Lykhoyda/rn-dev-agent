@@ -24,6 +24,12 @@ import {
   shouldRejectMaestroDeviceAuthority,
   verifyMaestroDeviceAuthority,
 } from '../domain/maestro-device-authority.js';
+import {
+  createRunnerReportDir,
+  disposeRunnerReportDir,
+  runnerReportArgs,
+  withDirectRunnerEvidence,
+} from '../domain/maestro-runner-report.js';
 
 const execFile = promisify(execFileCb);
 
@@ -186,20 +192,15 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         }
       }
 
-      const runnerReportDir =
-        flowDispatch.runner === 'maestro-runner'
-          ? join(
-              tmpdir(),
-              `rn-maestro-suite-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            )
-          : null;
+      const runnerReportDir = createRunnerReportDir(
+        flowDispatch.runner,
+        'rn-maestro-suite-report',
+      );
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
       const finalArgs = runnerReportDir
         ? [
             ...baseArgs.slice(0, -1),
-            '--output',
-            runnerReportDir,
-            '--flatten',
+            ...runnerReportArgs(runnerReportDir),
             baseArgs[baseArgs.length - 1],
           ]
         : baseArgs;
@@ -220,17 +221,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         // status LINES (GH#249: a bare `FAILED` substring false-flagged passing
         // runs whose app logs contained the token; mirrors the maestro_run fix).
         const outputPassed = !outputIndicatesFlowFailure(output);
-        let authorityOutput = output;
-        if (runnerReportDir) {
-          const logPath = join(runnerReportDir, 'maestro-runner.log');
-          if (existsSync(logPath)) {
-            try {
-              authorityOutput += `\n${readFileSync(logPath, 'utf8')}`;
-            } catch {
-              // Direct evidence stays unavailable and verification fails closed.
-            }
-          }
-        }
+        const authorityOutput = withDirectRunnerEvidence(runnerReportDir, output);
         const deviceAuthority = verifyMaestroDeviceAuthority({
           runner: flowDispatch.runner,
           platform,
@@ -259,19 +250,12 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const errWithOutput = err as { stdout?: unknown; stderr?: unknown };
-        let authorityOutput = [errWithOutput.stdout, errWithOutput.stderr]
-          .filter((value): value is string => typeof value === 'string')
-          .join('\n');
-        if (runnerReportDir) {
-          const logPath = join(runnerReportDir, 'maestro-runner.log');
-          if (existsSync(logPath)) {
-            try {
-              authorityOutput += `\n${readFileSync(logPath, 'utf8')}`;
-            } catch {
-              // Preserve the original process error when the report is unreadable.
-            }
-          }
-        }
+        const authorityOutput = withDirectRunnerEvidence(
+          runnerReportDir,
+          [errWithOutput.stdout, errWithOutput.stderr]
+            .filter((value): value is string => typeof value === 'string')
+            .join('\n'),
+        );
         const deviceAuthority = verifyMaestroDeviceAuthority({
           runner: flowDispatch.runner,
           platform,
@@ -289,6 +273,8 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         });
         failed++;
         if (args.stopOnFailure) break;
+      } finally {
+        disposeRunnerReportDir(runnerReportDir);
       }
     }
 

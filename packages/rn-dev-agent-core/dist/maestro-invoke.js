@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
@@ -10,6 +10,7 @@ import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { getActiveSession } from './agent-device-wrapper.js';
 import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from './domain/maestro-device-authority.js';
+import { createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, withDirectRunnerEvidence, } from './domain/maestro-runner-report.js';
 const execFile = promisify(execFileCb);
 // Escape a user-supplied string for safe embedding inside a double-quoted YAML scalar.
 // Handles backslash, double quote, and control characters that would break the scalar.
@@ -118,32 +119,16 @@ export async function runMaestroInline(yaml, opts) {
     if (!appFileResolution.ok) {
         return { passed: false, output: '', flowFile, error: appFileResolution.error };
     }
-    const runnerReportDir = dispatch.runner === 'maestro-runner'
-        ? join(tmpdir(), `rn-maestro-inline-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-        : null;
+    const runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-inline-report');
     const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
     const finalArgs = runnerReportDir
         ? [
             ...baseArgs.slice(0, -1),
-            '--output',
-            runnerReportDir,
-            '--flatten',
+            ...runnerReportArgs(runnerReportDir),
             baseArgs[baseArgs.length - 1],
         ]
         : baseArgs;
-    const directRunnerOutput = (output) => {
-        if (!runnerReportDir)
-            return output;
-        const logPath = join(runnerReportDir, 'maestro-runner.log');
-        if (!existsSync(logPath))
-            return output;
-        try {
-            return `${output}\n${readFileSync(logPath, 'utf8')}`;
-        }
-        catch {
-            return output;
-        }
-    };
+    const directRunnerOutput = (output) => withDirectRunnerEvidence(runnerReportDir, output);
     try {
         const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, {
             timeout,
@@ -212,5 +197,8 @@ export async function runMaestroInline(yaml, opts) {
         }
         const msg = errObj.message ?? String(err);
         return { passed: false, output: '', flowFile, error: msg.slice(0, 500) };
+    }
+    finally {
+        disposeRunnerReportDir(runnerReportDir);
     }
 }

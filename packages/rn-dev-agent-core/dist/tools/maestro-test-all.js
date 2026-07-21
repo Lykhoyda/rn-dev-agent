@@ -12,6 +12,7 @@ import { runFlowParked } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
+import { createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, withDirectRunnerEvidence, } from '../domain/maestro-runner-report.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
     if (!existsSync(dir))
@@ -135,16 +136,12 @@ export function createMaestroTestAllHandler() {
                         keyboardCaveat ??= rerouted.degradedReason;
                 }
             }
-            const runnerReportDir = flowDispatch.runner === 'maestro-runner'
-                ? join(tmpdir(), `rn-maestro-suite-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-                : null;
+            const runnerReportDir = createRunnerReportDir(flowDispatch.runner, 'rn-maestro-suite-report');
             const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
             const finalArgs = runnerReportDir
                 ? [
                     ...baseArgs.slice(0, -1),
-                    '--output',
-                    runnerReportDir,
-                    '--flatten',
+                    ...runnerReportArgs(runnerReportDir),
                     baseArgs[baseArgs.length - 1],
                 ]
                 : baseArgs;
@@ -160,18 +157,7 @@ export function createMaestroTestAllHandler() {
                 // status LINES (GH#249: a bare `FAILED` substring false-flagged passing
                 // runs whose app logs contained the token; mirrors the maestro_run fix).
                 const outputPassed = !outputIndicatesFlowFailure(output);
-                let authorityOutput = output;
-                if (runnerReportDir) {
-                    const logPath = join(runnerReportDir, 'maestro-runner.log');
-                    if (existsSync(logPath)) {
-                        try {
-                            authorityOutput += `\n${readFileSync(logPath, 'utf8')}`;
-                        }
-                        catch {
-                            // Direct evidence stays unavailable and verification fails closed.
-                        }
-                    }
-                }
+                const authorityOutput = withDirectRunnerEvidence(runnerReportDir, output);
                 const deviceAuthority = verifyMaestroDeviceAuthority({
                     runner: flowDispatch.runner,
                     platform,
@@ -201,20 +187,9 @@ export function createMaestroTestAllHandler() {
             catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 const errWithOutput = err;
-                let authorityOutput = [errWithOutput.stdout, errWithOutput.stderr]
+                const authorityOutput = withDirectRunnerEvidence(runnerReportDir, [errWithOutput.stdout, errWithOutput.stderr]
                     .filter((value) => typeof value === 'string')
-                    .join('\n');
-                if (runnerReportDir) {
-                    const logPath = join(runnerReportDir, 'maestro-runner.log');
-                    if (existsSync(logPath)) {
-                        try {
-                            authorityOutput += `\n${readFileSync(logPath, 'utf8')}`;
-                        }
-                        catch {
-                            // Preserve the original process error when the report is unreadable.
-                        }
-                    }
-                }
+                    .join('\n'));
                 const deviceAuthority = verifyMaestroDeviceAuthority({
                     runner: flowDispatch.runner,
                     platform,
@@ -233,6 +208,9 @@ export function createMaestroTestAllHandler() {
                 failed++;
                 if (args.stopOnFailure)
                     break;
+            }
+            finally {
+                disposeRunnerReportDir(runnerReportDir);
             }
         }
         // GH #356/B223: surface the base dispatch's fallback reason, or (if any

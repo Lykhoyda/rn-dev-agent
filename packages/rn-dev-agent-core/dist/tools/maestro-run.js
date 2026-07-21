@@ -17,6 +17,7 @@ import { fastHealthCheck as defaultFastHealthCheck, stopFastRunner as defaultSto
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
+import { createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, withDirectRunnerEvidence, } from '../domain/maestro-runner-report.js';
 const defaultExecFile = promisify(execFileCb);
 /**
  * GH#202 Phase 2a + GH#237: run a Maestro flow with L2 parked. iOS stops the
@@ -204,24 +205,12 @@ export function createMaestroRunHandler(deps = {}) {
         }
         // A unique flattened report gives us maestro-runner's direct selected-device
         // and WDA target log. Never infer execution identity from requested argv.
-        const runnerReportDir = dispatch.runner === 'maestro-runner'
-            ? join(tmpdir(), `rn-maestro-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-            : null;
-        const reportArgs = runnerReportDir ? ['--output', runnerReportDir, '--flatten'] : [];
-        const finalArgs = assembleMaestroArgs(baseArgs, [...reportArgs, ...paramArgs]);
-        const directRunnerOutput = (output) => {
-            if (!runnerReportDir)
-                return output;
-            const logPath = join(runnerReportDir, 'maestro-runner.log');
-            if (!existsSync(logPath))
-                return output;
-            try {
-                return `${output}\n${readFileSync(logPath, 'utf8')}`;
-            }
-            catch {
-                return output;
-            }
-        };
+        const runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-report');
+        const finalArgs = assembleMaestroArgs(baseArgs, [
+            ...runnerReportArgs(runnerReportDir),
+            ...paramArgs,
+        ]);
+        const directRunnerOutput = (output) => withDirectRunnerEvidence(runnerReportDir, output);
         // GH #397: engine-pin visibility. Detection is process-cached and fail-open
         // (null on error). The caveat rides the existing warn-once mechanism below;
         // RN_ENGINE_PIN_STRICT=1 opts into refusing PROVEN divergence only.
@@ -265,7 +254,6 @@ export function createMaestroRunHandler(deps = {}) {
                     transport: dispatch.runner,
                     passed: false,
                     deviceAuthority,
-                    runnerReportDir,
                     output: output.slice(0, 4000),
                 });
             }
@@ -280,7 +268,6 @@ export function createMaestroRunHandler(deps = {}) {
                 transportVersion: engineStatus?.version ?? null,
                 fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
                 deviceAuthority,
-                runnerReportDir,
                 output: output.slice(0, 2000),
                 ...summary,
                 ...(!passed
@@ -349,7 +336,6 @@ export function createMaestroRunHandler(deps = {}) {
                     transport: dispatch.runner,
                     passed: false,
                     deviceAuthority,
-                    runnerReportDir,
                     output: combined.slice(0, 4000),
                     ...summary,
                     terminal,
@@ -371,7 +357,6 @@ export function createMaestroRunHandler(deps = {}) {
                 transportVersion: engineStatus?.version ?? null,
                 fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
                 deviceAuthority,
-                runnerReportDir,
                 passed: false,
                 // `output` mirrors the success/warn shape so callers can read
                 // it the same way regardless of which path they hit.
@@ -388,6 +373,9 @@ export function createMaestroRunHandler(deps = {}) {
                     : {}),
             });
             return failResult(failAug.message, failAug.meta);
+        }
+        finally {
+            disposeRunnerReportDir(runnerReportDir);
         }
     };
 }
