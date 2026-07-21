@@ -23609,6 +23609,9 @@ async function runNative(cliArgs, opts = {}) {
       const reboundArgs = [...cliArgs];
       reboundArgs[1] = healed.newRef.startsWith("@") ? healed.newRef : `@${healed.newRef}`;
       ios = buildRunIOSArgs(reboundArgs, appId);
+      if (ios.command === "type" && opts.verifyTypeReadback) {
+        ios._verifyExactReadback = opts.verifyTypeReadback;
+      }
       if (ios._staleRef) {
         return staleRefFail(ios._staleRef, "absent", getCachedMetadata(ios._staleRef));
       }
@@ -51859,15 +51862,29 @@ function acknowledgeExternalEdit(action) {
   });
   return { ...action, state: nextState };
 }
+function canonicalRuntimeJson(state) {
+  return JSON.stringify(state, (_key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record2 = value;
+      return Object.fromEntries(Object.keys(record2).sort().map((k) => [k, record2[k]]));
+    }
+    return value;
+  });
+}
+function runtimeSidecarMatches(sidecarPath, expected) {
+  let onDisk;
+  try {
+    onDisk = JSON.parse(readFileSync17(sidecarPath, "utf8"));
+  } catch {
+    return false;
+  }
+  const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
+  return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
+}
 function saveActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
   if (existsSync19(sidecarPath)) {
-    try {
-      const onDisk = JSON.parse(readFileSync17(sidecarPath, "utf8"));
-      if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
-        return { ok: false, conflict: "EXTERNAL_WRITE" };
-      }
-    } catch {
+    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
   } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
@@ -51879,21 +51896,14 @@ function saveActionRuntimeWithCAS(expected, nextState) {
 }
 function promoteActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync19(sidecarPath)) {
-    try {
-      const onDisk = JSON.parse(readFileSync17(sidecarPath, "utf8"));
-      if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
-        return { ok: false, conflict: "EXTERNAL_WRITE" };
-      }
-    } catch {
-      return { ok: false, conflict: "EXTERNAL_WRITE" };
-    }
+  if (existsSync19(sidecarPath) && !runtimeSidecarMatches(sidecarPath, expected.state)) {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   const yaml2 = readFileSync17(expected.filePath, "utf8");
-  const marker = "# status: experimental";
-  if (yaml2.split(marker).length !== 2)
+  const marker = /^# status: experimental[ \t]*$/gm;
+  if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   const promoted = yaml2.replace(marker, "# status: active");
   const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
@@ -55120,12 +55130,16 @@ function createCollectLogsHandler(getClient2) {
             scopes.native_ios = {
               deviceId: session.deviceId,
               appId: session.appId,
-              process: "resolved-current-pid"
+              process: "unresolved"
             };
             promises.push({
               source,
               promise: collectNativeIos(args.durationMs, controller.signal, session.deviceId, session.appId, (pid) => {
-                scopes.native_ios = { ...scopes.native_ios, pid };
+                scopes.native_ios = {
+                  ...scopes.native_ios,
+                  process: "resolved-current-pid",
+                  pid
+                };
               })
             });
             break;
@@ -59904,10 +59918,8 @@ function createConnectHandler(getClient2, setClient2, createClient2) {
       const target = client2.connectedTarget;
       const portMismatch = typeof args.metroPort === "number" && args.metroPort !== client2.metroPort;
       const targetIdMismatch = typeof effectiveFilters.targetId === "string" && effectiveFilters.targetId.length > 0 && effectiveFilters.targetId !== target?.id;
-      const bundleMatched = typeof effectiveFilters.bundleId === "string" && target != null && targetMatchesBundleId(target, effectiveFilters.bundleId);
-      const bundleMismatch = typeof effectiveFilters.bundleId === "string" && effectiveFilters.bundleId.length > 0 && !bundleMatched;
-      const platformMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
-      if (portMismatch || targetIdMismatch || bundleMismatch || platformMismatch) {
+      const sessionMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
+      if (portMismatch || targetIdMismatch || sessionMismatch) {
         const port = args.metroPort ?? client2.metroPort;
         await client2.disconnect();
         client2 = createClient2(port);
