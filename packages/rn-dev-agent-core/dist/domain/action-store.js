@@ -338,6 +338,33 @@ export function saveActionWithCAS(action) {
     const { filePath, sidecarPath: writtenSidecarPath } = saveAction(action);
     return { ok: true, filePath, sidecarPath: writtenSidecarPath };
 }
+function canonicalRuntimeJson(state) {
+    return JSON.stringify(state, (_key, value) => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const record = value;
+            return Object.fromEntries(Object.keys(record).sort().map((k) => [k, record[k]]));
+        }
+        return value;
+    });
+}
+/**
+ * Compare the on-disk sidecar against the loaded baseline using the same
+ * normalization `loadOrInitSidecar` applies, so a legacy sidecar missing
+ * `lastSeenMtimeMs` (re-seeded on load) is not read as an external write.
+ */
+function runtimeSidecarMatches(sidecarPath, expected) {
+    let onDisk;
+    try {
+        onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8'));
+    }
+    catch {
+        return false;
+    }
+    const normalized = typeof onDisk?.lastSeenMtimeMs === 'number'
+        ? onDisk
+        : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
+    return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
+}
 /**
  * Persist run telemetry without reserializing the tracked action YAML. The
  * synchronous compare+write is atomic with respect to this MCP process and
@@ -353,13 +380,7 @@ export function saveActionWithCAS(action) {
 export function saveActionRuntimeWithCAS(expected, nextState) {
     const sidecarPath = sidecarPathFor(expected.filePath);
     if (existsSync(sidecarPath)) {
-        try {
-            const onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8'));
-            if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
-                return { ok: false, conflict: 'EXTERNAL_WRITE' };
-            }
-        }
-        catch {
+        if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
             return { ok: false, conflict: 'EXTERNAL_WRITE' };
         }
     }
@@ -373,22 +394,14 @@ export function saveActionRuntimeWithCAS(expected, nextState) {
 /** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
 export function promoteActionRuntimeWithCAS(expected, nextState) {
     const sidecarPath = sidecarPathFor(expected.filePath);
-    if (existsSync(sidecarPath)) {
-        try {
-            const onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8'));
-            if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
-                return { ok: false, conflict: 'EXTERNAL_WRITE' };
-            }
-        }
-        catch {
-            return { ok: false, conflict: 'EXTERNAL_WRITE' };
-        }
+    if (existsSync(sidecarPath) && !runtimeSidecarMatches(sidecarPath, expected.state)) {
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
     }
     if (actionWasEditedExternally(expected))
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     const yaml = readFileSync(expected.filePath, 'utf8');
-    const marker = '# status: experimental';
-    if (yaml.split(marker).length !== 2)
+    const marker = /^# status: experimental[ \t]*$/gm;
+    if ((yaml.match(marker) ?? []).length !== 1)
         return { ok: false, conflict: 'EXTERNAL_WRITE' };
     const promoted = yaml.replace(marker, '# status: active');
     const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);

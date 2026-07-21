@@ -1,7 +1,7 @@
 import { okResult, failResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { sessionConnectFilters, targetMatchesSession } from './status.js';
-import { TargetSelectionError, targetMatchesBundleId } from '../cdp/discovery.js';
+import { TargetSelectionError } from '../cdp/discovery.js';
 export function createConnectHandler(getClient, setClient, createClient) {
     return async (args) => {
         let client = getClient();
@@ -33,17 +33,11 @@ export function createConnectHandler(getClient, setClient, createClient) {
             const targetIdMismatch = typeof effectiveFilters.targetId === 'string' &&
                 effectiveFilters.targetId.length > 0 &&
                 effectiveFilters.targetId !== target?.id;
-            // Bundle authority must come from one internally consistent Metro
-            // identity field, never an arbitrary token elsewhere in title/argv-like
-            // prose. Bridgeless targets carry it in appId or `<bundle> (<device>)`.
-            const bundleMatched = typeof effectiveFilters.bundleId === 'string' &&
-                target != null &&
-                targetMatchesBundleId(target, effectiveFilters.bundleId);
-            const bundleMismatch = typeof effectiveFilters.bundleId === 'string' &&
-                effectiveFilters.bundleId.length > 0 &&
-                !bundleMatched;
-            const platformMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
-            if (portMismatch || targetIdMismatch || bundleMismatch || platformMismatch) {
+            // Bundle authority is enforced inside targetMatchesSession, which must
+            // come from one internally consistent Metro identity field, never an
+            // arbitrary token elsewhere in title/argv-like prose.
+            const sessionMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
+            if (portMismatch || targetIdMismatch || sessionMismatch) {
                 // Honour requested filters by reconnecting; fall through to autoConnect below.
                 const port = args.metroPort ?? client.metroPort;
                 await client.disconnect();

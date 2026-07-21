@@ -449,7 +449,7 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
             scopes.native_ios = {
               deviceId: session.deviceId,
               appId: session.appId,
-              process: 'resolved-current-pid',
+              process: 'unresolved',
             };
             promises.push({
               source,
@@ -459,7 +459,11 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
                 session.deviceId,
                 session.appId,
                 (pid) => {
-                  scopes.native_ios = { ...scopes.native_ios, pid };
+                  scopes.native_ios = {
+                    ...scopes.native_ios,
+                    process: 'resolved-current-pid',
+                    pid,
+                  };
                 },
               ),
             });

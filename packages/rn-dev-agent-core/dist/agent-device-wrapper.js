@@ -1068,6 +1068,9 @@ export async function runNative(cliArgs, opts = {}) {
             const reboundArgs = [...cliArgs];
             reboundArgs[1] = healed.newRef.startsWith('@') ? healed.newRef : `@${healed.newRef}`;
             ios = buildRunIOSArgs(reboundArgs, appId);
+            if (ios.command === 'type' && opts.verifyTypeReadback) {
+                ios._verifyExactReadback = opts.verifyTypeReadback;
+            }
             if (ios._staleRef) {
                 return staleRefFail(ios._staleRef, 'absent', getCachedMetadata(ios._staleRef));
             }
