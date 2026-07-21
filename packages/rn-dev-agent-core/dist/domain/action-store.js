@@ -342,7 +342,9 @@ function canonicalRuntimeJson(state) {
     return JSON.stringify(state, (_key, value) => {
         if (value && typeof value === 'object' && !Array.isArray(value)) {
             const record = value;
-            return Object.fromEntries(Object.keys(record).sort().map((k) => [k, record[k]]));
+            return Object.fromEntries(Object.keys(record)
+                .sort()
+                .map((k) => [k, record[k]]));
         }
         return value;
     });

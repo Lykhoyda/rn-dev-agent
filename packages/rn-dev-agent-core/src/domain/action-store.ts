@@ -389,7 +389,11 @@ function canonicalRuntimeJson(state: unknown): string {
   return JSON.stringify(state, (_key, value) => {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const record = value as Record<string, unknown>;
-      return Object.fromEntries(Object.keys(record).sort().map((k) => [k, record[k]]));
+      return Object.fromEntries(
+        Object.keys(record)
+          .sort()
+          .map((k) => [k, record[k]]),
+      );
     }
     return value as unknown;
   });
