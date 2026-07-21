@@ -1022,29 +1022,31 @@ async function persistRun(
     }
     const nextState = appendRunRecord(fresh.state, record);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record);
-    const result = promotes
-      ? promoteActionRuntimeWithCAS(fresh, nextState)
-      : saveActionRuntimeWithCAS(fresh, nextState);
-    if (result.ok) {
-      // Runtime telemetry is sidecar-only. A replay that did not apply repair
-      // must preserve tracked YAML bytes (including documentation comments).
+    // Runtime telemetry is sidecar-only. A replay that did not apply repair
+    // must preserve tracked YAML bytes (including documentation comments).
+    const commit = (promoted: boolean): PersistRunOutcome => {
       mirrorToDb({
         yamlFilePath: fresh.filePath,
         state: fresh.state,
         newRunRecord: record,
         meta: {
           appId: fresh.metadata.appId,
-          status: promotes ? 'active' : fresh.metadata.status,
+          status: promoted ? 'active' : fresh.metadata.status,
           path: fresh.filePath,
         },
       });
-      return { promoted: promotes };
-    }
-    // CAS conflict — another writer raced us. Reload and retry.
+      return { promoted };
+    };
+    // A promotion refusal is deterministic (externally edited YAML, or a missing
+    // `# status: experimental` marker) — retrying cannot clear it, so degrade to
+    // the sidecar-only append instead of failing an otherwise successful replay.
+    if (promotes && promoteActionRuntimeWithCAS(fresh, nextState).ok) return commit(true);
+    if (saveActionRuntimeWithCAS(fresh, nextState).ok) return commit(false);
+    // Sidecar CAS conflict — another writer raced us. Reload and retry.
     if (attempt === MAX_ATTEMPTS) {
       throw new Error(
-        `persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; ` +
-          `the action YAML or runtime sidecar changed after load. RunRecord was not written.`,
+        `persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive sidecar CAS conflicts; ` +
+          `the runtime sidecar changed after load. RunRecord was not written.`,
       );
     }
   }

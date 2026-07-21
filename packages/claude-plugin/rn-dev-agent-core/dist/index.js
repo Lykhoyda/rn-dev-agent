@@ -53439,7 +53439,13 @@ function resolveAppId(override, platform) {
     return resolveBundleId(platform) ?? readExpoSlug() ?? "";
   return readExpoSlug() ?? "";
 }
-function createMaestroRunHandler() {
+async function buildRunnerResume(platform, probe) {
+  if (platform !== "ios")
+    return void 0;
+  return { attempted: true, healthy: await probe().catch(() => false) };
+}
+function createMaestroRunHandler(deps = {}) {
+  const fastHealthCheck2 = deps.fastHealthCheck ?? fastHealthCheck;
   return async (args) => {
     if (args.params) {
       for (const [key, value] of Object.entries(args.params)) {
@@ -53528,10 +53534,7 @@ function createMaestroRunHandler() {
       const output = combineRunnerOutput(stdout, stderr);
       const passed = !outputIndicatesFlowFailure(output);
       const summary = buildStepSummary(output, { failed: !passed });
-      const runnerResume = !passed ? {
-        attempted: true,
-        healthy: await fastHealthCheck().catch(() => false)
-      } : void 0;
+      const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck2) : void 0;
       const meta = {
         passed,
         flowFile,
@@ -53542,7 +53545,7 @@ function createMaestroRunHandler() {
         fallback: dispatch.fallbackReason ? dispatch.runner : "none",
         output: output.slice(0, 2e3),
         ...summary,
-        ...!passed ? { terminal: buildTerminalEvidence(output), runnerResume } : {},
+        ...!passed ? { terminal: buildTerminalEvidence(output), ...runnerResume ? { runnerResume } : {} } : {},
         timedOut: false,
         outputTruncated: false,
         ...dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {},
@@ -53569,10 +53572,7 @@ function createMaestroRunHandler() {
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(err?.code ?? ""));
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
-      const runnerResume = {
-        attempted: true,
-        healthy: await fastHealthCheck().catch(() => false)
-      };
+      const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
       const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
       const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
         flowFile,
@@ -53587,7 +53587,7 @@ function createMaestroRunHandler() {
         output: combined.slice(0, 4e3),
         ...summary,
         terminal,
-        runnerResume,
+        ...runnerResume ? { runnerResume } : {},
         timedOut,
         outputTruncated,
         // GH #397: a drifted/mismatched engine causing a real failure is
@@ -54448,22 +54448,25 @@ async function persistRun(actionId, projectRoot, record2) {
     }
     const nextState = appendRunRecord(fresh.state, record2);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record2);
-    const result = promotes ? promoteActionRuntimeWithCAS(fresh, nextState) : saveActionRuntimeWithCAS(fresh, nextState);
-    if (result.ok) {
+    const commit = (promoted) => {
       mirrorToDb({
         yamlFilePath: fresh.filePath,
         state: fresh.state,
         newRunRecord: record2,
         meta: {
           appId: fresh.metadata.appId,
-          status: promotes ? "active" : fresh.metadata.status,
+          status: promoted ? "active" : fresh.metadata.status,
           path: fresh.filePath
         }
       });
-      return { promoted: promotes };
-    }
+      return { promoted };
+    };
+    if (promotes && promoteActionRuntimeWithCAS(fresh, nextState).ok)
+      return commit(true);
+    if (saveActionRuntimeWithCAS(fresh, nextState).ok)
+      return commit(false);
     if (attempt === MAX_ATTEMPTS) {
-      throw new Error(`persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; the action YAML or runtime sidecar changed after load. RunRecord was not written.`);
+      throw new Error(`persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive sidecar CAS conflicts; the runtime sidecar changed after load. RunRecord was not written.`);
     }
   }
   return { promoted: false };

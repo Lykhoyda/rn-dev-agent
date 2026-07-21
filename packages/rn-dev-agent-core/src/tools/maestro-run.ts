@@ -116,7 +116,32 @@ function resolveAppId(override?: string, platform?: string): string {
   return readExpoSlug() ?? '';
 }
 
-export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<ToolResult> {
+export interface MaestroRunDeps {
+  fastHealthCheck?: () => Promise<boolean>;
+}
+
+export interface RunnerResumeEvidence {
+  attempted: boolean;
+  healthy: boolean;
+}
+
+/**
+ * Read-only verification of the already-parked runner. The probe is the iOS
+ * rn-fast-runner's, so on Android it would report an unhealthy runner that was
+ * never involved in the run — omit the evidence there instead of lying.
+ */
+export async function buildRunnerResume(
+  platform: 'ios' | 'android',
+  probe: () => Promise<boolean>,
+): Promise<RunnerResumeEvidence | undefined> {
+  if (platform !== 'ios') return undefined;
+  return { attempted: true, healthy: await probe().catch(() => false) };
+}
+
+export function createMaestroRunHandler(
+  deps: MaestroRunDeps = {},
+): (args: MaestroRunArgs) => Promise<ToolResult> {
+  const fastHealthCheck = deps.fastHealthCheck ?? defaultFastHealthCheck;
   return async (args) => {
     // GH #116: validate params shape FIRST so a malformed payload is rejected
     // regardless of platform / dispatch-tier availability. CI envs without
@@ -280,12 +305,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
       // substring false-flagged passing runs whose app logs contained the token).
       const passed = !outputIndicatesFlowFailure(output);
       const summary = buildStepSummary(output, { failed: !passed });
-      const runnerResume = !passed
-        ? {
-            attempted: true,
-            healthy: await defaultFastHealthCheck().catch(() => false),
-          }
-        : undefined;
+      const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck) : undefined;
       const meta = {
         passed,
         flowFile,
@@ -296,7 +316,9 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
         output: output.slice(0, 2000),
         ...summary,
-        ...(!passed ? { terminal: buildTerminalEvidence(output), runnerResume } : {}),
+        ...(!passed
+          ? { terminal: buildTerminalEvidence(output), ...(runnerResume ? { runnerResume } : {}) }
+          : {}),
         timedOut: false,
         outputTruncated: false,
         ...(dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {}),
@@ -352,12 +374,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
         combined.length === 0 &&
         ['ENOENT', 'EACCES'].includes(String((err as { code?: unknown } | null)?.code ?? ''));
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
-      // Read-only verification of the already-existing parked-runner resume
-      // state. This never launches or prepares anything.
-      const runnerResume = {
-        attempted: true,
-        healthy: await defaultFastHealthCheck().catch(() => false),
-      };
+      const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
       // Headline from structured data (raw-free); the raw err.message is the
       // fallback only for system errors with no step output (e.g. spawn ENOENT).
       const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
@@ -380,7 +397,7 @@ export function createMaestroRunHandler(): (args: MaestroRunArgs) => Promise<Too
           output: combined.slice(0, 4000),
           ...summary,
           terminal,
-          runnerResume,
+          ...(runnerResume ? { runnerResume } : {}),
           timedOut,
           outputTruncated,
           // GH #397: a drifted/mismatched engine causing a real failure is

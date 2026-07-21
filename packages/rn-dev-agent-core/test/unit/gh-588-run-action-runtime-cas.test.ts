@@ -233,3 +233,47 @@ test('GH-588 V2 disconfirmation: stale forceReload=false baseline still blocks Y
   assert.equal(readFileSync(yamlPath, 'utf8'), yaml);
   assert.equal(readFileSync(project.sidecarPath('wizard-create-task'), 'utf8'), sidecarBefore);
 });
+
+test('GH-588 V2: a blocked promotion degrades to sidecar-only telemetry, not a failed replay', async () => {
+  const yaml = wizardYaml('experimental');
+  project.seedAction('wizard-create-task', yaml, evidenceSidecar());
+  const yamlPath = project.yamlPath('wizard-create-task');
+  const pinnedMtime = new Date(WIZARD_YAML_MTIME_MS);
+  utimesSync(yamlPath, pinnedMtime, pinnedMtime);
+  const yamlHashBefore = sha256(yamlPath);
+
+  const handler = createRunActionHandler({
+    maestroRun: async () => ({
+      content: [{ type: 'text' as const, text: JSON.stringify(PASS_ENV) }],
+    }),
+    repairAction: async () => {
+      throw new Error('autoRepair=false must not invoke repair');
+    },
+    blindProbeContext: async () => ({ deviceId: DEVICE_ID, iosRuntimeMajor: 26 }),
+  });
+
+  const result = await handler({
+    actionId: 'wizard-create-task',
+    projectRoot: project.root,
+    platform: 'ios',
+    params: { TITLE: 'V2Blocked', DESC: 'd', PRIORITY: 'high', TAG: 'bug' },
+    autoRepair: false,
+    forceReload: false,
+  });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, undefined);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.passed, true);
+  assert.equal(envelope.data.writes.runtimeState, 'sidecar');
+  assert.deepEqual(envelope.data.writes.actionYaml, {
+    written: false,
+    reason: 'repair-not-applied',
+  });
+
+  const persisted = project.readSidecar('wizard-create-task');
+  assert.equal(persisted.runHistory.length, 3);
+  assert.equal(persisted.runHistory[2].status, 'pass');
+  assert.equal(sha256(yamlPath), yamlHashBefore, 'a refused promotion must not rewrite YAML');
+  assert.match(readFileSync(yamlPath, 'utf8'), /^# status: experimental$/m);
+});
