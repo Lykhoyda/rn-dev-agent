@@ -179,6 +179,38 @@ test('real maestro_run path forwards active UDID and accepts only matching direc
   assert.equal(body.data.deviceAuthority.reportedDeviceId, EXACT);
 });
 
+test('an explicit deviceId matching the session in a different case is not a mismatch', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    execFile: async () => ({ stdout: runnerLog(EXACT), stderr: '' }),
+  });
+  const result = await handler({
+    inlineYaml: '- launchApp',
+    platform: 'ios',
+    appId: APP_ID,
+    deviceId: EXACT.toLowerCase(),
+  });
+  const body = envelope(result);
+  assert.equal(body.ok, true, result.content[0].text);
+  assert.equal(body.data.deviceAuthority.verified, true);
+
+  const foreign = await handler({
+    inlineYaml: '- launchApp',
+    platform: 'ios',
+    appId: APP_ID,
+    deviceId: FOREIGN,
+  });
+  assert.equal(envelope(foreign).code, 'TARGET_SESSION_MISMATCH');
+});
+
 test('real maestro_run path rejects exit-zero wrong-device/shared-WDA evidence', async () => {
   for (const [output, reason] of [
     [runnerLog(FOREIGN), 'reported-device-mismatch'],
@@ -376,6 +408,45 @@ test('an Android pinned-device receipt is direct evidence, not a missing-report 
   });
   assert.equal(foreign.verified, false);
   assert.equal(foreign.reason, 'reported-device-mismatch');
+});
+
+test('a warm WDA that never re-narrates its target is degraded, not refused', () => {
+  const warm = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: `Using specified iOS device: ${EXACT}`,
+    requireWdaProvenance: true,
+  });
+  assert.equal(warm.verified, true);
+  assert.equal(warm.reason, 'exact-runner-match');
+  assert.equal(warm.wdaProvenance, 'unavailable');
+
+  const spelled = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: [
+      `Using specified iOS device: ${EXACT}`,
+      `Building WebDriverAgent for device ${EXACT}`,
+    ].join('\n'),
+    requireWdaProvenance: true,
+  });
+  assert.equal(spelled.verified, true);
+  assert.equal(spelled.wdaProvenance, 'exact-match');
+
+  const foreignWarm = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: [
+      `Using specified iOS device: ${EXACT}`,
+      `Building WebDriverAgent for device ${FOREIGN}`,
+    ].join('\n'),
+    requireWdaProvenance: true,
+  });
+  assert.equal(foreignWarm.verified, false);
+  assert.equal(foreignWarm.reason, 'wda-device-mismatch');
 });
 
 test('UDID letter case never splits one device into ambiguous or foreign identities', () => {

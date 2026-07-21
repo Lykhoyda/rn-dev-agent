@@ -261,7 +261,7 @@ export function updateRefMapFromFlat(nodes, freshness = {}) {
     lastUpdated = Date.now();
     return { applied: true };
 }
-export function getFreshRefTarget(ref) {
+export function getFreshRefTarget(ref, opts = {}) {
     if (!isRefMapFresh())
         return null;
     const key = ref.startsWith('@') ? ref.slice(1) : ref;
@@ -270,7 +270,7 @@ export function getFreshRefTarget(ref) {
     if (!rect ||
         !record ||
         record.snapshotGeneration !== snapshotGeneration ||
-        record.keyboardStateAtSnapshot === null)
+        (record.keyboardStateAtSnapshot === null && opts.allowUnknownKeyboardState !== true))
         return null;
     return {
         rect,

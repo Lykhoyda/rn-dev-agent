@@ -7,6 +7,8 @@ export interface MaestroDeviceAuthority {
   wdaDeviceIds: string[];
   verified: boolean;
   source: 'maestro-runner-log' | 'maestro-cli-explicit-udid' | 'none';
+  /** Corroborating iOS WDA receipt: absent narration is not a contradiction. */
+  wdaProvenance?: 'exact-match' | 'unavailable';
   reason:
     | 'exact-runner-and-wda-match'
     | 'exact-runner-match'
@@ -15,8 +17,7 @@ export interface MaestroDeviceAuthority {
     | 'reported-device-missing'
     | 'reported-device-ambiguous'
     | 'reported-device-mismatch'
-    | 'wda-device-mismatch'
-    | 'wda-provenance-missing';
+    | 'wda-device-mismatch';
 }
 
 // iOS UDIDs are hex and are rendered in different cases by the report writer,
@@ -26,7 +27,7 @@ function canonicalDeviceId(value: string): string {
   return value.toLowerCase();
 }
 
-function sameDevice(left: string, right: string): boolean {
+export function sameDevice(left: string, right: string): boolean {
   return canonicalDeviceId(left) === canonicalDeviceId(right);
 }
 
@@ -68,7 +69,7 @@ export function verifyMaestroDeviceAuthority(input: {
   ]);
   const wdaDeviceIds = uniqueMatches(
     input.output,
-    /\b(?:Building WDA for|Starting WDA on) device\s+([A-Za-z0-9._:-]+)/gi,
+    /\b(?:Building|Starting|Launching|Installing)\s+(?:WDA|WebDriverAgent(?:Runner)?)\s+(?:for|on|to)\s+device\s+([A-Za-z0-9._:-]+)/gi,
   );
   const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
   const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
@@ -119,16 +120,17 @@ export function verifyMaestroDeviceAuthority(input: {
   if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
     return { ...base, verified: false, reason: 'wda-device-mismatch' };
   }
-  if (
-    input.platform === 'ios' &&
-    input.requireWdaProvenance === true &&
-    wdaDeviceIds.length === 0
-  ) {
-    return { ...base, verified: false, reason: 'wda-provenance-missing' };
-  }
+  // A warm WDA does not re-narrate its target, so missing narration proves
+  // nothing either way; contradictory narration is already rejected above.
   return {
     ...base,
     verified: true,
+    ...(input.platform === 'ios' && input.requireWdaProvenance === true
+      ? {
+          wdaProvenance:
+            wdaDeviceIds.length > 0 ? ('exact-match' as const) : ('unavailable' as const),
+        }
+      : {}),
     reason:
       input.platform === 'ios' && wdaDeviceIds.length > 0
         ? 'exact-runner-and-wda-match'

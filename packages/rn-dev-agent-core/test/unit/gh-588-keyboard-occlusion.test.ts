@@ -96,7 +96,7 @@ test('GH-588 Slice D: hideKeyboard reaches JS, polls to proven hidden state, and
   };
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data?.via, 'js');
-  assert.deepEqual(envelope.data?.attemptedTiers, ['native-swipe', 'native-control', 'js']);
+  assert.deepEqual(envelope.data?.attemptedTiers, ['native-control', 'native-swipe', 'js']);
   assert.equal(snapshots, 2);
 });
 
@@ -198,4 +198,121 @@ test('GH-588 Slice D: failed post-check performs no tap', async () => {
   });
   assert.equal(result, first);
   assert.equal(retries, 0);
+});
+
+test('GH-588 Slice D: producers that never report visibility are degraded, not refused', async () => {
+  let snapshots = 0;
+  // The Android runner answers `keyboard dismiss` with {dismissed:true} only.
+  const androidDismiss = await dismissKeyboardWithParity({
+    nativeDismiss: async () => okResult({ dismissed: true }),
+    refreshSnapshot: async () => {
+      snapshots += 1;
+      return okResult({ nodes: [node] });
+    },
+  });
+  const envelope = JSON.parse(androidDismiss.content[0]!.text) as {
+    ok: boolean;
+    data?: { keyboardGuard?: string; visibilityProof?: string };
+  };
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data?.keyboardGuard, 'auto_dismissed');
+  assert.equal(envelope.data?.visibilityProof, 'unavailable');
+  // Polling a producer that never emits visibility must not burn every attempt.
+  assert.equal(snapshots, 1);
+
+  let retries = 0;
+  const healed = await healKeyboardOccludedTap(
+    failResult('KEYBOARD_OCCLUDED: keyboard covers the target', 'KEYBOARD_OCCLUDED'),
+    {
+      dismissViaJs: async () => true,
+      refreshSnapshot: async () => okResult({ nodes: [node] }),
+      retryTap: async () => {
+        retries += 1;
+        return okResult({ tapped: true });
+      },
+    },
+  );
+  assert.equal(retries, 1);
+  assert.equal(healed.isError, undefined);
+});
+
+test('GH-588 Slice D: an observed-visible keyboard still refuses both paths', async () => {
+  const refused = await dismissKeyboardWithParity({
+    nativeDismiss: async () => okResult({ dismissed: true, visible: true }),
+    refreshSnapshot: async () => okResult({ nodes: [node], keyboardVisible: true }),
+  });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0]!.text, /KEYBOARD_DISMISS_FAILED/);
+});
+
+function fastRunnerV1State() {
+  return {
+    schemaVersion: 1,
+    pid: process.pid,
+    port: 22089,
+    deviceId: 'legacy-fixture',
+    bundleId: 'dev.fixture',
+    startedAt: new Date(0).toISOString(),
+    protocolVersion: 1,
+  } as never;
+}
+
+function v1DismissFetch(snapshotNodes: unknown[], commands: string[]) {
+  return async (_url: unknown, init: { body?: unknown }) => {
+    const command = (JSON.parse(String(init?.body)) as { command: string }).command;
+    commands.push(command);
+    const body =
+      command === 'keyboardDismiss'
+        ? { ok: true, v: 1, data: { wasVisible: true, dismissed: true, visible: false } }
+        : command === 'snapshot'
+          ? { ok: true, v: 1, data: { nodes: snapshotNodes } }
+          : { ok: true, v: 1, data: { tapped: true } };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+}
+
+test('GH-588 Slice D: protocol N-1 ref target re-resolves without keyboard-state metadata', async () => {
+  clearRefMap();
+  updateRefMapFromFlat([node], { snapshotGeneration: 41, keyboardVisible: true });
+  _setFastRunnerStateForTest(fastRunnerV1State());
+  const commands: string[] = [];
+  _setFetchForTest(
+    v1DismissFetch(
+      [{ index: 7, type: 'Button', identifier: 'wizard-next-btn', rect: node.rect }],
+      commands,
+    ) as never,
+  );
+  try {
+    const result = await runIOS({ command: 'tap', x: 10, y: 20, _targetRef: '@e7' } as never);
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(commands, ['keyboardDismiss', 'snapshot', 'tap']);
+  } finally {
+    _setFetchForTest(globalThis.fetch);
+    _setFastRunnerStateForTest(null);
+  }
+});
+
+test('GH-588 Slice D: a positionally reused ref refuses instead of tapping a foreign element', async () => {
+  clearRefMap();
+  updateRefMapFromFlat([node], { snapshotGeneration: 41, keyboardVisible: true });
+  _setFastRunnerStateForTest(fastRunnerV1State());
+  const commands: string[] = [];
+  _setFetchForTest(
+    v1DismissFetch(
+      [{ index: 7, type: 'Button', identifier: 'delete-account-btn', rect: node.rect }],
+      commands,
+    ) as never,
+  );
+  try {
+    const result = await runIOS({ command: 'tap', x: 10, y: 20, _targetRef: '@e7' } as never);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0]!.text, /KEYBOARD_DISMISS_FAILED/);
+    assert.deepEqual(commands, ['keyboardDismiss', 'snapshot']);
+  } finally {
+    _setFetchForTest(globalThis.fetch);
+    _setFastRunnerStateForTest(null);
+  }
 });

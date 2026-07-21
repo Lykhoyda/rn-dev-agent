@@ -57,7 +57,9 @@ export async function launchAndNavigate(client, screen, params, opts = {}) {
             error: 'Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project.',
         };
     }
-    const lifecycleDeviceId = session?.platform === platform && session.appId === bundleId ? session.deviceId : undefined;
+    // The session's device is the device being driven regardless of which bundle
+    // the replay targets; dropping it here would fall back to ambiguous `booted`.
+    const lifecycleDeviceId = session?.platform === platform ? session.deviceId : undefined;
     let pickerDismissed = false;
     let reconnectAttempts = 0;
     try {

@@ -13,8 +13,10 @@ import {
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
+import { assembleMaestroArgs } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
 import {
+  sameDevice,
   shouldRejectMaestroDeviceAuthority,
   verifyMaestroDeviceAuthority,
   type MaestroDeviceAuthority,
@@ -132,7 +134,11 @@ export async function runMaestroInline(
   const session = getActiveSession();
   const matchingSessionDeviceId =
     session?.platform === opts.platform && session.deviceId ? session.deviceId : undefined;
-  if (opts.deviceId && matchingSessionDeviceId && opts.deviceId !== matchingSessionDeviceId) {
+  if (
+    opts.deviceId &&
+    matchingSessionDeviceId &&
+    !sameDevice(opts.deviceId, matchingSessionDeviceId)
+  ) {
     return {
       passed: false,
       output: '',
@@ -175,13 +181,7 @@ export async function runMaestroInline(
     appFileResolution.appFile,
     requestedDeviceId,
   );
-  const finalArgs = runnerReportDir
-    ? [
-        ...baseArgs.slice(0, -1),
-        ...runnerReportArgs(runnerReportDir),
-        baseArgs[baseArgs.length - 1],
-      ]
-    : baseArgs;
+  const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
   const directRunnerEvidence = (output: string) =>
     collectDirectRunnerEvidence(runnerReportDir, output);
 

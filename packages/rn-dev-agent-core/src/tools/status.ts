@@ -337,8 +337,6 @@ export function createStatusHandler(
         setClient(client);
         await client.autoConnect(args.metroPort, connectFilters, 'status');
         await validateConnectedTarget();
-      } else {
-        await validateConnectedTarget();
       }
 
       const status = await buildStatusResult(client);

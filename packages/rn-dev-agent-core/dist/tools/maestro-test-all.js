@@ -8,7 +8,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
-import { runFlowParked } from './maestro-run.js';
+import { assembleMaestroArgs, runFlowParked } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
@@ -138,13 +138,7 @@ export function createMaestroTestAllHandler() {
             }
             const runnerReportDir = createRunnerReportDir(flowDispatch.runner, 'rn-maestro-suite-report');
             const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
-            const finalArgs = runnerReportDir
-                ? [
-                    ...baseArgs.slice(0, -1),
-                    ...runnerReportArgs(runnerReportDir),
-                    baseArgs[baseArgs.length - 1],
-                ]
-                : baseArgs;
+            const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
             try {
                 const { stdout, stderr } = await runFlowParked(() => execFile(flowDispatch.binPath, finalArgs, {
                     timeout,

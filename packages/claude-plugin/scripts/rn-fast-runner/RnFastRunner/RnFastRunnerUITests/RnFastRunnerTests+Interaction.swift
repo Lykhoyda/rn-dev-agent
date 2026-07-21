@@ -337,20 +337,24 @@ extension RnFastRunnerTests {
     let visible = isKeyboardVisible(app: app)
     return (wasVisible: true, dismissed: !visible, visible: visible, via: "native-control")
 #else
-    let keyboard = app.keyboards.firstMatch
-    keyboard.swipeDown()
-    sleepFor(0.2)
-    if !isKeyboardVisible(app: app) {
-      return (wasVisible: true, dismissed: true, visible: false, via: "native-swipe")
-    }
-
+    // Control first: a swipe that starts on a letter key initiates QuickPath
+    // slide-typing and silently mutates the focused field (device-proven).
     if tapKeyboardDismissControl(app: app) {
       sleepFor(0.2)
-      let visible = isKeyboardVisible(app: app)
-      return (wasVisible: true, dismissed: !visible, visible: visible, via: "native-control")
+      if !isKeyboardVisible(app: app) {
+        return (wasVisible: true, dismissed: true, visible: false, via: "native-control")
+      }
     }
 
-    return (wasVisible: true, dismissed: false, visible: isKeyboardVisible(app: app), via: nil)
+    swipeKeyboardDownFromTopEdge(app: app)
+    sleepFor(0.2)
+    let visible = isKeyboardVisible(app: app)
+    return (
+      wasVisible: true,
+      dismissed: !visible,
+      visible: visible,
+      via: visible ? nil : "native-swipe"
+    )
 #endif
   }
 
@@ -400,6 +404,20 @@ extension RnFastRunnerTests {
     let dismissal = dismissKeyboard(app: app)
     guard dismissal.dismissed && !dismissal.visible else { return "dismiss_failed" }
     return targetRect == nil ? "auto_dismissed" : "auto_dismissed_requires_reresolve"
+#endif
+  }
+
+  private func swipeKeyboardDownFromTopEdge(app: XCUIApplication) {
+#if os(tvOS)
+    return
+#else
+    let keyboard = app.keyboards.firstMatch
+    guard keyboard.exists else { return }
+    // Anchor on the keyboard's very top edge (predictive/accessory band) rather
+    // than its centre, so the drag never begins on a letter key.
+    let start = keyboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+    let end = keyboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.5))
+    start.press(forDuration: 0.05, thenDragTo: end)
 #endif
   }
 

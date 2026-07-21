@@ -1396,6 +1396,9 @@ function hasRunnerTimeoutRecovery(result: ToolResult): boolean {
  * Re-check the exact dispatch authority and /health after settle; only exact
  * independent readback may recover such a result to success.
  */
+const POST_SETTLE_HEALTH_ATTEMPTS = 2;
+const POST_SETTLE_HEALTH_RETRY_MS = 250;
+
 export async function verifyTypeResultAfterSettle(
   args: RunIOSArgs,
   result: ToolResult,
@@ -1408,10 +1411,31 @@ export async function verifyTypeResultAfterSettle(
     runnerState.port === authorityBefore.port &&
     runnerState.deviceId === authorityBefore.deviceId;
   if (sameAuthority) {
-    const health = await probeFastRunnerLivenessDetailed();
-    if (health.liveness === 'alive') return result;
+    // A single probe right after a heavy type+settle can time out transiently;
+    // only a repeated non-alive verdict is evidence of lost authority.
+    for (let attempt = 0; attempt < POST_SETTLE_HEALTH_ATTEMPTS; attempt += 1) {
+      const health = await probeFastRunnerLivenessDetailed();
+      if (health.liveness === 'alive') return result;
+      if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, POST_SETTLE_HEALTH_RETRY_MS));
+      }
+    }
   }
   return containTypeTimeout(args, authorityBefore, 'post-settle-runner-authority-lost');
+}
+
+function sameRefIdentity(
+  before: ReturnType<typeof getCachedMetadata>,
+  after: ReturnType<typeof getCachedMetadata>,
+): boolean {
+  if (!before || !after) return false;
+  if (before.identifier !== undefined || after.identifier !== undefined) {
+    return before.identifier === after.identifier && before.type === after.type;
+  }
+  if (before.label !== undefined || after.label !== undefined) {
+    return before.label === after.label && before.type === after.type;
+  }
+  return before.type === after.type;
 }
 
 function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
@@ -1492,7 +1516,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       return failResult(
         'KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.',
         'KEYBOARD_DISMISS_FAILED',
-        { attemptedTiers: ['native-swipe', 'native-control'], protocolVersion: 1 },
+        { attemptedTiers: ['native-control', 'native-swipe'], protocolVersion: 1 },
       );
     }
     if (data.wasVisible && data.dismissed) keyboardRelayoutRecovered = true;
@@ -1500,6 +1524,10 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
 
   const refreshTargetAfterKeyboard = async (): Promise<boolean> => {
     if (!args._targetRef) return true; // raw coordinates remain meaningful after dismissal
+    // Ref ids are positional: the keyboard leaving the tree shifts the index
+    // set, so the same id can denote a different element. Only an identity
+    // match may be re-served under the original ref.
+    const before = getCachedMetadata(args._targetRef);
     const snapshot = await postCommand({
       command: 'snapshot',
       interactiveOnly: true,
@@ -1520,7 +1548,8 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         ? { keyboardVisible: data.keyboardVisible }
         : {}),
     });
-    const target = getFreshRefTarget(args._targetRef);
+    if (!sameRefIdentity(before, getCachedMetadata(args._targetRef))) return false;
+    const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
     if (!target) return false;
     body.x = Math.round(target.rect.x + target.rect.width / 2);
     body.y = Math.round(target.rect.y + target.rect.height / 2);

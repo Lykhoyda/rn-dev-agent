@@ -189,17 +189,46 @@ function readAndroidPackages(): Set<string> | null {
   }
 }
 
-function readIOSPackages(): Set<string> | null {
+export function bootedSimulatorUdids(): string[] {
   try {
-    const out = execFileSync('xcrun', ['simctl', 'listapps', 'booted'], {
+    const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
       timeout: 5000,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return parseSimctlListapps(out);
+    const parsed = JSON.parse(out) as { devices?: Record<string, Array<{ udid?: string }>> };
+    return Object.values(parsed.devices ?? {})
+      .flat()
+      .map((device) => device.udid)
+      .filter((udid): udid is string => typeof udid === 'string' && udid.length > 0);
   } catch {
-    return null;
+    return [];
   }
+}
+
+// `simctl listapps booted` errors out as soon as more than one simulator is
+// booted — the exact case this inference must survive. Probe each booted UDID
+// exactly and union the results: platform inference asks "is this bundle an iOS
+// app", which no single device owns.
+function readIOSPackages(): Set<string> | null {
+  const udids = bootedSimulatorUdids();
+  if (udids.length === 0) return null;
+  const ids = new Set<string>();
+  let probed = false;
+  for (const udid of udids) {
+    try {
+      const out = execFileSync('xcrun', ['simctl', 'listapps', udid], {
+        timeout: 5000,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      probed = true;
+      for (const id of parseSimctlListapps(out)) ids.add(id);
+    } catch {
+      // A single unreadable simulator must not blind the others.
+    }
+  }
+  return probed ? ids : null;
 }
 
 export interface PlatformInferenceReaders {

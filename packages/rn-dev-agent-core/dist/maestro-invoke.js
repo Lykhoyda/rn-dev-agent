@@ -8,8 +8,9 @@ import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidat
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
+import { assembleMaestroArgs } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
-import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from './domain/maestro-device-authority.js';
+import { sameDevice, shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from './domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from './domain/maestro-runner-report.js';
 const execFile = promisify(execFileCb);
 // Escape a user-supplied string for safe embedding inside a double-quoted YAML scalar.
@@ -92,7 +93,9 @@ export async function runMaestroInline(yaml, opts) {
     const timeout = opts.timeoutMs ?? 30_000;
     const session = getActiveSession();
     const matchingSessionDeviceId = session?.platform === opts.platform && session.deviceId ? session.deviceId : undefined;
-    if (opts.deviceId && matchingSessionDeviceId && opts.deviceId !== matchingSessionDeviceId) {
+    if (opts.deviceId &&
+        matchingSessionDeviceId &&
+        !sameDevice(opts.deviceId, matchingSessionDeviceId)) {
         return {
             passed: false,
             output: '',
@@ -121,13 +124,7 @@ export async function runMaestroInline(yaml, opts) {
     }
     const runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-inline-report');
     const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
-    const finalArgs = runnerReportDir
-        ? [
-            ...baseArgs.slice(0, -1),
-            ...runnerReportArgs(runnerReportDir),
-            baseArgs[baseArgs.length - 1],
-        ]
-        : baseArgs;
+    const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
     const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
     try {
         const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, {

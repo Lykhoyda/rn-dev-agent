@@ -78,21 +78,29 @@ export function buildIosLogStreamArgs(deviceId, pid) {
         'ndjson',
         '--level',
         'debug',
-        '--predicate',
-        `processIdentifier == ${pid}`,
+        // A null pid means the app is not running (crashed, or not yet launched):
+        // the device stays exactly scoped, but pinning to a dead pid would drop the
+        // crash trail and the post-relaunch pid entirely.
+        ...(pid === null ? [] : ['--predicate', `processIdentifier == ${pid}`]),
     ];
 }
-async function resolveIosAppPid(deviceId, bundleId) {
-    const { stdout } = await execFile('xcrun', ['simctl', 'spawn', deviceId, 'launchctl', 'list']);
-    const pid = parseIosAppPid(stdout, bundleId);
-    if (pid === null)
-        throw new Error(`target app ${bundleId} is not running on ${deviceId}`);
-    return pid;
+const PID_PROBE_TIMEOUT_MS = 5_000;
+async function resolveIosAppPid(deviceId, bundleId, signal) {
+    try {
+        const { stdout } = await execFile('xcrun', ['simctl', 'spawn', deviceId, 'launchctl', 'list'], {
+            timeout: PID_PROBE_TIMEOUT_MS,
+            signal,
+        });
+        return parseIosAppPid(stdout, bundleId);
+    }
+    catch {
+        return null;
+    }
 }
 async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolvedPid) {
     if (signal.aborted)
         return [];
-    const pid = await resolveIosAppPid(deviceId, bundleId);
+    const pid = await resolveIosAppPid(deviceId, bundleId, signal);
     onResolvedPid?.(pid);
     return new Promise((resolve, reject) => {
         const entries = [];
@@ -406,8 +414,8 @@ export function createCollectLogsHandler(getClient) {
                             promise: collectNativeIos(args.durationMs, controller.signal, session.deviceId, session.appId, (pid) => {
                                 scopes.native_ios = {
                                     ...scopes.native_ios,
-                                    process: 'resolved-current-pid',
-                                    pid,
+                                    process: pid === null ? 'app-not-running-device-scoped' : 'resolved-current-pid',
+                                    ...(pid === null ? {} : { pid }),
                                 };
                             }),
                         });

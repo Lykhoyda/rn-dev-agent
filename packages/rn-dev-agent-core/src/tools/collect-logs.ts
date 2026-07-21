@@ -105,7 +105,7 @@ export function parseIosAppPid(launchctlList: string, bundleId: string): number 
   return null;
 }
 
-export function buildIosLogStreamArgs(deviceId: string, pid: number): string[] {
+export function buildIosLogStreamArgs(deviceId: string, pid: number | null): string[] {
   return [
     'simctl',
     'spawn',
@@ -116,16 +116,29 @@ export function buildIosLogStreamArgs(deviceId: string, pid: number): string[] {
     'ndjson',
     '--level',
     'debug',
-    '--predicate',
-    `processIdentifier == ${pid}`,
+    // A null pid means the app is not running (crashed, or not yet launched):
+    // the device stays exactly scoped, but pinning to a dead pid would drop the
+    // crash trail and the post-relaunch pid entirely.
+    ...(pid === null ? [] : ['--predicate', `processIdentifier == ${pid}`]),
   ];
 }
 
-async function resolveIosAppPid(deviceId: string, bundleId: string): Promise<number> {
-  const { stdout } = await execFile('xcrun', ['simctl', 'spawn', deviceId, 'launchctl', 'list']);
-  const pid = parseIosAppPid(stdout, bundleId);
-  if (pid === null) throw new Error(`target app ${bundleId} is not running on ${deviceId}`);
-  return pid;
+const PID_PROBE_TIMEOUT_MS = 5_000;
+
+async function resolveIosAppPid(
+  deviceId: string,
+  bundleId: string,
+  signal: AbortSignal,
+): Promise<number | null> {
+  try {
+    const { stdout } = await execFile('xcrun', ['simctl', 'spawn', deviceId, 'launchctl', 'list'], {
+      timeout: PID_PROBE_TIMEOUT_MS,
+      signal,
+    });
+    return parseIosAppPid(stdout, bundleId);
+  } catch {
+    return null;
+  }
 }
 
 async function collectNativeIos(
@@ -133,10 +146,10 @@ async function collectNativeIos(
   signal: AbortSignal,
   deviceId: string,
   bundleId: string,
-  onResolvedPid?: (pid: number) => void,
+  onResolvedPid?: (pid: number | null) => void,
 ): Promise<LogEntry[]> {
   if (signal.aborted) return [];
-  const pid = await resolveIosAppPid(deviceId, bundleId);
+  const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
 
   return new Promise<LogEntry[]>((resolve, reject) => {
@@ -461,8 +474,9 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
                 (pid) => {
                   scopes.native_ios = {
                     ...scopes.native_ios,
-                    process: 'resolved-current-pid',
-                    pid,
+                    process:
+                      pid === null ? 'app-not-running-device-scoped' : 'resolved-current-pid',
+                    ...(pid === null ? {} : { pid }),
                   };
                 },
               ),

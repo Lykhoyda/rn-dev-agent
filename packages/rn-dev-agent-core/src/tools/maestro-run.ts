@@ -37,6 +37,7 @@ import {
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import {
+  sameDevice,
   shouldRejectMaestroDeviceAuthority,
   verifyMaestroDeviceAuthority,
 } from '../domain/maestro-device-authority.js';
@@ -197,7 +198,11 @@ export function createMaestroRunHandler(
     const session = activeSession();
     const matchingSessionDeviceId =
       session?.platform === platform && session.deviceId ? session.deviceId : undefined;
-    if (args.deviceId && matchingSessionDeviceId && args.deviceId !== matchingSessionDeviceId) {
+    if (
+      args.deviceId &&
+      matchingSessionDeviceId &&
+      !sameDevice(args.deviceId, matchingSessionDeviceId)
+    ) {
       return failResult(
         `Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`,
         'TARGET_SESSION_MISMATCH',

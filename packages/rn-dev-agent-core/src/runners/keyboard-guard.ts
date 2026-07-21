@@ -106,15 +106,27 @@ export function keyboardVisibility(result: unknown): boolean | null {
 const KEYBOARD_POSTCHECK_ATTEMPTS = 5;
 const KEYBOARD_POSTCHECK_DELAY_MS = 100;
 
+/**
+ * `unknown` means the producer does not report keyboard visibility at all
+ * (Android runner, protocol-v1 iOS artifacts) — distinct from an observed
+ * still-visible keyboard, which is the only disconfirming observation.
+ */
+export type KeyboardHiddenObservation = 'hidden' | 'visible' | 'unknown';
+
 export async function waitForKeyboardHidden(
   refreshSnapshot: () => Promise<unknown>,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-): Promise<boolean> {
+): Promise<KeyboardHiddenObservation> {
+  let last: KeyboardHiddenObservation = 'unknown';
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
-    if (keyboardVisibility(await refreshSnapshot()) === false) return true;
+    const visible = keyboardVisibility(await refreshSnapshot());
+    if (visible === false) return 'hidden';
+    // A producer that never emits visibility will not start on a later poll.
+    if (visible === null) return 'unknown';
+    last = 'visible';
     if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1) await sleep(KEYBOARD_POSTCHECK_DELAY_MS);
   }
-  return false;
+  return last;
 }
 
 export interface KeyboardDismissDeps {
@@ -123,49 +135,65 @@ export interface KeyboardDismissDeps {
   refreshSnapshot: () => Promise<unknown>;
 }
 
+function nativeDismissTiers(via: string): string[] {
+  return via === 'native-control' ? ['native-control'] : ['native-control', via];
+}
+
 /** Shared standalone/batch dismissal chain with an independent hidden-state check. */
 export async function dismissKeyboardWithParity(deps: KeyboardDismissDeps): Promise<ToolResult> {
   const native = await deps.nativeDismiss();
   if (!native.isError) {
+    let data: { wasVisible?: unknown; dismissed?: unknown; visible?: unknown; via?: unknown } = {};
     try {
-      const envelope = JSON.parse(native.content[0]?.text ?? '{}') as {
-        data?: { wasVisible?: unknown; dismissed?: unknown; visible?: unknown; via?: unknown };
-      };
-      const data = envelope.data;
-      if (data?.wasVisible === false && data.visible === false) {
-        return okResult({
-          dismissed: false,
-          keyboardGuard: 'no_keyboard',
-          via: 'no_keyboard',
-          attemptedTiers: [],
-        });
-      }
-      if (data?.dismissed === true && data.visible === false) {
-        const via = typeof data.via === 'string' ? data.via : 'native-control';
+      data =
+        (
+          JSON.parse(native.content[0]?.text ?? '{}') as {
+            data?: typeof data;
+          }
+        ).data ?? {};
+    } catch {
+      // A malformed native success cannot prove that the keyboard is hidden.
+    }
+    if (data.wasVisible === false && data.visible !== true) {
+      return okResult({
+        dismissed: false,
+        keyboardGuard: 'no_keyboard',
+        via: 'no_keyboard',
+        attemptedTiers: [],
+      });
+    }
+    if (data.dismissed === true && data.visible !== true) {
+      const via = typeof data.via === 'string' ? data.via : 'native-control';
+      // Producers that do not report keyboard visibility (Android runner,
+      // protocol-v1 iOS) can only be corroborated by an independent probe;
+      // absence of a visibility field is not a disconfirmation.
+      const observed =
+        data.visible === false ? 'hidden' : await waitForKeyboardHidden(deps.refreshSnapshot);
+      if (observed !== 'visible') {
         return okResult({
           dismissed: true,
           keyboardGuard: 'auto_dismissed',
           via,
-          attemptedTiers: via === 'native-swipe' ? ['native-swipe'] : ['native-swipe', via],
+          attemptedTiers: nativeDismissTiers(via),
+          visibilityProof: observed === 'hidden' ? 'observed-hidden' : 'unavailable',
         });
       }
-    } catch {
-      // A malformed native success cannot prove that the keyboard is hidden.
     }
   }
 
-  const attemptedTiers = ['native-swipe', 'native-control'];
+  const attemptedTiers = ['native-control', 'native-swipe'];
   if (deps.dismissViaJs) {
     attemptedTiers.push('js');
     try {
       if (await deps.dismissViaJs()) {
-        const hidden = await waitForKeyboardHidden(deps.refreshSnapshot);
-        if (hidden) {
+        const observed = await waitForKeyboardHidden(deps.refreshSnapshot);
+        if (observed !== 'visible') {
           return okResult({
             dismissed: true,
             keyboardGuard: 'auto_dismissed',
             via: 'js',
             attemptedTiers,
+            visibilityProof: observed === 'hidden' ? 'observed-hidden' : 'unavailable',
           });
         }
       }
@@ -174,7 +202,7 @@ export async function dismissKeyboardWithParity(deps: KeyboardDismissDeps): Prom
     }
   }
   return failResult(
-    'KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; keyboard visibility was not proven false.',
+    'KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; the keyboard was still observed visible.',
     'KEYBOARD_DISMISS_FAILED',
     { attemptedTiers },
   );
@@ -201,7 +229,7 @@ export async function healKeyboardOccludedTap(
   }
   if (!dismissed) return first;
   try {
-    if (!(await waitForKeyboardHidden(deps.refreshSnapshot))) return first;
+    if ((await waitForKeyboardHidden(deps.refreshSnapshot)) === 'visible') return first;
   } catch {
     return first;
   }

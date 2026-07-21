@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -99,6 +99,14 @@ function hashBytes(bytes) {
  * macOS /tmp -> /private/tmp spelling gap without accepting paths outside the
  * candidate.
  */
+function realpathOrSelf(path) {
+    try {
+        return realpathSync(path);
+    }
+    catch {
+        return path;
+    }
+}
 export function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     let root;
     try {
@@ -119,8 +127,10 @@ export function resolveProofCandidateEntrypoint(candidateRoot, argv) {
         }
         for (const host of ['claude-plugin', 'codex-plugin']) {
             const hostRoot = join(root, 'packages', host);
-            const coreIndex = join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js');
-            const coreSupervisor = join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js');
+            // Both sides are realpath-normalized: a symlinked dist/ must not read as
+            // a foreign process.
+            const coreIndex = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js'));
+            const coreSupervisor = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'));
             if (arg === coreIndex) {
                 return {
                     host,
@@ -139,19 +149,17 @@ export function resolveProofCandidateEntrypoint(candidateRoot, argv) {
                     kind: 'core-supervisor',
                 };
             }
-            if (host === 'codex-plugin' && arg === join(hostRoot, 'bin', 'cdp-supervisor.js')) {
-                try {
-                    return {
-                        host,
-                        coreBundle: realpathSync(coreIndex),
-                        coreSupervisor: realpathSync(coreSupervisor),
-                        authorityArg,
-                        kind: 'codex-launcher',
-                    };
-                }
-                catch {
+            if (host === 'codex-plugin' &&
+                arg === realpathOrSelf(join(hostRoot, 'bin', 'cdp-supervisor.js'))) {
+                if (!existsSync(coreIndex) || !existsSync(coreSupervisor))
                     return null;
-                }
+                return {
+                    host,
+                    coreBundle: coreIndex,
+                    coreSupervisor,
+                    authorityArg,
+                    kind: 'codex-launcher',
+                };
             }
         }
     }

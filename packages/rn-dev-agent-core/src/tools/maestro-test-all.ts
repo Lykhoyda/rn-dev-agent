@@ -17,7 +17,7 @@ import {
   parseAndValidateFlow,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
-import { runFlowParked } from './maestro-run.js';
+import { assembleMaestroArgs, runFlowParked } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
@@ -194,13 +194,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
 
       const runnerReportDir = createRunnerReportDir(flowDispatch.runner, 'rn-maestro-suite-report');
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
-      const finalArgs = runnerReportDir
-        ? [
-            ...baseArgs.slice(0, -1),
-            ...runnerReportArgs(runnerReportDir),
-            baseArgs[baseArgs.length - 1],
-          ]
-        : baseArgs;
+      const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
 
       try {
         const { stdout, stderr } = await runFlowParked(

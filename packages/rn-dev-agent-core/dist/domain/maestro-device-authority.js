@@ -4,7 +4,7 @@
 function canonicalDeviceId(value) {
     return value.toLowerCase();
 }
-function sameDevice(left, right) {
+export function sameDevice(left, right) {
     return canonicalDeviceId(left) === canonicalDeviceId(right);
 }
 function uniqueValues(values) {
@@ -33,7 +33,7 @@ export function verifyMaestroDeviceAuthority(input) {
         ...(input.directReportDeviceIds ?? []),
         ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi),
     ]);
-    const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building WDA for|Starting WDA on) device\s+([A-Za-z0-9._:-]+)/gi);
+    const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building|Starting|Launching|Installing)\s+(?:WDA|WebDriverAgent(?:Runner)?)\s+(?:for|on|to)\s+device\s+([A-Za-z0-9._:-]+)/gi);
     const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
     const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
     if (!requestedDeviceId) {
@@ -80,14 +80,16 @@ export function verifyMaestroDeviceAuthority(input) {
     if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
         return { ...base, verified: false, reason: 'wda-device-mismatch' };
     }
-    if (input.platform === 'ios' &&
-        input.requireWdaProvenance === true &&
-        wdaDeviceIds.length === 0) {
-        return { ...base, verified: false, reason: 'wda-provenance-missing' };
-    }
+    // A warm WDA does not re-narrate its target, so missing narration proves
+    // nothing either way; contradictory narration is already rejected above.
     return {
         ...base,
         verified: true,
+        ...(input.platform === 'ios' && input.requireWdaProvenance === true
+            ? {
+                wdaProvenance: wdaDeviceIds.length > 0 ? 'exact-match' : 'unavailable',
+            }
+            : {}),
         reason: input.platform === 'ios' && wdaDeviceIds.length > 0
             ? 'exact-runner-and-wda-match'
             : 'exact-runner-match',

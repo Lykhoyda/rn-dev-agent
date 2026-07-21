@@ -51,11 +51,36 @@ function sh(cmd: string, args: string[], timeout = 15_000): string {
   return execFileSync(cmd, args, { stdio: 'pipe', timeout }).toString();
 }
 
+const ADB_TARGET = DEVICE_ID ? ['-s', DEVICE_ID] : [];
+
+function androidLauncherComponent(): string {
+  try {
+    const resolved = sh('adb', [
+      ...ADB_TARGET,
+      'shell',
+      'cmd',
+      'package',
+      'resolve-activity',
+      '--brief',
+      APP_ID,
+    ]);
+    const component = resolved
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith(`${APP_ID}/`))
+      .pop();
+    if (component) return component;
+  } catch {
+    // Fall through to the conventional component below.
+  }
+  return `${APP_ID}/.MainActivity`;
+}
+
 function assertFixtureInstalled(): void {
   try {
     if (PLATFORM === 'ios') {
       sh('xcrun', ['simctl', 'get_app_container', DEVICE_ID ?? 'booted', APP_ID]);
-    } else if (!sh('adb', ['shell', 'pm', 'path', APP_ID]).includes('package:')) {
+    } else if (!sh('adb', [...ADB_TARGET, 'shell', 'pm', 'path', APP_ID]).includes('package:')) {
       throw new Error('not installed');
     }
   } catch {
@@ -71,7 +96,11 @@ function launchFixture(): void {
   if (PLATFORM === 'ios') {
     sh('xcrun', ['simctl', 'launch', DEVICE_ID ?? 'booted', APP_ID], 30_000);
   } else {
-    sh('adb', ['shell', 'am', 'start', '-W', '-n', `${APP_ID}/.MainActivity`], 30_000);
+    sh(
+      'adb',
+      [...ADB_TARGET, 'shell', 'am', 'start', '-W', '-n', androidLauncherComponent()],
+      30_000,
+    );
   }
 }
 
@@ -94,8 +123,8 @@ function deviceProvenance(): { device: string; os: string } {
     return { device: 'unknown-booted-simulator', os: 'unknown' };
   }
   return {
-    device: sh('adb', ['shell', 'getprop', 'ro.product.model']).trim(),
-    os: `Android ${sh('adb', ['shell', 'getprop', 'ro.build.version.release']).trim()}`,
+    device: sh('adb', [...ADB_TARGET, 'shell', 'getprop', 'ro.product.model']).trim(),
+    os: `Android ${sh('adb', [...ADB_TARGET, 'shell', 'getprop', 'ro.build.version.release']).trim()}`,
   };
 }
 

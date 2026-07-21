@@ -388,7 +388,10 @@ export interface FreshRefTarget {
   keyboardStateAtSnapshot: boolean | null;
 }
 
-export function getFreshRefTarget(ref: string): FreshRefTarget | null {
+export function getFreshRefTarget(
+  ref: string,
+  opts: { allowUnknownKeyboardState?: boolean } = {},
+): FreshRefTarget | null {
   if (!isRefMapFresh()) return null;
   const key = ref.startsWith('@') ? ref.slice(1) : ref;
   const rect = refMap.get(key);
@@ -397,7 +400,7 @@ export function getFreshRefTarget(ref: string): FreshRefTarget | null {
     !rect ||
     !record ||
     record.snapshotGeneration !== snapshotGeneration ||
-    record.keyboardStateAtSnapshot === null
+    (record.keyboardStateAtSnapshot === null && opts.allowUnknownKeyboardState !== true)
   )
     return null;
   return {

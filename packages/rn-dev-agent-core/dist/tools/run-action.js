@@ -245,6 +245,10 @@ export function createRunActionHandler(deps = {}) {
         // GH #397: deviceId threading. Handler-scoped (not inside the try) because
         // the outer catch also persists a RunRecord and must carry the device too.
         let probeDeviceId = null;
+        // Directly observed transport device (CDP context, else the session target
+        // Maestro was pinned to). Used only when the dispatch produced no receipt,
+        // so a clean pass can still clear a device-matched blind-probe latch.
+        let observedDeviceId = maestroDeviceId ?? null;
         const persistRunWithDevice = (record) => proofReplay
             ? Promise.resolve({ promoted: false, promotionRefused: false })
             : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
@@ -280,6 +284,7 @@ export function createRunActionHandler(deps = {}) {
                 const ctx = await blindProbeContext().catch(() => null);
                 if (ctx) {
                     probeDeviceId = ctx.deviceId;
+                    observedDeviceId = ctx.deviceId ?? observedDeviceId;
                     if (!blindProbeDisabled) {
                         atRisk = evaluateBlindProbeGate({
                             platform: args.platform,
@@ -383,7 +388,7 @@ export function createRunActionHandler(deps = {}) {
             const firstOutput = readMaestroOutput(firstEnv);
             const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
             const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
-            probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? null;
+            probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
             if (firstEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
                 const autoRepair = {
                     attempted: false,
@@ -515,7 +520,7 @@ export function createRunActionHandler(deps = {}) {
                             // The fallback is a different transport. Its existing active-session
                             // context remains the affinity input; never carry Maestro's device
                             // report across transports.
-                            probeDeviceId = maestroDeviceId ?? null;
+                            probeDeviceId = maestroDeviceId ?? observedDeviceId;
                             const persisted = await persistRunWithDevice({
                                 timestamp: new Date().toISOString(),
                                 durationMs: Date.now() - t0,
@@ -687,7 +692,7 @@ export function createRunActionHandler(deps = {}) {
             const retryOutput = readMaestroOutput(retryEnv);
             const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
             const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
-            probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? null;
+            probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
             if (retryEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
                 const autoRepair = {
                     attempted: true,

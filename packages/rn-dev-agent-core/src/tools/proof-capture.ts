@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
+  existsSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -252,6 +253,14 @@ export interface ProofCandidateEntrypoint {
  * macOS /tmp -> /private/tmp spelling gap without accepting paths outside the
  * candidate.
  */
+function realpathOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 export function resolveProofCandidateEntrypoint(
   candidateRoot: string,
   argv: readonly string[],
@@ -272,8 +281,12 @@ export function resolveProofCandidateEntrypoint(
     }
     for (const host of ['claude-plugin', 'codex-plugin'] as const) {
       const hostRoot = join(root, 'packages', host);
-      const coreIndex = join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js');
-      const coreSupervisor = join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js');
+      // Both sides are realpath-normalized: a symlinked dist/ must not read as
+      // a foreign process.
+      const coreIndex = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js'));
+      const coreSupervisor = realpathOrSelf(
+        join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'),
+      );
       if (arg === coreIndex) {
         return {
           host,
@@ -292,18 +305,18 @@ export function resolveProofCandidateEntrypoint(
           kind: 'core-supervisor',
         };
       }
-      if (host === 'codex-plugin' && arg === join(hostRoot, 'bin', 'cdp-supervisor.js')) {
-        try {
-          return {
-            host,
-            coreBundle: realpathSync(coreIndex),
-            coreSupervisor: realpathSync(coreSupervisor),
-            authorityArg,
-            kind: 'codex-launcher',
-          };
-        } catch {
-          return null;
-        }
+      if (
+        host === 'codex-plugin' &&
+        arg === realpathOrSelf(join(hostRoot, 'bin', 'cdp-supervisor.js'))
+      ) {
+        if (!existsSync(coreIndex) || !existsSync(coreSupervisor)) return null;
+        return {
+          host,
+          coreBundle: coreIndex,
+          coreSupervisor,
+          authorityArg,
+          kind: 'codex-launcher',
+        };
       }
     }
   }

@@ -65,6 +65,20 @@ function executableBasename(command: string): string {
   return executable.slice(executable.lastIndexOf('/') + 1);
 }
 
+const SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
+
+// `/bin/sh /usr/local/bin/maestro test flow.yaml` — the installed CLI is
+// routinely a shell wrapper, so the basename of argv[0] is the shell.
+function shellWrappedMaestro(command: string): boolean {
+  const tokens = command.trimStart().split(/\s+/);
+  if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? ''))) return false;
+  return tokens
+    .slice(1)
+    .some(
+      (token) => token.startsWith('/') && /^maestro(?:\.\w+)?$/i.test(executableBasename(token)),
+    );
+}
+
 export function isIosExternalRunnerProcessLine(line: string): boolean {
   const match = line.match(/^\s*\d+\s+(.+)$/);
   if (!match) return false;
@@ -72,6 +86,7 @@ export function isIosExternalRunnerProcessLine(line: string): boolean {
   const executable = executableBasename(command);
 
   if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable)) return true;
+  if (shellWrappedMaestro(command)) return true;
   if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable)) return true;
   if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
     return true;

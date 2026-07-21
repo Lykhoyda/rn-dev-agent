@@ -14,7 +14,11 @@ const DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 // writers. Each list is a precedence order, not a harvest set: one object
 // describes one device, so the most authoritative present key wins and `id` is
 // the last resort — it also spells model/device-type names ("iPhone-16-Pro").
-const DEVICE_ID_KEYS = ['udid', 'deviceId', 'serial', 'id'] as const;
+const DEVICE_ID_KEYS = ['udid', 'deviceId', 'serial'] as const;
+// `id` is the last resort ACROSS the whole report, not just within one object:
+// mixing an authoritative `udid` from one writer with an `id` from another
+// manufactures two identities for a single device.
+const WEAK_DEVICE_ID_KEYS = ['id'] as const;
 // `id` is deliberately absent here: on a run/flow container it names the run or
 // flow, and harvesting it would inject a foreign identity into the evidence set.
 const CONTAINER_DEVICE_ID_KEYS = ['udid', 'deviceId', 'deviceSerial'] as const;
@@ -34,6 +38,11 @@ function deviceIdsFrom(value: unknown): string[] {
   return idsFrom(value, DEVICE_ID_KEYS);
 }
 
+function weakDeviceIdsFrom(value: unknown): string[] {
+  if (typeof value === 'string') return [];
+  return idsFrom(value, WEAK_DEVICE_ID_KEYS);
+}
+
 function containerDeviceIdsFrom(value: unknown): string[] {
   if (typeof value === 'string') return [];
   return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
@@ -48,14 +57,12 @@ function reportDeviceIds(reportDir: string): string[] {
       flows?: unknown;
     };
     const flows = Array.isArray(report.flows) ? report.flows : [];
-    const ids = [
-      ...deviceIdsFrom(report.device),
-      ...containerDeviceIdsFrom(report),
-      ...flows.flatMap((flow) => [
-        ...deviceIdsFrom((flow as { device?: unknown } | null)?.device),
-        ...containerDeviceIdsFrom(flow),
-      ]),
+    const devices = [report.device, ...flows.map((flow) => (flow as { device?: unknown })?.device)];
+    const strong = [
+      ...devices.flatMap((device) => deviceIdsFrom(device)),
+      ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container)),
     ];
+    const ids = strong.length > 0 ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
     return [...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))];
   } catch {
     return [];

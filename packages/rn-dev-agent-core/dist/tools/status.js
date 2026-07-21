@@ -281,9 +281,6 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 await client.autoConnect(args.metroPort, connectFilters, 'status');
                 await validateConnectedTarget();
             }
-            else {
-                await validateConnectedTarget();
-            }
             const status = await buildStatusResult(client);
             let autoRecoveredMessage;
             if (status.app.dev === false) {

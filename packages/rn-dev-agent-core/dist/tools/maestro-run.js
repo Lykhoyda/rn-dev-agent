@@ -16,7 +16,7 @@ import { buildStepSummary, buildTerminalEvidence, classifyExecError, combineRunn
 import { fastHealthCheck as defaultFastHealthCheck, stopFastRunner as defaultStopFastRunner, } from '../runners/rn-fast-runner-client.js';
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
-import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
+import { sameDevice, shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
 const defaultExecFile = promisify(execFileCb);
 /**
@@ -109,7 +109,9 @@ export function createMaestroRunHandler(deps = {}) {
         }
         const session = activeSession();
         const matchingSessionDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : undefined;
-        if (args.deviceId && matchingSessionDeviceId && args.deviceId !== matchingSessionDeviceId) {
+        if (args.deviceId &&
+            matchingSessionDeviceId &&
+            !sameDevice(args.deviceId, matchingSessionDeviceId)) {
             return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, 'TARGET_SESSION_MISMATCH', { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
         }
         const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;

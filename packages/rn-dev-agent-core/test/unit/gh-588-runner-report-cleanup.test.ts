@@ -139,6 +139,10 @@ test('structured report identity survives scalar and alternate device key spelli
     { device: { id: 'iPhone-16-Pro', udid: EXACT } },
     { device: { id: 'iPhone16,1', deviceId: EXACT, name: 'iPhone 17 Pro' } },
     { flows: [{ device: { id: 'Pixel_9_API_35', serial: EXACT } }] },
+    // `id` is the last resort across the WHOLE report: a model name beside an
+    // authoritative udid in a sibling object must not split into two devices.
+    { device: { id: 'iPhone-16-Pro' }, udid: EXACT },
+    { device: { id: 'iPhone-16-Pro' }, flows: [{ device: { udid: EXACT } }] },
   ];
   for (const shape of shapes) {
     const dir = mkdtempSync(join(tmpdir(), 'gh-588-report-shape-'));
