@@ -10,7 +10,7 @@ import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
-import { sameDevice, shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from './domain/maestro-device-authority.js';
+import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from './domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from './domain/maestro-runner-report.js';
 const execFile = promisify(execFileCb);
 // Escape a user-supplied string for safe embedding inside a double-quoted YAML scalar.
@@ -146,14 +146,9 @@ export async function runMaestroInline(yaml, opts) {
             directReportDeviceIds: directEvidence.reportDeviceIds,
             requireWdaProvenance: passed,
         });
-        if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
-            return {
-                passed: false,
-                output,
-                flowFile,
-                error: `Maestro device authority refused (${deviceAuthority.reason})`,
-                deviceAuthority,
-            };
+        const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+        if (authorityRefusal) {
+            return { passed: false, output, flowFile, error: authorityRefusal, deviceAuthority };
         }
         return { passed, output, flowFile, deviceAuthority };
     }
@@ -186,13 +181,12 @@ export async function runMaestroInline(yaml, opts) {
                 output: directEvidence.output,
                 directReportDeviceIds: directEvidence.reportDeviceIds,
             });
+            const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, errObj.message);
             return {
                 passed: false,
                 output: capturedOutput,
                 flowFile,
-                ...(shouldRejectMaestroDeviceAuthority(deviceAuthority)
-                    ? { error: `Maestro device authority refused (${deviceAuthority.reason})` }
-                    : {}),
+                ...(authorityRefusal ? { error: authorityRefusal } : {}),
                 deviceAuthority,
             };
         }

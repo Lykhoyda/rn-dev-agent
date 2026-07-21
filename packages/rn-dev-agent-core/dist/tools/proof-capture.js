@@ -115,8 +115,13 @@ export function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     catch {
         return null;
     }
-    for (const authorityArg of argv) {
-        if (!isAbsolute(authorityArg))
+    // Only the executed script carries process authority. argv[1] is the entry
+    // module; argv[2] additionally covers the codex launcher, which execs the
+    // packaged core worker as its first argument. Scanning the full argv would
+    // let any unrelated process that merely PASSES the bundle path as an argument
+    // claim to be the plugin.
+    for (const authorityArg of argv.slice(1, 3)) {
+        if (typeof authorityArg !== 'string' || !isAbsolute(authorityArg))
             continue;
         let arg;
         try {

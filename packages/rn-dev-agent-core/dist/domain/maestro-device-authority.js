@@ -100,3 +100,12 @@ export function shouldRejectMaestroDeviceAuthority(authority) {
         authority.source === 'maestro-runner-log' &&
         !authority.verified);
 }
+// Single refusal wording for every verify call site. `underlyingError` is
+// appended rather than replaced: a refusal must never be the only channel a
+// real runner failure has (a masked ENOENT reads as a wrong-device run).
+export function maestroAuthorityRefusal(authority, underlyingError) {
+    if (!shouldRejectMaestroDeviceAuthority(authority))
+        return null;
+    const headline = `Maestro device authority refused: requested ${authority.requestedDeviceId}, direct runner/WDA evidence was ${authority.reportedDeviceId ?? 'missing'} (${authority.reason}).`;
+    return underlyingError ? `${headline} Underlying failure: ${underlyingError}` : headline;
+}

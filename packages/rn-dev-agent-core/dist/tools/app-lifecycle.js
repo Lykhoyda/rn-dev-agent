@@ -16,6 +16,20 @@ export function resolveIosLifecycleTarget(deviceId) {
     }
     return deviceId;
 }
+// Exported pure helpers so the iOS lifecycle argv shape is regression-testable
+// without spawning simctl — same contract buildAndroidLaunchArgv provides.
+export function buildIosLaunchArgv(bundleId, deviceId) {
+    if (typeof bundleId !== 'string' || bundleId.length === 0) {
+        throw new Error('buildIosLaunchArgv: bundleId is required');
+    }
+    return ['simctl', 'launch', resolveIosLifecycleTarget(deviceId), bundleId];
+}
+export function buildIosTerminateArgv(bundleId, deviceId) {
+    if (typeof bundleId !== 'string' || bundleId.length === 0) {
+        throw new Error('buildIosTerminateArgv: bundleId is required');
+    }
+    return ['simctl', 'terminate', resolveIosLifecycleTarget(deviceId), bundleId];
+}
 export function resolveAndroidLifecycleTarget(deviceId) {
     if (deviceId === undefined)
         return [];
@@ -34,7 +48,7 @@ export function resolveAndroidLifecycleTarget(deviceId) {
  */
 export async function terminateApp(bundleId, platform, deviceId) {
     if (platform === 'ios') {
-        await execFile('xcrun', ['simctl', 'terminate', resolveIosLifecycleTarget(deviceId), bundleId], {
+        await execFile('xcrun', buildIosTerminateArgv(bundleId, deviceId), {
             timeout: TERMINATE_TIMEOUT_MS,
             encoding: 'utf8',
         });
@@ -84,7 +98,7 @@ export function buildAndroidLaunchArgv(bundleId, deviceId) {
  */
 export async function launchApp(bundleId, platform, deviceId) {
     if (platform === 'ios') {
-        await execFile('xcrun', ['simctl', 'launch', resolveIosLifecycleTarget(deviceId), bundleId], {
+        await execFile('xcrun', buildIosLaunchArgv(bundleId, deviceId), {
             timeout: LAUNCH_TIMEOUT_MS,
             encoding: 'utf8',
         });

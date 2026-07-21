@@ -1,41 +1,59 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import {
+  buildIosLaunchArgv,
+  buildIosTerminateArgv,
+  resolveIosLifecycleTarget,
+} from '../../dist/tools/app-lifecycle.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const src = (rel: string) => readFileSync(resolve(__dirname, '../../src', rel), 'utf8');
+const UDID_A = '5C10B45B-2065-458B-B885-0F83F49747C8';
+const UDID_B = '0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9';
 
-const sessionSrc = src('tools/device-session.ts');
-const repairSrc = src('tools/repair-action.ts');
+test('GH-588: an exact UDID reaches the lifecycle argv verbatim, never the booted alias', () => {
+  for (const udid of [UDID_A, UDID_B]) {
+    assert.deepEqual(buildIosLaunchArgv('com.rndevagent.testapp', udid), [
+      'simctl',
+      'launch',
+      udid,
+      'com.rndevagent.testapp',
+    ]);
+    assert.deepEqual(buildIosTerminateArgv('com.rndevagent.testapp', udid), [
+      'simctl',
+      'terminate',
+      udid,
+      'com.rndevagent.testapp',
+    ]);
+  }
+});
 
-// Both recovery paths hold an exact device identity before they re-foreground
-// the target app; launching against `booted` there is the #588 wrong-device bug.
-test('GH-588: iOS re-foreground recovery never targets the ambiguous booted alias', () => {
-  for (const [name, source] of [
-    ['device-session.ts', sessionSrc],
-    ['repair-action.ts', repairSrc],
-  ]) {
-    assert.doesNotMatch(
-      source,
-      /'simctl',\s*'launch',\s*'booted'/,
-      `${name} must not launch against the booted alias`,
+test('GH-588: two simulators produce two distinct argvs (counterfactual)', () => {
+  const a = buildIosLaunchArgv('com.rndevagent.testapp', UDID_A);
+  const b = buildIosLaunchArgv('com.rndevagent.testapp', UDID_B);
+  assert.notDeepEqual(a, b);
+  assert.ok(!a.includes('booted') && !b.includes('booted'));
+});
+
+test('GH-588: a non-UDID device identity is refused rather than silently widened', () => {
+  for (const bogus of ['booted', 'iPhone 16 Pro', 'iPhone-16-Pro', '']) {
+    assert.throws(
+      () => resolveIosLifecycleTarget(bogus),
+      /exact simulator UDID/,
+      `"${bogus}" must not resolve to a lifecycle target`,
     );
   }
 });
 
-test('GH-588: both re-foreground paths delegate to the exact-device launchApp owner', () => {
-  for (const [name, source] of [
-    ['device-session.ts', sessionSrc],
-    ['repair-action.ts', repairSrc],
-  ]) {
-    assert.match(source, /app-lifecycle\.js/, `${name} must import the lifecycle owner`);
-    // Three arguments = (bundleId, platform, deviceId): the launch is device-scoped.
-    assert.match(
-      source,
-      /launchApp\(\s*[^(),]+,[^(),]+,[^()]+\)/,
-      `${name} must launch through launchApp with a device argument`,
-    );
-  }
+test('GH-588: only a wholly absent identity falls back to the booted alias', () => {
+  assert.equal(resolveIosLifecycleTarget(undefined), 'booted');
+  assert.deepEqual(buildIosLaunchArgv('com.rndevagent.testapp'), [
+    'simctl',
+    'launch',
+    'booted',
+    'com.rndevagent.testapp',
+  ]);
+});
+
+test('GH-588: an empty bundleId is refused on both lifecycle argv builders', () => {
+  assert.throws(() => buildIosLaunchArgv('', UDID_A), /bundleId is required/);
+  assert.throws(() => buildIosTerminateArgv('', UDID_A), /bundleId is required/);
 });

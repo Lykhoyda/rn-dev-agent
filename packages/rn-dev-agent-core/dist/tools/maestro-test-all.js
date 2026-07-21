@@ -11,7 +11,7 @@ import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from 
 import { assembleMaestroArgs, runFlowParked } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
-import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
+import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
@@ -49,7 +49,13 @@ export function createMaestroTestAllHandler() {
             return failResult('Cannot determine platform. Pass platform or open a device session first.');
         }
         const session = getActiveSession();
-        const requestedDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : undefined;
+        const matchingSessionDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : undefined;
+        if (args.deviceId &&
+            matchingSessionDeviceId &&
+            !sameDevice(args.deviceId, matchingSessionDeviceId)) {
+            return failResult(`Refusing Maestro suite target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, 'TARGET_SESSION_MISMATCH', { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
+        }
+        const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
         // B59: tiered dispatch (see maestro-dispatch.ts) — picks maestro-runner
         // when viable, falls back to the Maestro CLI on iOS+no-adb machines.
         const dispatch = chooseMaestroDispatch({ platform });
@@ -160,17 +166,14 @@ export function createMaestroTestAllHandler() {
                     directReportDeviceIds: directEvidence.reportDeviceIds,
                     requireWdaProvenance: outputPassed,
                 });
-                const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
-                const ok = outputPassed && !authorityRejected;
+                const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+                const ok = outputPassed && !authorityRefusal;
                 results.push({
                     name,
                     passed: ok,
                     durationMs: Date.now() - start,
-                    error: authorityRejected
-                        ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? 'missing'})`
-                        : ok
-                            ? undefined
-                            : output.slice(0, 300),
+                    error: authorityRefusal ?? (ok ? undefined : output.slice(0, 300)),
+                    deviceAuthority,
                 });
                 if (ok)
                     passed++;
@@ -182,24 +185,35 @@ export function createMaestroTestAllHandler() {
             catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 const errWithOutput = err;
-                const directEvidence = collectDirectRunnerEvidence(runnerReportDir, [errWithOutput.stdout, errWithOutput.stderr]
+                const capturedOutput = [errWithOutput.stdout, errWithOutput.stderr]
                     .filter((value) => typeof value === 'string')
-                    .join('\n'));
-                const deviceAuthority = verifyMaestroDeviceAuthority({
-                    runner: flowDispatch.runner,
-                    platform,
-                    requestedDeviceId,
-                    output: directEvidence.output,
-                    directReportDeviceIds: directEvidence.reportDeviceIds,
-                });
-                const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
+                    .join('\n')
+                    .trim();
+                // No captured output means the runner never executed (spawn ENOENT/EACCES,
+                // a park failure, a timeout before first byte). There is no device to
+                // adjudicate, and an authority verdict here would be the only thing the
+                // suite reports — masking a broken Maestro install as a wrong-device run.
+                const directEvidence = capturedOutput
+                    ? collectDirectRunnerEvidence(runnerReportDir, capturedOutput)
+                    : null;
+                const deviceAuthority = directEvidence
+                    ? verifyMaestroDeviceAuthority({
+                        runner: flowDispatch.runner,
+                        platform,
+                        requestedDeviceId,
+                        output: directEvidence.output,
+                        directReportDeviceIds: directEvidence.reportDeviceIds,
+                    })
+                    : null;
+                const authorityRefusal = deviceAuthority
+                    ? maestroAuthorityRefusal(deviceAuthority, msg.slice(0, 300))
+                    : null;
                 results.push({
                     name,
                     passed: false,
                     durationMs: Date.now() - start,
-                    error: authorityRejected
-                        ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? 'missing'})`
-                        : msg.slice(0, 300),
+                    error: authorityRefusal ?? msg.slice(0, 300),
+                    ...(deviceAuthority ? { deviceAuthority } : {}),
                 });
                 failed++;
                 if (args.stopOnFailure)
@@ -220,6 +234,7 @@ export function createMaestroTestAllHandler() {
             platform,
             flowDir,
             runner: dispatch.runner,
+            requestedDeviceId: requestedDeviceId ?? null,
             ...(batchCaveat ? { fallbackReason: batchCaveat } : {}),
             results,
         };

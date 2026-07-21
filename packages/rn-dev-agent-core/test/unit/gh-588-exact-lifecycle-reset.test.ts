@@ -65,6 +65,9 @@ test('GH-588 V4: lifecycle reset threads the matching active iOS session UDID to
   );
 });
 
+// A foreign-app session is not lifecycle authority for this bundle — but the
+// reset must not silently degrade to the ambiguous `booted` alias either. It
+// refuses, so nothing is ever dispatched at an unidentified simulator.
 test('GH-588 V4: another app session is never borrowed as lifecycle authority', async () => {
   const targets: Array<string | undefined> = [];
   const handler = createDeviceResetStateHandler(() => client(), {
@@ -74,9 +77,13 @@ test('GH-588 V4: another app session is never borrowed as lifecycle authority', 
     },
   });
 
-  await handler({ appId: APP_ID, platform: 'ios', relaunch: false });
+  const result = await handler({ appId: APP_ID, platform: 'ios', relaunch: false });
 
-  assert.deepEqual(targets, [undefined]);
+  assert.deepEqual(targets, []);
+  assert.equal(result.isError, true);
+  const envelope = JSON.parse(result.content[0].text);
+  assert.equal(envelope.code, 'TARGET_SESSION_MISMATCH');
+  assert.equal(envelope.meta.activeSessionDeviceId, UDID);
 });
 
 test('GH-588 V4: supplied iOS lifecycle identities are exact UDIDs or fail closed', () => {

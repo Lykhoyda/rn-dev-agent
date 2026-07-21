@@ -433,9 +433,12 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
     const errors: Partial<Record<LogSource, string>> = {};
 
     const controller = new AbortController();
+    // The iOS native collector spends up to PID_PROBE_TIMEOUT_MS resolving the
+    // exact app pid BEFORE the log stream starts, so a deadline measured from
+    // handler entry silently truncates the requested capture window.
     const hardDeadline = setTimeout(
       () => controller.abort(),
-      Math.max(args.durationMs + 2000, 5000),
+      Math.max(args.durationMs + PID_PROBE_TIMEOUT_MS + 2000, 5000),
     );
 
     try {

@@ -24,7 +24,6 @@ const WEAK_DEVICE_ID_KEYS = ['id'] as const;
 const CONTAINER_DEVICE_ID_KEYS = ['udid', 'deviceId', 'deviceSerial'] as const;
 
 function idsFrom(value: unknown, keys: readonly string[]): string[] {
-  if (typeof value === 'string') return [value];
   if (!value || typeof value !== 'object') return [];
   const record = value as Record<string, unknown>;
   for (const key of keys) {
@@ -38,13 +37,16 @@ function deviceIdsFrom(value: unknown): string[] {
   return idsFrom(value, DEVICE_ID_KEYS);
 }
 
+// A bare string carries no key asserting it is an identity, and this writer
+// also spells model names there ("iPhone-16-Pro" satisfies DIRECT_DEVICE_ID_RE).
+// Treating it as strong made one such writer a permanent mismatch lockout, so
+// it joins `id` in the last-resort tier the other two variants already use.
 function weakDeviceIdsFrom(value: unknown): string[] {
-  if (typeof value === 'string') return [];
+  if (typeof value === 'string') return [value];
   return idsFrom(value, WEAK_DEVICE_ID_KEYS);
 }
 
 function containerDeviceIdsFrom(value: unknown): string[] {
-  if (typeof value === 'string') return [];
   return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
 }
 

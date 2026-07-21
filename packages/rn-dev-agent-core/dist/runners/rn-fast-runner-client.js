@@ -89,6 +89,10 @@ let runnerProcess = null;
 let runnerState = null;
 let runnerPoisoned = false;
 let poisonReap = null;
+// Concurrent containments share one poison flag. Clearing it on the first
+// completion would reopen mutating commands while a second containment is
+// still awaiting its own reap — exactly the window the poison exists to close.
+let poisonHolders = 0;
 let runnerOutputTail = '';
 let lastRunnerCommand = null;
 let lastRunnerPostMortem = null;
@@ -758,6 +762,13 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
         }
         lastKnownCapabilities = res.capabilities ?? [];
         noteStaleHittableArtifact(res.capabilities);
+        // startFastRunner stamps the bridge's own RUNNER_PROTOCOL_VERSION optimistically;
+        // /health is the only place the artifact's real wire version is learned. Without
+        // writing it back, a compatible v1 runner reads as v2 and the client-side
+        // dismiss-first fallback that v1 requires is silently skipped.
+        if (typeof res.protocolVersion === 'number') {
+            state.protocolVersion = res.protocolVersion;
+        }
         return {
             liveness: 'alive',
             ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
@@ -921,6 +932,7 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
     // refused at postCommandWithRecovery and cannot reach this XCTest instance.
     const runnerBefore = authorityBefore;
     runnerPoisoned = true;
+    poisonHolders++;
     let verification = { matches: false };
     try {
         if (args._verifyExactReadback && typeof args.text === 'string') {
@@ -945,8 +957,12 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
         }
     }
     finally {
-        poisonReap = null;
-        runnerPoisoned = false;
+        poisonHolders--;
+        if (poisonHolders <= 0) {
+            poisonHolders = 0;
+            poisonReap = null;
+            runnerPoisoned = false;
+        }
     }
     const runnerTimeoutRecovery = {
         trigger,
@@ -1038,6 +1054,23 @@ function sameRefIdentity(before, after) {
     // element of the same type once the keyboard leaves the tree.
     return false;
 }
+// Same rule refreshRef enforces: a positional ref may only be re-served when
+// its identity resolves to exactly ONE node in the new tree. Equality at the
+// same key is not enough — sibling rows sharing a testID satisfy it after the
+// index set shifts.
+function countIdentityMatches(before, nodes) {
+    let matches = 0;
+    for (const node of nodes) {
+        const candidate = {
+            type: node.type,
+            ...(node.label !== undefined ? { label: node.label } : {}),
+            ...(node.identifier !== undefined ? { identifier: node.identifier } : {}),
+        };
+        if (sameRefIdentity(before, candidate))
+            matches++;
+    }
+    return matches;
+}
 function mapRunnerNodesToFlat(nodes) {
     const out = [];
     let synthCounter = 0;
@@ -1121,22 +1154,44 @@ export async function runIOS(args) {
         body.snapshotGeneration = args.snapshotGeneration;
     if (args.keyboardStateAtSnapshot !== undefined)
         body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+    // Transport-level refusals must surface as typed results from every runner
+    // round trip, not just the main dispatch — `withSession` does not catch, so a
+    // raw throw from the keyboard preamble becomes an MCP-level crash.
+    const mapRunnerDispatchError = (err) => {
+        const m = err instanceof Error ? err.message : String(err);
+        if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+            return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        if (m.startsWith('RUNNER_TIMEOUT') && runnerPoisoned) {
+            return failResult(m, 'RUNNER_TIMEOUT', { poisoned: true, dispatched: false });
+        }
+        return null;
+    };
     let keyboardRelayoutRecovered = false;
     // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
     // policy client-side instead of silently downgrading to point containment.
     if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true &&
         runnerState?.protocolVersion === 1) {
-        const legacyDismiss = await postCommand({
-            command: 'keyboardDismiss',
-            ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
-        });
-        const data = (legacyDismiss.data ?? {});
-        if (data.wasVisible && (!data.dismissed || data.visible)) {
-            return failResult('KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.', 'KEYBOARD_DISMISS_FAILED', { attemptedTiers: ['native-control', 'native-swipe'], protocolVersion: 1 });
+        try {
+            const legacyDismiss = await postCommand({
+                command: 'keyboardDismiss',
+                ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+            });
+            const data = (legacyDismiss.data ?? {});
+            if (data.wasVisible && (!data.dismissed || data.visible)) {
+                return failResult('KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.', 'KEYBOARD_DISMISS_FAILED', { attemptedTiers: ['native-control', 'native-swipe'], protocolVersion: 1 });
+            }
+            if (data.wasVisible && data.dismissed)
+                keyboardRelayoutRecovered = true;
         }
-        if (data.wasVisible && data.dismissed)
-            keyboardRelayoutRecovered = true;
+        catch (err) {
+            const mapped = mapRunnerDispatchError(err);
+            if (mapped)
+                return mapped;
+            throw err;
+        }
     }
+    const refreshFailure = { result: null };
     const refreshTargetAfterKeyboard = async () => {
         if (!args._targetRef)
             return true; // raw coordinates remain meaningful after dismissal
@@ -1144,17 +1199,27 @@ export async function runIOS(args) {
         // set, so the same id can denote a different element. Only an identity
         // match may be re-served under the original ref.
         const before = getCachedMetadata(args._targetRef);
-        const snapshot = await postCommand({
-            command: 'snapshot',
-            interactiveOnly: true,
-            ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
-        });
+        let snapshot;
+        try {
+            snapshot = await postCommand({
+                command: 'snapshot',
+                interactiveOnly: true,
+                ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+            });
+        }
+        catch (err) {
+            refreshFailure.result = mapRunnerDispatchError(err);
+            if (refreshFailure.result)
+                return false;
+            throw err;
+        }
         if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== 'object')
             return false;
         const data = snapshot.data;
         if (!Array.isArray(data.nodes))
             return false;
-        updateRefMapFromFlat(mapRunnerNodesToFlat(data.nodes), {
+        const flat = mapRunnerNodesToFlat(data.nodes);
+        updateRefMapFromFlat(flat, {
             ...(typeof data.snapshotGeneration === 'number'
                 ? { snapshotGeneration: data.snapshotGeneration }
                 : {}),
@@ -1163,6 +1228,8 @@ export async function runIOS(args) {
                 : {}),
         });
         if (!sameRefIdentity(before, getCachedMetadata(args._targetRef)))
+            return false;
+        if (!before || countIdentityMatches(before, flat) !== 1)
             return false;
         const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
         if (!target)
@@ -1176,7 +1243,7 @@ export async function runIOS(args) {
         return true;
     };
     if (keyboardRelayoutRecovered && !(await refreshTargetAfterKeyboard())) {
-        return staleAfterKeyboardDismissal(args._targetRef);
+        return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
     }
     let resp;
     let recovery;
@@ -1184,13 +1251,10 @@ export async function runIOS(args) {
         ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
     }
     catch (err) {
+        const mapped = mapRunnerDispatchError(err);
+        if (mapped)
+            return mapped;
         const m = err instanceof Error ? err.message : String(err);
-        if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
-            return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
-        }
-        if (m.startsWith('RUNNER_TIMEOUT') && runnerPoisoned) {
-            return failResult(m, 'RUNNER_TIMEOUT', { poisoned: true, dispatched: false });
-        }
         if (args.command === 'type' && m.startsWith('RUNNER_TIMEOUT')) {
             return containTypeTimeout(args);
         }
@@ -1198,7 +1262,7 @@ export async function runIOS(args) {
     }
     if (!resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
         if (!(await refreshTargetAfterKeyboard())) {
-            return staleAfterKeyboardDismissal(args._targetRef);
+            return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
         }
         ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
         keyboardRelayoutRecovered = true;

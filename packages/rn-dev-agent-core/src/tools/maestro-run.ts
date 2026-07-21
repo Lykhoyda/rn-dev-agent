@@ -37,8 +37,8 @@ import {
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import {
+  maestroAuthorityRefusal,
   sameDevice,
-  shouldRejectMaestroDeviceAuthority,
   verifyMaestroDeviceAuthority,
 } from '../domain/maestro-device-authority.js';
 import {
@@ -380,20 +380,17 @@ export function createMaestroRunHandler(
         directReportDeviceIds: directEvidence.reportDeviceIds,
         requireWdaProvenance: passed,
       });
-      if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
-        return failResult(
-          `Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? 'missing'} (${deviceAuthority.reason}).`,
-          'DEVICE_AUTHORITY_MISMATCH',
-          {
-            flowFile,
-            platform,
-            runner: dispatch.runner,
-            transport: dispatch.runner,
-            passed: false,
-            deviceAuthority,
-            output: output.slice(0, 4000),
-          },
-        );
+      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+      if (authorityRefusal) {
+        return failResult(authorityRefusal, 'DEVICE_AUTHORITY_MISMATCH', {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          output: output.slice(0, 4000),
+        });
       }
       const summary = buildStepSummary(output, { failed: !passed });
       const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck) : undefined;
@@ -475,25 +472,26 @@ export function createMaestroRunHandler(
         ['ENOENT', 'EACCES'].includes(String((err as { code?: unknown } | null)?.code ?? ''));
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
-      if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
-        return failResult(
-          `Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? 'missing'} (${deviceAuthority.reason}).`,
-          'DEVICE_AUTHORITY_MISMATCH',
-          {
-            flowFile,
-            platform,
-            runner: dispatch.runner,
-            transport: dispatch.runner,
-            passed: false,
-            deviceAuthority,
-            output: combined.slice(0, 4000),
-            ...summary,
-            terminal,
-            ...(runnerResume ? { runnerResume } : {}),
-            timedOut,
-            outputTruncated,
-          },
-        );
+      // A run that produced no output never reached the device, so there is no
+      // authority verdict to render — reporting one would mask the spawn/park
+      // failure behind DEVICE_AUTHORITY_MISMATCH and refuse auto-repair.
+      const catchRefusal =
+        combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg) : null;
+      if (catchRefusal) {
+        return failResult(catchRefusal, 'DEVICE_AUTHORITY_MISMATCH', {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          output: combined.slice(0, 4000),
+          ...summary,
+          terminal,
+          ...(runnerResume ? { runnerResume } : {}),
+          timedOut,
+          outputTruncated,
+        });
       }
       // Headline from structured data (raw-free); the raw err.message is the
       // fallback only for system errors with no step output (e.g. spawn ENOENT).

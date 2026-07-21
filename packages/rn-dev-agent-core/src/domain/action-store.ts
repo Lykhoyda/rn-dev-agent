@@ -454,7 +454,14 @@ export function promoteActionRuntimeWithCAS(
   nextState: ReusableAction['state'],
 ): SaveActionRuntimeCASResult {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync(sidecarPath) && !runtimeSidecarMatches(sidecarPath, expected.state)) {
+  if (existsSync(sidecarPath)) {
+    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+      return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
+  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
+    // Same refusal as saveActionRuntimeWithCAS: a sidecar that vanished under a
+    // state that has history is an external signal, and promoting would rewrite
+    // both YAML and sidecar over it.
     return { ok: false, conflict: 'EXTERNAL_WRITE' };
   }
   if (actionWasEditedExternally(expected)) return { ok: false, conflict: 'EXTERNAL_WRITE' };

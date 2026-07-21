@@ -465,14 +465,21 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             projectRoot,
             probeDeviceId ? { ...record, deviceId: probeDeviceId } : record,
           );
-    const writeDisclosure = (actionYaml: WriteDisclosureKind = 'none') => ({
+    const writeDisclosure = (
+      actionYaml: WriteDisclosureKind = 'none',
+      outcome?: PersistRunOutcome,
+    ) => ({
       actionYaml:
         actionYaml === 'none'
           ? { written: false, reason: 'repair-not-applied' }
           : actionYaml === 'lifecycle-promotion-refused'
             ? { written: false, reason: 'lifecycle-promotion-refused' }
             : { written: true, authorized: true, reason: actionYaml },
-      runtimeState: proofReplay ? 'none' : 'sidecar',
+      runtimeState: proofReplay
+        ? 'none'
+        : outcome?.runtimeStateRefused
+          ? 'refused-external-write'
+          : 'sidecar',
       databaseMirror: proofReplay ? 'none' : 'best-effort',
     });
 
@@ -551,7 +558,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   transportVersion: null,
                   fallback: 'none',
                   repair: autoRepair,
-                  writes: writeDisclosure(promotionDisclosure(persisted)),
+                  writes: writeDisclosure(promotionDisclosure(persisted), persisted),
                   blindProbe,
                   ...blindProbeControl,
                   timings_ms,
@@ -661,7 +668,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair,
           autoRepair,
-          writes: writeDisclosure(promotionDisclosure(persisted)),
+          writes: writeDisclosure(promotionDisclosure(persisted), persisted),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500),
@@ -771,7 +778,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   fallback: 'cdp-js',
                   repair: autoRepair,
                   autoRepair,
-                  writes: writeDisclosure(promotionDisclosure(persisted)),
+                  writes: writeDisclosure(promotionDisclosure(persisted), persisted),
                   durationMs: Date.now() - t0,
                   flowFile: action.filePath,
                 });
@@ -1115,6 +1122,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 interface PersistRunOutcome {
   promoted: boolean;
   promotionRefused: boolean;
+  runtimeStateRefused?: boolean;
 }
 
 type WriteDisclosureKind =
@@ -1173,11 +1181,17 @@ async function persistRun(
     if (promotes && !promotionRefused) return commit(true, false);
     if (saveActionRuntimeWithCAS(fresh, nextState).ok) return commit(false, promotionRefused);
     // Sidecar CAS conflict — another writer raced us. Reload and retry.
+    // Exhausting the retries is NOT necessarily a race: a truncated or foreign
+    // sidecar is refused deterministically while loadOrInitSidecar keeps
+    // handing back a fresh state, so reload+retry can never converge. Degrade
+    // with disclosure like the promotion path rather than converting an
+    // otherwise-successful replay into an orchestration exception.
     if (attempt === MAX_ATTEMPTS) {
-      throw new Error(
-        `persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive sidecar CAS conflicts; ` +
-          `the runtime sidecar changed after load. RunRecord was not written.`,
+      console.error(
+        `cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} sidecar CAS conflicts; ` +
+          `runtime state was not written (status=${record.status}).`,
       );
+      return { promoted: false, promotionRefused, runtimeStateRefused: true };
     }
   }
   return { promoted: false, promotionRefused: false };

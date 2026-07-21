@@ -280,11 +280,20 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
         const waitForReady = args.waitForReady ?? true;
         const waitForNavReady = args.waitForNavReady ?? false;
         const session = deps.getSession?.() ?? null;
-        const lifecycleDeviceId = session?.platform === platform &&
-            session.appId === args.appId &&
-            typeof session.deviceId === 'string'
+        const sessionDeviceId = session?.platform === platform && typeof session.deviceId === 'string'
             ? session.deviceId
             : undefined;
+        // A session bound to a different bundle is not lifecycle authority for this
+        // one, but dropping its device silently resolved to the ambiguous `booted`
+        // alias — the #588 wrong-device bug. Refuse instead of guessing a target.
+        if (sessionDeviceId && session?.appId !== args.appId) {
+            return failResult(`Refusing to reset ${args.appId}: the active ${platform} session is bound to ${session?.appId ?? 'another app'} on ${sessionDeviceId}. Close that session first so an exact device identity for ${args.appId} can be resolved.`, 'TARGET_SESSION_MISMATCH', {
+                requestedAppId: args.appId,
+                activeSessionAppId: session?.appId,
+                activeSessionDeviceId: sessionDeviceId,
+            });
+        }
+        const lifecycleDeviceId = sessionDeviceId;
         const steps = [];
         let reconnected = false;
         let helpersInjected = false;

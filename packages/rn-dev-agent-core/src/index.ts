@@ -2154,6 +2154,12 @@ trackedTool(
       .enum(['ios', 'android'])
       .optional()
       .describe('Target platform (auto-detected from session)'),
+    deviceId: z
+      .string()
+      .optional()
+      .describe(
+        'Exact simulator UDID / adb serial to run the suite on (defaults to the active session device).',
+      ),
     flowDir: z
       .string()
       .optional()

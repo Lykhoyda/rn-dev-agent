@@ -16,8 +16,6 @@ const WEAK_DEVICE_ID_KEYS = ['id'];
 // flow, and harvesting it would inject a foreign identity into the evidence set.
 const CONTAINER_DEVICE_ID_KEYS = ['udid', 'deviceId', 'deviceSerial'];
 function idsFrom(value, keys) {
-    if (typeof value === 'string')
-        return [value];
     if (!value || typeof value !== 'object')
         return [];
     const record = value;
@@ -31,14 +29,16 @@ function idsFrom(value, keys) {
 function deviceIdsFrom(value) {
     return idsFrom(value, DEVICE_ID_KEYS);
 }
+// A bare string carries no key asserting it is an identity, and this writer
+// also spells model names there ("iPhone-16-Pro" satisfies DIRECT_DEVICE_ID_RE).
+// Treating it as strong made one such writer a permanent mismatch lockout, so
+// it joins `id` in the last-resort tier the other two variants already use.
 function weakDeviceIdsFrom(value) {
     if (typeof value === 'string')
-        return [];
+        return [value];
     return idsFrom(value, WEAK_DEVICE_ID_KEYS);
 }
 function containerDeviceIdsFrom(value) {
-    if (typeof value === 'string')
-        return [];
     return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
 }
 function reportDeviceIds(reportDir) {

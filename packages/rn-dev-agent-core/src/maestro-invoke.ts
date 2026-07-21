@@ -16,8 +16,8 @@ import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
 import {
+  maestroAuthorityRefusal,
   sameDevice,
-  shouldRejectMaestroDeviceAuthority,
   verifyMaestroDeviceAuthority,
   type MaestroDeviceAuthority,
 } from './domain/maestro-device-authority.js';
@@ -205,14 +205,9 @@ export async function runMaestroInline(
       directReportDeviceIds: directEvidence.reportDeviceIds,
       requireWdaProvenance: passed,
     });
-    if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
-      return {
-        passed: false,
-        output,
-        flowFile,
-        error: `Maestro device authority refused (${deviceAuthority.reason})`,
-        deviceAuthority,
-      };
+    const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+    if (authorityRefusal) {
+      return { passed: false, output, flowFile, error: authorityRefusal, deviceAuthority };
     }
     return { passed, output, flowFile, deviceAuthority };
   } catch (err) {
@@ -244,13 +239,12 @@ export async function runMaestroInline(
         output: directEvidence.output,
         directReportDeviceIds: directEvidence.reportDeviceIds,
       });
+      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, errObj.message);
       return {
         passed: false,
         output: capturedOutput,
         flowFile,
-        ...(shouldRejectMaestroDeviceAuthority(deviceAuthority)
-          ? { error: `Maestro device authority refused (${deviceAuthority.reason})` }
-          : {}),
+        ...(authorityRefusal ? { error: authorityRefusal } : {}),
         deviceAuthority,
       };
     }
