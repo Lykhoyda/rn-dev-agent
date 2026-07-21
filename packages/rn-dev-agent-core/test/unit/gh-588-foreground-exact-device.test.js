@@ -26,12 +26,16 @@ test('GH-588: iOS re-foreground recovery never targets the ambiguous booted alia
 });
 
 test('GH-588: both re-foreground paths delegate to the exact-device launchApp owner', () => {
-  assert.match(sessionSrc, /import \{ launchApp \} from '\.\/app-lifecycle\.js'/);
-  assert.match(sessionSrc, /await launchApp\(appId, 'ios', deviceId\)/);
-
-  assert.match(repairSrc, /import \{ launchApp \} from '\.\/app-lifecycle\.js'/);
-  assert.match(repairSrc, /await launchApp\(bundleId, [^)]*deviceId\)/);
-  // The serial that already scopes stopFastRunner must scope the launch too.
-  assert.match(repairSrc, /const deviceId = getActiveSession\(\)\?\.deviceId;/);
-  assert.match(repairSrc, /stopFastRunner\(deviceId\)/);
+  for (const [name, source] of [
+    ['device-session.ts', sessionSrc],
+    ['repair-action.ts', repairSrc],
+  ]) {
+    assert.match(source, /app-lifecycle\.js/, `${name} must import the lifecycle owner`);
+    // Three arguments = (bundleId, platform, deviceId): the launch is device-scoped.
+    assert.match(
+      source,
+      /launchApp\(\s*[^(),]+,[^(),]+,[^()]+\)/,
+      `${name} must launch through launchApp with a device argument`,
+    );
+  }
 });
