@@ -1,8 +1,7 @@
 // GH #383 (Task 8 carry-forwards): RUNNER_PROTOCOL_MISMATCH and the transparent
 // upgrade note must surface on EVERY entry path, not just runNative. The
-// device_snapshot action=open path has no dependency-injection seam for
-// ensureRunnerForCommand/startAndroidRunner, so — like the GH #202 wiring
-// tests — these are source-text invariants on the open path.
+// These source-text invariants ensure the default open path and its injectable
+// test seam preserve the same upgrade behavior.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -29,11 +28,15 @@ test('gh-383: open success carries the upgrade note (iOS ready.note, Android pen
 });
 
 test('gh-383: Android note is consumed immediately after startAndroidRunner succeeds (never left pending)', () => {
-  // GH #418: the open call gained { allowArtifactRebuild: true } — the
-  // invariant is unchanged: the note is consumed on the very next line.
+  // GH #418: the default dependency still enables the one allowed open-path
+  // rebuild, and the caller consumes the note immediately after that dependency.
   assert.match(
     sessionSrc,
-    /await startAndroidRunner\(deviceId, appId, undefined, \{ allowArtifactRebuild: true \}\);\s*\n\s*upgradeNote = consumePendingAndroidUpgradeNote\(\);/,
+    /startAndroidRunner\(deviceId, appId, undefined, \{ allowArtifactRebuild: true \}\)/,
+  );
+  assert.match(
+    sessionSrc,
+    /await startAndroidRunnerFn\(deviceId, appId\);\s*\n\s*upgradeNote = consumePendingAndroidUpgradeNote\(\);/,
   );
 });
 

@@ -10,6 +10,10 @@ import {
 import { _setActiveSessionForTest } from '../../dist/agent-device-wrapper.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 
+test.beforeEach(() => {
+  _setActiveSessionForTest(null);
+});
+
 function envelope(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0]!.text) as Record<string, unknown>;
 }

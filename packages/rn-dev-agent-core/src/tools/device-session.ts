@@ -125,12 +125,13 @@ export async function isAppRunning(
   bundleId: string,
   probes?: {
     ios?: (bundleId: string) => Promise<boolean>;
-    android?: (bundleId: string) => Promise<boolean>;
+    android?: (bundleId: string, deviceId?: string) => Promise<boolean>;
   },
+  deviceId?: string,
 ): Promise<boolean> {
   const p = (platform ?? 'ios').toLowerCase();
   if (p === 'android') {
-    return (probes?.android ?? defaultAndroidProbe)(bundleId);
+    return (probes?.android ?? defaultAndroidProbe)(bundleId, deviceId);
   }
   return (probes?.ios ?? defaultIOSProbe)(bundleId);
 }
@@ -148,15 +149,45 @@ async function defaultIOSProbe(bundleId: string): Promise<boolean> {
   }
 }
 
-async function defaultAndroidProbe(bundleId: string): Promise<boolean> {
+export function buildAndroidPidofArgs(bundleId: string, deviceId?: string): string[] {
+  return [...(deviceId ? ['-s', deviceId] : []), 'shell', 'pidof', bundleId];
+}
+
+async function defaultAndroidProbe(bundleId: string, deviceId?: string): Promise<boolean> {
   try {
-    const { stdout } = await execFile('adb', ['shell', 'pidof', bundleId], {
+    const { stdout } = await execFile('adb', buildAndroidPidofArgs(bundleId, deviceId), {
       timeout: 3000,
       encoding: 'utf8',
     });
     return stdout.trim().length > 0;
   } catch {
     return false;
+  }
+}
+
+export function buildAndroidAppLaunchArgs(deviceId: string, appId: string): string[] {
+  // Keyless AVDs abort monkey with exit 251 when its default SYS_KEYS bucket is
+  // non-empty. This invocation injects only the launcher event, so disabling
+  // that unavailable random-event bucket changes no intended behavior.
+  return [
+    '-s',
+    deviceId,
+    'shell',
+    'monkey',
+    '--pct-syskeys',
+    '0',
+    '-p',
+    appId,
+    '-c',
+    'android.intent.category.LAUNCHER',
+    '1',
+  ];
+}
+
+class AndroidAppLaunchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AndroidAppLaunchError';
   }
 }
 
@@ -168,12 +199,31 @@ export function createDeviceSnapshotHandler(
       deviceId: string,
       appId: string,
     ) => Promise<boolean>;
+    isAppRunning?: (platform: string, appId: string, deviceId: string) => Promise<boolean>;
+    startAndroidRunner?: (deviceId: string, appId: string) => Promise<unknown>;
+    launchAndroidApp?: (deviceId: string, appId: string) => Promise<void>;
   } = {},
 ): (args: SnapshotArgs) => Promise<ToolResult> {
   const probeAndroidUi =
     deps.probeAndroidUi ??
     ((deviceId: string, appId: string) =>
       runAndroid({ command: 'snapshot', deviceId, bundleId: appId, interactiveOnly: false }));
+  const isAppRunningFn =
+    deps.isAppRunning ??
+    ((platform: string, appId: string, deviceId: string) =>
+      isAppRunning(platform, appId, undefined, deviceId));
+  const startAndroidRunnerFn =
+    deps.startAndroidRunner ??
+    ((deviceId: string, appId: string) =>
+      startAndroidRunner(deviceId, appId, undefined, { allowArtifactRebuild: true }));
+  const launchAndroidApp =
+    deps.launchAndroidApp ??
+    (async (deviceId: string, appId: string) => {
+      await execFile('adb', buildAndroidAppLaunchArgs(deviceId, appId), {
+        timeout: 10_000,
+        encoding: 'utf8',
+      });
+    });
   return async (args) => {
     const action = args.action ?? 'snapshot';
 
@@ -261,7 +311,7 @@ export function createDeviceSnapshotHandler(
       // the app is already running. Avoids the unconditional relaunch that
       // invalidates CDP sessions and can race Metro bundle loading.
       if (args.attachOnly) {
-        const running = await isAppRunning(platform, appId);
+        const running = await isAppRunningFn(platform, appId, deviceId);
         if (!running) {
           releaseDeviceLockForSession();
           return failResult(
@@ -307,24 +357,16 @@ export function createDeviceSnapshotHandler(
           });
         } else {
           // GH #418: open may invalidate stale runner APKs + Gradle-rebuild.
-          await startAndroidRunner(deviceId, appId, undefined, { allowArtifactRebuild: true });
+          await startAndroidRunnerFn(deviceId, appId);
           upgradeNote = consumePendingAndroidUpgradeNote();
           if (!args.attachOnly) {
-            await execFile(
-              'adb',
-              [
-                '-s',
-                deviceId,
-                'shell',
-                'monkey',
-                '-p',
-                appId,
-                '-c',
-                'android.intent.category.LAUNCHER',
-                '1',
-              ],
-              { timeout: 10_000, encoding: 'utf8' },
-            );
+            try {
+              await launchAndroidApp(deviceId, appId);
+            } catch (err) {
+              throw new AndroidAppLaunchError(
+                `Failed to launch ${appId} on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
           }
           const readiness = await probeAndroidUi(deviceId, appId);
           if (readiness.isError) {
@@ -348,6 +390,9 @@ export function createDeviceSnapshotHandler(
         // doesn't leak onto the next successful Android result.
         consumePendingAndroidUpgradeNote();
         const msg = err instanceof Error ? err.message : String(err);
+        if (err instanceof AndroidAppLaunchError) {
+          return failResult(err.message, 'APP_LAUNCH_FAILED');
+        }
         // GH #418: even the open-path rebuild couldn't produce a runner with
         // the required commands — the checkout itself is suspect.
         if (msg.startsWith('RUNNER_COMMANDS_STALE')) {

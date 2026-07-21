@@ -46363,10 +46363,10 @@ function deviceBusyMessage(deviceId, holder) {
   const label = holder.platform === "android" ? "Emulator/device" : "Simulator";
   return `${label} ${deviceId} is already owned by another rn-dev-agent bridge (PID ${holder.pid}, project ${holder.projectRoot}${holder.appId ? `, app ${holder.appId}` : ""}). Close that session or target a different simulator.`;
 }
-async function isAppRunning(platform, bundleId, probes) {
+async function isAppRunning(platform, bundleId, probes, deviceId) {
   const p = (platform ?? "ios").toLowerCase();
   if (p === "android") {
-    return (probes?.android ?? defaultAndroidProbe)(bundleId);
+    return (probes?.android ?? defaultAndroidProbe)(bundleId, deviceId);
   }
   return (probes?.ios ?? defaultIOSProbe)(bundleId);
 }
@@ -46381,9 +46381,12 @@ async function defaultIOSProbe(bundleId) {
     return false;
   }
 }
-async function defaultAndroidProbe(bundleId) {
+function buildAndroidPidofArgs(bundleId, deviceId) {
+  return [...deviceId ? ["-s", deviceId] : [], "shell", "pidof", bundleId];
+}
+async function defaultAndroidProbe(bundleId, deviceId) {
   try {
-    const { stdout } = await execFile11("adb", ["shell", "pidof", bundleId], {
+    const { stdout } = await execFile11("adb", buildAndroidPidofArgs(bundleId, deviceId), {
       timeout: 3e3,
       encoding: "utf8"
     });
@@ -46392,8 +46395,31 @@ async function defaultAndroidProbe(bundleId) {
     return false;
   }
 }
+function buildAndroidAppLaunchArgs(deviceId, appId) {
+  return [
+    "-s",
+    deviceId,
+    "shell",
+    "monkey",
+    "--pct-syskeys",
+    "0",
+    "-p",
+    appId,
+    "-c",
+    "android.intent.category.LAUNCHER",
+    "1"
+  ];
+}
 function createDeviceSnapshotHandler(deps = {}) {
   const probeAndroidUi = deps.probeAndroidUi ?? ((deviceId, appId) => runAndroid({ command: "snapshot", deviceId, bundleId: appId, interactiveOnly: false }));
+  const isAppRunningFn = deps.isAppRunning ?? ((platform, appId, deviceId) => isAppRunning(platform, appId, void 0, deviceId));
+  const startAndroidRunnerFn = deps.startAndroidRunner ?? ((deviceId, appId) => startAndroidRunner(deviceId, appId, void 0, { allowArtifactRebuild: true }));
+  const launchAndroidApp = deps.launchAndroidApp ?? (async (deviceId, appId) => {
+    await execFile11("adb", buildAndroidAppLaunchArgs(deviceId, appId), {
+      timeout: 1e4,
+      encoding: "utf8"
+    });
+  });
   return async (args) => {
     const action = args.action ?? "snapshot";
     if (action === "open") {
@@ -46435,7 +46461,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         logger.warn("rn-device", `Device-ownership lock unavailable (fs error) for ${deviceId} \u2014 cross-bridge contention protection is off this session.`);
       }
       if (args.attachOnly) {
-        const running = await isAppRunning(platform, appId);
+        const running = await isAppRunningFn(platform, appId, deviceId);
         if (!running) {
           releaseDeviceLockForSession();
           return failResult(`attachOnly=true but ${appId} is not running on ${platform}. Launch it manually or drop attachOnly.`, "NOT_CONNECTED");
@@ -46459,20 +46485,14 @@ function createDeviceSnapshotHandler(deps = {}) {
           }).catch(() => {
           });
         } else {
-          await startAndroidRunner(deviceId, appId, void 0, { allowArtifactRebuild: true });
+          await startAndroidRunnerFn(deviceId, appId);
           upgradeNote = consumePendingAndroidUpgradeNote();
           if (!args.attachOnly) {
-            await execFile11("adb", [
-              "-s",
-              deviceId,
-              "shell",
-              "monkey",
-              "-p",
-              appId,
-              "-c",
-              "android.intent.category.LAUNCHER",
-              "1"
-            ], { timeout: 1e4, encoding: "utf8" });
+            try {
+              await launchAndroidApp(deviceId, appId);
+            } catch (err) {
+              throw new AndroidAppLaunchError(`Failed to launch ${appId} on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
           const readiness = await probeAndroidUi(deviceId, appId);
           if (readiness.isError) {
@@ -46485,6 +46505,9 @@ function createDeviceSnapshotHandler(deps = {}) {
         releaseDeviceLockForSession();
         consumePendingAndroidUpgradeNote();
         const msg3 = err instanceof Error ? err.message : String(err);
+        if (err instanceof AndroidAppLaunchError) {
+          return failResult(err.message, "APP_LAUNCH_FAILED");
+        }
         if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
           return failResult(msg3, "RUNNER_COMMANDS_STALE");
         }
@@ -46726,7 +46749,7 @@ async function reopenSessionForRecovery(appId, platform, attachOnly) {
     sessionName: recoveryName
   });
 }
-var execFile11, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer;
+var execFile11, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, AndroidAppLaunchError;
 var init_device_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
     "use strict";
@@ -46752,6 +46775,12 @@ var init_device_session = __esm({
     HEARTBEAT_MS = 3e4;
     activeDeviceLock = null;
     heartbeatTimer = null;
+    AndroidAppLaunchError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "AndroidAppLaunchError";
+      }
+    };
   }
 });
 
