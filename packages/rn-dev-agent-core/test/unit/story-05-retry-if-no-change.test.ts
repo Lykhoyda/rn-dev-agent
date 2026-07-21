@@ -208,6 +208,39 @@ test('keyboard auto-dismiss recovery, hierarchy unchanged → intended tap is no
   assert.equal(env.meta.tapRetried, undefined);
 });
 
+test('runner-native auto-dismiss (data.keyboardGuard, pre-lift), hierarchy unchanged → intended tap is not repeated', async () => {
+  let dispatches = 0;
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true, keyboardGuard: 'auto_dismissed' }),
+    async () => {
+      dispatches++;
+      return okResult({ tapped: true });
+    },
+    ctx,
+    policy,
+    depsWith([unchanged]),
+  );
+  assert.equal(dispatches, 0);
+  const env = parse(result);
+  assert.equal(env.meta.noUiChange, true);
+  assert.equal(env.meta.tapRetried, undefined);
+});
+
+test('control: data.keyboardGuard no_keyboard does not consume the retry budget', async () => {
+  let dispatches = 0;
+  await settleWithRetryIfNoChange(
+    okResult({ tapped: true, keyboardGuard: 'no_keyboard' }),
+    async () => {
+      dispatches++;
+      return okResult({ tapped: true });
+    },
+    ctx,
+    policy,
+    depsWith([unchanged, unchanged]),
+  );
+  assert.equal(dispatches, 1);
+});
+
 test('control: no transportRecovery marker, hierarchy unchanged → exactly one retap', async () => {
   let dispatches = 0;
   const result = await settleWithRetryIfNoChange(

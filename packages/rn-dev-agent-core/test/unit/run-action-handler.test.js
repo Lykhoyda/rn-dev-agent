@@ -171,6 +171,40 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   assert.equal(typeof sidecar.runHistory[0].autoRepair?.phases?.firstAttemptMs, 'number');
 });
 
+test('run-action: proofReplay pass on an experimental action discloses no lifecycle-promotion write', async () => {
+  const originalYaml = `${fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] })}# retained operator note\n`;
+  project.seedAction('demo', originalYaml);
+
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([PASS_ENV]),
+    repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
+  });
+  const result = await handler({
+    actionId: 'demo',
+    projectRoot: project.root,
+    proofReplay: true,
+    autoRepair: false,
+    forceReload: false,
+  });
+
+  assert.equal(result.isError, undefined);
+  const env = JSON.parse(result.content[0].text);
+  assert.equal(env.data.passed, true);
+  assert.equal(env.data.proofReplay, true);
+  assert.deepEqual(env.data.writes.actionYaml, {
+    written: false,
+    reason: 'repair-not-applied',
+  });
+  assert.equal(env.data.writes.runtimeState, 'none');
+  assert.equal(
+    readFileSync(project.yamlPath('demo'), 'utf8'),
+    originalYaml,
+    'proofReplay must not promote or rewrite the tracked YAML',
+  );
+  const sidecar = project.readSidecar('demo');
+  assert.equal(sidecar.runHistory.length, 0, 'proofReplay must not append RunRecords');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auto-repair end-to-end: SELECTOR_NOT_FOUND → repair → retry passes
 // ─────────────────────────────────────────────────────────────────────────────

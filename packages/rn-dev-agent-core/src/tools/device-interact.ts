@@ -554,9 +554,10 @@ export function createDevicePressHandler(
     const hasRef = typeof args.ref === 'string' && args.ref.length > 0;
     const hasCoordinates = args.x !== undefined && args.y !== undefined;
     if (hasRef === hasCoordinates) {
-      return failResult('Provide exactly one press target: ref, or both x and y coordinates', {
-        code: 'INVALID_ARGUMENT',
-      });
+      return failResult(
+        'Provide exactly one press target: ref, or both x and y coordinates',
+        'INVALID_ARGUMENT',
+      );
     }
     const target = hasRef ? (args.ref!.startsWith('@') ? args.ref! : `@${args.ref!}`) : undefined;
     const cliArgs = hasRef ? ['press', target!] : ['press', String(args.x!), String(args.y!)];

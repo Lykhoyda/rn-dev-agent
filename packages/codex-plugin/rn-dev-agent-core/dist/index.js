@@ -23474,7 +23474,7 @@ function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
 function hasConsumedTapRetryBudget(result) {
   try {
     const env = JSON.parse(result.content[0].text);
-    return env.meta?.transportRecovery !== void 0 || env.meta?.keyboardGuard === "auto_dismissed";
+    return env.meta?.transportRecovery !== void 0 || env.meta?.keyboardGuard === "auto_dismissed" || env.data?.keyboardGuard === "auto_dismissed";
   } catch {
     return false;
   }
@@ -26299,9 +26299,7 @@ function createDevicePressHandler(getClient2) {
     const hasRef = typeof args.ref === "string" && args.ref.length > 0;
     const hasCoordinates = args.x !== void 0 && args.y !== void 0;
     if (hasRef === hasCoordinates) {
-      return failResult("Provide exactly one press target: ref, or both x and y coordinates", {
-        code: "INVALID_ARGUMENT"
-      });
+      return failResult("Provide exactly one press target: ref, or both x and y coordinates", "INVALID_ARGUMENT");
     }
     const target = hasRef ? args.ref.startsWith("@") ? args.ref : `@${args.ref}` : void 0;
     const cliArgs = hasRef ? ["press", target] : ["press", String(args.x), String(args.y)];
@@ -54038,7 +54036,7 @@ function createRunActionHandler(deps = {}) {
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
     let probeDeviceId = null;
-    const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve() : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
+    const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve({ promoted: false }) : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
     const writeDisclosure = (actionYaml = "none") => ({
       actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : { written: true, authorized: true, reason: actionYaml },
       runtimeState: proofReplay ? "none" : "sidecar",
@@ -54080,7 +54078,7 @@ function createRunActionHandler(deps = {}) {
                 // maestro was skipped by design.
                 phases: { firstAttemptMs: Date.now() - tProbe }
               };
-              await persistRunWithDevice({
+              const persisted = await persistRunWithDevice({
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 durationMs: Date.now() - t0,
                 status: replay.passed ? "pass" : "fail",
@@ -54099,7 +54097,7 @@ function createRunActionHandler(deps = {}) {
                   transportVersion: null,
                   fallback: "none",
                   repair: autoRepair2,
-                  writes: writeDisclosure(),
+                  writes: writeDisclosure(persisted.promoted ? "lifecycle-promotion" : "none"),
                   blindProbe,
                   timings_ms,
                   autoRepair: autoRepair2,
@@ -54139,7 +54137,7 @@ function createRunActionHandler(deps = {}) {
           outcome: "skipped",
           phases: { firstAttemptMs }
         };
-        await persistRunWithDevice({
+        const persisted = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "pass",
@@ -54153,7 +54151,7 @@ function createRunActionHandler(deps = {}) {
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair2,
           autoRepair: autoRepair2,
-          writes: writeDisclosure(action.metadata.status === "experimental" ? "lifecycle-promotion" : "none"),
+          writes: writeDisclosure(persisted.promoted ? "lifecycle-promotion" : "none"),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500)
@@ -54213,7 +54211,7 @@ function createRunActionHandler(deps = {}) {
                 outcome: "skipped",
                 phases: { firstAttemptMs }
               };
-              await persistRunWithDevice({
+              const persisted = await persistRunWithDevice({
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 durationMs: Date.now() - t0,
                 status,
@@ -54232,7 +54230,7 @@ function createRunActionHandler(deps = {}) {
                   fallback: "cdp-js",
                   repair: autoRepair2,
                   autoRepair: autoRepair2,
-                  writes: writeDisclosure(action.metadata.status === "experimental" ? "lifecycle-promotion" : "none"),
+                  writes: writeDisclosure(persisted.promoted ? "lifecycle-promotion" : "none"),
                   durationMs: Date.now() - t0,
                   flowFile: action.filePath
                 });
@@ -54443,7 +54441,7 @@ async function persistRun(actionId, projectRoot, record2) {
     const fresh = loadAction(projectRoot, actionId);
     if (!fresh) {
       console.error(`cdp_run_action: persistRun could not reload action "${actionId}" \u2014 RunRecord dropped (status=${record2.status}, autoRepair.outcome=${record2.autoRepair?.outcome ?? "n/a"})`);
-      return;
+      return { promoted: false };
     }
     const nextState = appendRunRecord(fresh.state, record2);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record2);
@@ -54459,12 +54457,13 @@ async function persistRun(actionId, projectRoot, record2) {
           path: fresh.filePath
         }
       });
-      return;
+      return { promoted: promotes };
     }
     if (attempt === MAX_ATTEMPTS) {
       throw new Error(`persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; the action YAML or runtime sidecar changed after load. RunRecord was not written.`);
     }
   }
+  return { promoted: false };
 }
 
 // packages/rn-dev-agent-core/dist/tools/dispatch.js

@@ -1118,10 +1118,13 @@ export function tapRetryPolicy(
 function hasConsumedTapRetryBudget(result: ToolResult): boolean {
   try {
     const env = JSON.parse(result.content[0].text) as {
+      data?: { keyboardGuard?: unknown };
       meta?: { transportRecovery?: unknown; keyboardGuard?: unknown };
     };
     return (
-      env.meta?.transportRecovery !== undefined || env.meta?.keyboardGuard === 'auto_dismissed'
+      env.meta?.transportRecovery !== undefined ||
+      env.meta?.keyboardGuard === 'auto_dismissed' ||
+      env.data?.keyboardGuard === 'auto_dismissed'
     );
   } catch {
     return false;

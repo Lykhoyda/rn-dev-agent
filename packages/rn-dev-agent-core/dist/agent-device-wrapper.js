@@ -893,7 +893,9 @@ export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
 function hasConsumedTapRetryBudget(result) {
     try {
         const env = JSON.parse(result.content[0].text);
-        return (env.meta?.transportRecovery !== undefined || env.meta?.keyboardGuard === 'auto_dismissed');
+        return (env.meta?.transportRecovery !== undefined ||
+            env.meta?.keyboardGuard === 'auto_dismissed' ||
+            env.data?.keyboardGuard === 'auto_dismissed');
     }
     catch {
         return false;

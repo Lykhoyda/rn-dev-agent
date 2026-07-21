@@ -415,9 +415,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // GH #397: deviceId threading. Handler-scoped (not inside the try) because
     // the outer catch also persists a RunRecord and must carry the device too.
     let probeDeviceId: string | null = null;
-    const persistRunWithDevice = (record: RunRecord): Promise<void> =>
+    const persistRunWithDevice = (record: RunRecord): Promise<PersistRunOutcome> =>
       proofReplay
-        ? Promise.resolve()
+        ? Promise.resolve({ promoted: false })
         : persistRun(
             args.actionId,
             projectRoot,
@@ -486,7 +486,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                 // maestro was skipped by design.
                 phases: { firstAttemptMs: Date.now() - tProbe },
               };
-              await persistRunWithDevice({
+              const persisted = await persistRunWithDevice({
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status: replay.passed ? 'pass' : 'fail',
@@ -505,7 +505,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   transportVersion: null,
                   fallback: 'none',
                   repair: autoRepair,
-                  writes: writeDisclosure(),
+                  writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
                   blindProbe,
                   timings_ms,
                   autoRepair,
@@ -564,7 +564,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           outcome: 'skipped',
           phases: { firstAttemptMs },
         };
-        await persistRunWithDevice({
+        const persisted = await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'pass',
@@ -578,9 +578,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair,
           autoRepair,
-          writes: writeDisclosure(
-            action.metadata.status === 'experimental' ? 'lifecycle-promotion' : 'none',
-          ),
+          writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500),
@@ -667,7 +665,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                 outcome: 'skipped',
                 phases: { firstAttemptMs },
               };
-              await persistRunWithDevice({
+              const persisted = await persistRunWithDevice({
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status,
@@ -686,9 +684,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   fallback: 'cdp-js',
                   repair: autoRepair,
                   autoRepair,
-                  writes: writeDisclosure(
-                    action.metadata.status === 'experimental' ? 'lifecycle-promotion' : 'none',
-                  ),
+                  writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
                   durationMs: Date.now() - t0,
                   flowFile: action.filePath,
                 });
@@ -1003,7 +999,15 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
  *     log the dropped record to stderr instead of swallowing silently
  *     so the operator can see telemetry loss in their MCP logs.
  */
-async function persistRun(actionId: string, projectRoot: string, record: RunRecord): Promise<void> {
+interface PersistRunOutcome {
+  promoted: boolean;
+}
+
+async function persistRun(
+  actionId: string,
+  projectRoot: string,
+  record: RunRecord,
+): Promise<PersistRunOutcome> {
   // Re-load to get the freshest state — repair-action may have just
   // bumped revision/repairHistory. Issue #117's bounded CAS retry remains,
   // but only the ignored runtime sidecar is written on ordinary replay.
@@ -1014,7 +1018,7 @@ async function persistRun(actionId: string, projectRoot: string, record: RunReco
       console.error(
         `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`,
       );
-      return;
+      return { promoted: false };
     }
     const nextState = appendRunRecord(fresh.state, record);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record);
@@ -1034,7 +1038,7 @@ async function persistRun(actionId: string, projectRoot: string, record: RunReco
           path: fresh.filePath,
         },
       });
-      return;
+      return { promoted: promotes };
     }
     // CAS conflict — another writer raced us. Reload and retry.
     if (attempt === MAX_ATTEMPTS) {
@@ -1044,4 +1048,5 @@ async function persistRun(actionId: string, projectRoot: string, record: RunReco
       );
     }
   }
+  return { promoted: false };
 }

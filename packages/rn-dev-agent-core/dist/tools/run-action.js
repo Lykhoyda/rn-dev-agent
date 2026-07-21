@@ -231,7 +231,7 @@ export function createRunActionHandler(deps = {}) {
         // the outer catch also persists a RunRecord and must carry the device too.
         let probeDeviceId = null;
         const persistRunWithDevice = (record) => proofReplay
-            ? Promise.resolve()
+            ? Promise.resolve({ promoted: false })
             : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
         const writeDisclosure = (actionYaml = 'none') => ({
             actionYaml: actionYaml === 'none'
@@ -290,7 +290,7 @@ export function createRunActionHandler(deps = {}) {
                                 // maestro was skipped by design.
                                 phases: { firstAttemptMs: Date.now() - tProbe },
                             };
-                            await persistRunWithDevice({
+                            const persisted = await persistRunWithDevice({
                                 timestamp: new Date().toISOString(),
                                 durationMs: Date.now() - t0,
                                 status: replay.passed ? 'pass' : 'fail',
@@ -309,7 +309,7 @@ export function createRunActionHandler(deps = {}) {
                                     transportVersion: null,
                                     fallback: 'none',
                                     repair: autoRepair,
-                                    writes: writeDisclosure(),
+                                    writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
                                     blindProbe,
                                     timings_ms,
                                     autoRepair,
@@ -364,7 +364,7 @@ export function createRunActionHandler(deps = {}) {
                     outcome: 'skipped',
                     phases: { firstAttemptMs },
                 };
-                await persistRunWithDevice({
+                const persisted = await persistRunWithDevice({
                     timestamp: new Date().toISOString(),
                     durationMs: Date.now() - t0,
                     status: 'pass',
@@ -378,7 +378,7 @@ export function createRunActionHandler(deps = {}) {
                     ...replaySuccessEvidence(firstEnv),
                     repair: autoRepair,
                     autoRepair,
-                    writes: writeDisclosure(action.metadata.status === 'experimental' ? 'lifecycle-promotion' : 'none'),
+                    writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
                     durationMs: Date.now() - t0,
                     flowFile: action.filePath,
                     firstAttemptOutput: firstOutput.slice(0, 500),
@@ -461,7 +461,7 @@ export function createRunActionHandler(deps = {}) {
                                 outcome: 'skipped',
                                 phases: { firstAttemptMs },
                             };
-                            await persistRunWithDevice({
+                            const persisted = await persistRunWithDevice({
                                 timestamp: new Date().toISOString(),
                                 durationMs: Date.now() - t0,
                                 status,
@@ -480,7 +480,7 @@ export function createRunActionHandler(deps = {}) {
                                     fallback: 'cdp-js',
                                     repair: autoRepair,
                                     autoRepair,
-                                    writes: writeDisclosure(action.metadata.status === 'experimental' ? 'lifecycle-promotion' : 'none'),
+                                    writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
                                     durationMs: Date.now() - t0,
                                     flowFile: action.filePath,
                                 });
@@ -736,19 +736,6 @@ export function createRunActionHandler(deps = {}) {
         }
     };
 }
-/**
- * Append a RunRecord to the action's runtime sidecar without rewriting YAML.
- *
- * Multi-LLM review of PR #115:
- *   - Codex I6 (conf 80): `actionId` is now passed explicitly rather
- *     than derived from `action.filePath`. The previous regex-based
- *     derivation broke for non-canonical paths (inline-yaml synthetic
- *     paths, symlinks) and silently dropped the RunRecord on a derive
- *     failure.
- *   - Codex C2 / Gemini C2 (conf 92): if `loadAction` returns null we
- *     log the dropped record to stderr instead of swallowing silently
- *     so the operator can see telemetry loss in their MCP logs.
- */
 async function persistRun(actionId, projectRoot, record) {
     // Re-load to get the freshest state — repair-action may have just
     // bumped revision/repairHistory. Issue #117's bounded CAS retry remains,
@@ -758,7 +745,7 @@ async function persistRun(actionId, projectRoot, record) {
         const fresh = loadAction(projectRoot, actionId);
         if (!fresh) {
             console.error(`cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`);
-            return;
+            return { promoted: false };
         }
         const nextState = appendRunRecord(fresh.state, record);
         const promotes = shouldAutoPromoteToActive(fresh.metadata, record);
@@ -778,7 +765,7 @@ async function persistRun(actionId, projectRoot, record) {
                     path: fresh.filePath,
                 },
             });
-            return;
+            return { promoted: promotes };
         }
         // CAS conflict — another writer raced us. Reload and retry.
         if (attempt === MAX_ATTEMPTS) {
@@ -786,4 +773,5 @@ async function persistRun(actionId, projectRoot, record) {
                 `the action YAML or runtime sidecar changed after load. RunRecord was not written.`);
         }
     }
+    return { promoted: false };
 }
