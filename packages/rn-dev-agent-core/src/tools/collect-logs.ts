@@ -433,12 +433,14 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
     const errors: Partial<Record<LogSource, string>> = {};
 
     const controller = new AbortController();
-    // The iOS native collector spends up to PID_PROBE_TIMEOUT_MS resolving the
-    // exact app pid BEFORE the log stream starts, so a deadline measured from
-    // handler entry silently truncates the requested capture window.
+    // Only the iOS native collector spends up to PID_PROBE_TIMEOUT_MS resolving
+    // the exact app pid BEFORE its log stream starts; a deadline measured from
+    // handler entry would silently truncate that capture window. Paths that
+    // never pay the probe keep the tighter abort.
+    const probeBudgetMs = args.sources.includes('native_ios') ? PID_PROBE_TIMEOUT_MS : 0;
     const hardDeadline = setTimeout(
       () => controller.abort(),
-      Math.max(args.durationMs + PID_PROBE_TIMEOUT_MS + 2000, 5000),
+      Math.max(args.durationMs + probeBudgetMs + 2000, 5000),
     );
 
     try {

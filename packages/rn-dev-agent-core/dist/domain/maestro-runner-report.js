@@ -44,7 +44,7 @@ function containerDeviceIdsFrom(value) {
 function reportDeviceIds(reportDir) {
     const reportPath = join(reportDir, 'report.json');
     if (!existsSync(reportPath))
-        return [];
+        return { ids: [], strength: 'none' };
     try {
         const report = JSON.parse(readFileSync(reportPath, 'utf8'));
         const flows = Array.isArray(report.flows) ? report.flows : [];
@@ -53,11 +53,18 @@ function reportDeviceIds(reportDir) {
             ...devices.flatMap((device) => deviceIdsFrom(device)),
             ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container)),
         ];
-        const ids = strong.length > 0 ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
-        return [...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))];
+        const usingStrong = strong.length > 0;
+        const ids = usingStrong ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
+        const accepted = [
+            ...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id))),
+        ];
+        return {
+            ids: accepted,
+            strength: accepted.length === 0 ? 'none' : usingStrong ? 'strong' : 'weak',
+        };
     }
     catch {
-        return [];
+        return { ids: [], strength: 'none' };
     }
 }
 export function createRunnerReportDir(runner, prefix) {
@@ -70,10 +77,12 @@ export function runnerReportArgs(reportDir) {
 }
 export function collectDirectRunnerEvidence(reportDir, output) {
     if (!reportDir)
-        return { output, reportDeviceIds: [] };
+        return { output, reportDeviceIds: [], reportDeviceIdStrength: 'none' };
+    const report = reportDeviceIds(reportDir);
     const evidence = {
         output,
-        reportDeviceIds: reportDeviceIds(reportDir),
+        reportDeviceIds: report.ids,
+        reportDeviceIdStrength: report.strength,
     };
     const logPath = join(reportDir, 'maestro-runner.log');
     if (!existsSync(logPath))

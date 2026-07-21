@@ -144,6 +144,7 @@ export async function runMaestroInline(yaml, opts) {
             requestedDeviceId,
             output: directEvidence.output,
             directReportDeviceIds: directEvidence.reportDeviceIds,
+            directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
             requireWdaProvenance: passed,
         });
         const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
@@ -180,6 +181,7 @@ export async function runMaestroInline(yaml, opts) {
                 requestedDeviceId,
                 output: directEvidence.output,
                 directReportDeviceIds: directEvidence.reportDeviceIds,
+                directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
             });
             const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, errObj.message);
             return {

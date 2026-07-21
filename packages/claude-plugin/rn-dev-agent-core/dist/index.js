@@ -21220,6 +21220,9 @@ async function probeFastRunnerLivenessDetailed(deps = {}) {
     }
     lastKnownCapabilities = res.capabilities ?? [];
     noteStaleHittableArtifact(res.capabilities);
+    if (typeof res.protocolVersion === "number") {
+      state.protocolVersion = res.protocolVersion;
+    }
     return {
       liveness: "alive",
       ...res.protocolVersion !== void 0 ? { runnerProtocolVersion: res.protocolVersion } : {},
@@ -21342,6 +21345,7 @@ async function postCommand(body) {
 async function containTypeTimeout(args, authorityBefore = captureFastRunnerCommandAuthority(), trigger = "main-thread-timeout") {
   const runnerBefore = authorityBefore;
   runnerPoisoned = true;
+  poisonHolders++;
   let verification = { matches: false };
   try {
     if (args._verifyExactReadback && typeof args.text === "string") {
@@ -21360,8 +21364,12 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
       reapDisposition = runnerState ? "replacement-preserved" : "already-absent";
     }
   } finally {
-    poisonReap = null;
-    runnerPoisoned = false;
+    poisonHolders--;
+    if (poisonHolders <= 0) {
+      poisonHolders = 0;
+      poisonReap = null;
+      runnerPoisoned = false;
+    }
   }
   const runnerTimeoutRecovery = {
     trigger,
@@ -21430,6 +21438,19 @@ function sameRefIdentity(before, after) {
     return before.label === after.label && before.type === after.type;
   }
   return false;
+}
+function countIdentityMatches(before, nodes) {
+  let matches = 0;
+  for (const node of nodes) {
+    const candidate = {
+      type: node.type,
+      ...node.label !== void 0 ? { label: node.label } : {},
+      ...node.identifier !== void 0 ? { identifier: node.identifier } : {}
+    };
+    if (sameRefIdentity(before, candidate))
+      matches++;
+  }
+  return matches;
 }
 function mapRunnerNodesToFlat(nodes) {
   const out = [];
@@ -21511,38 +21532,67 @@ async function runIOS(args) {
     body.snapshotGeneration = args.snapshotGeneration;
   if (args.keyboardStateAtSnapshot !== void 0)
     body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+  const mapRunnerDispatchError = (err) => {
+    const m = err instanceof Error ? err.message : String(err);
+    if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
+      return failResult(m, "RUNNER_PROTOCOL_MISMATCH");
+    }
+    if (m.startsWith("RUNNER_TIMEOUT") && runnerPoisoned) {
+      return failResult(m, "RUNNER_TIMEOUT", { poisoned: true, dispatched: false });
+    }
+    return null;
+  };
   let keyboardRelayoutRecovered = false;
   if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true && runnerState?.protocolVersion === 1) {
-    const legacyDismiss = await postCommand({
-      command: "keyboardDismiss",
-      ...args.bundleId ? { appBundleId: args.bundleId } : {}
-    });
-    const data = legacyDismiss.data ?? {};
-    if (data.wasVisible && (!data.dismissed || data.visible)) {
-      return failResult("KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers: ["native-control", "native-swipe"], protocolVersion: 1 });
+    try {
+      const legacyDismiss = await postCommand({
+        command: "keyboardDismiss",
+        ...args.bundleId ? { appBundleId: args.bundleId } : {}
+      });
+      const data = legacyDismiss.data ?? {};
+      if (data.wasVisible && (!data.dismissed || data.visible)) {
+        return failResult("KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers: ["native-control", "native-swipe"], protocolVersion: 1 });
+      }
+      if (data.wasVisible && data.dismissed)
+        keyboardRelayoutRecovered = true;
+    } catch (err) {
+      const mapped = mapRunnerDispatchError(err);
+      if (mapped)
+        return mapped;
+      throw err;
     }
-    if (data.wasVisible && data.dismissed)
-      keyboardRelayoutRecovered = true;
   }
+  const refreshFailure = { result: null };
   const refreshTargetAfterKeyboard = async () => {
     if (!args._targetRef)
       return true;
     const before = getCachedMetadata(args._targetRef);
-    const snapshot = await postCommand({
-      command: "snapshot",
-      interactiveOnly: true,
-      ...args.bundleId ? { appBundleId: args.bundleId } : {}
-    });
+    let snapshot;
+    try {
+      snapshot = await postCommand({
+        command: "snapshot",
+        interactiveOnly: true,
+        ...args.bundleId ? { appBundleId: args.bundleId } : {}
+      });
+    } catch (err) {
+      refreshFailure.result = mapRunnerDispatchError(err);
+      if (refreshFailure.result)
+        return false;
+      throw err;
+    }
     if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== "object")
       return false;
     const data = snapshot.data;
     if (!Array.isArray(data.nodes))
       return false;
-    updateRefMapFromFlat(mapRunnerNodesToFlat(data.nodes), {
+    const flat = mapRunnerNodesToFlat(data.nodes);
+    updateRefMapFromFlat(flat, {
       ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {},
       ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {}
     });
     if (!sameRefIdentity(before, getCachedMetadata(args._targetRef)))
+      return false;
+    if (!before || countIdentityMatches(before, flat) !== 1)
       return false;
     const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
     if (!target)
@@ -21556,20 +21606,17 @@ async function runIOS(args) {
     return true;
   };
   if (keyboardRelayoutRecovered && !await refreshTargetAfterKeyboard()) {
-    return staleAfterKeyboardDismissal(args._targetRef);
+    return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
   }
   let resp;
   let recovery;
   try {
     ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
   } catch (err) {
+    const mapped = mapRunnerDispatchError(err);
+    if (mapped)
+      return mapped;
     const m = err instanceof Error ? err.message : String(err);
-    if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
-      return failResult(m, "RUNNER_PROTOCOL_MISMATCH");
-    }
-    if (m.startsWith("RUNNER_TIMEOUT") && runnerPoisoned) {
-      return failResult(m, "RUNNER_TIMEOUT", { poisoned: true, dispatched: false });
-    }
     if (args.command === "type" && m.startsWith("RUNNER_TIMEOUT")) {
       return containTypeTimeout(args);
     }
@@ -21577,7 +21624,7 @@ async function runIOS(args) {
   }
   if (!resp.ok && resp.error?.code === "KEYBOARD_RELAYOUT_REQUIRED") {
     if (!await refreshTargetAfterKeyboard()) {
-      return staleAfterKeyboardDismissal(args._targetRef);
+      return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
     }
     ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
     keyboardRelayoutRecovered = true;
@@ -21621,7 +21668,7 @@ async function runIOS(args) {
   };
   return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
 }
-var READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS, POST_SETTLE_HEALTH_ATTEMPTS, POST_SETTLE_HEALTH_RETRY_MS;
+var READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, poisonHolders, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS, POST_SETTLE_HEALTH_ATTEMPTS, POST_SETTLE_HEALTH_RETRY_MS;
 var init_rn_fast_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
     "use strict";
@@ -21642,6 +21689,7 @@ var init_rn_fast_runner_client = __esm({
     runnerState = null;
     runnerPoisoned = false;
     poisonReap = null;
+    poisonHolders = 0;
     runnerOutputTail = "";
     lastRunnerCommand = null;
     lastRunnerPostMortem = null;
@@ -24770,7 +24818,12 @@ function verifyMaestroDeviceAuthority(input) {
     return { ...base, verified: false, reason: "reported-device-ambiguous" };
   }
   if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
-    return { ...base, verified: false, reason: "reported-device-mismatch" };
+    const weakOnly = input.directReportIdentityStrength === "weak" && (input.directReportDeviceIds ?? []).some((id) => sameDevice(id, reportedDeviceId ?? ""));
+    return {
+      ...base,
+      verified: false,
+      reason: weakOnly ? "reported-device-weak-identity" : "reported-device-mismatch"
+    };
   }
   if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
     return { ...base, verified: false, reason: "wda-device-mismatch" };
@@ -24787,6 +24840,12 @@ function verifyMaestroDeviceAuthority(input) {
 function shouldRejectMaestroDeviceAuthority(authority) {
   return authority.requestedDeviceId !== null && authority.source === "maestro-runner-log" && !authority.verified;
 }
+function maestroAuthorityRefusal(authority, underlyingError) {
+  if (!shouldRejectMaestroDeviceAuthority(authority))
+    return null;
+  const headline = `Maestro device authority refused: requested ${authority.requestedDeviceId}, direct runner/WDA evidence was ${authority.reportedDeviceId ?? "missing"} (${authority.reason}).`;
+  return underlyingError ? `${headline} Underlying failure: ${underlyingError}` : headline;
+}
 var init_maestro_device_authority = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
     "use strict";
@@ -24798,8 +24857,6 @@ import { existsSync as existsSync12, readFileSync as readFileSync11, rmSync as r
 import { tmpdir as tmpdir5 } from "node:os";
 import { join as join17 } from "node:path";
 function idsFrom(value, keys) {
-  if (typeof value === "string")
-    return [value];
   if (!value || typeof value !== "object")
     return [];
   const record2 = value;
@@ -24815,18 +24872,16 @@ function deviceIdsFrom(value) {
 }
 function weakDeviceIdsFrom(value) {
   if (typeof value === "string")
-    return [];
+    return [value];
   return idsFrom(value, WEAK_DEVICE_ID_KEYS);
 }
 function containerDeviceIdsFrom(value) {
-  if (typeof value === "string")
-    return [];
   return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
 }
 function reportDeviceIds(reportDir) {
   const reportPath = join17(reportDir, "report.json");
   if (!existsSync12(reportPath))
-    return [];
+    return { ids: [], strength: "none" };
   try {
     const report = JSON.parse(readFileSync11(reportPath, "utf8"));
     const flows = Array.isArray(report.flows) ? report.flows : [];
@@ -24835,10 +24890,17 @@ function reportDeviceIds(reportDir) {
       ...devices.flatMap((device) => deviceIdsFrom(device)),
       ...[report, ...flows].flatMap((container) => containerDeviceIdsFrom(container))
     ];
-    const ids = strong.length > 0 ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
-    return [...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))];
+    const usingStrong = strong.length > 0;
+    const ids = usingStrong ? strong : devices.flatMap((device) => weakDeviceIdsFrom(device));
+    const accepted = [
+      ...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
+    ];
+    return {
+      ids: accepted,
+      strength: accepted.length === 0 ? "none" : usingStrong ? "strong" : "weak"
+    };
   } catch {
-    return [];
+    return { ids: [], strength: "none" };
   }
 }
 function createRunnerReportDir(runner, prefix) {
@@ -24851,10 +24913,12 @@ function runnerReportArgs(reportDir) {
 }
 function collectDirectRunnerEvidence(reportDir, output) {
   if (!reportDir)
-    return { output, reportDeviceIds: [] };
+    return { output, reportDeviceIds: [], reportDeviceIdStrength: "none" };
+  const report = reportDeviceIds(reportDir);
   const evidence = {
     output,
-    reportDeviceIds: reportDeviceIds(reportDir)
+    reportDeviceIds: report.ids,
+    reportDeviceIdStrength: report.strength
   };
   const logPath = join17(reportDir, "maestro-runner.log");
   if (!existsSync12(logPath))
@@ -25038,10 +25102,12 @@ function createMaestroRunHandler(deps = {}) {
         requestedDeviceId,
         output: directEvidence.output,
         directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
         requireWdaProvenance: passed
       });
-      if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
-        return failResult(`Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? "missing"} (${deviceAuthority.reason}).`, "DEVICE_AUTHORITY_MISMATCH", {
+      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+      if (authorityRefusal) {
+        return failResult(authorityRefusal, "DEVICE_AUTHORITY_MISMATCH", {
           flowFile,
           platform,
           runner: dispatch.runner,
@@ -25094,14 +25160,16 @@ function createMaestroRunHandler(deps = {}) {
         platform,
         requestedDeviceId,
         output: directEvidence.output,
-        directReportDeviceIds: directEvidence.reportDeviceIds
+        directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength
       });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(err?.code ?? ""));
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
-      if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
-        return failResult(`Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? "missing"} (${deviceAuthority.reason}).`, "DEVICE_AUTHORITY_MISMATCH", {
+      const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg3) : null;
+      if (catchRefusal) {
+        return failResult(catchRefusal, "DEVICE_AUTHORITY_MISMATCH", {
           flowFile,
           platform,
           runner: dispatch.runner,
@@ -25269,16 +25337,12 @@ async function runMaestroInline(yaml2, opts) {
       requestedDeviceId,
       output: directEvidence.output,
       directReportDeviceIds: directEvidence.reportDeviceIds,
+      directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
       requireWdaProvenance: passed
     });
-    if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
-      return {
-        passed: false,
-        output,
-        flowFile,
-        error: `Maestro device authority refused (${deviceAuthority.reason})`,
-        deviceAuthority
-      };
+    const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+    if (authorityRefusal) {
+      return { passed: false, output, flowFile, error: authorityRefusal, deviceAuthority };
     }
     return { passed, output, flowFile, deviceAuthority };
   } catch (err) {
@@ -25299,13 +25363,15 @@ async function runMaestroInline(yaml2, opts) {
         platform: opts.platform,
         requestedDeviceId,
         output: directEvidence.output,
-        directReportDeviceIds: directEvidence.reportDeviceIds
+        directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength
       });
+      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, errObj.message);
       return {
         passed: false,
         output: capturedOutput,
         flowFile,
-        ...shouldRejectMaestroDeviceAuthority(deviceAuthority) ? { error: `Maestro device authority refused (${deviceAuthority.reason})` } : {},
+        ...authorityRefusal ? { error: authorityRefusal } : {},
         deviceAuthority
       };
     }
@@ -25438,6 +25504,18 @@ function resolveIosLifecycleTarget(deviceId) {
   }
   return deviceId;
 }
+function buildIosLaunchArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildIosLaunchArgv: bundleId is required");
+  }
+  return ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId];
+}
+function buildIosTerminateArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildIosTerminateArgv: bundleId is required");
+  }
+  return ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId];
+}
 function resolveAndroidLifecycleTarget(deviceId) {
   if (deviceId === void 0)
     return [];
@@ -25448,7 +25526,7 @@ function resolveAndroidLifecycleTarget(deviceId) {
 }
 async function terminateApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile7("xcrun", ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId], {
+    await execFile7("xcrun", buildIosTerminateArgv(bundleId, deviceId), {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -25479,7 +25557,7 @@ function buildAndroidLaunchArgv(bundleId, deviceId) {
 }
 async function launchApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile7("xcrun", ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId], {
+    await execFile7("xcrun", buildIosLaunchArgv(bundleId, deviceId), {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -52872,7 +52950,11 @@ function saveActionRuntimeWithCAS(expected, nextState) {
 }
 function promoteActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync21(sidecarPath) && !runtimeSidecarMatches(sidecarPath, expected.state)) {
+  if (existsSync21(sidecarPath)) {
+    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
+    }
+  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   }
   if (actionWasEditedExternally(expected))
@@ -54669,9 +54751,9 @@ function createRunActionHandler(deps = {}) {
     let probeDeviceId = null;
     let observedDeviceId = maestroDeviceId ?? null;
     const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve({ promoted: false, promotionRefused: false }) : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
-    const writeDisclosure = (actionYaml = "none") => ({
+    const writeDisclosure = (actionYaml = "none", outcome) => ({
       actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
-      runtimeState: proofReplay ? "none" : "sidecar",
+      runtimeState: proofReplay ? "none" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
       databaseMirror: proofReplay ? "none" : "best-effort"
     });
     try {
@@ -54712,7 +54794,7 @@ function createRunActionHandler(deps = {}) {
                 // maestro was skipped by design.
                 phases: { firstAttemptMs: Date.now() - tProbe }
               };
-              const persisted = await persistRunWithDevice({
+              const persisted2 = await persistRunWithDevice({
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 durationMs: Date.now() - t0,
                 status: replay.passed ? "pass" : "fail",
@@ -54731,7 +54813,7 @@ function createRunActionHandler(deps = {}) {
                   transportVersion: null,
                   fallback: "none",
                   repair: autoRepair2,
-                  writes: writeDisclosure(promotionDisclosure(persisted)),
+                  writes: writeDisclosure(promotionDisclosure(persisted2), persisted2),
                   blindProbe,
                   ...blindProbeControl,
                   timings_ms,
@@ -54778,7 +54860,7 @@ function createRunActionHandler(deps = {}) {
           refusedReason: args.autoRepair === false ? "USER_DISABLED" : "NOT_REPAIRABLE_KIND",
           phases: { firstAttemptMs }
         };
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -54792,7 +54874,7 @@ function createRunActionHandler(deps = {}) {
           failureKind: "DEVICE_AUTHORITY_MISMATCH",
           deviceAuthority: firstDeviceAuthority,
           autoRepair: autoRepair2,
-          writes: writeDisclosure()
+          writes: writeDisclosure("none", persisted2)
         });
       }
       if (firstPassed) {
@@ -54801,7 +54883,7 @@ function createRunActionHandler(deps = {}) {
           outcome: "skipped",
           phases: { firstAttemptMs }
         };
-        const persisted = await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "pass",
@@ -54815,7 +54897,7 @@ function createRunActionHandler(deps = {}) {
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair2,
           autoRepair: autoRepair2,
-          writes: writeDisclosure(promotionDisclosure(persisted)),
+          writes: writeDisclosure(promotionDisclosure(persisted2), persisted2),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500)
@@ -54876,7 +54958,7 @@ function createRunActionHandler(deps = {}) {
                 phases: { firstAttemptMs }
               };
               probeDeviceId = maestroDeviceId ?? observedDeviceId;
-              const persisted = await persistRunWithDevice({
+              const persisted2 = await persistRunWithDevice({
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 durationMs: Date.now() - t0,
                 status,
@@ -54895,7 +54977,7 @@ function createRunActionHandler(deps = {}) {
                   fallback: "cdp-js",
                   repair: autoRepair2,
                   autoRepair: autoRepair2,
-                  writes: writeDisclosure(promotionDisclosure(persisted)),
+                  writes: writeDisclosure(promotionDisclosure(persisted2), persisted2),
                   durationMs: Date.now() - t0,
                   flowFile: action.filePath
                 });
@@ -55067,7 +55149,7 @@ function createRunActionHandler(deps = {}) {
         repairTimestamp,
         ...nextFailedSelector ? { nextFailedSelector } : {}
       };
-      await persistRunWithDevice({
+      const persisted = await persistRunWithDevice({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         durationMs: Date.now() - t0,
         status: retryPassed ? "pass" : "fail",
@@ -55083,7 +55165,7 @@ function createRunActionHandler(deps = {}) {
           ...replaySuccessEvidence(retryEnv),
           repair: autoRepair,
           autoRepair,
-          writes: writeDisclosure("auto-repair"),
+          writes: writeDisclosure("auto-repair", persisted),
           durationMs: Date.now() - t0,
           flowFile: reloadedAction.filePath,
           retriedAfterRepair: true,
@@ -55093,7 +55175,7 @@ function createRunActionHandler(deps = {}) {
       return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`, "TESTID_NOT_FOUND", {
         actionId: args.actionId,
         autoRepair,
-        writes: writeDisclosure("auto-repair"),
+        writes: writeDisclosure("auto-repair", persisted),
         firstAttemptOutput: firstOutput.slice(0, 500),
         retryOutput: retryOutput.slice(0, 500),
         underlyingFailure: retryFailureDetail
@@ -55155,7 +55237,8 @@ async function persistRun(actionId, projectRoot, record2) {
     if (saveActionRuntimeWithCAS(fresh, nextState).ok)
       return commit(false, promotionRefused);
     if (attempt === MAX_ATTEMPTS) {
-      throw new Error(`persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive sidecar CAS conflicts; the runtime sidecar changed after load. RunRecord was not written.`);
+      console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} sidecar CAS conflicts; runtime state was not written (status=${record2.status}).`);
+      return { promoted: false, promotionRefused, runtimeStateRefused: true };
     }
   }
   return { promoted: false, promotionRefused: false };
@@ -55797,7 +55880,8 @@ function createCollectLogsHandler(getClient2) {
     const promises = [];
     const errors = {};
     const controller = new AbortController();
-    const hardDeadline = setTimeout(() => controller.abort(), Math.max(args.durationMs + 2e3, 5e3));
+    const probeBudgetMs = args.sources.includes("native_ios") ? PID_PROBE_TIMEOUT_MS : 0;
+    const hardDeadline = setTimeout(() => controller.abort(), Math.max(args.durationMs + probeBudgetMs + 2e3, 5e3));
     try {
       const session = getActiveSession();
       const scopes = {};
@@ -56141,6 +56225,16 @@ async function launchAndNavigate(client2, screen, params, opts = {}) {
       method: "startup_replay_failed",
       latency_ms: Date.now() - startTime,
       error: "Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project."
+    };
+  }
+  if (session?.deviceId && session.platform !== platform) {
+    return {
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: "startup_replay_failed",
+      latency_ms: Date.now() - startTime,
+      error: `Refusing startup replay on ${platform}: the active session is bound to ${session.platform} device ${session.deviceId}. Close that session or replay on its platform so an exact device identity is used instead of an ambiguous target.`
     };
   }
   const lifecycleDeviceId = session?.platform === platform ? session.deviceId : void 0;
@@ -56547,7 +56641,15 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
     const waitForReady = args.waitForReady ?? true;
     const waitForNavReady = args.waitForNavReady ?? false;
     const session = deps.getSession?.() ?? null;
-    const lifecycleDeviceId = session?.platform === platform && session.appId === args.appId && typeof session.deviceId === "string" ? session.deviceId : void 0;
+    const sessionDeviceId = session?.platform === platform && typeof session.deviceId === "string" ? session.deviceId : void 0;
+    if (sessionDeviceId && session?.appId !== args.appId) {
+      return failResult(`Refusing to reset ${args.appId}: the active ${platform} session is bound to ${session?.appId ?? "another app"} on ${sessionDeviceId}. Close that session first so an exact device identity for ${args.appId} can be resolved.`, "TARGET_SESSION_MISMATCH", {
+        requestedAppId: args.appId,
+        activeSessionAppId: session?.appId,
+        activeSessionDeviceId: sessionDeviceId
+      });
+    }
+    const lifecycleDeviceId = sessionDeviceId;
     const steps = [];
     let reconnected = false;
     let helpersInjected = false;
@@ -56706,6 +56808,7 @@ init_maestro_invoke();
 init_platform_utils();
 init_device_interact();
 init_agent_device_wrapper();
+init_maestro_device_authority();
 var APOSTROPHE_ASCII = "'";
 var APOSTROPHE_CURLY = "\u2019";
 var ACCEPT_LABELS_IOS = [
@@ -56796,6 +56899,9 @@ async function tapSystemDialog(labels, platform, totalTimeoutMs, slug) {
     const result = await runMaestroInline(yaml2, { platform, timeoutMs: perLabelMs, slug });
     if (result.passed) {
       return okResult({ tapped: true, platform, matchedLabel: label, triedLabels: labels });
+    }
+    if (result.deviceAuthority && shouldRejectMaestroDeviceAuthority(result.deviceAuthority)) {
+      return failResult(result.error ?? "Maestro device authority refused during system dialog probe.", "DEVICE_AUTHORITY_MISMATCH", { platform, label, triedLabels: labels, deviceAuthority: result.deviceAuthority });
     }
     attempts3.push({
       label,
@@ -57806,8 +57912,8 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   } catch {
     return null;
   }
-  for (const authorityArg of argv) {
-    if (!isAbsolute3(authorityArg))
+  for (const authorityArg of argv.slice(1, 3)) {
+    if (typeof authorityArg !== "string" || !isAbsolute3(authorityArg))
       continue;
     let arg;
     try {
@@ -59194,6 +59300,7 @@ async function validateMedia(process3, input) {
 init_utils();
 init_maestro_invoke();
 init_platform_utils();
+init_maestro_device_authority();
 var DEFAULT_PICKER_TIMEOUT_MS = 2e4;
 var MONTH_NAMES = [
   "January",
@@ -59286,7 +59393,14 @@ function createDevicePickDateHandler() {
       const openYaml = `- tapOn:
     id: "${yamlEscape(args.pickerTestId)}"
     optional: true`;
-      await runMaestroInline(openYaml, { platform, timeoutMs: 4e3, slug: "pick-date-open" });
+      const openResult = await runMaestroInline(openYaml, {
+        platform,
+        timeoutMs: 4e3,
+        slug: "pick-date-open"
+      });
+      if (openResult.deviceAuthority && shouldRejectMaestroDeviceAuthority(openResult.deviceAuthority)) {
+        return failResult(openResult.error ?? "Maestro device authority refused while opening the picker.", "DEVICE_AUTHORITY_MISMATCH", { platform, deviceAuthority: openResult.deviceAuthority });
+      }
     }
     for (const comp of components) {
       const yaml2 = `- tapOn:
@@ -61405,7 +61519,11 @@ function createMaestroTestAllHandler() {
       return failResult("Cannot determine platform. Pass platform or open a device session first.");
     }
     const session = getActiveSession();
-    const requestedDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : void 0;
+    const matchingSessionDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : void 0;
+    if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
+      return failResult(`Refusing Maestro suite target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
+    }
+    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
     const dispatch = chooseMaestroDispatch({ platform });
     if ("error" in dispatch) {
       return failResult(dispatch.error);
@@ -61491,15 +61609,17 @@ function createMaestroTestAllHandler() {
           requestedDeviceId,
           output: directEvidence.output,
           directReportDeviceIds: directEvidence.reportDeviceIds,
+          directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
           requireWdaProvenance: outputPassed
         });
-        const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
-        const ok = outputPassed && !authorityRejected;
+        const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+        const ok = outputPassed && !authorityRefusal;
         results.push({
           name,
           passed: ok,
           durationMs: Date.now() - start,
-          error: authorityRejected ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? "missing"})` : ok ? void 0 : output.slice(0, 300)
+          error: authorityRefusal ?? (ok ? void 0 : output.slice(0, 300)),
+          deviceAuthority
         });
         if (ok)
           passed++;
@@ -61510,20 +61630,23 @@ function createMaestroTestAllHandler() {
       } catch (err) {
         const msg3 = err instanceof Error ? err.message : String(err);
         const errWithOutput = err;
-        const directEvidence = collectDirectRunnerEvidence(runnerReportDir, [errWithOutput.stdout, errWithOutput.stderr].filter((value) => typeof value === "string").join("\n"));
-        const deviceAuthority = verifyMaestroDeviceAuthority({
+        const capturedOutput = [errWithOutput.stdout, errWithOutput.stderr].filter((value) => typeof value === "string").join("\n").trim();
+        const directEvidence = capturedOutput ? collectDirectRunnerEvidence(runnerReportDir, capturedOutput) : null;
+        const deviceAuthority = directEvidence ? verifyMaestroDeviceAuthority({
           runner: flowDispatch.runner,
           platform,
           requestedDeviceId,
           output: directEvidence.output,
-          directReportDeviceIds: directEvidence.reportDeviceIds
-        });
-        const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
+          directReportDeviceIds: directEvidence.reportDeviceIds,
+          directReportIdentityStrength: directEvidence.reportDeviceIdStrength
+        }) : null;
+        const authorityRefusal = deviceAuthority ? maestroAuthorityRefusal(deviceAuthority, msg3.slice(0, 300)) : null;
         results.push({
           name,
           passed: false,
           durationMs: Date.now() - start,
-          error: authorityRejected ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? "missing"})` : msg3.slice(0, 300)
+          error: authorityRefusal ?? msg3.slice(0, 300),
+          ...deviceAuthority ? { deviceAuthority } : {}
         });
         failed++;
         if (args.stopOnFailure)
@@ -61541,6 +61664,7 @@ function createMaestroTestAllHandler() {
       platform,
       flowDir,
       runner: dispatch.runner,
+      requestedDeviceId: requestedDeviceId ?? null,
       ...batchCaveat ? { fallbackReason: batchCaveat } : {},
       results
     };
@@ -64735,6 +64859,7 @@ trackedTool("maestro_generate", "Generate a persistent Maestro YAML flow file fr
 }, createMaestroGenerateHandler());
 trackedTool("maestro_test_all", "Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to override the default directory.", {
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
+  deviceId: external_exports.string().optional().describe("Exact simulator UDID / adb serial to run the suite on (defaults to the active session device)."),
   flowDir: external_exports.string().optional().describe("Directory to scan for .yaml flows (default: <project>/.rn-agent/actions/)"),
   pattern: external_exports.string().optional().describe('Regex pattern to filter flow files (e.g. "cart|checkout")'),
   timeoutPerFlow: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Timeout per flow in ms"),

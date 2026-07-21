@@ -400,7 +400,7 @@ export function createRunActionHandler(deps = {}) {
                     refusedReason: args.autoRepair === false ? 'USER_DISABLED' : 'NOT_REPAIRABLE_KIND',
                     phases: { firstAttemptMs },
                 };
-                await persistRunWithDevice({
+                const persisted = await persistRunWithDevice({
                     timestamp: new Date().toISOString(),
                     durationMs: Date.now() - t0,
                     status: 'fail',
@@ -414,7 +414,7 @@ export function createRunActionHandler(deps = {}) {
                     failureKind: 'DEVICE_AUTHORITY_MISMATCH',
                     deviceAuthority: firstDeviceAuthority,
                     autoRepair,
-                    writes: writeDisclosure(),
+                    writes: writeDisclosure('none', persisted),
                 });
             }
             if (firstPassed) {
@@ -757,7 +757,7 @@ export function createRunActionHandler(deps = {}) {
                 repairTimestamp,
                 ...(nextFailedSelector ? { nextFailedSelector } : {}),
             };
-            await persistRunWithDevice({
+            const persisted = await persistRunWithDevice({
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status: retryPassed ? 'pass' : 'fail',
@@ -773,7 +773,7 @@ export function createRunActionHandler(deps = {}) {
                     ...replaySuccessEvidence(retryEnv),
                     repair: autoRepair,
                     autoRepair,
-                    writes: writeDisclosure('auto-repair'),
+                    writes: writeDisclosure('auto-repair', persisted),
                     durationMs: Date.now() - t0,
                     flowFile: reloadedAction.filePath,
                     retriedAfterRepair: true,
@@ -783,7 +783,7 @@ export function createRunActionHandler(deps = {}) {
             return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`, 'TESTID_NOT_FOUND', {
                 actionId: args.actionId,
                 autoRepair,
-                writes: writeDisclosure('auto-repair'),
+                writes: writeDisclosure('auto-repair', persisted),
                 firstAttemptOutput: firstOutput.slice(0, 500),
                 retryOutput: retryOutput.slice(0, 500),
                 underlyingFailure: retryFailureDetail,

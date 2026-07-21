@@ -17,6 +17,7 @@ export interface MaestroDeviceAuthority {
     | 'reported-device-missing'
     | 'reported-device-ambiguous'
     | 'reported-device-mismatch'
+    | 'reported-device-weak-identity'
     | 'wda-device-mismatch';
 }
 
@@ -57,6 +58,8 @@ export function verifyMaestroDeviceAuthority(input: {
   requestedDeviceId?: string | null;
   output: string;
   directReportDeviceIds?: string[];
+  /** 'weak' when the report only carried a last-resort id (bare string / `id`). */
+  directReportIdentityStrength?: 'strong' | 'weak' | 'none';
   requireWdaProvenance?: boolean;
 }): MaestroDeviceAuthority {
   const requestedDeviceId = input.requestedDeviceId?.trim() || null;
@@ -115,7 +118,17 @@ export function verifyMaestroDeviceAuthority(input: {
     return { ...base, verified: false, reason: 'reported-device-ambiguous' };
   }
   if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
-    return { ...base, verified: false, reason: 'reported-device-mismatch' };
+    // A last-resort id (bare string or `id`) is frequently a model name, not an
+    // identity. It still refuses — absence of proof is not proof — but it must
+    // not read as "the runner executed on a different device".
+    const weakOnly =
+      input.directReportIdentityStrength === 'weak' &&
+      (input.directReportDeviceIds ?? []).some((id) => sameDevice(id, reportedDeviceId ?? ''));
+    return {
+      ...base,
+      verified: false,
+      reason: weakOnly ? 'reported-device-weak-identity' : 'reported-device-mismatch',
+    };
   }
   if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
     return { ...base, verified: false, reason: 'wda-device-mismatch' };

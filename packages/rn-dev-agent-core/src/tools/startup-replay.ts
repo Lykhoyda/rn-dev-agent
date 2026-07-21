@@ -83,6 +83,16 @@ export async function launchAndNavigate(
 
   // The session's device is the device being driven regardless of which bundle
   // the replay targets; dropping it here would fall back to ambiguous `booted`.
+  if (session?.deviceId && session.platform !== platform) {
+    return {
+      arrived: false,
+      screen,
+      current_screen: null,
+      method: 'startup_replay_failed',
+      latency_ms: Date.now() - startTime,
+      error: `Refusing startup replay on ${platform}: the active session is bound to ${session.platform} device ${session.deviceId}. Close that session or replay on its platform so an exact device identity is used instead of an ambiguous target.`,
+    };
+  }
   const lifecycleDeviceId = session?.platform === platform ? session.deviceId : undefined;
 
   let pickerDismissed = false;

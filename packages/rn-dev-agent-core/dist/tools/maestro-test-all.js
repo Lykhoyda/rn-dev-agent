@@ -164,6 +164,7 @@ export function createMaestroTestAllHandler() {
                     requestedDeviceId,
                     output: directEvidence.output,
                     directReportDeviceIds: directEvidence.reportDeviceIds,
+                    directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
                     requireWdaProvenance: outputPassed,
                 });
                 const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
@@ -203,6 +204,7 @@ export function createMaestroTestAllHandler() {
                         requestedDeviceId,
                         output: directEvidence.output,
                         directReportDeviceIds: directEvidence.reportDeviceIds,
+                        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
                     })
                     : null;
                 const authorityRefusal = deviceAuthority
