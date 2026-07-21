@@ -18088,15 +18088,350 @@ var require_dist2 = __commonJS({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
+import { join as join4, dirname, isAbsolute, sep } from "node:path";
+import { readFileSync as readFileSync2, realpathSync } from "node:fs";
+function isValidBundleId(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length === 0 || s.length >= BUNDLE_ID_MAX_LEN)
+    return false;
+  return BUNDLE_ID_RE.test(s);
+}
+function assertValidBundleId(s, context) {
+  if (!isValidBundleId(s)) {
+    const preview = JSON.stringify(s).slice(0, 80);
+    throw new MaestroValidationError(`Invalid bundle ID for ${context}: ${preview}`);
+  }
+}
+function isSafeMaestroScalar(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length > SCALAR_MAX_LEN)
+    return false;
+  if (UNSAFE_SCALAR_RE.test(s))
+    return false;
+  return true;
+}
+function buildMaestroFlow(opts, commands) {
+  if (opts.appId !== void 0) {
+    assertValidBundleId(opts.appId, "appId header");
+  }
+  for (const cmd of commands) {
+    validateCommand(cmd);
+  }
+  const headerYaml = opts.appId ? import_yaml.default.stringify({ appId: opts.appId }) : "";
+  const bodyYaml = import_yaml.default.stringify(commands);
+  return `${headerYaml}---
+${bodyYaml}`;
+}
+function validateCommand(cmd) {
+  if (cmd === null || cmd === void 0) {
+    throw new MaestroValidationError("Command is null/undefined");
+  }
+  if (typeof cmd === "string") {
+    if (!isSafeMaestroScalar(cmd)) {
+      throw new MaestroValidationError(`Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`);
+    }
+    if (DENIED_COMMANDS.has(cmd)) {
+      throw new MaestroValidationError(`Command not allowed (denied by default): ${cmd}`);
+    }
+    if (!ALLOWED_COMMANDS.has(cmd)) {
+      throw new MaestroValidationError(`Command not in allowlist: ${cmd}`);
+    }
+    return;
+  }
+  if (typeof cmd !== "object") {
+    throw new MaestroValidationError(`Command is not an object or string: ${typeof cmd}`);
+  }
+  const keys = Object.keys(cmd);
+  if (keys.length !== 1) {
+    throw new MaestroValidationError(`Command must have exactly one root key, got ${keys.length}: ${keys.join(", ")}`);
+  }
+  const key = keys[0];
+  if (DENIED_COMMANDS.has(key)) {
+    throw new MaestroValidationError(`Command not allowed (denied by default): ${key}`);
+  }
+  if (!ALLOWED_COMMANDS.has(key)) {
+    throw new MaestroValidationError(`Command not in allowlist: ${key}`);
+  }
+  if (key === "runFlow") {
+    validateRunFlowValue(cmd[key]);
+    return;
+  }
+  validateValue(cmd[key]);
+}
+function validateRunFlowValue(v) {
+  if (typeof v === "string") {
+    if (!isSafeMaestroScalar(v)) {
+      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
+    }
+    return;
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
+  }
+  const obj = v;
+  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
+    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
+  }
+  if ("when" in obj)
+    validateValue(obj.when);
+  if ("commands" in obj) {
+    if (!Array.isArray(obj.commands)) {
+      throw new MaestroValidationError(`runFlow.commands must be an array`);
+    }
+    for (const c of obj.commands)
+      validateCommand(c);
+  }
+  for (const [k, val] of Object.entries(obj)) {
+    if (k === "file" || k === "when" || k === "commands")
+      continue;
+    if (!isSafeMaestroScalar(k)) {
+      throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
+    }
+    validateValue(val);
+  }
+}
+function validateValue(v) {
+  if (v === null || v === void 0)
+    return;
+  if (typeof v === "boolean" || typeof v === "number")
+    return;
+  if (typeof v === "string") {
+    if (!isSafeMaestroScalar(v)) {
+      throw new MaestroValidationError(`Unsafe scalar value: ${JSON.stringify(v).slice(0, 80)}`);
+    }
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const item of v)
+      validateValue(item);
+    return;
+  }
+  if (typeof v === "object") {
+    for (const [key, value] of Object.entries(v)) {
+      if (!isSafeMaestroScalar(key)) {
+        throw new MaestroValidationError(`Unsafe scalar key: ${JSON.stringify(key).slice(0, 80)}`);
+      }
+      validateValue(value);
+    }
+    return;
+  }
+  throw new MaestroValidationError(`Unsupported value type: ${typeof v}`);
+}
+function asRunFlow(cmd) {
+  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd))
+    return null;
+  const keys = Object.keys(cmd);
+  if (keys.length !== 1 || keys[0] !== "runFlow")
+    return null;
+  const v = cmd.runFlow;
+  if (typeof v === "string")
+    return { file: v };
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const o = v;
+    return {
+      file: typeof o.file === "string" ? o.file : void 0,
+      when: o.when,
+      commands: Array.isArray(o.commands) ? o.commands : void 0
+    };
+  }
+  return null;
+}
+function resolveRunFlowTarget(file, opts) {
+  if (!opts.flowDir || !opts.flowRoot) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
+  }
+  if (isAbsolute(file)) {
+    throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
+  }
+  if (file.split(/[\\/]/).includes("..")) {
+    throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
+  }
+  if (!/\.ya?ml$/i.test(file)) {
+    throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
+  }
+  const realpath = opts.realpathFn ?? realpathSync;
+  let resolved;
+  let rootReal;
+  try {
+    resolved = realpath(join4(opts.flowDir, file));
+    rootReal = realpath(opts.flowRoot);
+  } catch (err) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
+  }
+  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep)) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
+  }
+  return resolved;
+}
+function expandRunFlows(commands, opts) {
+  const out = [];
+  for (const cmd of commands) {
+    const rf = asRunFlow(cmd);
+    if (!rf) {
+      out.push(cmd);
+      continue;
+    }
+    if (rf.file !== void 0) {
+      const depth = opts._depth ?? 0;
+      const max = opts.maxRunFlowDepth ?? 5;
+      if (depth >= max) {
+        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
+      }
+      const resolved = resolveRunFlowTarget(rf.file, opts);
+      const visited = opts._visited ?? /* @__PURE__ */ new Set();
+      if (visited.has(resolved)) {
+        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
+      }
+      const readFile3 = opts.readFileFn ?? ((p) => readFileSync2(p, "utf8"));
+      let subText;
+      try {
+        subText = readFile3(resolved);
+      } catch (err) {
+        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
+      }
+      const sub = parseAndValidateFlow(subText, {
+        ...opts,
+        rejectHeader: true,
+        flowDir: dirname(resolved),
+        _depth: depth + 1,
+        _visited: /* @__PURE__ */ new Set([...visited, resolved])
+      });
+      if (rf.when !== void 0) {
+        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
+      } else {
+        out.push(...sub.commands);
+      }
+    } else {
+      const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
+      const wrapped = { commands: inner };
+      if (rf.when !== void 0)
+        wrapped.when = rf.when;
+      out.push({ runFlow: wrapped });
+    }
+  }
+  return out;
+}
+function parseAndValidateFlow(yamlText, opts = {}) {
+  let docs;
+  try {
+    docs = import_yaml.default.parseAllDocuments(yamlText, { strict: true });
+  } catch (err) {
+    throw new MaestroValidationError(`YAML parse error: ${err.message}`);
+  }
+  if (docs.length === 0) {
+    throw new MaestroValidationError("Empty Maestro flow");
+  }
+  let appId;
+  let body;
+  if (docs.length === 1) {
+    body = docs[0].toJS();
+  } else {
+    const header = docs[0].toJS() ?? {};
+    if (header && typeof header === "object" && "appId" in header) {
+      if (opts.rejectHeader) {
+        throw new MaestroValidationError("Header (appId) not allowed in this context");
+      }
+      const rawAppId = header.appId;
+      assertValidBundleId(rawAppId, "parsed flow header");
+      appId = rawAppId;
+    }
+    body = docs[docs.length - 1].toJS();
+  }
+  if (body === null || body === void 0) {
+    body = [];
+  }
+  if (!Array.isArray(body)) {
+    throw new MaestroValidationError(`Flow body must be an array, got ${typeof body}`);
+  }
+  const expanded = expandRunFlows(body, opts);
+  for (const cmd of expanded) {
+    validateCommand(cmd);
+  }
+  const raw = buildMaestroFlow(appId !== void 0 ? { appId } : {}, expanded);
+  return { appId, commands: expanded, raw };
+}
+var import_yaml, MaestroValidationError, BUNDLE_ID_RE, BUNDLE_ID_MAX_LEN, UNSAFE_SCALAR_RE, SCALAR_MAX_LEN, ALLOWED_COMMANDS, DENIED_COMMANDS;
+var init_maestro_validator = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
+    "use strict";
+    import_yaml = __toESM(require_dist2(), 1);
+    MaestroValidationError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "MaestroValidationError";
+      }
+    };
+    BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
+    BUNDLE_ID_MAX_LEN = 256;
+    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
+    SCALAR_MAX_LEN = 4096;
+    ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
+      "launchApp",
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "inputText",
+      "eraseText",
+      "scroll",
+      "scrollUntilVisible",
+      "swipe",
+      // Multi-LLM review caught these: test-recorder-generators emits the
+      // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
+      // top-level commands. Without these in the allowlist, every recorded
+      // action containing a swipe would be refused at replay time. The
+      // deepsec attack vector (newline-injected direction) is already
+      // mitigated by isSafeMaestroScalar catching the embedded newline.
+      "swipeUp",
+      "swipeDown",
+      "swipeLeft",
+      "swipeRight",
+      "back",
+      "pressKey",
+      "openLink",
+      "waitForAnimationToEnd",
+      "extendedWaitUntil",
+      "hideKeyboard",
+      "takeScreenshot",
+      "clearState",
+      "addMedia",
+      "copyTextFrom",
+      "pasteText",
+      "travel",
+      "setLocation",
+      "setAirplaneMode",
+      "killApp",
+      "stopApp",
+      "tap",
+      // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
+      // dev-client picker). Validated specially (validateRunFlowValue) so nested
+      // `commands` get full command-level allowlist checks, and {file} refs are
+      // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
+      // through generic validateValue, which would miss nested denied commands.
+      "runFlow"
+    ]);
+    DENIED_COMMANDS = /* @__PURE__ */ new Set([
+      "runScript",
+      "evalScript",
+      "startRecording",
+      "stopRecording"
+    ]);
+  }
+});
+
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, existsSync as existsSync3, renameSync, readdirSync, lstatSync, mkdirSync as mkdirSync2 } from "node:fs";
-import { join as join4, dirname } from "node:path";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync3, renameSync, readdirSync, lstatSync, mkdirSync as mkdirSync2 } from "node:fs";
+import { join as join5, dirname as dirname2 } from "node:path";
 function isRnProject(dir) {
-  const pkgPath2 = join4(dir, "package.json");
+  const pkgPath2 = join5(dir, "package.json");
   if (!existsSync3(pkgPath2))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync2(pkgPath2, "utf-8"));
+    const pkg = JSON.parse(readFileSync3(pkgPath2, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -18117,7 +18452,7 @@ function scanForRnProject(rootDir, maxDepth) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join4(rootDir, name);
+    const full = join5(rootDir, name);
     try {
       const stat2 = lstatSync(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
@@ -18152,7 +18487,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join4(rootDir, name);
+    const full = join5(rootDir, name);
     try {
       const stat2 = lstatSync(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
@@ -18172,11 +18507,11 @@ function collectRnProjects(rootDir, maxDepth, out) {
   }
 }
 function readProjectBundleId(projectRoot) {
-  const appJsonPath = join4(projectRoot, "app.json");
+  const appJsonPath = join5(projectRoot, "app.json");
   if (!existsSync3(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync2(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync3(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -18210,7 +18545,7 @@ function findProjectRoot(opts = {}) {
         walkupHit = walkupHit ?? dir;
         break;
       }
-      const parent = join4(dir, "..");
+      const parent = join5(dir, "..");
       if (parent === dir)
         break;
       dir = parent;
@@ -18219,7 +18554,7 @@ function findProjectRoot(opts = {}) {
   if (!targetBundleId && walkupHit)
     return walkupHit;
   const cwd = process.cwd();
-  const parentOfCwd = join4(cwd, "..");
+  const parentOfCwd = join5(cwd, "..");
   if (targetBundleId) {
     const all = [];
     collectRnProjects(cwd, 0, all);
@@ -18245,7 +18580,7 @@ function findProjectRoot(opts = {}) {
 }
 function getProjectSlug(projectRoot) {
   try {
-    const pkg = JSON.parse(readFileSync2(join4(projectRoot, "package.json"), "utf-8"));
+    const pkg = JSON.parse(readFileSync3(join5(projectRoot, "package.json"), "utf-8"));
     if (pkg.name && typeof pkg.name === "string")
       return pkg.name;
   } catch {
@@ -18253,18 +18588,18 @@ function getProjectSlug(projectRoot) {
   return projectRoot.split("/").pop() ?? "unknown";
 }
 function getGraphPath(projectRoot) {
-  return join4(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
+  return join5(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
 }
 function readGraph(projectRoot) {
   try {
     let filePath = getGraphPath(projectRoot);
     if (!existsSync3(filePath)) {
-      const legacyPath = join4(projectRoot, LEGACY_GRAPH_FILENAME);
+      const legacyPath = join5(projectRoot, LEGACY_GRAPH_FILENAME);
       if (!existsSync3(legacyPath))
         return null;
       filePath = legacyPath;
     }
-    const raw = (0, import_yaml.parse)(readFileSync2(filePath, "utf-8"));
+    const raw = (0, import_yaml2.parse)(readFileSync3(filePath, "utf-8"));
     if (!raw || !raw.nav_graph)
       return null;
     hydrateStrikesFromGraph(raw.nav_graph, projectRoot);
@@ -18275,9 +18610,9 @@ function readGraph(projectRoot) {
 }
 function writeGraph(projectRoot, graph) {
   const filePath = getGraphPath(projectRoot);
-  mkdirSync2(dirname(filePath), { recursive: true });
+  mkdirSync2(dirname2(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  const yaml2 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
+  const yaml2 = (0, import_yaml2.stringify)({ nav_graph: graph }, { lineWidth: 120 });
   writeFileSync2(tmpPath, yaml2, "utf-8");
   renameSync(tmpPath, filePath);
   return filePath;
@@ -18523,11 +18858,11 @@ function recordNavigation(projectRoot, input) {
     } : void 0
   };
 }
-var import_yaml, RN_AGENT_DIR, GRAPH_FILENAME, LEGACY_GRAPH_FILENAME, MAX_ACTION_RECORDS, STRIKE_COOLDOWN_MS, STRIKE_THRESHOLD, RELIABILITY_SUCCESS_DELTA, RELIABILITY_FAILURE_DELTA, strikeMap, hydratedProjectKey;
+var import_yaml2, RN_AGENT_DIR, GRAPH_FILENAME, LEGACY_GRAPH_FILENAME, MAX_ACTION_RECORDS, STRIKE_COOLDOWN_MS, STRIKE_THRESHOLD, RELIABILITY_SUCCESS_DELTA, RELIABILITY_FAILURE_DELTA, strikeMap, hydratedProjectKey;
 var init_storage = __esm({
   "packages/rn-dev-agent-core/dist/nav-graph/storage.js"() {
     "use strict";
-    import_yaml = __toESM(require_dist2(), 1);
+    import_yaml2 = __toESM(require_dist2(), 1);
     RN_AGENT_DIR = ".rn-agent";
     GRAPH_FILENAME = "nav-graph.yaml";
     LEGACY_GRAPH_FILENAME = ".rn-nav-graph.yaml";
@@ -18543,8 +18878,8 @@ var init_storage = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { realpathSync as realpathSync2 } from "node:fs";
+import { resolve, sep as sep2 } from "node:path";
 function parseLsofPid(stdout) {
   for (const line of stdout.split("\n")) {
     const n = parseInt(line.trim(), 10);
@@ -18584,7 +18919,7 @@ function cwdForPid(pid, exec) {
 }
 function realpathOrResolve(p) {
   try {
-    return realpathSync(resolve(p));
+    return realpathSync2(resolve(p));
   } catch {
     return resolve(p);
   }
@@ -18605,7 +18940,7 @@ function pathMatchesRoot(servingCwd, projectRoot) {
   const b = realpathOrResolve(projectRoot);
   if (a === b)
     return true;
-  return a.startsWith(b + sep) || b.startsWith(a + sep);
+  return a.startsWith(b + sep2) || b.startsWith(a + sep2);
 }
 function resolveBridgeProjectRoot() {
   const root = findProjectRoot();
@@ -18686,6 +19021,25 @@ function parseSimctlListapps(stdout) {
   }
   return ids;
 }
+function targetBundleIdentity(target) {
+  const identities = /* @__PURE__ */ new Map();
+  const add = (candidate) => {
+    if (!isValidBundleId(candidate))
+      return;
+    identities.set(candidate.toLowerCase(), candidate);
+  };
+  add(target.appId);
+  add(target.description);
+  const title = target.title?.trim() ?? "";
+  add(title);
+  const canonicalTitle = title.match(/^([^\s()]+)\s+\(.+\)$/);
+  if (canonicalTitle)
+    add(canonicalTitle[1]);
+  return identities.size === 1 ? [...identities.values()][0] : null;
+}
+function targetMatchesBundleId(target, bundleId) {
+  return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
+}
 function readAndroidPackages() {
   try {
     const out = execFileSync2("adb", ["shell", "pm", "list", "packages"], {
@@ -18732,9 +19086,9 @@ function inferPlatforms(targets, readers = {}) {
       t.platformInference = "probed";
       continue;
     }
-    const desc = t.description ?? "";
-    const inAndroid = androidPackages?.has(desc) ?? false;
-    const inIOS = iosPackages?.has(desc) ?? false;
+    const bundleIdentity = targetBundleIdentity(t);
+    const inAndroid = bundleIdentity ? androidPackages?.has(bundleIdentity) ?? false : false;
+    const inIOS = bundleIdentity ? iosPackages?.has(bundleIdentity) ?? false : false;
     if (inAndroid && !inIOS) {
       t.platform = "android";
       t.platformInference = "probed";
@@ -18753,7 +19107,7 @@ function inferPlatforms(targets, readers = {}) {
 }
 function describeTarget(target) {
   const confidence = target.platformInference ?? "probed";
-  return `${target.id} title="${target.title || "?"}" device="${target.deviceName ?? "?"}" description="${target.description ?? "?"}" platform=${target.platform ?? "?"} confidence=${confidence}`;
+  return `${target.id} title="${target.title || "?"}" appId="${target.appId ?? "?"}" device="${target.deviceName ?? "?"}" description="${target.description ?? "?"}" platform=${target.platform ?? "?"} confidence=${confidence}`;
 }
 function classifyAndroidDeviceKind(deviceName) {
   if (!deviceName)
@@ -18809,19 +19163,18 @@ function selectTarget(validTargets, filtersOrPlatform) {
     }
   }
   if (filters.bundleId) {
-    const bundleLower = filters.bundleId.toLowerCase();
-    const bundleMatched = filteredTargets.filter((t) => (t.description ?? "").toLowerCase() === bundleLower);
+    const bundleMatched = filteredTargets.filter((target) => targetMatchesBundleId(target, filters.bundleId));
     if (bundleMatched.length === 0) {
       return {
         targets: [],
-        warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map((t) => t.description ?? "?").join(", ")}`
+        warning: `bundleId "${filters.bundleId}" not found in proven live target metadata. Candidates: ${filteredTargets.map(describeTarget).join("; ")}`
       };
     }
     filteredTargets = bundleMatched;
   }
   const prefLower = filters.preferredBundleId?.toLowerCase();
   if (prefLower && filteredTargets.length > 1) {
-    const preferred = filteredTargets.filter((t) => (t.description ?? "").toLowerCase() === prefLower);
+    const preferred = filteredTargets.filter((target) => targetMatchesBundleId(target, filters.preferredBundleId));
     if (preferred.length > 0 && preferred.length < filteredTargets.length) {
       logger.info("CDP", `Auto-selected target by preferredBundleId "${filters.preferredBundleId}" (${preferred.length} of ${filteredTargets.length})`);
       filteredTargets = preferred;
@@ -18833,8 +19186,8 @@ function selectTarget(validTargets, filtersOrPlatform) {
     if (aPage !== bPage)
       return bPage - aPage;
     if (prefLower) {
-      const aPref = (a.description ?? "").toLowerCase() === prefLower ? 1 : 0;
-      const bPref = (b.description ?? "").toLowerCase() === prefLower ? 1 : 0;
+      const aPref = targetMatchesBundleId(a, prefLower) ? 1 : 0;
+      const bPref = targetMatchesBundleId(b, prefLower) ? 1 : 0;
       if (aPref !== bPref)
         return bPref - aPref;
     }
@@ -18856,7 +19209,7 @@ function selectMetroPort(attached, runningPorts, ctx) {
   }
   if (ctx.preferredBundleId) {
     const pref = ctx.preferredBundleId.toLowerCase();
-    const prefPorts = attached.filter((a) => a.targets.some((t) => (t.description ?? "").toLowerCase() === pref));
+    const prefPorts = attached.filter((a) => a.targets.some((target) => targetMatchesBundleId(target, pref)));
     if (prefPorts.length === 1)
       return { port: prefPorts[0].port };
   }
@@ -18989,6 +19342,7 @@ var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
     init_logger();
+    init_maestro_validator();
     init_metro_cwd();
     AppDetachedError = class extends Error {
       port;
@@ -19020,15 +19374,15 @@ var init_discovery = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync4, readFileSync as readFileSync3 } from "node:fs";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
+import { join as join6 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join5(projectRoot, filename);
+    const p = join6(projectRoot, filename);
     if (!existsSync4(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync3(p, "utf-8"));
+      const raw = JSON.parse(readFileSync4(p, "utf-8"));
       const expo = raw.expo ?? raw;
       const iosBundleId = expo?.ios?.bundleIdentifier;
       const androidPkg = expo?.android?.package;
@@ -19049,11 +19403,11 @@ function resolveBundleId(platform) {
 }
 function readAppIdStrict(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join5(projectRoot, filename);
+    const p = join6(projectRoot, filename);
     if (!existsSync4(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync3(p, "utf-8"));
+      const raw = JSON.parse(readFileSync4(p, "utf-8"));
       const expo = raw.expo ?? raw;
       if (platform === "android")
         return expo?.android?.package ?? null;
@@ -19075,11 +19429,11 @@ function readExpoSlug() {
   if (!projectRoot)
     return null;
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join5(projectRoot, filename);
+    const p = join6(projectRoot, filename);
     if (!existsSync4(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync3(p, "utf-8"));
+      const raw = JSON.parse(readFileSync4(p, "utf-8"));
       return raw.expo?.slug ?? null;
     } catch {
       continue;
@@ -19091,11 +19445,11 @@ function readRnAgentConfig(projectRoot) {
   const root = projectRoot ?? findProjectRoot();
   if (!root)
     return null;
-  const p = join5(root, ".rn-agent", "config.json");
+  const p = join6(root, ".rn-agent", "config.json");
   if (!existsSync4(p))
     return null;
   try {
-    return JSON.parse(readFileSync3(p, "utf-8"));
+    return JSON.parse(readFileSync4(p, "utf-8"));
   } catch (err) {
     if (!warnedBadConfig) {
       warnedBadConfig = true;
@@ -19612,34 +19966,34 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, unlinkSync as unlinkSync2, mkdirSync as mkdirSync3, renameSync as renameSync2, lstatSync as lstatSync2 } from "node:fs";
-import { join as join6, dirname as dirname2 } from "node:path";
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync3, unlinkSync as unlinkSync2, mkdirSync as mkdirSync3, renameSync as renameSync2, lstatSync as lstatSync2 } from "node:fs";
+import { join as join7, dirname as dirname3 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
-    return join6(process.env.XDG_STATE_HOME, "rn-dev-agent");
+    return join7(process.env.XDG_STATE_HOME, "rn-dev-agent");
   }
   if (process.platform === "darwin") {
-    return join6(homedir2(), "Library", "Application Support", "rn-dev-agent");
+    return join7(homedir2(), "Library", "Application Support", "rn-dev-agent");
   }
-  return join6(homedir2(), ".rn-dev-agent");
+  return join7(homedir2(), ".rn-dev-agent");
 }
 function runnerStatePath(key) {
   const safe = key.replace(/[^A-Za-z0-9._:-]/g, "_");
-  return join6(getStateDir(), "runner-state", `${safe}.json`);
+  return join7(getStateDir(), "runner-state", `${safe}.json`);
 }
 function readJsonStateFile(path) {
   try {
     const stat2 = lstatSync2(path);
     if (stat2.isSymbolicLink())
       return null;
-    return JSON.parse(readFileSync4(path, "utf8"));
+    return JSON.parse(readFileSync5(path, "utf8"));
   } catch {
     return null;
   }
 }
 function writeJsonStateFileAtomic(path, value) {
-  mkdirSync3(dirname2(path), { recursive: true });
+  mkdirSync3(dirname3(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
   writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   renameSync2(tmpPath, path);
@@ -19670,7 +20024,7 @@ var init_secure_state_file = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
 import { existsSync as existsSync5, statSync } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 function compactUnique(paths) {
   const out = [];
   for (const path of paths) {
@@ -19693,21 +20047,21 @@ function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
-    runnerRoot ? join7(runnerRoot, runnerName) : void 0,
-    repoRoot ? join7(repoRoot, "packages", runnerName) : void 0,
-    repoRoot ? join7(repoRoot, "scripts", runnerName) : void 0,
-    codexPluginRoot ? join7(codexPluginRoot, "scripts", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "..", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "scripts", runnerName) : void 0,
+    runnerRoot ? join8(runnerRoot, runnerName) : void 0,
+    repoRoot ? join8(repoRoot, "packages", runnerName) : void 0,
+    repoRoot ? join8(repoRoot, "scripts", runnerName) : void 0,
+    codexPluginRoot ? join8(codexPluginRoot, "scripts", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "..", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "scripts", runnerName) : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join7(baseDir, "..", "..", "scripts", runnerName),
+    join8(baseDir, "..", "..", "scripts", runnerName),
     // Source checkout: packages/rn-dev-agent-core/dist/runners.
     // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
-    join7(baseDir, "..", "..", "..", runnerName),
+    join8(baseDir, "..", "..", "..", runnerName),
     // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
-    join7(baseDir, "..", "..", "..", "..", "scripts", runnerName)
+    join8(baseDir, "..", "..", "..", "..", "scripts", runnerName)
   ]);
 }
 function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
@@ -19720,16 +20074,16 @@ function candidateRunnerManifestFiles(baseDir = import.meta.dirname) {
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
     process.env.RN_DEV_AGENT_RUNNER_MANIFEST,
-    repoRoot ? join7(repoRoot, "runner-manifest.json") : void 0,
-    codexPluginRoot ? join7(codexPluginRoot, "runner-manifest.json") : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "runner-manifest.json") : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "runner-manifest.json") : void 0,
+    repoRoot ? join8(repoRoot, "runner-manifest.json") : void 0,
+    codexPluginRoot ? join8(codexPluginRoot, "runner-manifest.json") : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "..", "..", "runner-manifest.json") : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "runner-manifest.json") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join7(baseDir, "..", "..", "runner-manifest.json"),
+    join8(baseDir, "..", "..", "runner-manifest.json"),
     // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
-    join7(baseDir, "..", "..", "..", "..", "runner-manifest.json"),
+    join8(baseDir, "..", "..", "..", "..", "runner-manifest.json"),
     // Legacy source checkout: scripts/cdp-bridge/dist/runners.
-    join7(baseDir, "..", "..", "..", "runner-manifest.json")
+    join8(baseDir, "..", "..", "..", "runner-manifest.json")
   ]);
 }
 function candidatePluginManifestFiles(baseDir = import.meta.dirname) {
@@ -19737,17 +20091,17 @@ function candidatePluginManifestFiles(baseDir = import.meta.dirname) {
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
     process.env.RN_DEV_AGENT_PLUGIN_MANIFEST,
-    codexPluginRoot ? join7(codexPluginRoot, ".codex-plugin", "plugin.json") : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, ".claude-plugin", "plugin.json") : void 0,
-    claudePluginRoot ? join7(claudePluginRoot, "plugin.json") : void 0,
+    codexPluginRoot ? join8(codexPluginRoot, ".codex-plugin", "plugin.json") : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, ".claude-plugin", "plugin.json") : void 0,
+    claudePluginRoot ? join8(claudePluginRoot, "plugin.json") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join7(baseDir, "..", "..", ".codex-plugin", "plugin.json"),
+    join8(baseDir, "..", "..", ".codex-plugin", "plugin.json"),
     // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
-    join7(baseDir, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
-    join7(baseDir, "..", "..", "..", "claude-plugin", "plugin.json"),
+    join8(baseDir, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
+    join8(baseDir, "..", "..", "..", "claude-plugin", "plugin.json"),
     // Core package fallback. This is enough for artifact versioning in Codex.
-    join7(baseDir, "..", "package.json"),
-    join7(baseDir, "..", "..", "package.json")
+    join8(baseDir, "..", "package.json"),
+    join8(baseDir, "..", "..", "package.json")
   ]);
 }
 function firstExistingFile(candidates) {
@@ -19760,7 +20114,7 @@ var init_runtime_paths = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/protocol.js
-import { readFileSync as readFileSync5 } from "node:fs";
+import { readFileSync as readFileSync6 } from "node:fs";
 function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
   if (health.protocolVersion === void 0)
     return { compatible: false, reason: "legacy" };
@@ -19791,7 +20145,7 @@ function getPluginVersion() {
       cachedPluginVersion = null;
       return cachedPluginVersion;
     }
-    const parsed = JSON.parse(readFileSync5(manifestPath, "utf-8"));
+    const parsed = JSON.parse(readFileSync6(manifestPath, "utf-8"));
     cachedPluginVersion = typeof parsed.version === "string" ? parsed.version : null;
   } catch {
     cachedPluginVersion = null;
@@ -19853,9 +20207,9 @@ var init_quiescence = __esm({
 // packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync6, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync6, rmSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync6, mkdirSync as mkdirSync4, readdirSync as readdirSync2, readFileSync as readFileSync7, rmSync, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname3, join as join8 } from "node:path";
+import { dirname as dirname4, join as join9 } from "node:path";
 function resolveArtifactDecision(input) {
   if (input.envOverride)
     return "build-local";
@@ -19889,8 +20243,8 @@ function releaseAssetUrl(repo, version2, assetName) {
   return `https://github.com/${repo}/releases/download/v${version2}/${assetName}`;
 }
 function cacheDirFor(home, platformOS, version2, platform) {
-  const root = platformOS === "darwin" ? join8(home, "Library", "Caches", "rn-dev-agent", "runners") : join8(home, ".cache", "rn-dev-agent", "runners");
-  return join8(root, version2, platform);
+  const root = platformOS === "darwin" ? join9(home, "Library", "Caches", "rn-dev-agent", "runners") : join9(home, ".cache", "rn-dev-agent", "runners");
+  return join9(root, version2, platform);
 }
 function formatArtifactSize(bytes) {
   return `~${Math.max(1, Math.round(bytes / 1e6))} MB`;
@@ -19908,11 +20262,11 @@ async function acquireArtifact(platform, version2, deps, extractedOk) {
   if (assets.length === 0)
     return { provenance: "build-local" };
   const cacheDir = deps.cacheDir(version2, platform);
-  const productsDir = join8(cacheDir, "products");
+  const productsDir = join9(cacheDir, "products");
   const actualByName = {};
   let allZipsPresent = true;
   for (const a of assets) {
-    const zp = join8(cacheDir, a.name);
+    const zp = join9(cacheDir, a.name);
     if (deps.existsSync(zp)) {
       try {
         actualByName[a.name] = deps.sha256File(zp);
@@ -19934,7 +20288,7 @@ async function acquireArtifact(platform, version2, deps, extractedOk) {
   try {
     deps.mkdirp(cacheDir);
     for (const a of assets) {
-      const zp = join8(cacheDir, a.name);
+      const zp = join9(cacheDir, a.name);
       await deps.fetchToFile(releaseAssetUrl(RUNNER_REPO, version2, a.name), zp, {
         timeoutMs: DOWNLOAD_TIMEOUT_MS,
         maxBytes: a.bytes + DOWNLOAD_SIZE_SLACK_BYTES
@@ -19967,10 +20321,10 @@ async function acquireArtifact(platform, version2, deps, extractedOk) {
   }
 }
 function iosExtractedOk(deps) {
-  return (productsDir) => deps.listFiles(join8(productsDir, "Build", "Products")).some((f) => f.endsWith(".xctestrun"));
+  return (productsDir) => deps.listFiles(join9(productsDir, "Build", "Products")).some((f) => f.endsWith(".xctestrun"));
 }
 function androidExtractedOk(deps) {
-  return (productsDir) => deps.existsSync(join8(productsDir, ANDROID_APP_APK_NAME)) && deps.existsSync(join8(productsDir, ANDROID_TEST_APK_NAME));
+  return (productsDir) => deps.existsSync(join9(productsDir, ANDROID_APP_APK_NAME)) && deps.existsSync(join9(productsDir, ANDROID_TEST_APK_NAME));
 }
 async function resolveIosRunnerArtifacts(version2, localDerivedDataPath, deps = defaultArtifactDeps(), forceLocalBuild = false) {
   if (forceLocalBuild) {
@@ -19990,8 +20344,8 @@ async function resolveAndroidRunnerArtifacts(version2, local, deps = defaultArti
   }
   return {
     provenance: r.provenance,
-    appApk: join8(r.productsDir, ANDROID_APP_APK_NAME),
-    testApk: join8(r.productsDir, ANDROID_TEST_APK_NAME),
+    appApk: join9(r.productsDir, ANDROID_APP_APK_NAME),
+    testApk: join9(r.productsDir, ANDROID_TEST_APK_NAME),
     note: r.note
   };
 }
@@ -20000,7 +20354,7 @@ function readCommittedManifest() {
     const manifestPath = firstExistingFile(candidateRunnerManifestFiles());
     if (!manifestPath)
       return null;
-    const parsed = JSON.parse(readFileSync6(manifestPath, "utf-8"));
+    const parsed = JSON.parse(readFileSync7(manifestPath, "utf-8"));
     if (parsed && typeof parsed === "object" && parsed.assets)
       return parsed;
     return null;
@@ -20009,7 +20363,7 @@ function readCommittedManifest() {
   }
 }
 function sha256File(p) {
-  return createHash2("sha256").update(readFileSync6(p)).digest("hex");
+  return createHash2("sha256").update(readFileSync7(p)).digest("hex");
 }
 async function fetchToFile(url, dest, opts) {
   const controller = new AbortController();
@@ -20020,7 +20374,7 @@ async function fetchToFile(url, dest, opts) {
       throw new Error(`HTTP ${res.status} fetching ${url}`);
     if (!res.body)
       throw new Error(`empty response body for ${url}`);
-    mkdirSync4(dirname3(dest), { recursive: true });
+    mkdirSync4(dirname4(dest), { recursive: true });
     const reader = res.body.getReader();
     const chunks = [];
     let total = 0;
@@ -20208,8 +20562,8 @@ __export(rn_fast_runner_client_exports, {
   stopFastRunner: () => stopFastRunner
 });
 import { spawn } from "node:child_process";
-import { join as join9 } from "node:path";
-import { existsSync as existsSync7, readdirSync as readdirSync3, mkdirSync as mkdirSync5, rmSync as rmSync2, statSync as statSync2, readFileSync as readFileSync7, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join10 } from "node:path";
+import { existsSync as existsSync7, readdirSync as readdirSync3, mkdirSync as mkdirSync5, rmSync as rmSync2, statSync as statSync2, readFileSync as readFileSync8, writeFileSync as writeFileSync5 } from "node:fs";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -20395,7 +20749,7 @@ function resolveRunnerStartPlan(opts) {
 }
 function hasBuiltTestProduct(derivedDataPath) {
   try {
-    const productsDir = join9(derivedDataPath, "Build", "Products");
+    const productsDir = join10(derivedDataPath, "Build", "Products");
     if (!existsSync7(productsDir))
       return false;
     return readdirSync3(productsDir).some((entry) => entry.endsWith(".xctestrun"));
@@ -20404,7 +20758,7 @@ function hasBuiltTestProduct(derivedDataPath) {
   }
 }
 function derivedDataPathForRunner() {
-  return join9(FAST_RUNNER_PROJECT, "build", "DerivedData");
+  return join10(FAST_RUNNER_PROJECT, "build", "DerivedData");
 }
 function acquireRunnerRebuildLock() {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -20496,7 +20850,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   if (shouldReuseRunner(runnerState, deviceId))
     return runnerState;
   const desired = port ?? (await isPortFree(DEFAULT_PORT) ? DEFAULT_PORT : 0);
-  const projectPath = join9(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
+  const projectPath = join10(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
   if (!existsSync7(projectPath)) {
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
   }
@@ -21087,13 +21441,13 @@ var init_rn_fast_runner_client = __esm({
     lastKnownCapabilities = [];
     quiescenceAnnouncementPending = false;
     QUIESCENCE_STATUSES = /* @__PURE__ */ new Set(["active", "disabled", "unavailable"]);
-    REBUILD_LOCK_DIR = join9(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_DIR = join10(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
     REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    REBUILD_BUDGET_FILE = join9(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    REBUILD_BUDGET_FILE = join10(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
     runnerRebuildBudget = {
       alreadyRebuiltFor(pluginVersion) {
         try {
-          const parsed = JSON.parse(readFileSync7(REBUILD_BUDGET_FILE, "utf8"));
+          const parsed = JSON.parse(readFileSync8(REBUILD_BUDGET_FILE, "utf8"));
           return parsed.pluginVersion === pluginVersion;
         } catch {
           return false;
@@ -21101,7 +21455,7 @@ var init_rn_fast_runner_client = __esm({
       },
       recordRebuild(pluginVersion) {
         try {
-          mkdirSync5(join9(FAST_RUNNER_PROJECT, "build"), { recursive: true });
+          mkdirSync5(join10(FAST_RUNNER_PROJECT, "build"), { recursive: true });
           writeFileSync5(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: (/* @__PURE__ */ new Date()).toISOString() }));
         } catch {
         }
@@ -21118,7 +21472,7 @@ var init_rn_fast_runner_client = __esm({
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
 import { execFile, spawn as spawn2 } from "node:child_process";
 import { createWriteStream as createWriteStream2, renameSync as renameSync3, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename, dirname as dirname4, join as join10 } from "node:path";
+import { basename, dirname as dirname5, join as join11 } from "node:path";
 import { promisify } from "node:util";
 function parseSimctlBootedAll(jsonText) {
   let data;
@@ -21202,7 +21556,7 @@ function resolveCaptureOutcome(streamFinished, procCode) {
   return procCode === 0 ? "success" : "failure";
 }
 function rawTempPath(finalPath, uniq) {
-  return join10(dirname4(finalPath), `.${basename(finalPath)}.${uniq}.rawtmp`);
+  return join11(dirname5(finalPath), `.${basename(finalPath)}.${uniq}.rawtmp`);
 }
 function nextCaptureSuffix() {
   captureCounter += 1;
@@ -21357,9 +21711,9 @@ __export(release_android_slot_exports, {
 });
 import { execFile as execFileCb } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
-import { existsSync as existsSync8, readFileSync as readFileSync8, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync8, readFileSync as readFileSync9, unlinkSync as unlinkSync4 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
   return pid === selfPid || pid === parentPid;
 }
@@ -21375,7 +21729,7 @@ function defaultDeps() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync8(DAEMON_JSON, "utf8"));
+        const parsed = JSON.parse(readFileSync9(DAEMON_JSON, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -21487,8 +21841,8 @@ var init_release_android_slot = __esm({
     init_rn_android_runner_client();
     init_agent_device_wrapper();
     execFile2 = promisify2(execFileCb);
-    DAEMON_JSON = join11(homedir4(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join11(homedir4(), ".agent-device", "daemon.lock");
+    DAEMON_JSON = join12(homedir4(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join12(homedir4(), ".agent-device", "daemon.lock");
     DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
     SIGKILL_GRACE_MS = 500;
     ADB_TIMEOUT_MS = 5e3;
@@ -21542,7 +21896,7 @@ import { spawn as spawn3, execFile as execFile3 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
 import { writeFileSync as writeFileSync6, existsSync as existsSync9, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 function _setFetchForTest2(fn) {
   fetchImpl2 = fn;
 }
@@ -22225,7 +22579,7 @@ async function runAndroid(args) {
     const data = resp.data;
     if (!data?.pngBase64)
       return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
-    const outPath = args.outPath ?? join12(tmpdir3(), `rn-android-screenshot-${Date.now()}.png`);
+    const outPath = args.outPath ?? join13(tmpdir3(), `rn-android-screenshot-${Date.now()}.png`);
     writeFileSync6(outPath, Buffer.from(data.pngBase64, "base64"));
     return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
   }
@@ -22258,9 +22612,9 @@ var init_rn_android_runner_client = __esm({
     HEALTH_POLL_INTERVAL_MS = 150;
     HEALTH_PROBE_TIMEOUT_MS = 1e3;
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
-    GRADLEW = join12(RN_ANDROID_RUNNER_DIR, "gradlew");
-    APK_APP = join12(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    APK_TEST = join12(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
+    GRADLEW = join13(RN_ANDROID_RUNNER_DIR, "gradlew");
+    APK_APP = join13(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    APK_TEST = join13(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
     GRADLE_BUILD_TIMEOUT_MS = 6e5;
     ADB_INSTALL_TIMEOUT_MS = 12e4;
     runnerProcess2 = null;
@@ -22438,11 +22792,11 @@ var init_settle = __esm({
 
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
 import { unlinkSync as unlinkSync5, rmSync as rmSync4 } from "node:fs";
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 import { createHash as createHash3 } from "node:crypto";
 function getSessionFilePath() {
   const projectId = createHash3("sha256").update(process.cwd()).digest("hex").slice(0, 12);
-  return join13(getStateDir(), `session-${projectId}.json`);
+  return join14(getStateDir(), `session-${projectId}.json`);
 }
 function getActiveSession() {
   return activeSession;
@@ -23345,341 +23699,6 @@ var init_platform_utils = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join14, dirname as dirname5, isAbsolute, sep as sep2 } from "node:path";
-import { readFileSync as readFileSync9, realpathSync as realpathSync2 } from "node:fs";
-function isValidBundleId(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length === 0 || s.length >= BUNDLE_ID_MAX_LEN)
-    return false;
-  return BUNDLE_ID_RE.test(s);
-}
-function assertValidBundleId(s, context) {
-  if (!isValidBundleId(s)) {
-    const preview = JSON.stringify(s).slice(0, 80);
-    throw new MaestroValidationError(`Invalid bundle ID for ${context}: ${preview}`);
-  }
-}
-function isSafeMaestroScalar(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length > SCALAR_MAX_LEN)
-    return false;
-  if (UNSAFE_SCALAR_RE.test(s))
-    return false;
-  return true;
-}
-function buildMaestroFlow(opts, commands) {
-  if (opts.appId !== void 0) {
-    assertValidBundleId(opts.appId, "appId header");
-  }
-  for (const cmd of commands) {
-    validateCommand(cmd);
-  }
-  const headerYaml = opts.appId ? import_yaml2.default.stringify({ appId: opts.appId }) : "";
-  const bodyYaml = import_yaml2.default.stringify(commands);
-  return `${headerYaml}---
-${bodyYaml}`;
-}
-function validateCommand(cmd) {
-  if (cmd === null || cmd === void 0) {
-    throw new MaestroValidationError("Command is null/undefined");
-  }
-  if (typeof cmd === "string") {
-    if (!isSafeMaestroScalar(cmd)) {
-      throw new MaestroValidationError(`Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`);
-    }
-    if (DENIED_COMMANDS.has(cmd)) {
-      throw new MaestroValidationError(`Command not allowed (denied by default): ${cmd}`);
-    }
-    if (!ALLOWED_COMMANDS.has(cmd)) {
-      throw new MaestroValidationError(`Command not in allowlist: ${cmd}`);
-    }
-    return;
-  }
-  if (typeof cmd !== "object") {
-    throw new MaestroValidationError(`Command is not an object or string: ${typeof cmd}`);
-  }
-  const keys = Object.keys(cmd);
-  if (keys.length !== 1) {
-    throw new MaestroValidationError(`Command must have exactly one root key, got ${keys.length}: ${keys.join(", ")}`);
-  }
-  const key = keys[0];
-  if (DENIED_COMMANDS.has(key)) {
-    throw new MaestroValidationError(`Command not allowed (denied by default): ${key}`);
-  }
-  if (!ALLOWED_COMMANDS.has(key)) {
-    throw new MaestroValidationError(`Command not in allowlist: ${key}`);
-  }
-  if (key === "runFlow") {
-    validateRunFlowValue(cmd[key]);
-    return;
-  }
-  validateValue(cmd[key]);
-}
-function validateRunFlowValue(v) {
-  if (typeof v === "string") {
-    if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
-    }
-    return;
-  }
-  if (v === null || typeof v !== "object" || Array.isArray(v)) {
-    throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
-  }
-  const obj = v;
-  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
-    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
-  }
-  if ("when" in obj)
-    validateValue(obj.when);
-  if ("commands" in obj) {
-    if (!Array.isArray(obj.commands)) {
-      throw new MaestroValidationError(`runFlow.commands must be an array`);
-    }
-    for (const c of obj.commands)
-      validateCommand(c);
-  }
-  for (const [k, val] of Object.entries(obj)) {
-    if (k === "file" || k === "when" || k === "commands")
-      continue;
-    if (!isSafeMaestroScalar(k)) {
-      throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
-    }
-    validateValue(val);
-  }
-}
-function validateValue(v) {
-  if (v === null || v === void 0)
-    return;
-  if (typeof v === "boolean" || typeof v === "number")
-    return;
-  if (typeof v === "string") {
-    if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe scalar value: ${JSON.stringify(v).slice(0, 80)}`);
-    }
-    return;
-  }
-  if (Array.isArray(v)) {
-    for (const item of v)
-      validateValue(item);
-    return;
-  }
-  if (typeof v === "object") {
-    for (const [key, value] of Object.entries(v)) {
-      if (!isSafeMaestroScalar(key)) {
-        throw new MaestroValidationError(`Unsafe scalar key: ${JSON.stringify(key).slice(0, 80)}`);
-      }
-      validateValue(value);
-    }
-    return;
-  }
-  throw new MaestroValidationError(`Unsupported value type: ${typeof v}`);
-}
-function asRunFlow(cmd) {
-  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd))
-    return null;
-  const keys = Object.keys(cmd);
-  if (keys.length !== 1 || keys[0] !== "runFlow")
-    return null;
-  const v = cmd.runFlow;
-  if (typeof v === "string")
-    return { file: v };
-  if (v && typeof v === "object" && !Array.isArray(v)) {
-    const o = v;
-    return {
-      file: typeof o.file === "string" ? o.file : void 0,
-      when: o.when,
-      commands: Array.isArray(o.commands) ? o.commands : void 0
-    };
-  }
-  return null;
-}
-function resolveRunFlowTarget(file, opts) {
-  if (!opts.flowDir || !opts.flowRoot) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
-  }
-  if (isAbsolute(file)) {
-    throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
-  }
-  if (file.split(/[\\/]/).includes("..")) {
-    throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
-  }
-  if (!/\.ya?ml$/i.test(file)) {
-    throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
-  }
-  const realpath = opts.realpathFn ?? realpathSync2;
-  let resolved;
-  let rootReal;
-  try {
-    resolved = realpath(join14(opts.flowDir, file));
-    rootReal = realpath(opts.flowRoot);
-  } catch (err) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
-  }
-  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep2)) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
-  }
-  return resolved;
-}
-function expandRunFlows(commands, opts) {
-  const out = [];
-  for (const cmd of commands) {
-    const rf = asRunFlow(cmd);
-    if (!rf) {
-      out.push(cmd);
-      continue;
-    }
-    if (rf.file !== void 0) {
-      const depth = opts._depth ?? 0;
-      const max = opts.maxRunFlowDepth ?? 5;
-      if (depth >= max) {
-        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
-      }
-      const resolved = resolveRunFlowTarget(rf.file, opts);
-      const visited = opts._visited ?? /* @__PURE__ */ new Set();
-      if (visited.has(resolved)) {
-        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
-      }
-      const readFile3 = opts.readFileFn ?? ((p) => readFileSync9(p, "utf8"));
-      let subText;
-      try {
-        subText = readFile3(resolved);
-      } catch (err) {
-        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
-      }
-      const sub = parseAndValidateFlow(subText, {
-        ...opts,
-        rejectHeader: true,
-        flowDir: dirname5(resolved),
-        _depth: depth + 1,
-        _visited: /* @__PURE__ */ new Set([...visited, resolved])
-      });
-      if (rf.when !== void 0) {
-        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
-      } else {
-        out.push(...sub.commands);
-      }
-    } else {
-      const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
-      const wrapped = { commands: inner };
-      if (rf.when !== void 0)
-        wrapped.when = rf.when;
-      out.push({ runFlow: wrapped });
-    }
-  }
-  return out;
-}
-function parseAndValidateFlow(yamlText, opts = {}) {
-  let docs;
-  try {
-    docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
-  } catch (err) {
-    throw new MaestroValidationError(`YAML parse error: ${err.message}`);
-  }
-  if (docs.length === 0) {
-    throw new MaestroValidationError("Empty Maestro flow");
-  }
-  let appId;
-  let body;
-  if (docs.length === 1) {
-    body = docs[0].toJS();
-  } else {
-    const header = docs[0].toJS() ?? {};
-    if (header && typeof header === "object" && "appId" in header) {
-      if (opts.rejectHeader) {
-        throw new MaestroValidationError("Header (appId) not allowed in this context");
-      }
-      const rawAppId = header.appId;
-      assertValidBundleId(rawAppId, "parsed flow header");
-      appId = rawAppId;
-    }
-    body = docs[docs.length - 1].toJS();
-  }
-  if (body === null || body === void 0) {
-    body = [];
-  }
-  if (!Array.isArray(body)) {
-    throw new MaestroValidationError(`Flow body must be an array, got ${typeof body}`);
-  }
-  const expanded = expandRunFlows(body, opts);
-  for (const cmd of expanded) {
-    validateCommand(cmd);
-  }
-  const raw = buildMaestroFlow(appId !== void 0 ? { appId } : {}, expanded);
-  return { appId, commands: expanded, raw };
-}
-var import_yaml2, MaestroValidationError, BUNDLE_ID_RE, BUNDLE_ID_MAX_LEN, UNSAFE_SCALAR_RE, SCALAR_MAX_LEN, ALLOWED_COMMANDS, DENIED_COMMANDS;
-var init_maestro_validator = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
-    "use strict";
-    import_yaml2 = __toESM(require_dist2(), 1);
-    MaestroValidationError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "MaestroValidationError";
-      }
-    };
-    BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
-    BUNDLE_ID_MAX_LEN = 256;
-    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
-    SCALAR_MAX_LEN = 4096;
-    ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
-      "launchApp",
-      "tapOn",
-      "doubleTapOn",
-      "longPressOn",
-      "assertVisible",
-      "assertNotVisible",
-      "inputText",
-      "eraseText",
-      "scroll",
-      "scrollUntilVisible",
-      "swipe",
-      // Multi-LLM review caught these: test-recorder-generators emits the
-      // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
-      // top-level commands. Without these in the allowlist, every recorded
-      // action containing a swipe would be refused at replay time. The
-      // deepsec attack vector (newline-injected direction) is already
-      // mitigated by isSafeMaestroScalar catching the embedded newline.
-      "swipeUp",
-      "swipeDown",
-      "swipeLeft",
-      "swipeRight",
-      "back",
-      "pressKey",
-      "openLink",
-      "waitForAnimationToEnd",
-      "extendedWaitUntil",
-      "hideKeyboard",
-      "takeScreenshot",
-      "clearState",
-      "addMedia",
-      "copyTextFrom",
-      "pasteText",
-      "travel",
-      "setLocation",
-      "setAirplaneMode",
-      "killApp",
-      "stopApp",
-      "tap",
-      // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
-      // dev-client picker). Validated specially (validateRunFlowValue) so nested
-      // `commands` get full command-level allowlist checks, and {file} refs are
-      // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
-      // through generic validateValue, which would miss nested denied commands.
-      "runFlow"
-    ]);
-    DENIED_COMMANDS = /* @__PURE__ */ new Set([
-      "runScript",
-      "evalScript",
-      "startRecording",
-      "stopRecording"
-    ]);
-  }
-});
-
 // packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
 import { spawnSync } from "node:child_process";
 import { existsSync as existsSync10 } from "node:fs";
@@ -24326,12 +24345,34 @@ async function detectAndroidExternalRunner(execFileImpl = execFile6, serialArgs 
     return null;
   }
 }
+function executableBasename(command) {
+  const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
+  return executable.slice(executable.lastIndexOf("/") + 1);
+}
+function isIosExternalRunnerProcessLine(line) {
+  const match = line.match(/^\s*\d+\s+(.+)$/);
+  if (!match)
+    return false;
+  const command = match[1];
+  const executable = executableBasename(command);
+  if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable))
+    return true;
+  if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable))
+    return true;
+  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  if (/^xcodebuild$/i.test(executable) && /(?:maestro[^\s]*|WebDriverAgent[^\s]*)\.xctestrun(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  return false;
+}
 async function detectIosExternalRunner(execFileImpl = execFile6, udid) {
   try {
     const opts = { timeout: 2e3, encoding: "utf8" };
     const run = execFileImpl === execFile6 ? promisify6(execFileImpl) : execFileImpl;
     const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
-    const lines = stdout.split("\n").filter((line) => IOS_FOREIGN_RE.test(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
+    const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
     if (lines.length === 0)
       return null;
     return {
@@ -24360,11 +24401,10 @@ function foreignRunnerNotice(detection, flowLeaseHeld) {
     warning: `FOREIGN_RUNNER_ACTIVE: ${detection.message}`
   };
 }
-var IOS_FOREIGN_RE, RN_FAST_RUNNER_RE;
+var RN_FAST_RUNNER_RE;
 var init_external_runner_detect = __esm({
   "packages/rn-dev-agent-core/dist/runners/external-runner-detect.js"() {
     "use strict";
-    IOS_FOREIGN_RE = /maestro|WebDriverAgent/i;
     RN_FAST_RUNNER_RE = /RnFastRunner/i;
   }
 });
@@ -48344,14 +48384,8 @@ function targetMatchesSession(target, filters) {
     return false;
   if (filters.platform && (target.platform !== filters.platform || target.platformInference === "defaulted" || target.platformInference === "ambiguous"))
     return false;
-  if (filters.bundleId) {
-    const description = (target.description ?? "").toLowerCase();
-    const bundle = filters.bundleId.toLowerCase();
-    const escaped = bundle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (!new RegExp(`(^|[^A-Za-z0-9._-])${escaped}([^A-Za-z0-9._-]|$)`).test(description)) {
-      return false;
-    }
-  }
+  if (filters.bundleId && !targetMatchesBundleId(target, filters.bundleId))
+    return false;
   if (filters.deviceKind === "physical" && !androidTargetMatchesKind(target.deviceName, filters.deviceKind)) {
     return false;
   }
@@ -48440,7 +48474,7 @@ async function buildStatusResult(client2) {
       device: client2.connectedTarget?.title ?? null,
       pageId: client2.connectedTarget?.id ?? null,
       platform: client2.connectedTarget?.platform ?? null,
-      bundleId: client2.connectedTarget?.description ?? null,
+      bundleId: client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null,
       affinityScope: (() => {
         const active = getActiveSession();
         if (!active)
@@ -48572,7 +48606,7 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
                   status.app.architecture = narrowArchitecture(retryProbe.appInfo?.architecture);
                   status.cdp.device = client2.connectedTarget?.title ?? null;
                   status.cdp.pageId = client2.connectedTarget?.id ?? null;
-                  status.cdp.bundleId = client2.connectedTarget?.description ?? null;
+                  status.cdp.bundleId = client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null;
                   status.capabilities.fiberTree = retryProbe.fiberTree;
                   devRecovered = true;
                   autoRecoveredMessage = "Reconnected to correct JS context";
@@ -48593,7 +48627,7 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
           status.app.isPaused = client2.isPaused;
           status.cdp.device = client2.connectedTarget?.title ?? null;
           status.cdp.pageId = client2.connectedTarget?.id ?? null;
-          status.cdp.bundleId = client2.connectedTarget?.description ?? null;
+          status.cdp.bundleId = client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null;
         } catch {
         }
         if (status.app.isPaused) {
@@ -48602,7 +48636,7 @@ function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
             status.app.isPaused = client2.isPaused;
             status.cdp.device = client2.connectedTarget?.title ?? null;
             status.cdp.pageId = client2.connectedTarget?.id ?? null;
-            status.cdp.bundleId = client2.connectedTarget?.description ?? null;
+            status.cdp.bundleId = client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null;
           } else {
             const hint = wedge.reason === "flow-active" ? "A Maestro flow is running \u2014 skipped re-foreground recovery. Wait for the flow to finish, then retry." : wedge.reason === "budget-exhausted" ? "Wedge-recovery budget exhausted this session. Try cdp_restart(hardReset=true)." : "Re-foreground recovery did not clear the wedge. Try cdp_restart(hardReset=true).";
             return warnResult(status, `Debugger paused / app backgrounded. ${hint}`);
@@ -59589,11 +59623,9 @@ function createConnectHandler(getClient2, setClient2, createClient2) {
     };
     if (client2.isConnected && !args.force) {
       const target = client2.connectedTarget;
-      const haystack = `${target?.title ?? ""} ${target?.description ?? ""}`.toLowerCase();
       const portMismatch = typeof args.metroPort === "number" && args.metroPort !== client2.metroPort;
       const targetIdMismatch = typeof effectiveFilters.targetId === "string" && effectiveFilters.targetId.length > 0 && effectiveFilters.targetId !== target?.id;
-      const bundleIdLower = effectiveFilters.bundleId?.toLowerCase() ?? "";
-      const bundleMatched = bundleIdLower.length > 0 && new RegExp(`(^|[^A-Za-z0-9._-])${bundleIdLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Za-z0-9._-]|$)`).test(haystack);
+      const bundleMatched = typeof effectiveFilters.bundleId === "string" && target != null && targetMatchesBundleId(target, effectiveFilters.bundleId);
       const bundleMismatch = typeof effectiveFilters.bundleId === "string" && effectiveFilters.bundleId.length > 0 && !bundleMatched;
       const platformMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
       if (portMismatch || targetIdMismatch || bundleMismatch || platformMismatch) {
@@ -59639,7 +59671,8 @@ function createConnectHandler(getClient2, setClient2, createClient2) {
           title: target.title,
           vm: target.vm,
           platform: target.platform ?? null,
-          description: target.description ?? null
+          description: target.description ?? null,
+          appId: target.appId ?? null
         } : null
       });
     } catch (err) {
@@ -59653,6 +59686,7 @@ function createConnectHandler(getClient2, setClient2, createClient2) {
             title: target.title,
             deviceName: target.deviceName ?? null,
             description: target.description ?? null,
+            appId: target.appId ?? null,
             platform: target.platform ?? null,
             confidence: target.platformInference ?? "probed"
           })),
@@ -59691,6 +59725,7 @@ function createTargetsHandler(getClient2) {
           title: t.title,
           vm: t.vm,
           description: t.description ?? null,
+          appId: t.appId ?? null,
           platform: t.platform ?? null,
           connected: t.id === connectedId
         }))

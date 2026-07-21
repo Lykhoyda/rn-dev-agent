@@ -3,7 +3,7 @@ import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { sessionConnectFilters, targetMatchesSession } from './status.js';
-import { TargetSelectionError } from '../cdp/discovery.js';
+import { TargetSelectionError, targetMatchesBundleId } from '../cdp/discovery.js';
 import type { ConnectFilters } from '../cdp/connect.js';
 
 interface ConnectArgs {
@@ -66,28 +66,19 @@ export function createConnectHandler(
     // changed, leaving callers attached to the wrong Hermes page.
     if (client.isConnected && !args.force) {
       const target = client.connectedTarget;
-      const haystack = `${target?.title ?? ''} ${target?.description ?? ''}`.toLowerCase();
-
       const portMismatch =
         typeof args.metroPort === 'number' && args.metroPort !== client.metroPort;
       const targetIdMismatch =
         typeof effectiveFilters.targetId === 'string' &&
         effectiveFilters.targetId.length > 0 &&
         effectiveFilters.targetId !== target?.id;
-      // Phase 134.5 (deepsec BUG: other-logic-bug): the prior substring
-      // check would treat `com.example.app` as "already connected" when
-      // the actual target is `com.example.app-test` or `com.example.app2`
-      // — anything that contained the bundleId as a substring. Use a
-      // word-boundary check anchored on non-bundle-id characters so
-      // `com.example.app` matches `... com.example.app ...` but not
-      // `... com.example.app-test ...`. Bundle IDs use `[A-Za-z0-9._-]`,
-      // so the boundary must be anything outside that set.
-      const bundleIdLower = effectiveFilters.bundleId?.toLowerCase() ?? '';
+      // Bundle authority must come from one internally consistent Metro
+      // identity field, never an arbitrary token elsewhere in title/argv-like
+      // prose. Bridgeless targets carry it in appId or `<bundle> (<device>)`.
       const bundleMatched =
-        bundleIdLower.length > 0 &&
-        new RegExp(
-          `(^|[^A-Za-z0-9._-])${bundleIdLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9._-]|$)`,
-        ).test(haystack);
+        typeof effectiveFilters.bundleId === 'string' &&
+        target != null &&
+        targetMatchesBundleId(target, effectiveFilters.bundleId);
       const bundleMismatch =
         typeof effectiveFilters.bundleId === 'string' &&
         effectiveFilters.bundleId.length > 0 &&
@@ -150,6 +141,7 @@ export function createConnectHandler(
               vm: target.vm,
               platform: target.platform ?? null,
               description: target.description ?? null,
+              appId: target.appId ?? null,
             }
           : null,
       });
@@ -167,6 +159,7 @@ export function createConnectHandler(
             title: target.title,
             deviceName: target.deviceName ?? null,
             description: target.description ?? null,
+            appId: target.appId ?? null,
             platform: target.platform ?? null,
             confidence: target.platformInference ?? 'probed',
           })),
@@ -213,6 +206,7 @@ export function createTargetsHandler(getClient: () => CDPClient) {
           title: t.title,
           vm: t.vm,
           description: t.description ?? null,
+          appId: t.appId ?? null,
           platform: t.platform ?? null,
           connected: t.id === connectedId,
         })),

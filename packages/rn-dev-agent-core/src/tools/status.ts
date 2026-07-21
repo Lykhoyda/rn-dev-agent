@@ -16,6 +16,8 @@ import {
   TargetSelectionError,
   androidTargetMatchesKind,
   enumerateMetroCandidates,
+  targetBundleIdentity,
+  targetMatchesBundleId,
 } from '../cdp/discovery.js';
 import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
@@ -52,14 +54,7 @@ export function targetMatchesSession(
       target.platformInference === 'ambiguous')
   )
     return false;
-  if (filters.bundleId) {
-    const description = (target.description ?? '').toLowerCase();
-    const bundle = filters.bundleId.toLowerCase();
-    const escaped = bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!new RegExp(`(^|[^A-Za-z0-9._-])${escaped}([^A-Za-z0-9._-]|$)`).test(description)) {
-      return false;
-    }
-  }
+  if (filters.bundleId && !targetMatchesBundleId(target, filters.bundleId)) return false;
   if (
     filters.deviceKind === 'physical' &&
     !androidTargetMatchesKind(target.deviceName, filters.deviceKind)
@@ -189,7 +184,7 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       device: client.connectedTarget?.title ?? null,
       pageId: client.connectedTarget?.id ?? null,
       platform: client.connectedTarget?.platform ?? null,
-      bundleId: client.connectedTarget?.description ?? null,
+      bundleId: client.connectedTarget ? targetBundleIdentity(client.connectedTarget) : null,
       affinityScope: (() => {
         const active = getActiveSession();
         if (!active) return 'best-available' as const;
@@ -380,7 +375,9 @@ export function createStatusHandler(
                   status.app.architecture = narrowArchitecture(retryProbe.appInfo?.architecture);
                   status.cdp.device = client.connectedTarget?.title ?? null;
                   status.cdp.pageId = client.connectedTarget?.id ?? null;
-                  status.cdp.bundleId = client.connectedTarget?.description ?? null;
+                  status.cdp.bundleId = client.connectedTarget
+                    ? targetBundleIdentity(client.connectedTarget)
+                    : null;
                   status.capabilities.fiberTree = retryProbe.fiberTree;
                   devRecovered = true;
                   autoRecoveredMessage = 'Reconnected to correct JS context';
@@ -408,7 +405,9 @@ export function createStatusHandler(
           status.app.isPaused = client.isPaused;
           status.cdp.device = client.connectedTarget?.title ?? null;
           status.cdp.pageId = client.connectedTarget?.id ?? null;
-          status.cdp.bundleId = client.connectedTarget?.description ?? null;
+          status.cdp.bundleId = client.connectedTarget
+            ? targetBundleIdentity(client.connectedTarget)
+            : null;
         } catch {
           // softReconnect failed — fall through to the wedge recovery below.
         }
@@ -421,7 +420,9 @@ export function createStatusHandler(
             status.app.isPaused = client.isPaused; // resumed
             status.cdp.device = client.connectedTarget?.title ?? null;
             status.cdp.pageId = client.connectedTarget?.id ?? null;
-            status.cdp.bundleId = client.connectedTarget?.description ?? null;
+            status.cdp.bundleId = client.connectedTarget
+              ? targetBundleIdentity(client.connectedTarget)
+              : null;
           } else {
             const hint =
               wedge.reason === 'flow-active'

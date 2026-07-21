@@ -20,6 +20,8 @@ export interface HermesTarget {
   vm: string;
   webSocketDebuggerUrl: string;
   description?: string;
+  /** Metro may expose the exact application identifier separately from description. */
+  appId?: string;
   type?: string;
   platform?: 'ios' | 'android';
   /**

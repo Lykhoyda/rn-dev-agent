@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createConnectHandler } from '../../dist/tools/connection.js';
-import { selectTarget } from '../../dist/cdp/discovery.js';
+import { createStatusHandler } from '../../dist/tools/status.js';
+import {
+  TargetSelectionError,
+  selectTarget,
+  targetBundleIdentity,
+} from '../../dist/cdp/discovery.js';
+import { _setActiveSessionForTest } from '../../dist/agent-device-wrapper.js';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
 
 function envelope(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0]!.text) as Record<string, unknown>;
@@ -127,6 +134,153 @@ test('GH-588 Slice A: defaulted iOS identity is unproven; filterless Android rem
   ]);
   assert.equal(filterless.targets.length, 1);
   assert.match(filterless.warning!, /No platform filter/);
+});
+
+const BRIDGELESS_TARGET = {
+  id: '4c764862a650eef22f54b8902ef6acf4516b289c-1',
+  title: 'com.rndevagent.testapp (Issue588-Validation-iPhone-8082)',
+  appId: 'com.rndevagent.testapp',
+  vm: 'Hermes',
+  description: 'React Native Bridgeless [C++ connection]',
+  deviceName: 'Issue588-Validation-iPhone-8082',
+  platform: 'ios' as const,
+  platformInference: 'probed' as const,
+  webSocketDebuggerUrl: 'ws://127.0.0.1:8082/inspector/device?page=1',
+};
+
+test('GH-588 final validation: cdp_connect accepts proven Bridgeless title/appId identity', async () => {
+  _setActiveSessionForTest({
+    platform: 'ios',
+    deviceId: '5C10B45B-2065-458B-B885-0F83F49747C8',
+    appId: 'com.rndevagent.testapp',
+  });
+  try {
+    const fake = {
+      isConnected: false,
+      metroPort: 8082,
+      connectedTarget: null as typeof BRIDGELESS_TARGET | null,
+      disconnect: async () => {
+        fake.isConnected = false;
+      },
+      autoConnect: async (_port: number | undefined, filters: Record<string, string>) => {
+        const selected = selectTarget([BRIDGELESS_TARGET], filters);
+        if (selected.targets.length === 0) {
+          throw new TargetSelectionError(
+            selected.errorCode ?? 'PLATFORM_TARGET_NOT_FOUND',
+            selected.warning ?? 'No proven target',
+            [BRIDGELESS_TARGET],
+          );
+        }
+        fake.connectedTarget = selected.targets[0]!;
+        fake.isConnected = true;
+        return 'connected';
+      },
+    };
+    const handler = createConnectHandler(
+      () => fake as never,
+      () => undefined,
+      () => fake as never,
+    );
+
+    const body = envelope(await handler({ metroPort: 8082, platform: 'ios' }));
+    assert.equal(body.ok, true);
+    assert.equal(
+      (body.data as { target: { appId: string } }).target.appId,
+      'com.rndevagent.testapp',
+    );
+  } finally {
+    _setActiveSessionForTest(null);
+  }
+});
+
+test('GH-588 final validation: cdp_status reports the same proven Bridgeless identity', async () => {
+  _setActiveSessionForTest({
+    platform: 'ios',
+    deviceId: '5C10B45B-2065-458B-B885-0F83F49747C8',
+    appId: 'com.rndevagent.testapp',
+  });
+  try {
+    const mock = createMockClient({
+      _isConnected: true,
+      _metroPort: 8082,
+      _connectedTarget: { ...BRIDGELESS_TARGET, appId: undefined },
+    });
+    const handler = createStatusHandler(
+      () => mock,
+      () => undefined,
+      () => mock,
+    );
+    const body = envelope(await handler({ metroPort: 8082, platform: 'ios' }));
+    assert.equal(body.ok, true);
+    assert.equal(
+      (body.data as { cdp: { bundleId: string } }).cdp.bundleId,
+      'com.rndevagent.testapp',
+      'canonical title is authoritative when Bridgeless description is generic',
+    );
+  } finally {
+    _setActiveSessionForTest(null);
+  }
+});
+
+test('GH-588 final validation: bundle proof supports exact legacy/title/appId paths only', () => {
+  assert.equal(
+    targetBundleIdentity({ ...BRIDGELESS_TARGET, appId: undefined }),
+    'com.rndevagent.testapp',
+  );
+  assert.equal(
+    targetBundleIdentity({
+      ...BRIDGELESS_TARGET,
+      title: 'React Native',
+      appId: 'com.rndevagent.testapp',
+    }),
+    'com.rndevagent.testapp',
+  );
+  assert.equal(
+    targetBundleIdentity({
+      ...BRIDGELESS_TARGET,
+      title: 'React Native',
+      appId: undefined,
+      description: 'com.rndevagent.testapp',
+    }),
+    'com.rndevagent.testapp',
+  );
+  assert.equal(
+    targetBundleIdentity({
+      ...BRIDGELESS_TARGET,
+      title: 'prompt mentions com.rndevagent.testapp',
+      appId: undefined,
+    }),
+    null,
+    'an arbitrary title token is not identity evidence',
+  );
+  assert.equal(
+    targetBundleIdentity({ ...BRIDGELESS_TARGET, appId: 'com.foreign.app' }),
+    null,
+    'conflicting valid identity fields fail closed',
+  );
+});
+
+test('GH-588 final validation: wrong bundle/platform/defaulted identity all fail closed', () => {
+  const wrongBundle = selectTarget([BRIDGELESS_TARGET], {
+    platform: 'ios',
+    bundleId: 'com.foreign.app',
+  });
+  assert.equal(wrongBundle.targets.length, 0);
+  assert.match(wrongBundle.warning!, /proven live target metadata/);
+
+  const wrongPlatform = selectTarget([BRIDGELESS_TARGET], {
+    platform: 'android',
+    bundleId: 'com.rndevagent.testapp',
+  });
+  assert.equal(wrongPlatform.targets.length, 0);
+  assert.equal(wrongPlatform.errorCode, 'PLATFORM_TARGET_NOT_FOUND');
+
+  const defaulted = selectTarget(
+    [{ ...BRIDGELESS_TARGET, platformInference: 'defaulted' as const }],
+    { platform: 'ios', bundleId: 'com.rndevagent.testapp' },
+  );
+  assert.equal(defaulted.targets.length, 0);
+  assert.equal(defaulted.errorCode, 'PLATFORM_TARGET_NOT_FOUND');
 });
 
 test('GH-588 Slice A: exact targetId cannot override platform authority', () => {

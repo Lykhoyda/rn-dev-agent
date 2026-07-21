@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { logger } from '../logger.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 import type { HermesTarget, MetroCandidate } from '../types.js';
 import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from './metro-cwd.js';
 
@@ -142,6 +143,34 @@ export function parseSimctlListapps(stdout: string): Set<string> {
   return ids;
 }
 
+/**
+ * Return the single, internally consistent bundle identity carried by Metro.
+ * Bridgeless targets use a generic description and put the app ID in `appId`
+ * or in the canonical `<bundleId> (<device>)` title. Conflicting valid IDs are
+ * unproven and therefore fail closed rather than choosing the best-looking one.
+ */
+export function targetBundleIdentity(target: HermesTarget): string | null {
+  const identities = new Map<string, string>();
+  const add = (candidate: unknown) => {
+    if (!isValidBundleId(candidate)) return;
+    identities.set(candidate.toLowerCase(), candidate);
+  };
+
+  add(target.appId);
+  add(target.description);
+
+  const title = target.title?.trim() ?? '';
+  add(title);
+  const canonicalTitle = title.match(/^([^\s()]+)\s+\(.+\)$/);
+  if (canonicalTitle) add(canonicalTitle[1]);
+
+  return identities.size === 1 ? [...identities.values()][0] : null;
+}
+
+export function targetMatchesBundleId(target: HermesTarget, bundleId: string): boolean {
+  return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
+}
+
 function readAndroidPackages(): Set<string> | null {
   try {
     const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
@@ -242,9 +271,9 @@ export function inferPlatforms(
       continue;
     }
 
-    const desc = t.description ?? '';
-    const inAndroid = androidPackages?.has(desc) ?? false;
-    const inIOS = iosPackages?.has(desc) ?? false;
+    const bundleIdentity = targetBundleIdentity(t);
+    const inAndroid = bundleIdentity ? (androidPackages?.has(bundleIdentity) ?? false) : false;
+    const inIOS = bundleIdentity ? (iosPackages?.has(bundleIdentity) ?? false) : false;
 
     if (inAndroid && !inIOS) {
       t.platform = 'android';
@@ -275,7 +304,7 @@ export interface SelectTargetResult {
 
 function describeTarget(target: HermesTarget): string {
   const confidence = target.platformInference ?? 'probed';
-  return `${target.id} title="${target.title || '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
+  return `${target.id} title="${target.title || '?'}" appId="${target.appId ?? '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
 }
 
 export class TargetSelectionError extends Error {
@@ -316,7 +345,7 @@ export interface SelectTargetFilters {
   deviceKind?: 'emulator' | 'physical';
   /** Exact match against `target.id` — precise selection from cdp_targets output. */
   targetId?: string;
-  /** Match against `target.description` — Metro inspector reports bundleId there. */
+  /** Exact match against Metro's proven appId/description/canonical title identity. */
   bundleId?: string;
   /** Preferred bundleId (auto-selection hint, non-hard-filter). Used to break ties. */
   preferredBundleId?: string;
@@ -405,14 +434,13 @@ export function selectTarget(
 
   // bundleId is hard and platform-scoped whenever a platform authority exists.
   if (filters.bundleId) {
-    const bundleLower = filters.bundleId.toLowerCase();
-    const bundleMatched = filteredTargets.filter(
-      (t) => (t.description ?? '').toLowerCase() === bundleLower,
+    const bundleMatched = filteredTargets.filter((target) =>
+      targetMatchesBundleId(target, filters.bundleId!),
     );
     if (bundleMatched.length === 0) {
       return {
         targets: [],
-        warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map((t) => t.description ?? '?').join(', ')}`,
+        warning: `bundleId "${filters.bundleId}" not found in proven live target metadata. Candidates: ${filteredTargets.map(describeTarget).join('; ')}`,
       };
     }
     filteredTargets = bundleMatched;
@@ -423,8 +451,8 @@ export function selectTarget(
   // all candidates. Auto-populated from project-config.ts in connect.ts.
   const prefLower = filters.preferredBundleId?.toLowerCase();
   if (prefLower && filteredTargets.length > 1) {
-    const preferred = filteredTargets.filter(
-      (t) => (t.description ?? '').toLowerCase() === prefLower,
+    const preferred = filteredTargets.filter((target) =>
+      targetMatchesBundleId(target, filters.preferredBundleId!),
     );
     if (preferred.length > 0 && preferred.length < filteredTargets.length) {
       logger.info(
@@ -443,8 +471,8 @@ export function selectTarget(
     const bPage = parseInt(b.id?.split('-')[1] ?? '0', 10);
     if (aPage !== bPage) return bPage - aPage;
     if (prefLower) {
-      const aPref = (a.description ?? '').toLowerCase() === prefLower ? 1 : 0;
-      const bPref = (b.description ?? '').toLowerCase() === prefLower ? 1 : 0;
+      const aPref = targetMatchesBundleId(a, prefLower) ? 1 : 0;
+      const bPref = targetMatchesBundleId(b, prefLower) ? 1 : 0;
       if (aPref !== bPref) return bPref - aPref;
     }
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
@@ -500,7 +528,7 @@ export function selectMetroPort(
   if (ctx.preferredBundleId) {
     const pref = ctx.preferredBundleId.toLowerCase();
     const prefPorts = attached.filter((a) =>
-      a.targets.some((t) => (t.description ?? '').toLowerCase() === pref),
+      a.targets.some((target) => targetMatchesBundleId(target, pref)),
     );
     if (prefPorts.length === 1) return { port: prefPorts[0].port };
   }
