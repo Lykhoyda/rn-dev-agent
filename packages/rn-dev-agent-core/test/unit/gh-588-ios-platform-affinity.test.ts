@@ -344,25 +344,45 @@ test('a failure that burned seconds of subprocess timeouts is not re-paid per co
   clearPackageProbeCache();
 
   const at = (t: number) => () => t;
+  // A clock that reads lookup, probe-start, probe-end, then pins the end.
+  const clockOverTicks = (ticks: number[]) => {
+    let cursor = 0;
+    return () => ticks[Math.min(cursor++, ticks.length - 1)];
+  };
+
   // Every booted simulator timing out costs N x 5s; that must not be repeated
   // on the next connect just because the result was null.
-  const slowTicks = [0, 0, 10_000];
-  let cursor = 0;
-  const slowClock = () => slowTicks[Math.min(cursor++, slowTicks.length - 1)];
   let slowCalls = 0;
   const slowFailing = () => {
     slowCalls += 1;
     return null;
   };
-  assert.equal(cachedPackageProbe('ios', slowFailing, slowClock), null);
+  assert.equal(cachedPackageProbe('ios', slowFailing, clockOverTicks([0, 0, 10_000])), null);
   assert.equal(slowCalls, 1);
 
-  assert.equal(cachedPackageProbe('ios', slowFailing, at(5_000)), null);
   assert.equal(cachedPackageProbe('ios', slowFailing, at(14_000)), null);
+  assert.equal(cachedPackageProbe('ios', slowFailing, at(24_000)), null);
   assert.equal(slowCalls, 1, 'a slow failure keeps the long TTL');
 
   // It still expires — this is a cache, not a latch.
-  assert.equal(cachedPackageProbe('ios', slowFailing, at(16_000)), null);
+  assert.equal(cachedPackageProbe('ios', slowFailing, at(26_000)), null);
   assert.equal(slowCalls, 2);
+
+  // Three unresponsive simulators cost 3 x 5s = the whole TTL. The window must
+  // start when the probe FINISHES, or the entry is born expired and the next
+  // connect re-pays all 15s.
+  clearPackageProbeCache();
+  let exhaustingCalls = 0;
+  const exhausting = () => {
+    exhaustingCalls += 1;
+    return null;
+  };
+  assert.equal(cachedPackageProbe('ios', exhausting, clockOverTicks([0, 0, 15_000])), null);
+  assert.equal(exhaustingCalls, 1);
+  assert.equal(cachedPackageProbe('ios', exhausting, at(15_000)), null);
+  assert.equal(cachedPackageProbe('ios', exhausting, at(29_000)), null);
+  assert.equal(exhaustingCalls, 1, 'a probe costing a full TTL is still worth caching');
+  assert.equal(cachedPackageProbe('ios', exhausting, at(31_000)), null);
+  assert.equal(exhaustingCalls, 2);
   clearPackageProbeCache();
 });

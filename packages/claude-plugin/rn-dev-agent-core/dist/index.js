@@ -19052,9 +19052,10 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
     return hit.value;
   const startedAt = clock();
   const value = probe();
+  const finishedAt = clock();
   packageProbeCache.set(key, {
-    at: startedAt,
-    ttl: packageProbeTtl(value, clock() - startedAt),
+    at: finishedAt,
+    ttl: packageProbeTtl(value, finishedAt - startedAt),
     value
   });
   return value;
