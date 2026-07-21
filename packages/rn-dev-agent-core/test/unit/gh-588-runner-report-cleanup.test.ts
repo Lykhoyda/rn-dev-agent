@@ -136,6 +136,9 @@ test('structured report identity survives scalar and alternate device key spelli
     { flows: [{ device: { serial: EXACT } }] },
     { udid: EXACT },
     { id: 'run-42', flows: [{ id: 'flow-1', deviceId: EXACT }] },
+    { device: { id: 'iPhone-16-Pro', udid: EXACT } },
+    { device: { id: 'iPhone16,1', deviceId: EXACT, name: 'iPhone 17 Pro' } },
+    { flows: [{ device: { id: 'Pixel_9_API_35', serial: EXACT } }] },
   ];
   for (const shape of shapes) {
     const dir = mkdtempSync(join(tmpdir(), 'gh-588-report-shape-'));

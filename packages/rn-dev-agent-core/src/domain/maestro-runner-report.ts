@@ -11,9 +11,10 @@ const DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 
 // maestro-runner renders the executing device either as a nested object or as a
 // bare identifier, and names the identity field differently across its report
-// writers. Harvest every documented spelling so a shape drift degrades one key,
-// not the whole structured-evidence source.
-const DEVICE_ID_KEYS = ['id', 'udid', 'deviceId', 'serial'] as const;
+// writers. Each list is a precedence order, not a harvest set: one object
+// describes one device, so the most authoritative present key wins and `id` is
+// the last resort — it also spells model/device-type names ("iPhone-16-Pro").
+const DEVICE_ID_KEYS = ['udid', 'deviceId', 'serial', 'id'] as const;
 // `id` is deliberately absent here: on a run/flow container it names the run or
 // flow, and harvesting it would inject a foreign identity into the evidence set.
 const CONTAINER_DEVICE_ID_KEYS = ['udid', 'deviceId', 'deviceSerial'] as const;
@@ -22,7 +23,11 @@ function idsFrom(value: unknown, keys: readonly string[]): string[] {
   if (typeof value === 'string') return [value];
   if (!value || typeof value !== 'object') return [];
   const record = value as Record<string, unknown>;
-  return keys.map((key) => record[key]).filter((id): id is string => typeof id === 'string');
+  for (const key of keys) {
+    const id = record[key];
+    if (typeof id === 'string') return [id];
+  }
+  return [];
 }
 
 function deviceIdsFrom(value: unknown): string[] {

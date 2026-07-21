@@ -45320,7 +45320,12 @@ function idsFrom(value, keys) {
   if (!value || typeof value !== "object")
     return [];
   const record2 = value;
-  return keys.map((key) => record2[key]).filter((id) => typeof id === "string");
+  for (const key of keys) {
+    const id = record2[key];
+    if (typeof id === "string")
+      return [id];
+  }
+  return [];
 }
 function deviceIdsFrom(value) {
   return idsFrom(value, DEVICE_ID_KEYS);
@@ -45388,7 +45393,7 @@ var init_maestro_runner_report = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
     "use strict";
     DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
-    DEVICE_ID_KEYS = ["id", "udid", "deviceId", "serial"];
+    DEVICE_ID_KEYS = ["udid", "deviceId", "serial", "id"];
     CONTAINER_DEVICE_ID_KEYS = ["udid", "deviceId", "deviceSerial"];
   }
 });
