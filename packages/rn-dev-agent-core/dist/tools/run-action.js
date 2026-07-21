@@ -81,6 +81,7 @@ function replaySuccessEvidence(env) {
         transport: env.data?.transport ?? env.data?.runner ?? 'unproven',
         transportVersion: env.data?.transportVersion ?? null,
         fallback: env.data?.fallback ?? 'unproven',
+        ...(env.data?.deviceAuthority ? { deviceAuthority: env.data.deviceAuthority } : {}),
         perStepReadback: {
             source: 'maestro-runner-step-report',
             complete: steps.length > 0 && steps.every((step) => step.status === 'pass'),
@@ -109,6 +110,11 @@ function readMaestroOutput(env) {
     if (typeof metaOutput === 'string')
         return metaOutput;
     return env.error ?? '';
+}
+function readMaestroDeviceAuthority(env) {
+    if (env.data?.deviceAuthority)
+        return env.data.deviceAuthority;
+    return env.meta?.deviceAuthority;
 }
 /**
  * maestro_run builds its headline from the full runner stream before slicing
@@ -196,6 +202,7 @@ export function createRunActionHandler(deps = {}) {
         delayMs: Math.min(Math.max(0, probeRetryRaw.delayMs), 5000),
     };
     const blindProbeContext = deps.blindProbeContext ?? (async () => null);
+    const targetContext = deps.targetContext ?? (() => null);
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -228,6 +235,13 @@ export function createRunActionHandler(deps = {}) {
         const trigger = args.trigger ?? 'agent';
         const timeoutMs = args.timeoutMs ?? 120_000;
         const t0 = Date.now();
+        const activeTarget = targetContext();
+        if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
+            return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, 'TARGET_SESSION_MISMATCH', { requestedPlatform: args.platform, activeSession: activeTarget });
+        }
+        const maestroDeviceId = (!args.platform || activeTarget?.platform === args.platform) && activeTarget?.deviceId
+            ? activeTarget.deviceId
+            : undefined;
         // GH #397: deviceId threading. Handler-scoped (not inside the try) because
         // the outer catch also persists a RunRecord and must carry the device too.
         let probeDeviceId = null;
@@ -353,9 +367,13 @@ export function createRunActionHandler(deps = {}) {
             // / fast repair". Phase boundaries: t0 → tFirstDone → tRepairDone
             // → tRetryDone.
             const tBeforeFirst = Date.now();
+            // Requested/session metadata is not RunRecord authority. Clear it before
+            // dispatch; only direct maestro-runner evidence may repopulate it.
+            probeDeviceId = null;
             const firstResult = await maestroRun({
                 flowPath: action.filePath,
                 platform: args.platform,
+                deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
             });
@@ -364,6 +382,32 @@ export function createRunActionHandler(deps = {}) {
             const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
             const firstOutput = readMaestroOutput(firstEnv);
             const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
+            const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
+            probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? null;
+            if (firstEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
+                const autoRepair = {
+                    attempted: false,
+                    outcome: args.autoRepair === false ? 'refused' : 'skipped',
+                    refusedReason: args.autoRepair === false ? 'USER_DISABLED' : 'NOT_REPAIRABLE_KIND',
+                    phases: { firstAttemptMs },
+                };
+                await persistRunWithDevice({
+                    timestamp: new Date().toISOString(),
+                    durationMs: Date.now() - t0,
+                    status: 'fail',
+                    failureCode: 'DEVICE_AUTHORITY_MISMATCH',
+                    failureDetail: firstFailureDetail.slice(0, 1000),
+                    trigger,
+                    autoRepair,
+                });
+                return failResult(`cdp_run_action: ${args.actionId} refused replay authority: ${firstFailureDetail}`, 'DEVICE_AUTHORITY_MISMATCH', {
+                    actionId: args.actionId,
+                    failureKind: 'DEVICE_AUTHORITY_MISMATCH',
+                    deviceAuthority: firstDeviceAuthority,
+                    autoRepair,
+                    writes: writeDisclosure(),
+                });
+            }
             if (firstPassed) {
                 // Happy path — append RunRecord with no auto-repair.
                 const autoRepair = {
@@ -468,6 +512,10 @@ export function createRunActionHandler(deps = {}) {
                                 outcome: 'skipped',
                                 phases: { firstAttemptMs },
                             };
+                            // The fallback is a different transport. Its existing active-session
+                            // context remains the affinity input; never carry Maestro's device
+                            // report across transports.
+                            probeDeviceId = maestroDeviceId ?? null;
                             const persisted = await persistRunWithDevice({
                                 timestamp: new Date().toISOString(),
                                 durationMs: Date.now() - t0,
@@ -625,9 +673,11 @@ export function createRunActionHandler(deps = {}) {
                 return failResult(`cdp_run_action: action disappeared between repair and retry — investigate filesystem`, 'NO_PROJECT_ROOT');
             }
             const tBeforeRetry = Date.now();
+            probeDeviceId = null;
             const retryResult = await maestroRun({
                 flowPath: reloadedAction.filePath,
                 platform: args.platform,
+                deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
             });
@@ -636,6 +686,25 @@ export function createRunActionHandler(deps = {}) {
             const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
             const retryOutput = readMaestroOutput(retryEnv);
             const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
+            const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
+            probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? null;
+            if (retryEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
+                const autoRepair = {
+                    attempted: true,
+                    outcome: 'failed',
+                    phases: { firstAttemptMs, repairMs, retryMs },
+                };
+                await persistRunWithDevice({
+                    timestamp: new Date().toISOString(),
+                    durationMs: Date.now() - t0,
+                    status: 'fail',
+                    failureCode: 'DEVICE_AUTHORITY_MISMATCH',
+                    failureDetail: retryFailureDetail.slice(0, 1000),
+                    trigger,
+                    autoRepair,
+                });
+                return failResult(`cdp_run_action: ${args.actionId} refused retry authority: ${retryFailureDetail}`, 'DEVICE_AUTHORITY_MISMATCH', { actionId: args.actionId, deviceAuthority: retryDeviceAuthority, autoRepair });
+            }
             // Issue #120: pull the repair-engine's similarity score and the
             // RepairRecord's timestamp into the AutoRepairOutcome so MTTR can
             // both rank patches by confidence and cross-reference to the

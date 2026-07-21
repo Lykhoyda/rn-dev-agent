@@ -23889,7 +23889,13 @@ function chooseMaestroDispatch(inputs) {
       return {
         runner: "maestro",
         binPath: maestroPath2,
-        buildArgs: (platform, flowFile, _appFile) => ["test", "--platform", platform, flowFile],
+        buildArgs: (platform, flowFile, _appFile, deviceId) => [
+          "test",
+          "--platform",
+          platform,
+          ...deviceId ? ["--udid", deviceId] : [],
+          flowFile
+        ],
         fallbackReason: "Android flow uses hideKeyboard; maestro-runner v1.0.9 no-ops it on Android (B223) \u2014 using the Maestro CLI so the keyboard is actually dismissed"
       };
     }
@@ -23899,7 +23905,14 @@ function chooseMaestroDispatch(inputs) {
     return {
       runner: "maestro-runner",
       binPath: runnerPath,
-      buildArgs: (platform, flowFile, appFile) => appFile ? ["--app-file", appFile, "--platform", platform, "test", flowFile] : ["--platform", platform, "test", flowFile],
+      buildArgs: (platform, flowFile, appFile, deviceId) => [
+        ...appFile ? ["--app-file", appFile] : [],
+        "--platform",
+        platform,
+        ...deviceId ? ["--device", deviceId] : [],
+        "test",
+        flowFile
+      ],
       ...needsOfficialForKeyboard ? {
         degradedReason: "Android flow uses hideKeyboard but the Maestro CLI is not installed; maestro-runner v1.0.9 no-ops hideKeyboard on Android (B223), so the keyboard will NOT be dismissed. Install the Maestro CLI (`brew install maestro`) for the keyboard-occlusion fix to work on Android."
       } : {}
@@ -23919,7 +23932,13 @@ function chooseMaestroDispatch(inputs) {
       // entire B59 fallback on its target machines.
       // The Maestro CLI handles clearState reinstall from the flow's appId
       // header and exposes no --app-file flag, so appFile is intentionally ignored here.
-      buildArgs: (platform, flowFile, _appFile) => ["test", "--platform", platform, flowFile],
+      buildArgs: (platform, flowFile, _appFile, deviceId) => [
+        "test",
+        "--platform",
+        platform,
+        ...deviceId ? ["--udid", deviceId] : [],
+        flowFile
+      ],
       fallbackReason: reason
     };
   }
@@ -24179,10 +24198,79 @@ var init_resolve_ios_app_file = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
+function uniqueMatches(output, pattern) {
+  return [...new Set([...output.matchAll(pattern)].map((match) => match[1]).filter(Boolean))];
+}
+function verifyMaestroDeviceAuthority(input) {
+  const requestedDeviceId = input.requestedDeviceId?.trim() || null;
+  const reportedIds = uniqueMatches(input.output, /\bFound (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi);
+  const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building WDA for|Starting WDA on) device\s+([A-Za-z0-9._:-]+)/gi);
+  const observedDeviceIds = [.../* @__PURE__ */ new Set([...reportedIds, ...wdaDeviceIds])];
+  const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
+  if (!requestedDeviceId) {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: reportedIds.length > 0 ? "maestro-runner-log" : "none",
+      reason: "no-exact-device-request"
+    };
+  }
+  if (input.runner !== "maestro-runner") {
+    return {
+      requestedDeviceId,
+      reportedDeviceId,
+      observedDeviceIds,
+      wdaDeviceIds,
+      verified: false,
+      source: "maestro-cli-explicit-udid",
+      reason: "direct-runner-evidence-unavailable"
+    };
+  }
+  const base = {
+    requestedDeviceId,
+    reportedDeviceId,
+    observedDeviceIds,
+    wdaDeviceIds,
+    source: "maestro-runner-log"
+  };
+  if (reportedIds.length === 0) {
+    return { ...base, verified: false, reason: "reported-device-missing" };
+  }
+  if (reportedIds.length !== 1) {
+    return { ...base, verified: false, reason: "reported-device-ambiguous" };
+  }
+  if (reportedDeviceId !== requestedDeviceId) {
+    return { ...base, verified: false, reason: "reported-device-mismatch" };
+  }
+  if (observedDeviceIds.some((id) => id !== requestedDeviceId)) {
+    return { ...base, verified: false, reason: "wda-device-mismatch" };
+  }
+  if (input.platform === "ios" && input.requireWdaProvenance === true && wdaDeviceIds.length === 0) {
+    return { ...base, verified: false, reason: "wda-provenance-missing" };
+  }
+  return {
+    ...base,
+    verified: true,
+    reason: input.platform === "ios" && wdaDeviceIds.length > 0 ? "exact-runner-and-wda-match" : "exact-runner-match"
+  };
+}
+function shouldRejectMaestroDeviceAuthority(authority) {
+  return authority.requestedDeviceId !== null && authority.source === "maestro-runner-log" && !authority.verified;
+}
+var init_maestro_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/maestro-invoke.js
 import { execFile as execFileCb3 } from "node:child_process";
 import { promisify as promisify5 } from "node:util";
-import { existsSync as existsSync12, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync10, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join17 } from "node:path";
 import { homedir as homedir6, tmpdir as tmpdir5 } from "node:os";
 function yamlEscape(s) {
@@ -24238,15 +24326,76 @@ async function runMaestroInline(yaml2, opts) {
     };
   }
   const timeout = opts.timeoutMs ?? 3e4;
+  const session = getActiveSession();
+  const matchingSessionDeviceId = session?.platform === opts.platform && session.deviceId ? session.deviceId : void 0;
+  if (opts.deviceId && matchingSessionDeviceId && opts.deviceId !== matchingSessionDeviceId) {
+    return {
+      passed: false,
+      output: "",
+      flowFile,
+      error: `Refusing Maestro target ${opts.deviceId}: active ${opts.platform} session is bound to ${matchingSessionDeviceId}.`
+    };
+  }
+  const requestedDeviceId = opts.deviceId ?? matchingSessionDeviceId;
+  if (requestedDeviceId !== void 0 && (requestedDeviceId.length === 0 || requestedDeviceId.length > 256 || /\s/.test(requestedDeviceId))) {
+    return {
+      passed: false,
+      output: "",
+      flowFile,
+      error: "Refusing Maestro: deviceId must be 1-256 non-whitespace characters."
+    };
+  }
   const appFileResolution = resolveAppFileForClearState(opts.platform, content, headerAppId, void 0);
   if (!appFileResolution.ok) {
     return { passed: false, output: "", flowFile, error: appFileResolution.error };
   }
+  const runnerReportDir = dispatch.runner === "maestro-runner" ? join17(tmpdir5(), `rn-maestro-inline-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`) : null;
+  const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
+  const finalArgs = runnerReportDir ? [
+    ...baseArgs.slice(0, -1),
+    "--output",
+    runnerReportDir,
+    "--flatten",
+    baseArgs[baseArgs.length - 1]
+  ] : baseArgs;
+  const directRunnerOutput = (output) => {
+    if (!runnerReportDir)
+      return output;
+    const logPath = join17(runnerReportDir, "maestro-runner.log");
+    if (!existsSync12(logPath))
+      return output;
+    try {
+      return `${output}
+${readFileSync10(logPath, "utf8")}`;
+    } catch {
+      return output;
+    }
+  };
   try {
-    const { stdout, stderr } = await execFile5(dispatch.binPath, dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile), { timeout, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+    const { stdout, stderr } = await execFile5(dispatch.binPath, finalArgs, {
+      timeout,
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024
+    });
     const output = (stdout + "\n" + stderr).trim();
     const passed = !outputIndicatesFlowFailure(output);
-    return { passed, output, flowFile };
+    const deviceAuthority = verifyMaestroDeviceAuthority({
+      runner: dispatch.runner,
+      platform: opts.platform,
+      requestedDeviceId,
+      output: directRunnerOutput(output),
+      requireWdaProvenance: passed
+    });
+    if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
+      return {
+        passed: false,
+        output,
+        flowFile,
+        error: `Maestro device authority refused (${deviceAuthority.reason})`,
+        deviceAuthority
+      };
+    }
+    return { passed, output, flowFile, deviceAuthority };
   } catch (err) {
     const errObj = err;
     const capturedOutput = ((errObj.stdout ?? "") + "\n" + (errObj.stderr ?? "")).trim();
@@ -24259,7 +24408,19 @@ async function runMaestroInline(yaml2, opts) {
       };
     }
     if (capturedOutput) {
-      return { passed: false, output: capturedOutput, flowFile };
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform: opts.platform,
+        requestedDeviceId,
+        output: directRunnerOutput(capturedOutput)
+      });
+      return {
+        passed: false,
+        output: capturedOutput,
+        flowFile,
+        ...shouldRejectMaestroDeviceAuthority(deviceAuthority) ? { error: `Maestro device authority refused (${deviceAuthority.reason})` } : {},
+        deviceAuthority
+      };
     }
     const msg3 = errObj.message ?? String(err);
     return { passed: false, output: "", flowFile, error: msg3.slice(0, 500) };
@@ -24274,6 +24435,8 @@ var init_maestro_invoke = __esm({
     init_maestro_dispatch();
     init_maestro_error_parser();
     init_resolve_ios_app_file();
+    init_agent_device_wrapper();
+    init_maestro_device_authority();
     execFile5 = promisify5(execFileCb3);
   }
 });
@@ -24558,7 +24721,7 @@ var init_external_runner_detect = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
 import { execFileSync as execFileSync5 } from "node:child_process";
-import { existsSync as existsSync13, readFileSync as readFileSync10, unlinkSync as unlinkSync6 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync11, unlinkSync as unlinkSync6 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join18 } from "node:path";
 function selectInstalledLegacyApps(installed) {
@@ -24627,7 +24790,7 @@ function defaultDeps2() {
     },
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync10(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync11(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -25296,7 +25459,7 @@ var init_recover_detached = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync14, mkdirSync as mkdirSync7, openSync, writeSync, closeSync, readFileSync as readFileSync11, unlinkSync as unlinkSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync14, mkdirSync as mkdirSync7, openSync, writeSync, closeSync, readFileSync as readFileSync12, unlinkSync as unlinkSync7, writeFileSync as writeFileSync8 } from "node:fs";
 import { tmpdir as tmpdir6, userInfo } from "node:os";
 import { join as join19 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -25432,7 +25595,7 @@ var init_device_lock = __esm({
       }
       readExisting() {
         try {
-          const parsed = JSON.parse(readFileSync11(this.lockPath, "utf8"));
+          const parsed = JSON.parse(readFileSync12(this.lockPath, "utf8"));
           if (!isValidBody(parsed))
             return null;
           if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform)
@@ -27632,8 +27795,8 @@ ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
 import { createHash as createHash10 } from "node:crypto";
-import { readFileSync as readFileSync30, rmSync as rmSync6 } from "node:fs";
-import { execFile as execFile28 } from "node:child_process";
+import { readFileSync as readFileSync31, rmSync as rmSync6 } from "node:fs";
+import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { dirname as dirname17, join as join45 } from "node:path";
@@ -47351,7 +47514,7 @@ function annotateMutationAbsence(result, ctx) {
 
 // packages/rn-dev-agent-core/dist/verification/config.js
 init_storage();
-import { existsSync as existsSync15, readFileSync as readFileSync12 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync13 } from "node:fs";
 import { join as join20 } from "node:path";
 var MAX_PATTERN_LENGTH = 200;
 var _cachedProjectRoot;
@@ -47415,7 +47578,7 @@ function loadVerificationConfig(projectRoot) {
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync12(path, "utf-8"));
+    raw = JSON.parse(readFileSync13(path, "utf-8"));
   } catch {
     cache2.set(projectRoot, DEFAULTS);
     return DEFAULTS;
@@ -47534,7 +47697,7 @@ async function autoDismissDevMenuMeta(client2) {
 // packages/rn-dev-agent-core/dist/cdp/bundle-id-store.js
 init_storage();
 init_maestro_validator();
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync13, writeFileSync as writeFileSync9 } from "node:fs";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync14, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join21 } from "node:path";
 var STATE_FILE_NAME = "last-bundle-ids.json";
 function stateFilePath(projectRoot) {
@@ -47542,7 +47705,7 @@ function stateFilePath(projectRoot) {
 }
 function readStore(projectRoot) {
   try {
-    const raw = readFileSync13(stateFilePath(projectRoot), "utf8");
+    const raw = readFileSync14(stateFilePath(projectRoot), "utf8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -47627,7 +47790,7 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured) {
   return { ok: true, platformMatched, finalPlatform };
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}) {
-  const execFile29 = deps.execFile ?? defaultExecFile;
+  const execFile28 = deps.execFile ?? defaultExecFile;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const loadPersistedBundleIdFn = deps.loadPersistedBundleId ?? loadPersistedBundleId;
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured);
@@ -47657,13 +47820,13 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
     return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
   }
   try {
-    await execFile29("xcrun", ["simctl", "terminate", "booted", bundleId], { timeout: 5e3 });
+    await execFile28("xcrun", ["simctl", "terminate", "booted", bundleId], { timeout: 5e3 });
     steps.push(`simctl terminate ${bundleId}:ok`);
   } catch (err) {
     steps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
   }
   try {
-    await execFile29("xcrun", ["simctl", "launch", "booted", bundleId], { timeout: 8e3 });
+    await execFile28("xcrun", ["simctl", "launch", "booted", bundleId], { timeout: 8e3 });
     steps.push(`simctl launch ${bundleId}:ok`);
   } catch (err) {
     const msg3 = err instanceof Error ? err.message : String(err);
@@ -47882,7 +48045,7 @@ import { basename as basename3, dirname as dirname8, sep as sep3 } from "node:pa
 
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire } from "node:module";
-import { existsSync as existsSync16, mkdirSync as mkdirSync9, readdirSync as readdirSync5, readFileSync as readFileSync14 } from "node:fs";
+import { existsSync as existsSync16, mkdirSync as mkdirSync9, readdirSync as readdirSync5, readFileSync as readFileSync15 } from "node:fs";
 import { dirname as dirname6, join as join22 } from "node:path";
 var _require = createRequire(import.meta.url);
 var SCHEMA = `
@@ -48099,7 +48262,7 @@ function openActionDb(projectRoot, opts = {}) {
           if (exists)
             continue;
           try {
-            const parsed = JSON.parse(readFileSync14(join22(stateDir, f), "utf8"));
+            const parsed = JSON.parse(readFileSync15(join22(stateDir, f), "utf8"));
             if (parsed?.schemaVersion !== 1)
               continue;
             if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
@@ -48133,7 +48296,7 @@ var RUN_HISTORY_MAX = 50;
 var REPAIR_HISTORY_MAX = 25;
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-import { existsSync as existsSync17, readFileSync as readFileSync15, writeFileSync as writeFileSync10, mkdirSync as mkdirSync10, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync16, writeFileSync as writeFileSync10, mkdirSync as mkdirSync10, statSync as statSync4 } from "node:fs";
 import { join as join23, dirname as dirname7 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/reusable-action.js
@@ -48337,7 +48500,7 @@ function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date())
   const path = sidecarPathFor(yamlFilePath);
   if (existsSync17(path)) {
     try {
-      const text = readFileSync15(path, "utf8");
+      const text = readFileSync16(path, "utf8");
       const parsed = JSON.parse(text);
       if (parsed && parsed.schemaVersion === 1 && typeof parsed.revision === "number" && typeof parsed.updatedAt === "string" && Array.isArray(parsed.runHistory) && Array.isArray(parsed.repairHistory) && typeof parsed.stats === "object") {
         if (typeof parsed.lastSeenMtimeMs !== "number") {
@@ -48456,7 +48619,7 @@ init_maestro_invoke();
 import { execFile as execFileCb11, spawnSync as spawnSync2 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
 import { createHash as createHash4 } from "node:crypto";
-import { readFileSync as readFileSync16 } from "node:fs";
+import { readFileSync as readFileSync17 } from "node:fs";
 var execFile13 = promisify14(execFileCb11);
 var MAESTRO_RUNNER_PIN = {
   version: "1.0.9",
@@ -48547,7 +48710,7 @@ async function defaultExecVersion(bin) {
   return stdout + "\n" + stderr;
 }
 function defaultHashFile(bin) {
-  return createHash4("sha256").update(readFileSync16(bin)).digest("hex");
+  return createHash4("sha256").update(readFileSync17(bin)).digest("hex");
 }
 function safeBool(fn) {
   try {
@@ -51682,7 +51845,7 @@ import { execFile as execFileCb14 } from "node:child_process";
 import { promisify as promisify18 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync19, readFileSync as readFileSync17, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync19, readFileSync as readFileSync18, statSync as statSync7 } from "node:fs";
 import { join as join25 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
@@ -51862,7 +52025,7 @@ function loadAction(projectRoot, actionId) {
   const filePath = actionPathFor(projectRoot, actionId);
   if (!existsSync19(filePath))
     return null;
-  const text = readFileSync17(filePath, "utf8");
+  const text = readFileSync18(filePath, "utf8");
   const metadata = parseM7Header(text, actionId);
   if (!metadata)
     return null;
@@ -51887,7 +52050,7 @@ function saveAction(action) {
   }
   let topSection = "";
   if (existsSync19(action.filePath)) {
-    const existing = readFileSync17(action.filePath, "utf8");
+    const existing = readFileSync18(action.filePath, "utf8");
     topSection = splitYaml(existing).topSection;
   }
   if (!topSection && action.metadata.appId) {
@@ -51940,7 +52103,7 @@ function canonicalRuntimeJson(state) {
 function runtimeSidecarMatches(sidecarPath, expected) {
   let onDisk;
   try {
-    onDisk = JSON.parse(readFileSync17(sidecarPath, "utf8"));
+    onDisk = JSON.parse(readFileSync18(sidecarPath, "utf8"));
   } catch {
     return false;
   }
@@ -51967,7 +52130,7 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync17(expected.filePath, "utf8");
+  const yaml2 = readFileSync18(expected.filePath, "utf8");
   const marker = /^# status: experimental[ \t]*$/gm;
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
@@ -53312,7 +53475,7 @@ init_maestro_error_parser();
 init_utils();
 import { execFile as execFileCb15 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { existsSync as existsSync21, readFileSync as readFileSync18, writeFileSync as writeFileSync12 } from "node:fs";
+import { existsSync as existsSync21, readFileSync as readFileSync19, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { join as join27, dirname as dirname11 } from "node:path";
 init_agent_device_wrapper();
@@ -53476,7 +53639,8 @@ function augmentFailureWithDegradation(output, floorMs, baseMessage, baseMeta) {
 init_rn_fast_runner_client();
 init_release_android_slot();
 init_recovery();
-var execFile18 = promisify19(execFileCb15);
+init_maestro_device_authority();
+var defaultExecFile2 = promisify19(execFileCb15);
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
   try {
@@ -53517,6 +53681,10 @@ async function buildRunnerResume(platform, probe) {
 }
 function createMaestroRunHandler(deps = {}) {
   const fastHealthCheck2 = deps.fastHealthCheck ?? fastHealthCheck;
+  const activeSession2 = deps.getActiveSession ?? getActiveSession;
+  const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
+  const parkFlow = deps.parkFlow ?? runFlowParked;
+  const execute = deps.execFile ?? defaultExecFile2;
   return async (args) => {
     if (args.params) {
       for (const [key, value] of Object.entries(args.params)) {
@@ -53532,6 +53700,15 @@ function createMaestroRunHandler(deps = {}) {
     if (!platform) {
       return failResult("Cannot determine platform. Pass platform or open a device session first.");
     }
+    const session = activeSession2();
+    const matchingSessionDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : void 0;
+    if (args.deviceId && matchingSessionDeviceId && args.deviceId !== matchingSessionDeviceId) {
+      return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
+    }
+    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
+    if (requestedDeviceId !== void 0 && (requestedDeviceId.length === 0 || requestedDeviceId.length > 256 || /\s/.test(requestedDeviceId))) {
+      return failResult("Refusing Maestro: deviceId must be 1-256 non-whitespace characters.", "INVALID_ARGUMENT");
+    }
     let flowHasHideKeyboard = false;
     let flowFile;
     let rawYaml;
@@ -53544,7 +53721,7 @@ function createMaestroRunHandler(deps = {}) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync18(args.flowPath, "utf-8");
+        rawYaml = readFileSync19(args.flowPath, "utf-8");
       } catch (err) {
         return failResult(`Failed to read flow file: ${err.message}`);
       }
@@ -53569,7 +53746,7 @@ function createMaestroRunHandler(deps = {}) {
       }
       throw err;
     }
-    const dispatch = chooseMaestroDispatch({ platform, flowHasHideKeyboard });
+    const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
     if ("error" in dispatch) {
       return failResult(dispatch.error);
     }
@@ -53578,14 +53755,29 @@ function createMaestroRunHandler(deps = {}) {
     if (!appFileResolution.ok) {
       return failResult(appFileResolution.error);
     }
-    const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile);
+    const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile, requestedDeviceId);
     const paramArgs = [];
     if (args.params) {
       for (const [key, value] of Object.entries(args.params)) {
         paramArgs.push("-e", `${key}=${value}`);
       }
     }
-    const finalArgs = assembleMaestroArgs(baseArgs, paramArgs);
+    const runnerReportDir = dispatch.runner === "maestro-runner" ? join27(tmpdir7(), `rn-maestro-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`) : null;
+    const reportArgs = runnerReportDir ? ["--output", runnerReportDir, "--flatten"] : [];
+    const finalArgs = assembleMaestroArgs(baseArgs, [...reportArgs, ...paramArgs]);
+    const directRunnerOutput = (output) => {
+      if (!runnerReportDir)
+        return output;
+      const logPath = join27(runnerReportDir, "maestro-runner.log");
+      if (!existsSync21(logPath))
+        return output;
+      try {
+        return `${output}
+${readFileSync19(logPath, "utf8")}`;
+      } catch {
+        return output;
+      }
+    };
     const engineStatus = dispatch.runner === "maestro-runner" ? await getEngineStatus().catch(() => null) : null;
     const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
     const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
@@ -53593,17 +53785,32 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(strictRefusal, "ENGINE_PIN_MISMATCH");
     }
     try {
-      const { stdout, stderr } = await runFlowParked(() => execFile18(
-        dispatch.binPath,
-        finalArgs,
-        // 10MB buffer: a multi-step flow with screenshots + app console/network
-        // logs routinely exceeds Node's 1MB execFile default, which would kill
-        // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
-        // run as a failure.
-        { timeout, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 }
-      ), { platform, deviceId: getActiveSession()?.deviceId });
+      const { stdout, stderr } = await parkFlow(() => execute(dispatch.binPath, finalArgs, {
+        timeout,
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024
+      }), { platform, deviceId: requestedDeviceId });
       const output = combineRunnerOutput(stdout, stderr);
       const passed = !outputIndicatesFlowFailure(output);
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform,
+        requestedDeviceId,
+        output: directRunnerOutput(output),
+        requireWdaProvenance: passed
+      });
+      if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
+        return failResult(`Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? "missing"} (${deviceAuthority.reason}).`, "DEVICE_AUTHORITY_MISMATCH", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          runnerReportDir,
+          output: output.slice(0, 4e3)
+        });
+      }
       const summary = buildStepSummary(output, { failed: !passed });
       const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck2) : void 0;
       const meta = {
@@ -53614,6 +53821,8 @@ function createMaestroRunHandler(deps = {}) {
         transport: dispatch.runner,
         transportVersion: engineStatus?.version ?? null,
         fallback: dispatch.fallbackReason ? dispatch.runner : "none",
+        deviceAuthority,
+        runnerReportDir,
         output: output.slice(0, 2e3),
         ...summary,
         ...!passed ? { terminal: buildTerminalEvidence(output), ...runnerResume ? { runnerResume } : {} } : {},
@@ -53640,10 +53849,33 @@ function createMaestroRunHandler(deps = {}) {
       const stderr = typeof errAny?.stderr === "string" ? errAny.stderr : "";
       const combined = combineRunnerOutput(stdout, stderr);
       const { timedOut, outputTruncated } = classifyExecError(err);
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform,
+        requestedDeviceId,
+        output: directRunnerOutput(combined)
+      });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(err?.code ?? ""));
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
+      if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
+        return failResult(`Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? "missing"} (${deviceAuthority.reason}).`, "DEVICE_AUTHORITY_MISMATCH", {
+          flowFile,
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          deviceAuthority,
+          runnerReportDir,
+          output: combined.slice(0, 4e3),
+          ...summary,
+          terminal,
+          ...runnerResume ? { runnerResume } : {},
+          timedOut,
+          outputTruncated
+        });
+      }
       const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
       const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
         flowFile,
@@ -53652,6 +53884,8 @@ function createMaestroRunHandler(deps = {}) {
         transport: dispatch.runner,
         transportVersion: engineStatus?.version ?? null,
         fallback: dispatch.fallbackReason ? dispatch.runner : "none",
+        deviceAuthority,
+        runnerReportDir,
         passed: false,
         // `output` mirrors the success/warn shape so callers can read
         // it the same way regardless of which path they hit.
@@ -53926,7 +54160,7 @@ function buildCdpDispatch(deps) {
 // packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js
 import { execFile as execFileCb16 } from "node:child_process";
 import { promisify as promisify20 } from "node:util";
-var execFile19 = promisify20(execFileCb16);
+var execFile18 = promisify20(execFileCb16);
 var WDA_BLIND_MIN_IOS_MAJOR = 26;
 var RECENT_WINDOW = 5;
 function evaluateBlindProbeGate(input) {
@@ -53965,7 +54199,7 @@ function parseIosRuntimeMajorForUdid(simctlJson, udid) {
   return null;
 }
 var runtimeCache = /* @__PURE__ */ new Map();
-async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile19(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
+async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile18(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
   if (runtimeCache.has(udid))
     return runtimeCache.get(udid) ?? null;
   try {
@@ -54013,6 +54247,7 @@ function replaySuccessEvidence(env) {
     transport: env.data?.transport ?? env.data?.runner ?? "unproven",
     transportVersion: env.data?.transportVersion ?? null,
     fallback: env.data?.fallback ?? "unproven",
+    ...env.data?.deviceAuthority ? { deviceAuthority: env.data.deviceAuthority } : {},
     perStepReadback: {
       source: "maestro-runner-step-report",
       complete: steps.length > 0 && steps.every((step) => step.status === "pass"),
@@ -54034,6 +54269,11 @@ function readMaestroOutput(env) {
   if (typeof metaOutput === "string")
     return metaOutput;
   return env.error ?? "";
+}
+function readMaestroDeviceAuthority(env) {
+  if (env.data?.deviceAuthority)
+    return env.data.deviceAuthority;
+  return env.meta?.deviceAuthority;
 }
 function readMaestroFailureDetail(env, output) {
   if (typeof env.error === "string" && env.error.trim())
@@ -54085,6 +54325,7 @@ function createRunActionHandler(deps = {}) {
     delayMs: Math.min(Math.max(0, probeRetryRaw.delayMs), 5e3)
   };
   const blindProbeContext2 = deps.blindProbeContext ?? (async () => null);
+  const targetContext = deps.targetContext ?? (() => null);
   return async (args) => {
     if (!args.actionId || typeof args.actionId !== "string") {
       return failResult("cdp_run_action requires actionId", "BAD_FILENAME");
@@ -54110,6 +54351,11 @@ function createRunActionHandler(deps = {}) {
     const trigger = args.trigger ?? "agent";
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
+    const activeTarget = targetContext();
+    if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
+      return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, "TARGET_SESSION_MISMATCH", { requestedPlatform: args.platform, activeSession: activeTarget });
+    }
+    const maestroDeviceId = (!args.platform || activeTarget?.platform === args.platform) && activeTarget?.deviceId ? activeTarget.deviceId : void 0;
     let probeDeviceId = null;
     const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve({ promoted: false, promotionRefused: false }) : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
     const writeDisclosure = (actionYaml = "none") => ({
@@ -54198,9 +54444,11 @@ function createRunActionHandler(deps = {}) {
         }
       }
       const tBeforeFirst = Date.now();
+      probeDeviceId = null;
       const firstResult = await maestroRun({
         flowPath: action.filePath,
         platform: args.platform,
+        deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params
       });
@@ -54209,6 +54457,32 @@ function createRunActionHandler(deps = {}) {
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
       const firstOutput = readMaestroOutput(firstEnv);
       const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
+      const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
+      probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? null;
+      if (firstEnv.code === "DEVICE_AUTHORITY_MISMATCH") {
+        const autoRepair2 = {
+          attempted: false,
+          outcome: args.autoRepair === false ? "refused" : "skipped",
+          refusedReason: args.autoRepair === false ? "USER_DISABLED" : "NOT_REPAIRABLE_KIND",
+          phases: { firstAttemptMs }
+        };
+        await persistRunWithDevice({
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          durationMs: Date.now() - t0,
+          status: "fail",
+          failureCode: "DEVICE_AUTHORITY_MISMATCH",
+          failureDetail: firstFailureDetail.slice(0, 1e3),
+          trigger,
+          autoRepair: autoRepair2
+        });
+        return failResult(`cdp_run_action: ${args.actionId} refused replay authority: ${firstFailureDetail}`, "DEVICE_AUTHORITY_MISMATCH", {
+          actionId: args.actionId,
+          failureKind: "DEVICE_AUTHORITY_MISMATCH",
+          deviceAuthority: firstDeviceAuthority,
+          autoRepair: autoRepair2,
+          writes: writeDisclosure()
+        });
+      }
       if (firstPassed) {
         const autoRepair2 = {
           attempted: false,
@@ -54289,6 +54563,7 @@ function createRunActionHandler(deps = {}) {
                 outcome: "skipped",
                 phases: { firstAttemptMs }
               };
+              probeDeviceId = maestroDeviceId ?? null;
               const persisted = await persistRunWithDevice({
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 durationMs: Date.now() - t0,
@@ -54422,9 +54697,11 @@ function createRunActionHandler(deps = {}) {
         return failResult(`cdp_run_action: action disappeared between repair and retry \u2014 investigate filesystem`, "NO_PROJECT_ROOT");
       }
       const tBeforeRetry = Date.now();
+      probeDeviceId = null;
       const retryResult = await maestroRun({
         flowPath: reloadedAction.filePath,
         platform: args.platform,
+        deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params
       });
@@ -54433,6 +54710,25 @@ function createRunActionHandler(deps = {}) {
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
       const retryOutput = readMaestroOutput(retryEnv);
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
+      const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
+      probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? null;
+      if (retryEnv.code === "DEVICE_AUTHORITY_MISMATCH") {
+        const autoRepair2 = {
+          attempted: true,
+          outcome: "failed",
+          phases: { firstAttemptMs, repairMs, retryMs }
+        };
+        await persistRunWithDevice({
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          durationMs: Date.now() - t0,
+          status: "fail",
+          failureCode: "DEVICE_AUTHORITY_MISMATCH",
+          failureDetail: retryFailureDetail.slice(0, 1e3),
+          trigger,
+          autoRepair: autoRepair2
+        });
+        return failResult(`cdp_run_action: ${args.actionId} refused retry authority: ${retryFailureDetail}`, "DEVICE_AUTHORITY_MISMATCH", { actionId: args.actionId, deviceAuthority: retryDeviceAuthority, autoRepair: autoRepair2 });
+      }
       const repairScore = repairEnv.data?.score;
       const repairTimestamp = reloadedAction.state.repairHistory.length > 0 ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp : void 0;
       let nextFailedSelector;
@@ -54842,7 +55138,7 @@ init_agent_device_wrapper();
 init_utils();
 import { execFile as execFileCb17, spawn as spawn4 } from "node:child_process";
 import { promisify as promisify21 } from "node:util";
-var execFile20 = promisify21(execFileCb17);
+var execFile19 = promisify21(execFileCb17);
 function normalizeTimestamp(ts) {
   if (!ts)
     return (/* @__PURE__ */ new Date()).toISOString();
@@ -54911,7 +55207,7 @@ function buildIosLogStreamArgs(deviceId, pid) {
   ];
 }
 async function resolveIosAppPid(deviceId, bundleId) {
-  const { stdout } = await execFile20("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"]);
+  const { stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"]);
   const pid = parseIosAppPid(stdout, bundleId);
   if (pid === null)
     throw new Error(`target app ${bundleId} is not running on ${deviceId}`);
@@ -55291,9 +55587,9 @@ init_device_interact();
 init_utils();
 init_platform_utils();
 init_maestro_validator();
-import { execFile as execFile21 } from "node:child_process";
+import { execFile as execFile20 } from "node:child_process";
 import { promisify as promisify22 } from "node:util";
-var execFileAsync4 = promisify22(execFile21);
+var execFileAsync4 = promisify22(execFile20);
 var EXEC_TIMEOUT = 1e4;
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -55475,7 +55771,7 @@ init_maestro_validator();
 // packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
 import { execFile as execFileCb18 } from "node:child_process";
 import { promisify as promisify23 } from "node:util";
-var execFile22 = promisify23(execFileCb18);
+var execFile21 = promisify23(execFileCb18);
 var TERMINATE_TIMEOUT_MS = 1e4;
 var LAUNCH_TIMEOUT_MS = 15e3;
 var IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
@@ -55489,12 +55785,12 @@ function resolveIosLifecycleTarget(deviceId) {
 }
 async function terminateApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile22("xcrun", ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId], {
+    await execFile21("xcrun", ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
   } else {
-    await execFile22("adb", ["shell", "am", "force-stop", bundleId], {
+    await execFile21("adb", ["shell", "am", "force-stop", bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -55519,12 +55815,12 @@ function buildAndroidLaunchArgv(bundleId) {
 }
 async function launchApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile22("xcrun", ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId], {
+    await execFile21("xcrun", ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId], {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
   } else {
-    await execFile22("adb", buildAndroidLaunchArgv(bundleId), {
+    await execFile21("adb", buildAndroidLaunchArgv(bundleId), {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -56299,14 +56595,14 @@ function createDeviceDismissSystemDialogHandler() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
-var execFile23 = promisify24(execFileCb19);
+var execFile22 = promisify24(execFileCb19);
 var EXEC_TIMEOUT_MS = 1e4;
 function iosDeeplinkCommandArgs(url, deviceId) {
   return ["simctl", "openurl", deviceId ?? "booted", url];
 }
 async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile23("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
+    const { stdout, stderr } = await execFile22("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
@@ -56348,7 +56644,7 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
 async function openAndroidDeeplink(url, packageName, deviceId) {
   const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
-    const { stdout, stderr } = await execFile23("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile22("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
@@ -56432,12 +56728,12 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 init_platform_utils();
-import { execFile as execFile24 } from "node:child_process";
+import { execFile as execFile23 } from "node:child_process";
 import { existsSync as existsSync22 } from "node:fs";
 import { promisify as promisify25 } from "node:util";
 import { fileURLToPath } from "node:url";
 import { dirname as dirname12, join as join28 } from "node:path";
-var execFileAsync5 = promisify25(execFile24);
+var execFileAsync5 = promisify25(execFile23);
 var START_TIMEOUT_MS = 1e4;
 var STOP_TIMEOUT_MS = 6e4;
 var STATUS_TIMEOUT_MS = 5e3;
@@ -56724,7 +57020,7 @@ function createDeviceRecordHandler() {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { chmodSync, closeSync as closeSync3, fsyncSync, lstatSync as lstatSync3, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync19, realpathSync as realpathSync3, renameSync as renameSync5, unlinkSync as unlinkSync9, writeFileSync as writeFileSync13 } from "node:fs";
+import { chmodSync, closeSync as closeSync3, fsyncSync, lstatSync as lstatSync3, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync20, realpathSync as realpathSync3, renameSync as renameSync5, unlinkSync as unlinkSync9, writeFileSync as writeFileSync13 } from "node:fs";
 import { basename as basename5, dirname as dirname13, extname, isAbsolute as isAbsolute3, join as join29, relative, resolve as resolve3, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -57337,8 +57633,8 @@ function readProofCandidateRuntime(candidateRoot) {
   return proofCandidateRuntimeSchema.parse({
     repo: "Lykhoyda/rn-dev-agent",
     sha,
-    coreBundleSha256: hashBytes(readFileSync19(coreBundle)),
-    runnerManifestSha256: hashBytes(readFileSync19(runnerManifest)),
+    coreBundleSha256: hashBytes(readFileSync20(coreBundle)),
+    runnerManifestSha256: hashBytes(readFileSync20(runnerManifest)),
     mcp: { pid: process.pid, argv, cwd: process.cwd() }
   });
 }
@@ -57358,9 +57654,9 @@ function sameProofAction(left, right) {
 function readProofActionIdentity(appProjectRoot, actionId) {
   try {
     const path = actionPathFor(appProjectRoot, actionId);
-    const bytesBefore = readFileSync19(path);
+    const bytesBefore = readFileSync20(path);
     const action = loadAction(appProjectRoot, actionId);
-    const bytesAfter = readFileSync19(path);
+    const bytesAfter = readFileSync20(path);
     if (!action || action.metadata.id !== actionId || !bytesBefore.equals(bytesAfter) || !Number.isInteger(action.state.revision) || action.state.revision < 1) {
       return null;
     }
@@ -57552,7 +57848,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
   ];
   for (const path of candidates) {
     try {
-      const bytes = readFileSync19(path, "utf8");
+      const bytes = readFileSync20(path, "utf8");
       return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
     } catch {
     }
@@ -59755,10 +60051,10 @@ init_project_config();
 init_maestro_validator();
 import { execFile as execFileCb20 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
-import { existsSync as existsSync23, readFileSync as readFileSync20, writeFileSync as writeFileSync14, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync23, readFileSync as readFileSync21, writeFileSync as writeFileSync14, readdirSync as readdirSync7 } from "node:fs";
 import { join as join31 } from "node:path";
 import { homedir as homedir10 } from "node:os";
-var execFile25 = promisify26(execFileCb20);
+var execFile24 = promisify26(execFileCb20);
 var AUTH_ROUTE_PATTERNS = [
   "login",
   "signin",
@@ -59871,7 +60167,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
-  const originalContent = readFileSync20(flowPath, "utf-8");
+  const originalContent = readFileSync21(flowPath, "utf-8");
   const flowContent = stripClearState(originalContent);
   let validatedCommands;
   try {
@@ -59916,7 +60212,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   try {
-    await runFlowParked(() => execFile25(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile24(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -60226,7 +60522,7 @@ import { execFile as execFileCb21 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
 init_resolve_ios_app_file();
 init_maestro_validator();
-var defaultExecFile2 = promisify27(execFileCb21);
+var defaultExecFile3 = promisify27(execFileCb21);
 var lastSeenBundleIds = /* @__PURE__ */ new Map();
 var SIMULATOR_UDID_RE2 = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 function safeSimctlTarget(deviceId) {
@@ -60238,7 +60534,7 @@ function safeSimctlTarget(deviceId) {
 }
 var inflightRestart = null;
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile29 = deps.execFile ?? defaultExecFile2;
+  const execFile28 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const resolveBundleIdStrictFn = deps.resolveBundleIdStrict ?? resolveBundleIdStrict;
@@ -60281,7 +60577,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
         }
         if (bundleId && targetPlatform === "ios") {
           try {
-            await execFile29("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile28("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -60289,7 +60585,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile29("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile28("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -60410,7 +60706,7 @@ function buildGracefulShutdown(deps) {
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash8 } from "node:crypto";
 import { execFileSync as execFileSync8 } from "node:child_process";
-import { closeSync as closeSync4, existsSync as existsSync24, mkdirSync as mkdirSync14, openSync as openSync4, readFileSync as readFileSync21, statSync as statSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync4, existsSync as existsSync24, mkdirSync as mkdirSync14, openSync as openSync4, readFileSync as readFileSync22, statSync as statSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15, writeSync as writeSync2 } from "node:fs";
 import { tmpdir as tmpdir9, userInfo as userInfo2 } from "node:os";
 import { join as join32, resolve as resolve4 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -60576,7 +60872,7 @@ var Lockfile = class {
     if (!existsSync24(this.lockPath))
       return null;
     try {
-      const raw = readFileSync21(this.lockPath, "utf8");
+      const raw = readFileSync22(this.lockPath, "utf8");
       const parsed = JSON.parse(raw);
       if (!isValidLockBody(parsed))
         return null;
@@ -60805,12 +61101,13 @@ init_maestro_dispatch();
 init_maestro_validator();
 import { execFile as execFileCb22 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
-import { existsSync as existsSync26, readdirSync as readdirSync8, readFileSync as readFileSync22, writeFileSync as writeFileSync17 } from "node:fs";
+import { existsSync as existsSync26, readdirSync as readdirSync8, readFileSync as readFileSync23, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join34 } from "node:path";
 import { tmpdir as tmpdir10 } from "node:os";
 init_maestro_error_parser();
 init_resolve_ios_app_file();
-var execFile26 = promisify28(execFileCb22);
+init_maestro_device_authority();
+var execFile25 = promisify28(execFileCb22);
 function discoverFlows(dir, pattern) {
   if (!existsSync26(dir))
     return [];
@@ -60836,6 +61133,8 @@ function createMaestroTestAllHandler() {
     if (!platform) {
       return failResult("Cannot determine platform. Pass platform or open a device session first.");
     }
+    const session = getActiveSession();
+    const requestedDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : void 0;
     const dispatch = chooseMaestroDispatch({ platform });
     if ("error" in dispatch) {
       return failResult(dispatch.error);
@@ -60861,7 +61160,7 @@ function createMaestroTestAllHandler() {
       let appFile;
       let flowHasHideKeyboard = false;
       try {
-        const yamlText = readFileSync22(flow, "utf-8");
+        const yamlText = readFileSync23(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsed.appId !== void 0 ? { appId: parsed.appId } : {}, parsed.commands);
@@ -60903,19 +61202,48 @@ function createMaestroTestAllHandler() {
             keyboardCaveat ??= rerouted.degradedReason;
         }
       }
+      const runnerReportDir = flowDispatch.runner === "maestro-runner" ? join34(tmpdir10(), `rn-maestro-suite-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`) : null;
+      const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
+      const finalArgs = runnerReportDir ? [
+        ...baseArgs.slice(0, -1),
+        "--output",
+        runnerReportDir,
+        "--flatten",
+        baseArgs[baseArgs.length - 1]
+      ] : baseArgs;
       try {
-        const { stdout, stderr } = await runFlowParked(() => execFile26(flowDispatch.binPath, flowDispatch.buildArgs(platform, safeFlowFile, appFile), {
+        const { stdout, stderr } = await runFlowParked(() => execFile25(flowDispatch.binPath, finalArgs, {
           timeout,
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
-        }), { platform, deviceId: getActiveSession()?.deviceId });
+        }), { platform, deviceId: requestedDeviceId });
         const output = (stdout + "\n" + stderr).trim();
-        const ok = !outputIndicatesFlowFailure(output);
+        const outputPassed = !outputIndicatesFlowFailure(output);
+        let authorityOutput = output;
+        if (runnerReportDir) {
+          const logPath = join34(runnerReportDir, "maestro-runner.log");
+          if (existsSync26(logPath)) {
+            try {
+              authorityOutput += `
+${readFileSync23(logPath, "utf8")}`;
+            } catch {
+            }
+          }
+        }
+        const deviceAuthority = verifyMaestroDeviceAuthority({
+          runner: flowDispatch.runner,
+          platform,
+          requestedDeviceId,
+          output: authorityOutput,
+          requireWdaProvenance: outputPassed
+        });
+        const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
+        const ok = outputPassed && !authorityRejected;
         results.push({
           name,
           passed: ok,
           durationMs: Date.now() - start,
-          error: ok ? void 0 : output.slice(0, 300)
+          error: authorityRejected ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? "missing"})` : ok ? void 0 : output.slice(0, 300)
         });
         if (ok)
           passed++;
@@ -60925,11 +61253,30 @@ function createMaestroTestAllHandler() {
           break;
       } catch (err) {
         const msg3 = err instanceof Error ? err.message : String(err);
+        const errWithOutput = err;
+        let authorityOutput = [errWithOutput.stdout, errWithOutput.stderr].filter((value) => typeof value === "string").join("\n");
+        if (runnerReportDir) {
+          const logPath = join34(runnerReportDir, "maestro-runner.log");
+          if (existsSync26(logPath)) {
+            try {
+              authorityOutput += `
+${readFileSync23(logPath, "utf8")}`;
+            } catch {
+            }
+          }
+        }
+        const deviceAuthority = verifyMaestroDeviceAuthority({
+          runner: flowDispatch.runner,
+          platform,
+          requestedDeviceId,
+          output: authorityOutput
+        });
+        const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
         results.push({
           name,
           passed: false,
           durationMs: Date.now() - start,
-          error: msg3.slice(0, 300)
+          error: authorityRejected ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? "missing"})` : msg3.slice(0, 300)
         });
         failed++;
         if (args.stopOnFailure)
@@ -60962,7 +61309,7 @@ function createMaestroTestAllHandler() {
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
 init_agent_device_wrapper();
 init_utils();
-import { readFileSync as readFileSync23, readdirSync as readdirSync9, lstatSync as lstatSync4 } from "node:fs";
+import { readFileSync as readFileSync24, readdirSync as readdirSync9, lstatSync as lstatSync4 } from "node:fs";
 import { join as join35, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
@@ -60999,7 +61346,7 @@ function discoverTestIDs(dir) {
         }
         if (!SCAN_EXTENSIONS.has(extname2(entry)))
           continue;
-        const src = readFileSync23(full, "utf8");
+        const src = readFileSync24(full, "utf8");
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id)
@@ -61469,7 +61816,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync24 } from "node:fs";
+import { readFileSync as readFileSync25 } from "node:fs";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { dirname as dirname15, join as join37 } from "node:path";
 
@@ -61701,7 +62048,7 @@ var ObservabilityServer = class {
   }
   index(res) {
     try {
-      let html = readFileSync24(join37(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync25(join37(__dir, "web-dist", "index.html"), "utf8");
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -62049,7 +62396,7 @@ async function autostartObserve(deps) {
 init_project_config();
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn5, execFile as execFile27 } from "node:child_process";
+import { spawn as spawn5, execFile as execFile26 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir12 } from "node:os";
 import { join as join39 } from "node:path";
@@ -62113,7 +62460,7 @@ var scheduleAfter = (fn, delayMs) => {
     setTimeout(fn, delayMs);
 };
 var defaultSpawn = (cmd, args) => spawn5(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-async function detectIdb(execFileFn = execFile27) {
+async function detectIdb(execFileFn = execFile26) {
   return new Promise((resolve5) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve5(!err));
   });
@@ -62247,7 +62594,7 @@ var IosSimctlLoopSource = class {
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
   return new Promise((resolve5, reject) => {
-    execFile27(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+    execFile26(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -62643,11 +62990,11 @@ function buildMirrorTargetResolver(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync27 } from "node:fs";
+import { readFileSync as readFileSync28 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname16, join as join40 } from "node:path";
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync6, readFileSync as readFileSync25, readdirSync as readdirSync10, existsSync as existsSync27 } from "node:fs";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync6, readFileSync as readFileSync26, readdirSync as readdirSync10, existsSync as existsSync27 } from "node:fs";
 import { createHash as createHash9 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
@@ -62706,7 +63053,7 @@ function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync27(filePath))
     return null;
-  return parseLockedTest(readFileSync25(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync26(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
@@ -62749,12 +63096,12 @@ function parseLockedTest(text, filePath) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync26 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 import { join as join41 } from "node:path";
 function loadE2eConfig(projectRoot) {
   const filePath = join41(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync26(filePath, "utf8");
+    const raw = readFileSync27(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -62821,7 +63168,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync27(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync28(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -62880,7 +63227,7 @@ function createLockE2eTestHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
 import { join as join42 } from "node:path";
-import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync19, renameSync as renameSync7, readFileSync as readFileSync28, existsSync as existsSync28 } from "node:fs";
+import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync19, renameSync as renameSync7, readFileSync as readFileSync29, existsSync as existsSync28 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -62948,7 +63295,7 @@ function loadIndex(projectRoot) {
   if (!existsSync28(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync28(file, "utf8"));
+    const parsed = JSON.parse(readFileSync29(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -62973,7 +63320,7 @@ function loadRunRecord(projectRoot, runId) {
   if (!existsSync28(file))
     return null;
   try {
-    return JSON.parse(readFileSync28(file, "utf8"));
+    return JSON.parse(readFileSync29(file, "utf8"));
   } catch {
     return null;
   }
@@ -62989,7 +63336,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join43 } from "node:path";
-import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync20, renameSync as renameSync8, readFileSync as readFileSync29, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
+import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync20, renameSync as renameSync8, readFileSync as readFileSync30, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -63015,7 +63362,7 @@ function loadRequest(projectRoot, runId) {
   if (!existsSync29(file))
     return null;
   try {
-    return JSON.parse(readFileSync29(file, "utf8"));
+    return JSON.parse(readFileSync30(file, "utf8"));
   } catch {
     return null;
   }
@@ -63356,7 +63703,7 @@ async function listActions(projectRoot) {
 
 // packages/rn-dev-agent-core/dist/index.js
 var pkgPath = join45(dirname17(fileURLToPath4(import.meta.url)), "..", "package.json");
-var pkgVersion = JSON.parse(readFileSync30(pkgPath, "utf8")).version;
+var pkgVersion = JSON.parse(readFileSync31(pkgPath, "utf8")).version;
 var lockfile = null;
 var noLock = process.argv.includes("--no-lock");
 if (!noLock) {
@@ -63388,7 +63735,7 @@ var setClient = (c) => {
   client = c;
 };
 var createClient = (port) => new CDPClient(port);
-var execFileP = promisify29(execFile28);
+var execFileP = promisify29(execFile27);
 var mustOk = (res, what) => {
   const env = JSON.parse(res.content[0].text);
   if (env.ok === false)
@@ -63496,7 +63843,7 @@ var liveDeps = buildLiveDeps({
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
     try {
-      const buf = readFileSync30(path);
+      const buf = readFileSync31(path);
       const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
       return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
     } catch {
@@ -64101,12 +64448,13 @@ trackedTool("proof_step", "Atomic proof capture step: navigate to a screen (opti
   screenshotPath: external_exports.string().optional().describe("Output path for screenshot (default: auto-generated)"),
   label: external_exports.string().optional().describe('Label for this proof step (e.g. "After adding item to cart")')
 }, createProofStepHandler(getClient));
-trackedTool("maestro_run", "Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. Does NOT require CDP \u2014 works even when app is crashed or on native screens.", {
+trackedTool("maestro_run", "Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP \u2014 works even when app is crashed or on native screens.", {
   flowPath: external_exports.string().optional().describe("Path to a .yaml flow file to execute"),
   inlineYaml: external_exports.string().optional().describe("Inline YAML flow content (written to /tmp and executed)"),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
   appId: external_exports.string().optional().describe("App bundle ID (auto-detected from app.json)"),
   appFile: external_exports.string().optional().describe("iOS only \u2014 path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201)."),
+  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS UDID or Android serial. Defaults only from a matching active device session and is forwarded to the replay engine."),
   timeoutMs: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Execution timeout in ms"),
   params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).")
 }, createMaestroRunHandler());
@@ -64233,7 +64581,7 @@ trackedTool("cdp_repair_action", 'Self-repair an L3 reusable action whose Maestr
 }, createRepairActionHandler());
 trackedTool(
   "cdp_run_action",
-  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`,
+  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`,
   {
     actionId: external_exports.string().describe("Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml."),
     projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
@@ -64253,7 +64601,8 @@ trackedTool(
   createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
-    blindProbeContext
+    blindProbeContext,
+    targetContext: getActiveSession
   })
 );
 trackedTool("cdp_lock_e2e_test", "Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.", {
@@ -64317,7 +64666,8 @@ var triggerE2eRun = async (pattern) => {
 var runActionHandler = createRunActionHandler({
   getLiveRoute: () => readLiveRoute(getClient()),
   replayDeps: makeReplayDeps,
-  blindProbeContext
+  blindProbeContext,
+  targetContext: getActiveSession
 });
 setObserveE2eDeps({
   token: e2eCsrfToken,

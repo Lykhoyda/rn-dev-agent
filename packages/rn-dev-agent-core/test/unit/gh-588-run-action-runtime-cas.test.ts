@@ -95,6 +95,15 @@ const PASS_ENV = {
     transport: 'maestro-runner',
     transportVersion: '1.0.9',
     fallback: 'none',
+    deviceAuthority: {
+      requestedDeviceId: DEVICE_ID,
+      reportedDeviceId: DEVICE_ID,
+      observedDeviceIds: [DEVICE_ID],
+      wdaDeviceIds: [DEVICE_ID],
+      verified: true,
+      source: 'maestro-runner-log',
+      reason: 'exact-runner-and-wda-match',
+    },
     steps: [
       { index: 0, name: 'launchApp', verb: 'launchApp', status: 'pass', durationMs: 2_800 },
       { index: 1, name: 'tapOn', verb: 'tapOn', status: 'pass', durationMs: 1_400 },
@@ -119,6 +128,7 @@ test('GH-588 V2: stale YAML baseline does not reject sidecar-only RunRecord pers
     maestroRun: async (args) => {
       maestroCalls += 1;
       assert.equal(args.flowPath, yamlPath);
+      assert.equal(args.deviceId, DEVICE_ID);
       assert.deepEqual(args.params, {
         TITLE: 'V2Fresh',
         DESC: 'fresh-cas-reproduction',
@@ -132,6 +142,7 @@ test('GH-588 V2: stale YAML baseline does not reject sidecar-only RunRecord pers
       throw new Error('autoRepair=false must not invoke repair');
     },
     blindProbeContext: async () => ({ deviceId: DEVICE_ID, iosRuntimeMajor: 26 }),
+    targetContext: () => ({ platform: 'ios', deviceId: DEVICE_ID }),
   });
 
   const result = await handler({
@@ -250,6 +261,7 @@ test('GH-588 V2: a blocked promotion degrades to sidecar-only telemetry, not a f
       throw new Error('autoRepair=false must not invoke repair');
     },
     blindProbeContext: async () => ({ deviceId: DEVICE_ID, iosRuntimeMajor: 26 }),
+    targetContext: () => ({ platform: 'ios', deviceId: DEVICE_ID }),
   });
 
   const result = await handler({

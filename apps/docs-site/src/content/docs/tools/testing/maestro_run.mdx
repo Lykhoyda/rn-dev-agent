@@ -5,7 +5,7 @@ sidebar:
   order: 35
 ---
 
-Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. Does NOT require CDP — works even when app is crashed or on native screens.
+Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.
 
 ## Parameters
 
@@ -16,6 +16,7 @@ Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml f
 | `platform` | `unknown` | No |  |  | Target platform (auto-detected from session) |
 | `appId` | `string` | No |  |  | App bundle ID (auto-detected from app.json) |
 | `appFile` | `unknown` | No |  |  |  |
+| `deviceId` | `unknown` | No |  | min: 1, max: 256 |  |
 | `timeoutMs` | `unknown` | No | `120000` | min: 5000, max: 300000, integer | Execution timeout in ms |
 | `params` | `unknown` | No |  |  |  |
 

@@ -13,7 +13,10 @@ test('GH#201 maestro-run auto-resolves appFile for iOS clearState flows', () => 
   // resolveAppFileForClearState helper (so maestro_test_all + runMaestroInline
   // reuse it too); maestro-run delegates to it and threads the result into buildArgs.
   assert.match(runSrc, /resolveAppFileForClearState\(/);
-  assert.match(runSrc, /dispatch\.buildArgs\(platform, flowFile, appFileResolution\.appFile\)/);
+  assert.match(
+    runSrc,
+    /dispatch\.buildArgs\([\s\S]*platform,[\s\S]*flowFile,[\s\S]*appFileResolution\.appFile,[\s\S]*requestedDeviceId,[\s\S]*\)/,
+  );
 });
 
 test('GH#201 maestro_run exposes an appFile param', () => {

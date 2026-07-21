@@ -304,6 +304,8 @@ export type ToolErrorCode =
   | 'KEYBOARD_DISMISS_FAILED'
   | 'RUNNER_TIMEOUT'
   | 'WDA_BOOTSTRAP_FAILED'
+  // Direct maestro-runner/WDA device evidence did not match the exact target.
+  | 'DEVICE_AUTHORITY_MISMATCH'
   // Audit B5: cross_platform_verify verdict FAIL (elements differ across
   // platforms) — distinct from the partial-coverage missing-snapshot warning.
   | 'CROSS_PLATFORM_MISMATCH'

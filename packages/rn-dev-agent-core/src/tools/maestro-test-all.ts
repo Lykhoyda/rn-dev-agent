@@ -20,6 +20,10 @@ import {
 import { runFlowParked } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
+import {
+  shouldRejectMaestroDeviceAuthority,
+  verifyMaestroDeviceAuthority,
+} from '../domain/maestro-device-authority.js';
 
 const execFile = promisify(execFileCb);
 
@@ -75,6 +79,9 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
     if (!platform) {
       return failResult('Cannot determine platform. Pass platform or open a device session first.');
     }
+    const session = getActiveSession();
+    const requestedDeviceId =
+      session?.platform === platform && session.deviceId ? session.deviceId : undefined;
 
     // B59: tiered dispatch (see maestro-dispatch.ts) — picks maestro-runner
     // when viable, falls back to the Maestro CLI on iOS+no-adb machines.
@@ -179,32 +186,70 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         }
       }
 
+      const runnerReportDir =
+        flowDispatch.runner === 'maestro-runner'
+          ? join(
+              tmpdir(),
+              `rn-maestro-suite-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            )
+          : null;
+      const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
+      const finalArgs = runnerReportDir
+        ? [
+            ...baseArgs.slice(0, -1),
+            '--output',
+            runnerReportDir,
+            '--flatten',
+            baseArgs[baseArgs.length - 1],
+          ]
+        : baseArgs;
+
       try {
         const { stdout, stderr } = await runFlowParked(
           () =>
-            execFile(
-              flowDispatch.binPath,
-              flowDispatch.buildArgs(platform, safeFlowFile, appFile),
-              {
-                timeout,
-                encoding: 'utf8',
-                maxBuffer: 10 * 1024 * 1024,
-              },
-            ),
-          { platform, deviceId: getActiveSession()?.deviceId },
+            execFile(flowDispatch.binPath, finalArgs, {
+              timeout,
+              encoding: 'utf8',
+              maxBuffer: 10 * 1024 * 1024,
+            }),
+          { platform, deviceId: requestedDeviceId },
         );
         const output = (stdout + '\n' + stderr).trim();
         // The runner already exited 0 here, so that exit code is the
         // authoritative pass signal. The secondary scan keys on Maestro's own
         // status LINES (GH#249: a bare `FAILED` substring false-flagged passing
         // runs whose app logs contained the token; mirrors the maestro_run fix).
-        const ok = !outputIndicatesFlowFailure(output);
+        const outputPassed = !outputIndicatesFlowFailure(output);
+        let authorityOutput = output;
+        if (runnerReportDir) {
+          const logPath = join(runnerReportDir, 'maestro-runner.log');
+          if (existsSync(logPath)) {
+            try {
+              authorityOutput += `\n${readFileSync(logPath, 'utf8')}`;
+            } catch {
+              // Direct evidence stays unavailable and verification fails closed.
+            }
+          }
+        }
+        const deviceAuthority = verifyMaestroDeviceAuthority({
+          runner: flowDispatch.runner,
+          platform,
+          requestedDeviceId,
+          output: authorityOutput,
+          requireWdaProvenance: outputPassed,
+        });
+        const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
+        const ok = outputPassed && !authorityRejected;
 
         results.push({
           name,
           passed: ok,
           durationMs: Date.now() - start,
-          error: ok ? undefined : output.slice(0, 300),
+          error: authorityRejected
+            ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? 'missing'})`
+            : ok
+              ? undefined
+              : output.slice(0, 300),
         });
 
         if (ok) passed++;
@@ -213,11 +258,34 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         if (!ok && args.stopOnFailure) break;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const errWithOutput = err as { stdout?: unknown; stderr?: unknown };
+        let authorityOutput = [errWithOutput.stdout, errWithOutput.stderr]
+          .filter((value): value is string => typeof value === 'string')
+          .join('\n');
+        if (runnerReportDir) {
+          const logPath = join(runnerReportDir, 'maestro-runner.log');
+          if (existsSync(logPath)) {
+            try {
+              authorityOutput += `\n${readFileSync(logPath, 'utf8')}`;
+            } catch {
+              // Preserve the original process error when the report is unreadable.
+            }
+          }
+        }
+        const deviceAuthority = verifyMaestroDeviceAuthority({
+          runner: flowDispatch.runner,
+          platform,
+          requestedDeviceId,
+          output: authorityOutput,
+        });
+        const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
         results.push({
           name,
           passed: false,
           durationMs: Date.now() - start,
-          error: msg.slice(0, 300),
+          error: authorityRejected
+            ? `Device authority refused: ${deviceAuthority.reason} (${deviceAuthority.reportedDeviceId ?? 'missing'})`
+            : msg.slice(0, 300),
         });
         failed++;
         if (args.stopOnFailure) break;

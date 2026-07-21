@@ -47,6 +47,8 @@ export type ActionFailureCode =
   | 'ENV_UNREACHABLE'
   | 'TIMEOUT'
   | 'WDA_BOOTSTRAP_FAILED'
+  // Exact active-session target differed from direct maestro-runner/WDA evidence.
+  | 'DEVICE_AUTHORITY_MISMATCH'
   // GH #317 Phase 2: a CDP/JS transport-blind replay ran and the flow failed —
   // distinct from a generic UNKNOWN error so run-history/MTTR can tell them apart.
   | 'TRANSPORT_BLIND'

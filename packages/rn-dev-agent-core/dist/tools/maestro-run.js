@@ -16,7 +16,8 @@ import { buildStepSummary, buildTerminalEvidence, classifyExecError, combineRunn
 import { fastHealthCheck as defaultFastHealthCheck, stopFastRunner as defaultStopFastRunner, } from '../runners/rn-fast-runner-client.js';
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
-const execFile = promisify(execFileCb);
+import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
+const defaultExecFile = promisify(execFileCb);
 /**
  * GH#202 Phase 2a + GH#237: run a Maestro flow with L2 parked. iOS stops the
  * fast-runner (XCTest); Android releases the single UiAutomation slot (our
@@ -81,6 +82,10 @@ export async function buildRunnerResume(platform, probe) {
 }
 export function createMaestroRunHandler(deps = {}) {
     const fastHealthCheck = deps.fastHealthCheck ?? defaultFastHealthCheck;
+    const activeSession = deps.getActiveSession ?? getActiveSession;
+    const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
+    const parkFlow = deps.parkFlow ?? runFlowParked;
+    const execute = deps.execFile ?? defaultExecFile;
     return async (args) => {
         // GH #116: validate params shape FIRST so a malformed payload is rejected
         // regardless of platform / dispatch-tier availability. CI envs without
@@ -100,6 +105,18 @@ export function createMaestroRunHandler(deps = {}) {
         const platform = resolvePlatform(args.platform);
         if (!platform) {
             return failResult('Cannot determine platform. Pass platform or open a device session first.');
+        }
+        const session = activeSession();
+        const matchingSessionDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : undefined;
+        if (args.deviceId && matchingSessionDeviceId && args.deviceId !== matchingSessionDeviceId) {
+            return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, 'TARGET_SESSION_MISMATCH', { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
+        }
+        const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
+        if (requestedDeviceId !== undefined &&
+            (requestedDeviceId.length === 0 ||
+                requestedDeviceId.length > 256 ||
+                /\s/.test(requestedDeviceId))) {
+            return failResult('Refusing Maestro: deviceId must be 1-256 non-whitespace characters.', 'INVALID_ARGUMENT');
         }
         // GH #356/B223: the dispatch tier depends on whether the validated flow
         // uses hideKeyboard on Android, so the runner is chosen AFTER parsing below.
@@ -164,7 +181,7 @@ export function createMaestroRunHandler(deps = {}) {
         // B59 + GH #356/B223: tiered dispatch — maestro-runner when viable, Maestro
         // CLI fallback when iOS-only and adb is missing, and (B223) the Maestro CLI
         // for Android flows that use hideKeyboard (maestro-runner no-ops it there).
-        const dispatch = chooseMaestroDispatch({ platform, flowHasHideKeyboard });
+        const dispatch = selectDispatch({ platform, flowHasHideKeyboard });
         if ('error' in dispatch) {
             return failResult(dispatch.error);
         }
@@ -178,14 +195,33 @@ export function createMaestroRunHandler(deps = {}) {
         if (!appFileResolution.ok) {
             return failResult(appFileResolution.error);
         }
-        const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile);
+        const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile, requestedDeviceId);
         const paramArgs = [];
         if (args.params) {
             for (const [key, value] of Object.entries(args.params)) {
                 paramArgs.push('-e', `${key}=${value}`);
             }
         }
-        const finalArgs = assembleMaestroArgs(baseArgs, paramArgs);
+        // A unique flattened report gives us maestro-runner's direct selected-device
+        // and WDA target log. Never infer execution identity from requested argv.
+        const runnerReportDir = dispatch.runner === 'maestro-runner'
+            ? join(tmpdir(), `rn-maestro-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+            : null;
+        const reportArgs = runnerReportDir ? ['--output', runnerReportDir, '--flatten'] : [];
+        const finalArgs = assembleMaestroArgs(baseArgs, [...reportArgs, ...paramArgs]);
+        const directRunnerOutput = (output) => {
+            if (!runnerReportDir)
+                return output;
+            const logPath = join(runnerReportDir, 'maestro-runner.log');
+            if (!existsSync(logPath))
+                return output;
+            try {
+                return `${output}\n${readFileSync(logPath, 'utf8')}`;
+            }
+            catch {
+                return output;
+            }
+        };
         // GH #397: engine-pin visibility. Detection is process-cached and fail-open
         // (null on error). The caveat rides the existing warn-once mechanism below;
         // RN_ENGINE_PIN_STRICT=1 opts into refusing PROVEN divergence only.
@@ -196,12 +232,15 @@ export function createMaestroRunHandler(deps = {}) {
             return failResult(strictRefusal, 'ENGINE_PIN_MISMATCH');
         }
         try {
-            const { stdout, stderr } = await runFlowParked(() => execFile(dispatch.binPath, finalArgs, 
             // 10MB buffer: a multi-step flow with screenshots + app console/network
             // logs routinely exceeds Node's 1MB execFile default, which would kill
             // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
             // run as a failure.
-            { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }), { platform, deviceId: getActiveSession()?.deviceId });
+            const { stdout, stderr } = await parkFlow(() => execute(dispatch.binPath, finalArgs, {
+                timeout,
+                encoding: 'utf8',
+                maxBuffer: 10 * 1024 * 1024,
+            }), { platform, deviceId: requestedDeviceId });
             // combineRunnerOutput (not .trim()) so the step parser's leading-indent
             // anchor (B212) still sees the FIRST step line's indent — see GH #312.
             const output = combineRunnerOutput(stdout, stderr);
@@ -211,6 +250,25 @@ export function createMaestroRunHandler(deps = {}) {
             // keyed on Maestro's own status LINES (GH#249: the prior bare `FAILED`
             // substring false-flagged passing runs whose app logs contained the token).
             const passed = !outputIndicatesFlowFailure(output);
+            const deviceAuthority = verifyMaestroDeviceAuthority({
+                runner: dispatch.runner,
+                platform,
+                requestedDeviceId,
+                output: directRunnerOutput(output),
+                requireWdaProvenance: passed,
+            });
+            if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
+                return failResult(`Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? 'missing'} (${deviceAuthority.reason}).`, 'DEVICE_AUTHORITY_MISMATCH', {
+                    flowFile,
+                    platform,
+                    runner: dispatch.runner,
+                    transport: dispatch.runner,
+                    passed: false,
+                    deviceAuthority,
+                    runnerReportDir,
+                    output: output.slice(0, 4000),
+                });
+            }
             const summary = buildStepSummary(output, { failed: !passed });
             const runnerResume = !passed ? await buildRunnerResume(platform, fastHealthCheck) : undefined;
             const meta = {
@@ -221,6 +279,8 @@ export function createMaestroRunHandler(deps = {}) {
                 transport: dispatch.runner,
                 transportVersion: engineStatus?.version ?? null,
                 fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
+                deviceAuthority,
+                runnerReportDir,
                 output: output.slice(0, 2000),
                 ...summary,
                 ...(!passed
@@ -270,11 +330,34 @@ export function createMaestroRunHandler(deps = {}) {
             const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
             const combined = combineRunnerOutput(stdout, stderr);
             const { timedOut, outputTruncated } = classifyExecError(err);
+            const deviceAuthority = verifyMaestroDeviceAuthority({
+                runner: dispatch.runner,
+                platform,
+                requestedDeviceId,
+                output: directRunnerOutput(combined),
+            });
             const summary = buildStepSummary(combined, { failed: true });
             const spawnError = combined.length === 0 &&
                 ['ENOENT', 'EACCES'].includes(String(err?.code ?? ''));
             const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
             const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
+            if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
+                return failResult(`Maestro device authority refused: requested ${requestedDeviceId}, direct runner/WDA evidence was ${deviceAuthority.reportedDeviceId ?? 'missing'} (${deviceAuthority.reason}).`, 'DEVICE_AUTHORITY_MISMATCH', {
+                    flowFile,
+                    platform,
+                    runner: dispatch.runner,
+                    transport: dispatch.runner,
+                    passed: false,
+                    deviceAuthority,
+                    runnerReportDir,
+                    output: combined.slice(0, 4000),
+                    ...summary,
+                    terminal,
+                    ...(runnerResume ? { runnerResume } : {}),
+                    timedOut,
+                    outputTruncated,
+                });
+            }
             // Headline from structured data (raw-free); the raw err.message is the
             // fallback only for system errors with no step output (e.g. spawn ENOENT).
             const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
@@ -287,6 +370,8 @@ export function createMaestroRunHandler(deps = {}) {
                 transport: dispatch.runner,
                 transportVersion: engineStatus?.version ?? null,
                 fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
+                deviceAuthority,
+                runnerReportDir,
                 passed: false,
                 // `output` mirrors the success/warn shape so callers can read
                 // it the same way regardless of which path they hit.

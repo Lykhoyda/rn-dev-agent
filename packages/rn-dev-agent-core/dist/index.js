@@ -1486,7 +1486,7 @@ trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (opti
         .optional()
         .describe('Label for this proof step (e.g. "After adding item to cart")'),
 }, createProofStepHandler(getClient));
-trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. Does NOT require CDP — works even when app is crashed or on native screens.', {
+trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.', {
     flowPath: z.string().optional().describe('Path to a .yaml flow file to execute'),
     inlineYaml: z
         .string()
@@ -1501,6 +1501,12 @@ trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flow
         .string()
         .optional()
         .describe('iOS only — path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201).'),
+    deviceId: z
+        .string()
+        .min(1)
+        .max(256)
+        .optional()
+        .describe('Exact iOS UDID or Android serial. Defaults only from a matching active device session and is forwarded to the replay engine.'),
     timeoutMs: z
         .number()
         .int()
@@ -1803,7 +1809,7 @@ trackedTool('cdp_repair_action', 'Self-repair an L3 reusable action whose Maestr
 }, createRepairActionHandler());
 // Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
 // stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
-trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action\'s 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent\'s last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.', {
+trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict \"respect offline human edits\" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.", {
     actionId: z
         .string()
         .describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
@@ -1849,6 +1855,7 @@ createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
     blindProbeContext,
+    targetContext: getActiveSession,
 }));
 trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.', {
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
@@ -1918,6 +1925,7 @@ const runActionHandler = createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
     blindProbeContext,
+    targetContext: getActiveSession,
 });
 setObserveE2eDeps({
     token: e2eCsrfToken,

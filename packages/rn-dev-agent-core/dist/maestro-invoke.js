@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
@@ -8,6 +8,8 @@ import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidat
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
+import { getActiveSession } from './agent-device-wrapper.js';
+import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from './domain/maestro-device-authority.js';
 const execFile = promisify(execFileCb);
 // Escape a user-supplied string for safe embedding inside a double-quoted YAML scalar.
 // Handles backslash, double quote, and control characters that would break the scalar.
@@ -87,6 +89,28 @@ export async function runMaestroInline(yaml, opts) {
         };
     }
     const timeout = opts.timeoutMs ?? 30_000;
+    const session = getActiveSession();
+    const matchingSessionDeviceId = session?.platform === opts.platform && session.deviceId ? session.deviceId : undefined;
+    if (opts.deviceId && matchingSessionDeviceId && opts.deviceId !== matchingSessionDeviceId) {
+        return {
+            passed: false,
+            output: '',
+            flowFile,
+            error: `Refusing Maestro target ${opts.deviceId}: active ${opts.platform} session is bound to ${matchingSessionDeviceId}.`,
+        };
+    }
+    const requestedDeviceId = opts.deviceId ?? matchingSessionDeviceId;
+    if (requestedDeviceId !== undefined &&
+        (requestedDeviceId.length === 0 ||
+            requestedDeviceId.length > 256 ||
+            /\s/.test(requestedDeviceId))) {
+        return {
+            passed: false,
+            output: '',
+            flowFile,
+            error: 'Refusing Maestro: deviceId must be 1-256 non-whitespace characters.',
+        };
+    }
     // GH#201 parity with maestro_run: resolve --app-file so an iOS clearState flow
     // run through this inline path (device_fill/picker/dialog fallbacks) can
     // reinstall the app instead of failing after uninstall.
@@ -94,14 +118,60 @@ export async function runMaestroInline(yaml, opts) {
     if (!appFileResolution.ok) {
         return { passed: false, output: '', flowFile, error: appFileResolution.error };
     }
+    const runnerReportDir = dispatch.runner === 'maestro-runner'
+        ? join(tmpdir(), `rn-maestro-inline-report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+        : null;
+    const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
+    const finalArgs = runnerReportDir
+        ? [
+            ...baseArgs.slice(0, -1),
+            '--output',
+            runnerReportDir,
+            '--flatten',
+            baseArgs[baseArgs.length - 1],
+        ]
+        : baseArgs;
+    const directRunnerOutput = (output) => {
+        if (!runnerReportDir)
+            return output;
+        const logPath = join(runnerReportDir, 'maestro-runner.log');
+        if (!existsSync(logPath))
+            return output;
+        try {
+            return `${output}\n${readFileSync(logPath, 'utf8')}`;
+        }
+        catch {
+            return output;
+        }
+    };
     try {
-        const { stdout, stderr } = await execFile(dispatch.binPath, dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile), { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+        const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, {
+            timeout,
+            encoding: 'utf8',
+            maxBuffer: 10 * 1024 * 1024,
+        });
         const output = (stdout + '\n' + stderr).trim();
         // Runner exited 0 → authoritative pass. The secondary scan keys on Maestro's
         // own status LINES (GH#249: a bare `FAILED` substring false-flagged passing
         // runs whose app logs contained the token; mirrors maestro_run).
         const passed = !outputIndicatesFlowFailure(output);
-        return { passed, output, flowFile };
+        const deviceAuthority = verifyMaestroDeviceAuthority({
+            runner: dispatch.runner,
+            platform: opts.platform,
+            requestedDeviceId,
+            output: directRunnerOutput(output),
+            requireWdaProvenance: passed,
+        });
+        if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
+            return {
+                passed: false,
+                output,
+                flowFile,
+                error: `Maestro device authority refused (${deviceAuthority.reason})`,
+                deviceAuthority,
+            };
+        }
+        return { passed, output, flowFile, deviceAuthority };
     }
     catch (err) {
         // execFile errors carry stdout/stderr from the failed child process. When
@@ -124,7 +194,21 @@ export async function runMaestroInline(yaml, opts) {
             };
         }
         if (capturedOutput) {
-            return { passed: false, output: capturedOutput, flowFile };
+            const deviceAuthority = verifyMaestroDeviceAuthority({
+                runner: dispatch.runner,
+                platform: opts.platform,
+                requestedDeviceId,
+                output: directRunnerOutput(capturedOutput),
+            });
+            return {
+                passed: false,
+                output: capturedOutput,
+                flowFile,
+                ...(shouldRejectMaestroDeviceAuthority(deviceAuthority)
+                    ? { error: `Maestro device authority refused (${deviceAuthority.reason})` }
+                    : {}),
+                deviceAuthority,
+            };
         }
         const msg = errObj.message ?? String(err);
         return { passed: false, output: '', flowFile, error: msg.slice(0, 500) };

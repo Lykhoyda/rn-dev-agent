@@ -1,0 +1,248 @@
+import { afterEach, beforeEach, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
+import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
+import { verifyMaestroDeviceAuthority } from '../../dist/domain/maestro-device-authority.js';
+import { createRunActionHandler } from '../../dist/tools/run-action.js';
+import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
+
+const EXACT = '5C10B45B-2065-458B-B885-0F83F49747C8';
+const FOREIGN = 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3';
+const APP_ID = 'com.rndevagent.testapp';
+
+function runnerLog(found: string, wda = found): string {
+  return [
+    'Single device execution mode',
+    `  ✓ Found device: ${found}`,
+    `Building WDA for device ${wda} (team ID: )`,
+    `Starting WDA on device ${wda} (port: 8447)`,
+    'Flow execution completed: 1 passed, 0 failed, 0 skipped',
+  ].join('\n');
+}
+
+function fakeRunnerDispatch() {
+  const dispatch = chooseMaestroDispatch({
+    platform: 'ios',
+    whichAdb: () => '/usr/bin/adb',
+    whichMaestro: () => '/usr/bin/maestro',
+    maestroRunnerPath: () => '/fake/maestro-runner',
+  });
+  if ('error' in dispatch) throw new Error(dispatch.error);
+  return dispatch;
+}
+
+function envelope(result: { content: Array<{ text: string }> }): Record<string, any> {
+  return JSON.parse(result.content[0].text);
+}
+
+test('exact active UDID is forwarded to maestro-runner and official Maestro before the flow', () => {
+  const runner = fakeRunnerDispatch();
+  assert.deepEqual(runner.buildArgs('ios', '/tmp/flow.yaml', undefined, EXACT), [
+    '--platform',
+    'ios',
+    '--device',
+    EXACT,
+    'test',
+    '/tmp/flow.yaml',
+  ]);
+
+  const cli = chooseMaestroDispatch({
+    platform: 'ios',
+    whichAdb: () => null,
+    whichMaestro: () => '/usr/bin/maestro',
+    maestroRunnerPath: () => null,
+  });
+  if ('error' in cli) throw new Error(cli.error);
+  assert.deepEqual(cli.buildArgs('ios', '/tmp/flow.yaml', undefined, EXACT), [
+    'test',
+    '--platform',
+    'ios',
+    '--udid',
+    EXACT,
+    '/tmp/flow.yaml',
+  ]);
+});
+
+test('direct runner evidence verifies exact runner and WDA identity, not requested metadata', () => {
+  const exact = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(EXACT),
+    requireWdaProvenance: true,
+  });
+  assert.equal(exact.verified, true);
+  assert.equal(exact.reportedDeviceId, EXACT);
+  assert.equal(exact.reason, 'exact-runner-and-wda-match');
+
+  const wrongRunner = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(FOREIGN),
+    requireWdaProvenance: true,
+  });
+  assert.equal(wrongRunner.verified, false);
+  assert.equal(wrongRunner.reportedDeviceId, FOREIGN);
+  assert.equal(wrongRunner.reason, 'reported-device-mismatch');
+
+  const wrongWda = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(EXACT, FOREIGN),
+    requireWdaProvenance: true,
+  });
+  assert.equal(wrongWda.verified, false);
+  assert.equal(wrongWda.reason, 'wda-device-mismatch');
+});
+
+test('real maestro_run path forwards active UDID and accepts only matching direct evidence', async () => {
+  let argv: string[] = [];
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    execFile: async (_file, args) => {
+      argv = args;
+      return { stdout: runnerLog(EXACT), stderr: '' };
+    },
+  });
+
+  const result = await handler({
+    inlineYaml: '- launchApp',
+    platform: 'ios',
+    appId: APP_ID,
+  });
+  const body = envelope(result);
+  assert.equal(body.ok, true, result.content[0].text);
+  assert.deepEqual(argv.slice(0, 5), ['--platform', 'ios', '--device', EXACT, 'test']);
+  assert.equal(body.data.deviceAuthority.verified, true);
+  assert.equal(body.data.deviceAuthority.reportedDeviceId, EXACT);
+});
+
+test('real maestro_run path rejects exit-zero wrong-device/shared-WDA evidence', async () => {
+  for (const [output, reason] of [
+    [runnerLog(FOREIGN), 'reported-device-mismatch'],
+    [runnerLog(EXACT, FOREIGN), 'wda-device-mismatch'],
+    ['Flow execution completed: 1 passed, 0 failed, 0 skipped', 'reported-device-missing'],
+  ] as const) {
+    const handler = createMaestroRunHandler({
+      getActiveSession: () => ({
+        name: 'exact',
+        platform: 'ios',
+        deviceId: EXACT,
+        appId: APP_ID,
+        openedAt: new Date(0).toISOString(),
+      }),
+      chooseDispatch: () => fakeRunnerDispatch(),
+      parkFlow: async (run) => run(),
+      execFile: async () => ({ stdout: output, stderr: '' }),
+    });
+    const result = await handler({
+      inlineYaml: '- launchApp',
+      platform: 'ios',
+      appId: APP_ID,
+    });
+    const body = envelope(result);
+    assert.equal(result.isError, true);
+    assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+    assert.equal(body.meta.deviceAuthority.reason, reason);
+  }
+});
+
+test('real maestro_run non-zero path preserves and rejects direct foreign-device evidence', async () => {
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    execFile: async () => {
+      throw Object.assign(new Error('runner exited 1'), {
+        stdout: runnerLog(FOREIGN),
+        stderr: 'Failed to create session for app',
+        code: 1,
+      });
+    },
+  });
+  const result = await handler({
+    inlineYaml: '- launchApp',
+    platform: 'ios',
+    appId: APP_ID,
+  });
+  const body = envelope(result);
+  assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(body.meta.deviceAuthority.reportedDeviceId, FOREIGN);
+  assert.equal(body.meta.deviceAuthority.reason, 'reported-device-mismatch');
+});
+
+let project: ReturnType<typeof createTmpProject>;
+beforeEach(() => {
+  project = createTmpProject();
+});
+afterEach(() => project.cleanup());
+
+test('cdp_run_action persists the direct wrong device and never requested metadata', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  let maestroArgs: Record<string, unknown> | undefined;
+  let repairCalled = false;
+  const authority = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(FOREIGN),
+  });
+  const handler = createRunActionHandler({
+    targetContext: () => ({ platform: 'ios', deviceId: EXACT, appId: APP_ID }),
+    blindProbeContext: async () => ({ deviceId: EXACT, iosRuntimeMajor: 26 }),
+    maestroRun: async (args) => {
+      maestroArgs = args;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ok: false,
+              code: 'DEVICE_AUTHORITY_MISMATCH',
+              error: `requested ${EXACT}, direct runner reported ${FOREIGN}`,
+              meta: { deviceAuthority: authority, output: runnerLog(FOREIGN) },
+            }),
+          },
+        ],
+        isError: true,
+      };
+    },
+    repairAction: async () => {
+      repairCalled = true;
+      throw new Error('repair must not run for target-authority failures');
+    },
+  });
+
+  const result = await handler({
+    actionId: 'demo',
+    projectRoot: project.root,
+    platform: 'ios',
+    autoRepair: false,
+    blindProbeMode: 'forbid',
+  });
+  const body = envelope(result);
+  assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(repairCalled, false);
+  assert.equal(maestroArgs?.deviceId, EXACT, 'active exact UDID must reach maestro_run');
+
+  const record = project.readSidecar('demo').runHistory.at(-1);
+  assert.equal(record.failureCode, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(record.deviceId, FOREIGN, 'direct runner identity must replace requested metadata');
+  assert.notEqual(record.deviceId, EXACT);
+});

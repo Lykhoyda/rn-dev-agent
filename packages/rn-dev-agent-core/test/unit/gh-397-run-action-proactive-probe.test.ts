@@ -46,6 +46,15 @@ const PASS_ENV = {
     transport: 'maestro-runner',
     transportVersion: '1.0.9',
     fallback: 'none',
+    deviceAuthority: {
+      requestedDeviceId: 'UDID-1',
+      reportedDeviceId: 'UDID-1',
+      observedDeviceIds: ['UDID-1'],
+      wdaDeviceIds: ['UDID-1'],
+      verified: true,
+      source: 'maestro-runner-log',
+      reason: 'exact-runner-and-wda-match',
+    },
     steps: [{ index: 0, name: 'tapOn', verb: 'tapOn', status: 'pass', durationMs: 10 }],
   },
 };
@@ -288,7 +297,7 @@ test('gh-397: prior TRANSPORT_BLIND history + anchor present → probe routes ev
   assert.equal(counter.calls, 0);
 });
 
-test('gh-397: orchestration exception still persists a RunRecord with deviceId', async () => {
+test('gh-397: orchestration exception never invents RunRecord deviceId from requested context', async () => {
   project.seedAction('demo', replayFixtureYaml());
   const handler = createRunActionHandler({
     maestroRun: async () => {
@@ -298,7 +307,7 @@ test('gh-397: orchestration exception still persists a RunRecord with deviceId',
   });
   const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
   assert.equal(readEnvelope(result).ok, false);
-  assert.equal(lastRun('demo').deviceId, 'UDID-1');
+  assert.equal(lastRun('demo').deviceId, undefined);
 });
 
 test('gh-397: probe-routed replay failure records FALLBACK_REPLAY_FAILED, maestro still skipped', async () => {

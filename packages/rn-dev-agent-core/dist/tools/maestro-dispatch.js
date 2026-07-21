@@ -94,7 +94,13 @@ export function chooseMaestroDispatch(inputs) {
             return {
                 runner: 'maestro',
                 binPath: maestroPath,
-                buildArgs: (platform, flowFile, _appFile) => ['test', '--platform', platform, flowFile],
+                buildArgs: (platform, flowFile, _appFile, deviceId) => [
+                    'test',
+                    '--platform',
+                    platform,
+                    ...(deviceId ? ['--udid', deviceId] : []),
+                    flowFile,
+                ],
                 fallbackReason: 'Android flow uses hideKeyboard; maestro-runner v1.0.9 no-ops it on Android (B223) — using the Maestro CLI so the keyboard is actually dismissed',
             };
         }
@@ -108,9 +114,14 @@ export function chooseMaestroDispatch(inputs) {
         return {
             runner: 'maestro-runner',
             binPath: runnerPath,
-            buildArgs: (platform, flowFile, appFile) => appFile
-                ? ['--app-file', appFile, '--platform', platform, 'test', flowFile]
-                : ['--platform', platform, 'test', flowFile],
+            buildArgs: (platform, flowFile, appFile, deviceId) => [
+                ...(appFile ? ['--app-file', appFile] : []),
+                '--platform',
+                platform,
+                ...(deviceId ? ['--device', deviceId] : []),
+                'test',
+                flowFile,
+            ],
             ...(needsOfficialForKeyboard
                 ? {
                     degradedReason: 'Android flow uses hideKeyboard but the Maestro CLI is not installed; maestro-runner v1.0.9 no-ops hideKeyboard on Android (B223), so the keyboard will NOT be dismissed. Install the Maestro CLI (`brew install maestro`) for the keyboard-occlusion fix to work on Android.',
@@ -137,7 +148,13 @@ export function chooseMaestroDispatch(inputs) {
             // entire B59 fallback on its target machines.
             // The Maestro CLI handles clearState reinstall from the flow's appId
             // header and exposes no --app-file flag, so appFile is intentionally ignored here.
-            buildArgs: (platform, flowFile, _appFile) => ['test', '--platform', platform, flowFile],
+            buildArgs: (platform, flowFile, _appFile, deviceId) => [
+                'test',
+                '--platform',
+                platform,
+                ...(deviceId ? ['--udid', deviceId] : []),
+                flowFile,
+            ],
             fallbackReason: reason,
         };
     }
