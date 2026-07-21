@@ -274,7 +274,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
               requestedDeviceId,
               output: directEvidence.output,
               directReportDeviceIds: directEvidence.reportDeviceIds,
-            directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+              directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
             })
           : null;
         const authorityRefusal = deviceAuthority

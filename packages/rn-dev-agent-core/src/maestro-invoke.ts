@@ -239,7 +239,7 @@ export async function runMaestroInline(
         requestedDeviceId,
         output: directEvidence.output,
         directReportDeviceIds: directEvidence.reportDeviceIds,
-      directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
       });
       const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, errObj.message);
       return {

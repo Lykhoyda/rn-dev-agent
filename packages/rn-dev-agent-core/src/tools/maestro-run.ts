@@ -466,7 +466,7 @@ export function createMaestroRunHandler(
         requestedDeviceId,
         output: directEvidence.output,
         directReportDeviceIds: directEvidence.reportDeviceIds,
-      directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
       });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError =

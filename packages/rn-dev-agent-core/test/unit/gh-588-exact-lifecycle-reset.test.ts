@@ -147,10 +147,13 @@ test('GH-588 V4: startup replay threads a matching session device and never inve
     ok: true,
     deviceId: UDID,
   });
-  assert.deepEqual(resolveReplayLifecycleDevice({ platform: 'android', deviceId: SERIAL }, 'android'), {
-    ok: true,
-    deviceId: SERIAL,
-  });
+  assert.deepEqual(
+    resolveReplayLifecycleDevice({ platform: 'android', deviceId: SERIAL }, 'android'),
+    {
+      ok: true,
+      deviceId: SERIAL,
+    },
+  );
   assert.deepEqual(resolveReplayLifecycleDevice(null, 'ios'), { ok: true, deviceId: undefined });
   assert.deepEqual(resolveReplayLifecycleDevice({ platform: 'ios' }, 'android'), {
     ok: true,

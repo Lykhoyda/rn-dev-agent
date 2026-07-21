@@ -14,6 +14,12 @@ reading UI state, and managing device settings. All commands run via bash.
 
 ## iOS Simulator (simctl)
 
+`booted` below is a convenience alias for a single-simulator machine. As soon as
+a second simulator is up it is ambiguous and silently targets the wrong device —
+substitute the exact UDID (`xcrun simctl list devices booted`), which is the same
+exact-device identity the plugin's own device session and Maestro replay authority
+are checked against.
+
 ### Boot and Manage Devices
 
 ```bash
