@@ -190,6 +190,24 @@ test('transport-recovered send, hierarchy unchanged → no retap, noUiChange onl
   assert.equal(env.meta.tapRetried, undefined);
 });
 
+test('keyboard auto-dismiss recovery, hierarchy unchanged → intended tap is not repeated', async () => {
+  let dispatches = 0;
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true }, { meta: { keyboardGuard: 'auto_dismissed' } }),
+    async () => {
+      dispatches++;
+      return okResult({ tapped: true });
+    },
+    ctx,
+    policy,
+    depsWith([unchanged]),
+  );
+  assert.equal(dispatches, 0);
+  const env = parse(result);
+  assert.equal(env.meta.noUiChange, true);
+  assert.equal(env.meta.tapRetried, undefined);
+});
+
 test('control: no transportRecovery marker, hierarchy unchanged → exactly one retap', async () => {
   let dispatches = 0;
   const result = await settleWithRetryIfNoChange(

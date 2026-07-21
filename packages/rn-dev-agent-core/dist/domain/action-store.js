@@ -339,6 +339,58 @@ export function saveActionWithCAS(action) {
     return { ok: true, filePath, sidecarPath: writtenSidecarPath };
 }
 /**
+ * Persist run telemetry without reserializing the tracked action YAML. The
+ * synchronous compare+write is atomic with respect to this MCP process and
+ * preserves the same reload/retry contract as saveActionWithCAS.
+ */
+export function saveActionRuntimeWithCAS(expected, nextState) {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (actionWasEditedExternally(expected))
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    if (existsSync(sidecarPath)) {
+        try {
+            const onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8'));
+            if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
+                return { ok: false, conflict: 'EXTERNAL_WRITE' };
+            }
+        }
+        catch {
+            return { ok: false, conflict: 'EXTERNAL_WRITE' };
+        }
+    }
+    else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+}
+/** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
+export function promoteActionRuntimeWithCAS(expected, nextState) {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (existsSync(sidecarPath)) {
+        try {
+            const onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8'));
+            if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
+                return { ok: false, conflict: 'EXTERNAL_WRITE' };
+            }
+        }
+        catch {
+            return { ok: false, conflict: 'EXTERNAL_WRITE' };
+        }
+    }
+    if (actionWasEditedExternally(expected))
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    const yaml = readFileSync(expected.filePath, 'utf8');
+    const marker = '# status: experimental';
+    if (yaml.split(marker).length !== 2)
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    const promoted = yaml.replace(marker, '# status: active');
+    const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
+    expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
+    return { ok: true, sidecarPath };
+}
+/**
  * Update only the M7 metadata of an action without touching the body.
  * Used by lifecycle transitions (status: experimental → active).
  */

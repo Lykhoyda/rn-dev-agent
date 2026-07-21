@@ -1,4 +1,4 @@
-import type { ToolResult } from '../utils.js';
+import { failResult, okResult, type ToolResult } from '../utils.js';
 
 export function resolveKeyboardGuard(env: NodeJS.ProcessEnv): boolean {
   const raw = (env.RN_KEYBOARD_GUARD ?? '').trim().toLowerCase();
@@ -85,6 +85,101 @@ export interface KeyboardAutoHealDeps {
   retryTap: () => Promise<ToolResult>;
 }
 
+export function keyboardVisibility(result: unknown): boolean | null {
+  const text = (result as ToolResult | undefined)?.content?.[0]?.text;
+  if (typeof text !== 'string') return null;
+  try {
+    const envelope = JSON.parse(text) as {
+      ok?: boolean;
+      data?: { keyboardVisible?: unknown; visible?: unknown };
+    };
+    if (envelope.ok === false) return null;
+    if (typeof envelope.data?.keyboardVisible === 'boolean') {
+      return envelope.data.keyboardVisible;
+    }
+    return typeof envelope.data?.visible === 'boolean' ? envelope.data.visible : null;
+  } catch {
+    return null;
+  }
+}
+
+const KEYBOARD_POSTCHECK_ATTEMPTS = 5;
+const KEYBOARD_POSTCHECK_DELAY_MS = 100;
+
+export async function waitForKeyboardHidden(
+  refreshSnapshot: () => Promise<unknown>,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<boolean> {
+  for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
+    if (keyboardVisibility(await refreshSnapshot()) === false) return true;
+    if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1) await sleep(KEYBOARD_POSTCHECK_DELAY_MS);
+  }
+  return false;
+}
+
+export interface KeyboardDismissDeps {
+  nativeDismiss: () => Promise<ToolResult>;
+  dismissViaJs?: () => Promise<boolean>;
+  refreshSnapshot: () => Promise<unknown>;
+}
+
+/** Shared standalone/batch dismissal chain with an independent hidden-state check. */
+export async function dismissKeyboardWithParity(deps: KeyboardDismissDeps): Promise<ToolResult> {
+  const native = await deps.nativeDismiss();
+  if (!native.isError) {
+    try {
+      const envelope = JSON.parse(native.content[0]?.text ?? '{}') as {
+        data?: { wasVisible?: unknown; dismissed?: unknown; visible?: unknown; via?: unknown };
+      };
+      const data = envelope.data;
+      if (data?.wasVisible === false && data.visible === false) {
+        return okResult({
+          dismissed: false,
+          keyboardGuard: 'no_keyboard',
+          via: 'no_keyboard',
+          attemptedTiers: [],
+        });
+      }
+      if (data?.dismissed === true && data.visible === false) {
+        const via = typeof data.via === 'string' ? data.via : 'native-control';
+        return okResult({
+          dismissed: true,
+          keyboardGuard: 'auto_dismissed',
+          via,
+          attemptedTiers: via === 'native-swipe' ? ['native-swipe'] : ['native-swipe', via],
+        });
+      }
+    } catch {
+      // A malformed native success cannot prove that the keyboard is hidden.
+    }
+  }
+
+  const attemptedTiers = ['native-swipe', 'native-control'];
+  if (deps.dismissViaJs) {
+    attemptedTiers.push('js');
+    try {
+      if (await deps.dismissViaJs()) {
+        const hidden = await waitForKeyboardHidden(deps.refreshSnapshot);
+        if (hidden) {
+          return okResult({
+            dismissed: true,
+            keyboardGuard: 'auto_dismissed',
+            via: 'js',
+            attemptedTiers,
+          });
+        }
+      }
+    } catch {
+      // Fall through to the typed refusal; no hidden state was proven.
+    }
+  }
+  return failResult(
+    'KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; keyboard visibility was not proven false.',
+    'KEYBOARD_DISMISS_FAILED',
+    { attemptedTiers },
+  );
+}
+
 /**
  * #379 KEYBOARD_OCCLUDED auto-heal (JS-first, per D1250's fill pattern).
  * Bounded by construction: retryTap is the raw tap, so a second refusal flows
@@ -106,15 +201,9 @@ export async function healKeyboardOccludedTap(
   }
   if (!dismissed) return first;
   try {
-    const refreshed = await deps.refreshSnapshot();
-    const text = (refreshed as ToolResult | undefined)?.content?.[0]?.text;
-    if (typeof text === 'string') {
-      const envelope = JSON.parse(text) as { data?: { keyboardVisible?: unknown } };
-      if (envelope.data?.keyboardVisible === true) return first;
-    }
+    if (!(await waitForKeyboardHidden(deps.refreshSnapshot))) return first;
   } catch {
-    // Stale coords are survivable: the retry either re-binds by identity
-    // (Story 05) or refuses again — never worse than skipping the retry.
+    return first;
   }
   const retried = await deps.retryTap();
   return tagKeyboardAutoHeal(retried, Date.now() - t0);

@@ -126,7 +126,10 @@ diagram, pre-replay validation, replay-to-promote).
 next session, `list-learned-actions` surfaces it for the agent → `run-action`
 replays it in ~4 seconds → if a testID drifted, `cdp_run_action` auto-invokes
 `cdp_repair_action`, patches the YAML, retries once, and persists the result
-to the sidecar's `runHistory[]` with auto-repair telemetry.
+to the sidecar's `runHistory[]` with auto-repair telemetry. Successful replay
+envelopes explicitly report `transport`, `transportVersion`, `fallback`,
+`repair`, per-step engine readback, and authorized `writes`; ordinary replays
+preserve tracked action YAML bytes.
 
 **Status maturity.** New actions ship as `experimental`. The first clean
 replay auto-promotes them to `active`. Self-repair demotes back to
@@ -218,7 +221,7 @@ are documented exceptions, not defaults.
 |---|---|---|
 | Screenshot the screen | `device_screenshot` | `xcrun simctl io booted screenshot`, `adb shell screencap`, `screencapture` |
 | Read the UI / accessibility tree | `device_snapshot` (returns @ref handles) | parsing `xcrun simctl io ui`, `uiautomator dump`, ad-hoc tree dumps |
-| Tap an element | `device_press(ref=…)` or `device_find(text=…, action="click")` | `xcrun simctl io booted input tap`, `adb shell input tap`, coordinate guesses |
+| Tap an element | `device_press(ref=…)` or `device_find(text=…, action="click")`; use `device_press(x=…, y=…)` only for an intentional raw-coordinate tap | `xcrun simctl io booted input tap`, `adb shell input tap`, coordinate guesses |
 | Type into a field | `device_fill(ref=…, text=…)` | `xcrun simctl spawn booted … keyboard`, `adb shell input text` |
 | Open an in-app URL / deep link | `device_deeplink` / `cdp_navigate` / `cdp_nav_graph` | `xcrun simctl openurl`, `adb shell am start -a android.intent.action.VIEW` |
 | Read app state (Redux/Zustand/Jotai/RQ) | `cdp_store_state(path=…)` | `console.log` + log-tailing, dispatching probes via `cdp_evaluate` |
@@ -350,7 +353,7 @@ reset and re-test.
 - **JS errors:** `cdp_error_log` — buffered JS exceptions (last 50). Use `clear=true` to reset baseline before testing
 - **Console output:** `cdp_console_log` — buffered console.log/warn/error (last 200)
 - **Network requests:** `cdp_network_log` — buffered fetch/XHR history (last 100). Use `filter="/api/endpoint"` to narrow
-- **All logs at once:** `collect_logs` — parallel collection from JS console + native iOS/Android logs
+- **All logs at once:** `collect_logs` — parallel collection from JS console + native logs. Native Android collection is pinned to the open session's adb serial; native iOS collection is pinned to the open session's simulator and current target-app PID.
 - **If `cdp_error_log` is empty but app is broken** — the problem is native. Use `collect_logs` to check native crash logs
 
 #### "I need to run arbitrary JavaScript in the app"
@@ -431,7 +434,7 @@ Built-in reliability layers on `device_*` interactions (all default-ON, each wit
 |---|---|---|---|
 | **Settle engine** | Every mutating `device_*` verb waits for the UI to actually stabilize (window-update probe / screenshot-static compare, snapshot-hash fallback) instead of fixed sleeps. `device_batch` settles between steps by default. | `meta.settle: {method, settled}` | `RN_SETTLE=0` global, `settle: false` per batch step, `settleTimeoutMs` budget knob |
 | **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates); a tap that produced no UI change retries exactly once; `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.tapRetried`, `meta.noUiChange` | `RN_SELF_HEAL=0` global, `retryIfNoChange: false` per call |
-| **Keyboard guard** | Guarded iOS taps use fresh target rectangles against the current keyboard frame. If target geometry is stale or unknown while the keyboard is visible, the keyboard is always dismissed first, the snapshot/ref is refreshed, and the tap is retried once. Dismissal tiers are native swipe, native control, then injected JS; all tiers failing returns `KEYBOARD_DISMISS_FAILED` without tapping. | `meta.keyboardGuard` (`auto_dismissed` after a heal), `meta.keyboardAutoHeal`, `meta.via`, `meta.timings_ms.keyboardGuard` | `RN_KEYBOARD_GUARD=0` |
+| **Keyboard guard** | Guarded iOS taps use fresh, on-screen target rectangles against the current keyboard frame. If target geometry is stale, off-screen, or unknown (including raw coordinates) while the keyboard is visible, the keyboard is always dismissed first; refs are refreshed/re-resolved and the intended tap is dispatched once. Dismissal tiers are native swipe, native control, then injected JS with a fresh hidden-state post-check; all tiers failing returns `KEYBOARD_DISMISS_FAILED` without tapping. | `meta.keyboardGuard` (`auto_dismissed` after a heal), `meta.keyboardAutoHeal`, `meta.via`, `meta.timings_ms.keyboardGuard` | `RN_KEYBOARD_GUARD=0` |
 
 Three consecutive no-change taps on distinct targets surface a wedged-runtime hint — reboot the simulator rather than blaming app code.
 

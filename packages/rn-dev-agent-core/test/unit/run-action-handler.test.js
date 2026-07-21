@@ -8,6 +8,7 @@
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
 
@@ -130,7 +131,8 @@ test('run-action: action not found returns NO_PROJECT_ROOT', async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('run-action: first-attempt pass appends RunRecord with no auto-repair', async () => {
-  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const originalYaml = `${fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] })}# retained operator note\n`;
+  project.seedAction('demo', originalYaml);
 
   const handler = createRunActionHandler({
     maestroRun: fakeMaestroRun([PASS_ENV]),
@@ -144,6 +146,17 @@ test('run-action: first-attempt pass appends RunRecord with no auto-repair', asy
   assert.equal(env.data.passed, true);
   assert.equal(env.data.autoRepair.attempted, false);
   assert.equal(env.data.autoRepair.outcome, 'skipped');
+  assert.deepEqual(env.data.writes.actionYaml, {
+    written: true,
+    authorized: true,
+    reason: 'lifecycle-promotion',
+  });
+  const promotedYaml = readFileSync(project.yamlPath('demo'), 'utf8');
+  assert.equal(
+    promotedYaml,
+    originalYaml.replace('# status: experimental', '# status: active'),
+    'lifecycle promotion must preserve every non-status YAML byte',
+  );
 
   // Sidecar should have one RunRecord with status 'pass'.
   // Issue #120: even on the happy path we now record an autoRepair

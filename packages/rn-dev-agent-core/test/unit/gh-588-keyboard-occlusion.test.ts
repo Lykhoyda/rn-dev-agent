@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRunIOSArgs } from '../../dist/agent-device-wrapper.js';
+import {
+  _setActiveSessionForTest,
+  _setRunAgentDeviceForTest,
+  buildRunIOSArgs,
+} from '../../dist/agent-device-wrapper.js';
 import {
   _setFastRunnerStateForTest,
   _setFetchForTest,
@@ -11,7 +15,11 @@ import {
   getFreshRefTarget,
   updateRefMapFromFlat,
 } from '../../dist/fast-runner-ref-map.js';
-import { healKeyboardOccludedTap } from '../../dist/runners/keyboard-guard.js';
+import {
+  dismissKeyboardWithParity,
+  healKeyboardOccludedTap,
+} from '../../dist/runners/keyboard-guard.js';
+import { createDeviceBatchHandler } from '../../dist/tools/device-batch.js';
 import { failResult, okResult } from '../../dist/utils.js';
 
 const node = {
@@ -43,6 +51,14 @@ test('GH-588 Slice D: stale/unknown keyboard geometry is not advertised as fresh
   assert.equal(args.snapshotGeneration, undefined);
 });
 
+test('GH-588 Slice D: raw-coordinate press stays explicitly geometry-unknown', () => {
+  const args = buildRunIOSArgs(['press', '120', '700']);
+  assert.equal(args.x, 120);
+  assert.equal(args.y, 700);
+  assert.equal(args.targetBounds, undefined);
+  assert.equal(args.snapshotGeneration, undefined);
+});
+
 test('GH-588 Slice D: shared heal dismisses, verifies fresh hidden state, and retries exactly once', async () => {
   let retries = 0;
   const first = failResult(
@@ -61,6 +77,73 @@ test('GH-588 Slice D: shared heal dismisses, verifies fresh hidden state, and re
   assert.equal(retries, 1);
   assert.equal(envelope.meta?.keyboardGuard, 'auto_dismissed');
   assert.equal(envelope.meta?.via, 'js');
+});
+
+test('GH-588 Slice D: hideKeyboard reaches JS, polls to proven hidden state, and reports its tier', async () => {
+  let snapshots = 0;
+  const result = await dismissKeyboardWithParity({
+    nativeDismiss: async () =>
+      failResult('KEYBOARD_DISMISS_FAILED: native tiers failed', 'KEYBOARD_DISMISS_FAILED'),
+    dismissViaJs: async () => true,
+    refreshSnapshot: async () => {
+      snapshots += 1;
+      return okResult({ nodes: [node], keyboardVisible: snapshots < 2 });
+    },
+  });
+  const envelope = JSON.parse(result.content[0]!.text) as {
+    ok: boolean;
+    data?: { via?: string; attemptedTiers?: string[] };
+  };
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data?.via, 'js');
+  assert.deepEqual(envelope.data?.attemptedTiers, ['native-swipe', 'native-control', 'js']);
+  assert.equal(snapshots, 2);
+});
+
+test('GH-588 Slice D: batch hideKeyboard surfaces JS tier in its per-step receipt', async () => {
+  _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-UDID', appId: 'dev.fixture' });
+  _setRunAgentDeviceForTest(async (cliArgs) =>
+    cliArgs[0] === 'keyboard'
+      ? failResult('KEYBOARD_DISMISS_FAILED: native tiers failed', 'KEYBOARD_DISMISS_FAILED')
+      : okResult({ nodes: [node], keyboardVisible: false }),
+  );
+  const client = {
+    isConnected: true,
+    helpersInjected: true,
+    evaluate: async () => ({ value: JSON.stringify({ dismissed: true }) }),
+  };
+  try {
+    const result = await createDeviceBatchHandler(() => client as never)({
+      steps: [{ action: 'hideKeyboard' }],
+      finalSnapshot: 'none',
+    });
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      data?: { results?: Array<{ data?: { via?: string } }> };
+    };
+    assert.equal(envelope.data?.results?.[0]?.data?.via, 'js');
+  } finally {
+    _setRunAgentDeviceForTest(null);
+    _setActiveSessionForTest(null);
+  }
+});
+
+test('GH-588 Slice D: hideKeyboard no-keyboard disconfirmation performs no dismissal', async () => {
+  let jsCalls = 0;
+  const result = await dismissKeyboardWithParity({
+    nativeDismiss: async () =>
+      okResult({ wasVisible: false, dismissed: false, visible: false, via: null }),
+    dismissViaJs: async () => {
+      jsCalls += 1;
+      return true;
+    },
+    refreshSnapshot: async () => okResult({ keyboardVisible: false }),
+  });
+  const envelope = JSON.parse(result.content[0]!.text) as {
+    data?: { keyboardGuard?: string; via?: string };
+  };
+  assert.equal(envelope.data?.keyboardGuard, 'no_keyboard');
+  assert.equal(envelope.data?.via, 'no_keyboard');
+  assert.equal(jsCalls, 0);
 });
 
 test('GH-588 Slice D: protocol N-1 guarded press dismisses first client-side', async () => {

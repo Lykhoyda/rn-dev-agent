@@ -890,10 +890,10 @@ export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
 // Story 14 (#407): detect whether a raw runner ToolResult carries the
 // transport-recovery marker (runIOS/runAndroid attach it on the firstResult
 // when an ambiguous send was confirmed via the runner's outcome journal).
-function hasTransportRecovery(result) {
+function hasConsumedTapRetryBudget(result) {
     try {
         const env = JSON.parse(result.content[0].text);
-        return env.meta?.transportRecovery !== undefined;
+        return (env.meta?.transportRecovery !== undefined || env.meta?.keyboardGuard === 'auto_dismissed');
     }
     catch {
         return false;
@@ -925,7 +925,7 @@ export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, poli
     // budget — the runner journal confirmed the mutating gesture executed. The
     // heal layer must not re-fire it, or it would double-dispatch the very tap
     // that transport recovery just resolved. Report noUiChange honestly, no retry.
-    if (hasTransportRecovery(firstResult)) {
+    if (hasConsumedTapRetryBudget(firstResult)) {
         return flagNoUiChange(first.result, policy.targetKey);
     }
     const second = await dispatch();
@@ -1050,7 +1050,7 @@ export async function runNative(cliArgs, opts = {}) {
             upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
         }
         const { runIOS } = await import('./runners/rn-fast-runner-client.js');
-        const ios = buildRunIOSArgs(cliArgs, appId);
+        let ios = buildRunIOSArgs(cliArgs, appId);
         if (ios.command === 'type' && opts.verifyTypeReadback) {
             ios._verifyExactReadback = opts.verifyTypeReadback;
         }
@@ -1063,9 +1063,12 @@ export async function runNative(cliArgs, opts = {}) {
             }));
             if (healed.kind === 'failed')
                 return healed.result;
-            ios.x = healed.x;
-            ios.y = healed.y;
-            delete ios._staleRef;
+            const reboundArgs = [...cliArgs];
+            reboundArgs[1] = healed.newRef.startsWith('@') ? healed.newRef : `@${healed.newRef}`;
+            ios = buildRunIOSArgs(reboundArgs, appId);
+            if (ios._staleRef) {
+                return staleRefFail(ios._staleRef, 'absent', getCachedMetadata(ios._staleRef));
+            }
             healMeta = {
                 reResolved: true,
                 reResolvedRef: healed.newRef,

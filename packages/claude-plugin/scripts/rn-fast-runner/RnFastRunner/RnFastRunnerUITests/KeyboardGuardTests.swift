@@ -10,6 +10,22 @@ final class KeyboardGuardTests: XCTestCase {
     XCTAssertEqual(command.keyboardStateAtSnapshot, true)
   }
 
+  func testTargetGeometryMustBeOnScreen() {
+    let app = CGRect(x: 0, y: 0, width: 402, height: 874)
+    XCTAssertTrue(
+      KeyboardGuard.isProvenOnScreen(
+        appFrame: app,
+        targetRect: CGRect(x: 20, y: 550, width: 200, height: 44)
+      )
+    )
+    XCTAssertFalse(
+      KeyboardGuard.isProvenOnScreen(
+        appFrame: app,
+        targetRect: CGRect(x: 20, y: 918, width: 200, height: 44)
+      )
+    )
+  }
+
   func testRectIntersectionUsesFreshGeometry() {
     let kb = CGRect(x: 0, y: 500, width: 400, height: 350)
     XCTAssertTrue(

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   _setFastRunnerStateForTest,
   _setFetchForTest,
+  buildRunnerTestFaultEnv,
   getRunnerPostMortem,
   runIOS,
 } from '../../dist/runners/rn-fast-runner-client.js';
@@ -61,6 +62,14 @@ test('GH-588 Slice C: deterministic wedge hook is compile-gated out of release a
   assert.doesNotMatch(releaseWorkflow, /RN_FAST_RUNNER_TEST_FAULTS/);
 });
 
+test('GH-588 Slice C: deterministic fault uses the TEST_RUNNER_ XCUITest launch contract', () => {
+  assert.deepEqual(buildRunnerTestFaultEnv({ RN_FAST_RUNNER_TEST_FAULT: 'block-main-35s' }), {
+    RN_FAST_RUNNER_TEST_FAULT: 'block-main-35s',
+    TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT: 'block-main-35s',
+  });
+  assert.deepEqual(buildRunnerTestFaultEnv({}), {});
+});
+
 test('GH-588 Slice C: timeout succeeds only as exact-readback recovery', async () => {
   state();
   timeoutFetch();
@@ -77,8 +86,29 @@ test('GH-588 Slice C: timeout succeeds only as exact-readback recovery', async (
   assert.equal(result.ok, true);
   assert.equal(result.data?.recovered, true);
   assert.equal(result.data?.verification, 'exact-readback');
-  const recovery = result.meta?.runnerTimeoutRecovery as { reaped?: boolean } | undefined;
+  const recovery = result.meta?.runnerTimeoutRecovery as
+    | {
+        reaped?: boolean;
+        runner?: {
+          before?: { pid?: number };
+          afterReapPid?: number | null;
+          stateCleared?: boolean;
+        };
+        containmentOrder?: string[];
+        runnerPostMortem?: { available?: boolean; provenance?: string };
+      }
+    | undefined;
   assert.equal(recovery?.reaped, true);
+  assert.equal(recovery?.runner?.before?.pid, 999_999_999);
+  assert.equal(recovery?.runner?.afterReapPid, null);
+  assert.equal(recovery?.runner?.stateCleared, true);
+  assert.deepEqual(recovery?.containmentOrder, [
+    'poison',
+    'independent-readback',
+    'reap',
+    'result',
+  ]);
+  assert.equal(recovery?.runnerPostMortem?.provenance, 'adopted');
   assert.equal('runnerTimeoutShim' in (result.meta ?? {}), false);
 });
 

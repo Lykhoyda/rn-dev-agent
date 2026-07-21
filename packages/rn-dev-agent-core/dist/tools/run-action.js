@@ -28,7 +28,7 @@
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
 import { okResult, failResult } from '../utils.js';
-import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from '../domain/action-store.js';
+import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { appendRunRecord, shouldAutoPromoteToActive, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
@@ -68,6 +68,25 @@ function parseEnvelope(toolResult, toolName) {
     catch {
         return { ok: false, error: `Unparseable ${toolName} envelope` };
     }
+}
+function replaySuccessEvidence(env) {
+    const reportedSteps = env.data?.steps ?? [];
+    const steps = reportedSteps.map(({ index, verb, status, durationMs }) => ({
+        index,
+        verb,
+        status,
+        durationMs,
+    }));
+    return {
+        transport: env.data?.transport ?? env.data?.runner ?? 'unproven',
+        transportVersion: env.data?.transportVersion ?? null,
+        fallback: env.data?.fallback ?? 'unproven',
+        perStepReadback: {
+            source: 'maestro-runner-step-report',
+            complete: steps.length > 0 && steps.every((step) => step.status === 'pass'),
+            steps,
+        },
+    };
 }
 /**
  * Multi-LLM review of PR #115 (Codex C1, conf 95): when `maestro_run`
@@ -214,6 +233,13 @@ export function createRunActionHandler(deps = {}) {
         const persistRunWithDevice = (record) => proofReplay
             ? Promise.resolve()
             : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
+        const writeDisclosure = (actionYaml = 'none') => ({
+            actionYaml: actionYaml === 'none'
+                ? { written: false, reason: 'repair-not-applied' }
+                : { written: true, authorized: true, reason: actionYaml },
+            runtimeState: proofReplay ? 'none' : 'sidecar',
+            databaseMirror: proofReplay ? 'none' : 'best-effort',
+        });
         // Multi-LLM review of PR #115 (Gemini conf 95): wrap the orchestration
         // body so a thrown exception (maestroRun timeout, repairAction
         // throwing through withSession, etc.) is caught and surfaces as a
@@ -280,6 +306,10 @@ export function createRunActionHandler(deps = {}) {
                                     passed: true,
                                     actionId: args.actionId,
                                     transport: 'cdp-js',
+                                    transportVersion: null,
+                                    fallback: 'none',
+                                    repair: autoRepair,
+                                    writes: writeDisclosure(),
                                     blindProbe,
                                     timings_ms,
                                     autoRepair,
@@ -345,7 +375,10 @@ export function createRunActionHandler(deps = {}) {
                     passed: true,
                     actionId: args.actionId,
                     ...(proofReplay ? { proofReplay: true } : {}),
+                    ...replaySuccessEvidence(firstEnv),
+                    repair: autoRepair,
                     autoRepair,
+                    writes: writeDisclosure(action.metadata.status === 'experimental' ? 'lifecycle-promotion' : 'none'),
                     durationMs: Date.now() - t0,
                     flowFile: action.filePath,
                     firstAttemptOutput: firstOutput.slice(0, 500),
@@ -443,7 +476,11 @@ export function createRunActionHandler(deps = {}) {
                                     passed: true,
                                     actionId: args.actionId,
                                     transport: 'cdp-js',
+                                    transportVersion: null,
+                                    fallback: 'cdp-js',
+                                    repair: autoRepair,
                                     autoRepair,
+                                    writes: writeDisclosure(action.metadata.status === 'experimental' ? 'lifecycle-promotion' : 'none'),
                                     durationMs: Date.now() - t0,
                                     flowFile: action.filePath,
                                 });
@@ -648,7 +685,10 @@ export function createRunActionHandler(deps = {}) {
                 return okResult({
                     passed: true,
                     actionId: args.actionId,
+                    ...replaySuccessEvidence(retryEnv),
+                    repair: autoRepair,
                     autoRepair,
+                    writes: writeDisclosure('auto-repair'),
                     durationMs: Date.now() - t0,
                     flowFile: reloadedAction.filePath,
                     retriedAfterRepair: true,
@@ -658,6 +698,7 @@ export function createRunActionHandler(deps = {}) {
             return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`, 'TESTID_NOT_FOUND', {
                 actionId: args.actionId,
                 autoRepair,
+                writes: writeDisclosure('auto-repair'),
                 firstAttemptOutput: firstOutput.slice(0, 500),
                 retryOutput: retryOutput.slice(0, 500),
                 underlyingFailure: retryFailureDetail,
@@ -696,7 +737,7 @@ export function createRunActionHandler(deps = {}) {
     };
 }
 /**
- * Append a RunRecord to the action's sidecar via the atomic pair-writer.
+ * Append a RunRecord to the action's runtime sidecar without rewriting YAML.
  *
  * Multi-LLM review of PR #115:
  *   - Codex I6 (conf 80): `actionId` is now passed explicitly rather
@@ -710,14 +751,8 @@ export function createRunActionHandler(deps = {}) {
  */
 async function persistRun(actionId, projectRoot, record) {
     // Re-load to get the freshest state — repair-action may have just
-    // bumped revision/repairHistory between our two saveAction calls.
-    // Issue #117: lost-update guard via CAS + bounded retry. Two
-    // concurrent `cdp_run_action` calls against the same actionId would
-    // otherwise interleave their read-modify-write and lose one
-    // RunRecord. saveActionWithCAS detects an in-flight conflict by
-    // comparing on-disk lastSeenMtimeMs to the snapshot we loaded; on
-    // conflict, reload + retry. Bounded at 5 attempts so persistent
-    // contention surfaces as a console.error instead of a hang.
+    // bumped revision/repairHistory. Issue #117's bounded CAS retry remains,
+    // but only the ignored runtime sidecar is written on ordinary replay.
     const MAX_ATTEMPTS = 5;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const fresh = loadAction(projectRoot, actionId);
@@ -725,45 +760,30 @@ async function persistRun(actionId, projectRoot, record) {
             console.error(`cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`);
             return;
         }
-        // H5: promote experimental → active on a clean replay. This is the
-        // documented lifecycle ("first clean /run-action replay auto-promotes to
-        // active") that was defined + unit-tested but never wired into a call site.
-        // persistRun is the single chokepoint both success paths reach, so the
-        // promotion rides the same atomic CAS write as the RunRecord append.
-        const promotedMetadata = shouldAutoPromoteToActive(fresh.metadata, record)
-            ? { ...fresh.metadata, status: 'active' }
-            : fresh.metadata;
-        const next = {
-            ...fresh,
-            metadata: promotedMetadata,
-            state: appendRunRecord(fresh.state, record),
-        };
-        const result = saveActionWithCAS(next);
+        const nextState = appendRunRecord(fresh.state, record);
+        const promotes = shouldAutoPromoteToActive(fresh.metadata, record);
+        const result = promotes
+            ? promoteActionRuntimeWithCAS(fresh, nextState)
+            : saveActionRuntimeWithCAS(fresh, nextState);
         if (result.ok) {
-            // Task 5 (A2/C): append the RunRecord ROW to the DB mirror. This runs
-            // ONLY on ok:true — never on the CAS-conflict path below, so the mirror
-            // can't append a row for a write that the authoritative layer refused.
-            // `saveAction` (inside saveActionWithCAS) already upserted the index row
-            // idempotently; the row append is the point here. Best-effort, never
-            // throws — `next.state` carries the just-appended run in its history.
+            // Runtime telemetry is sidecar-only. A replay that did not apply repair
+            // must preserve tracked YAML bytes (including documentation comments).
             mirrorToDb({
-                yamlFilePath: next.filePath,
-                state: next.state,
+                yamlFilePath: fresh.filePath,
+                state: fresh.state,
                 newRunRecord: record,
                 meta: {
-                    appId: next.metadata.appId,
-                    status: next.metadata.status,
-                    path: next.filePath,
+                    appId: fresh.metadata.appId,
+                    status: promotes ? 'active' : fresh.metadata.status,
+                    path: fresh.filePath,
                 },
             });
             return;
         }
         // CAS conflict — another writer raced us. Reload and retry.
         if (attempt === MAX_ATTEMPTS) {
-            console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; ` +
-                `disk mtime=${result.diskMtimeMs}, expected=${result.expectedMtimeMs}. ` +
-                `RunRecord dropped — investigate concurrent writers.`);
-            return;
+            throw new Error(`persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; ` +
+                `the action YAML or runtime sidecar changed after load. RunRecord was not written.`);
         }
     }
 }

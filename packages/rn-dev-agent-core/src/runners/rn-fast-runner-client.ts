@@ -527,6 +527,22 @@ export function buildRunnerPortEnv(port: number): Record<string, string> {
 }
 
 /**
+ * xcodebuild strips TEST_RUNNER_ while forwarding values to XCUITest. Mirror
+ * the compile-gated deterministic fault onto that launch contract; released
+ * runner binaries contain no matching branch.
+ */
+export function buildRunnerTestFaultEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const value = env.TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT ?? env.RN_FAST_RUNNER_TEST_FAULT;
+  if (!value) return {};
+  return {
+    RN_FAST_RUNNER_TEST_FAULT: value,
+    TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT: value,
+  };
+}
+
+let runnerTestFaultForwarded = false;
+
+/**
  * GH #424: run a build-phase xcodebuild (build-for-testing) to completion.
  * Unlike the launch invocation it exits on its own and emits no READY marker,
  * so success is exit code 0 — the .xctestrun it writes is what makes every
@@ -614,6 +630,7 @@ export async function startFastRunner(
     }
   }
   const launch = plan[plan.length - 1];
+  const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
 
   return new Promise((resolve, reject) => {
     const child = spawn('xcodebuild', launch.args, {
@@ -622,6 +639,7 @@ export async function startFastRunner(
         ...buildRunnerPortEnv(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
         ...buildRunnerQuiescenceEnv(process.env),
+        ...runnerTestFaultEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -661,6 +679,7 @@ export async function startFastRunner(
         ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
       };
       runnerState = state;
+      if (Object.keys(runnerTestFaultEnv).length > 0) runnerTestFaultForwarded = true;
       quiescenceAnnouncementPending = true;
       try {
         writeJsonStateFileAtomic(iosStatePath(deviceId), state);
@@ -998,6 +1017,10 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
 
   const state = getState();
   if (!state) return;
+  const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
+  const spawnedExit = spawnedChild
+    ? new Promise<void>((resolve) => spawnedChild.once('exit', () => resolve()))
+    : null;
 
   try {
     sendSignal(state.pid, 'SIGTERM');
@@ -1011,6 +1034,11 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     } catch {
       /* race: died between checks */
     }
+  }
+  if (spawnedExit) {
+    // Let the registered child exit handler publish exit/signal/output-tail
+    // evidence before timeout containment snapshots the postmortem.
+    await Promise.race([spawnedExit, sleep(250)]);
   }
   clearState();
 }
@@ -1246,6 +1274,15 @@ async function postCommand(body: {
 async function containTypeTimeout(args: RunIOSArgs): Promise<ToolResult> {
   // Poison before any asynchronous readback: concurrently queued mutators are
   // refused at postCommandWithRecovery and cannot reach this XCTest instance.
+  const runnerBefore = runnerState
+    ? {
+        pid: runnerState.pid,
+        port: runnerState.port,
+        deviceId: runnerState.deviceId,
+        statePath: iosStatePath(runnerState.deviceId),
+        provenance: runnerProcess ? ('spawned' as const) : ('adopted' as const),
+      }
+    : null;
   runnerPoisoned = true;
   let verification: { matches: boolean; actual?: string | null } = { matches: false };
   try {
@@ -1267,6 +1304,15 @@ async function containTypeTimeout(args: RunIOSArgs): Promise<ToolResult> {
     poisoned: true,
     reaped: true,
     verification: verification.matches ? 'exact-readback' : 'unverified',
+    runner: {
+      before: runnerBefore,
+      afterReapPid: runnerState?.pid ?? null,
+      stateCleared: runnerState === null,
+      nextMutationRequiresRespawn: true,
+    },
+    runnerPostMortem: getRunnerPostMortem(),
+    containmentOrder: ['poison', 'independent-readback', 'reap', 'result'],
+    lateMutationContainment: 'runner-process-reaped-before-next-mutation',
     targetApp: {
       wasRunningBeforeRecovery: 'unverified',
       pidPreserved: 'unverified',

@@ -1,7 +1,11 @@
-import { spawn } from 'node:child_process';
+import { execFile as execFileCb, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { getActiveSession } from '../agent-device-wrapper.js';
 import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
+
+const execFile = promisify(execFileCb);
 
 type LogSource = 'js_console' | 'native_ios' | 'native_android';
 
@@ -85,8 +89,55 @@ async function collectJsConsole(
 
 const SIGKILL_GRACE_MS = 1500;
 
-function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogEntry[]> {
-  if (signal.aborted) return Promise.resolve([]);
+export function parseIosAppPid(launchctlList: string, bundleId: string): number | null {
+  for (const line of launchctlList.split('\n')) {
+    const columns = line.trim().split(/\s+/);
+    if (!/^\d+$/.test(columns[0] ?? '')) continue;
+    const label = columns.slice(2).join(' ');
+    if (
+      label === bundleId ||
+      label.startsWith(`UIKitApplication:${bundleId}[`) ||
+      label.startsWith(`UIKitApplication:${bundleId}<`)
+    ) {
+      return Number(columns[0]);
+    }
+  }
+  return null;
+}
+
+export function buildIosLogStreamArgs(deviceId: string, pid: number): string[] {
+  return [
+    'simctl',
+    'spawn',
+    deviceId,
+    'log',
+    'stream',
+    '--style',
+    'ndjson',
+    '--level',
+    'debug',
+    '--predicate',
+    `processIdentifier == ${pid}`,
+  ];
+}
+
+async function resolveIosAppPid(deviceId: string, bundleId: string): Promise<number> {
+  const { stdout } = await execFile('xcrun', ['simctl', 'spawn', deviceId, 'launchctl', 'list']);
+  const pid = parseIosAppPid(stdout, bundleId);
+  if (pid === null) throw new Error(`target app ${bundleId} is not running on ${deviceId}`);
+  return pid;
+}
+
+async function collectNativeIos(
+  durationMs: number,
+  signal: AbortSignal,
+  deviceId: string,
+  bundleId: string,
+  onResolvedPid?: (pid: number) => void,
+): Promise<LogEntry[]> {
+  if (signal.aborted) return [];
+  const pid = await resolveIosAppPid(deviceId, bundleId);
+  onResolvedPid?.(pid);
 
   return new Promise<LogEntry[]>((resolve, reject) => {
     const entries: LogEntry[] = [];
@@ -96,11 +147,9 @@ function collectNativeIos(durationMs: number, signal: AbortSignal): Promise<LogE
 
     let proc: ReturnType<typeof spawn>;
     try {
-      proc = spawn(
-        'xcrun',
-        ['simctl', 'spawn', 'booted', 'log', 'stream', '--style', 'ndjson', '--level', 'debug'],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
-      );
+      proc = spawn('xcrun', buildIosLogStreamArgs(deviceId, pid), {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
     } catch (err) {
       reject(err instanceof Error ? err : new Error('Failed to spawn xcrun'));
       return;
@@ -193,18 +242,41 @@ function parseIosNdjson(line: string): LogEntry | null {
       Error: 'error',
       Fault: 'error',
     };
+    const pid = Number(obj.processIdentifier);
     return {
       source: 'native_ios',
       level: levelMap[messageType] ?? 'log',
       text: String(obj.eventMessage ?? ''),
       timestamp: ts,
+      ...(Number.isInteger(pid) && pid > 0 ? { pid } : {}),
     };
   } catch {
     return null;
   }
 }
 
-function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<LogEntry[]> {
+export function buildAndroidLogcatArgs(serial: string): string[] {
+  return [
+    '-s',
+    serial,
+    'logcat',
+    '-v',
+    'threadtime',
+    '-T',
+    '1',
+    '-s',
+    'ReactNative:V',
+    'ReactNativeJS:V',
+    'AndroidRuntime:E',
+    'DEBUG:V',
+  ];
+}
+
+function collectNativeAndroid(
+  durationMs: number,
+  signal: AbortSignal,
+  serial: string,
+): Promise<LogEntry[]> {
   if (signal.aborted) return Promise.resolve([]);
 
   return new Promise<LogEntry[]>((resolve, reject) => {
@@ -217,22 +289,7 @@ function collectNativeAndroid(durationMs: number, signal: AbortSignal): Promise<
 
     let proc: ReturnType<typeof spawn>;
     try {
-      proc = spawn(
-        'adb',
-        [
-          'logcat',
-          '-v',
-          'threadtime',
-          '-T',
-          '1',
-          '-s',
-          'ReactNative:V',
-          'ReactNativeJS:V',
-          'AndroidRuntime:E',
-          'DEBUG:V',
-        ],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
-      );
+      proc = spawn('adb', buildAndroidLogcatArgs(serial), { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
       reject(err instanceof Error ? err : new Error('Failed to spawn adb'));
       return;
@@ -364,6 +421,8 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
     );
 
     try {
+      const session = getActiveSession();
+      const scopes: Partial<Record<LogSource, Record<string, unknown>>> = {};
       for (const source of args.sources) {
         switch (source) {
           case 'js_console': {
@@ -382,15 +441,39 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
             break;
           }
           case 'native_ios':
+            if (session?.platform !== 'ios' || !session.deviceId || !session.appId) {
+              errors.native_ios =
+                'No exact iOS app session — native logs require an open session with deviceId and appId.';
+              break;
+            }
+            scopes.native_ios = {
+              deviceId: session.deviceId,
+              appId: session.appId,
+              process: 'resolved-current-pid',
+            };
             promises.push({
               source,
-              promise: collectNativeIos(args.durationMs, controller.signal),
+              promise: collectNativeIos(
+                args.durationMs,
+                controller.signal,
+                session.deviceId,
+                session.appId,
+                (pid) => {
+                  scopes.native_ios = { ...scopes.native_ios, pid };
+                },
+              ),
             });
             break;
           case 'native_android':
+            if (session?.platform !== 'android' || !session.deviceId) {
+              errors.native_android =
+                'No exact Android session — native logs require an open session with an adb serial.';
+              break;
+            }
+            scopes.native_android = { serial: session.deviceId };
             promises.push({
               source,
-              promise: collectNativeAndroid(args.durationMs, controller.signal),
+              promise: collectNativeAndroid(args.durationMs, controller.signal, session.deviceId),
             });
             break;
         }
@@ -436,6 +519,7 @@ export function createCollectLogsHandler(getClient: () => CDPClient) {
         entries: allEntries,
         durationMs: args.durationMs,
         sources: args.sources,
+        scopes,
       };
 
       const hasErrors = Object.keys(errors).length > 0;

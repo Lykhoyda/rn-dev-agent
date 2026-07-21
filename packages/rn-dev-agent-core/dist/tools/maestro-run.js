@@ -212,6 +212,9 @@ export function createMaestroRunHandler() {
                 flowFile,
                 platform,
                 runner: dispatch.runner,
+                transport: dispatch.runner,
+                transportVersion: engineStatus?.version ?? null,
+                fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
                 output: output.slice(0, 2000),
                 ...summary,
                 ...(!passed ? { terminal: buildTerminalEvidence(output), runnerResume } : {}),
@@ -278,6 +281,9 @@ export function createMaestroRunHandler() {
                 flowFile,
                 platform,
                 runner: dispatch.runner,
+                transport: dispatch.runner,
+                transportVersion: engineStatus?.version ?? null,
+                fallback: dispatch.fallbackReason ? dispatch.runner : 'none',
                 passed: false,
                 // `output` mirrors the success/warn shape so callers can read
                 // it the same way regardless of which path they hit.

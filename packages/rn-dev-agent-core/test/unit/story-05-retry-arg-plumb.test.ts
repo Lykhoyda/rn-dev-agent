@@ -19,6 +19,12 @@ test('device_press handler forwards retryIfNoChange:false into runNative opts', 
     assert.equal(calls[0].opts.retryIfNoChange, false);
     await handler({ ref: 'e3' });
     assert.equal(calls[1].opts.retryIfNoChange, undefined);
+    await handler({ x: 120, y: 700, retryIfNoChange: false });
+    assert.deepEqual(calls[2].cliArgs, ['press', '120', '700']);
+    assert.equal(calls[2].opts.retryIfNoChange, false);
+    const invalid = await handler({ ref: 'e3', x: 120, y: 700 });
+    assert.equal(invalid.isError, true);
+    assert.equal(calls.length, 3, 'ambiguous target must not dispatch');
   } finally {
     _setRunAgentDeviceForTest(null);
     _setActiveSessionForTest(null);

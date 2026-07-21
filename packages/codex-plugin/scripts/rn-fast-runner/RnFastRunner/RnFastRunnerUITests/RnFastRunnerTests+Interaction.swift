@@ -377,7 +377,11 @@ extension RnFastRunnerTests {
     let targetRect = command.targetBounds.map {
       CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
     }
+    let targetOnScreen = targetRect.map {
+      KeyboardGuard.isProvenOnScreen(appFrame: app.frame, targetRect: $0)
+    } ?? false
     let fresh = targetRect != nil
+      && targetOnScreen
       && command.snapshotGeneration == currentSnapshotGeneration
       && command.keyboardStateAtSnapshot == true
     if fresh,

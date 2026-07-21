@@ -1303,14 +1303,19 @@ trackedTool(
         'Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.',
       ),
   },
-  createDeviceFindHandler(),
+  createDeviceFindHandler(getClient),
 );
 
 trackedTool(
   'device_press',
-  'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once (meta.tapRetried/noUiChange).',
+  'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. A guarded raw-coordinate tap dismisses any visible keyboard before the single tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once unless keyboard/transport recovery already consumed that retry budget.',
   {
-    ref: z.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
+    ref: z
+      .string()
+      .optional()
+      .describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
+    x: z.number().optional().describe('Raw tap X coordinate; requires y and no ref'),
+    y: z.number().optional().describe('Raw tap Y coordinate; requires x and no ref'),
     doubleTap: z.boolean().optional().describe('Use double-tap gesture'),
     count: z
       .number()
@@ -1932,6 +1937,14 @@ trackedTool(
             .describe(
               '(press/fill) Element ref from snapshot (e.g. "e5"). Beware: refs can go stale across step transitions; prefer testID for cross-step actions.',
             ),
+          x: z
+            .number()
+            .optional()
+            .describe('(press) Raw X coordinate; requires y and no ref/testID'),
+          y: z
+            .number()
+            .optional()
+            .describe('(press) Raw Y coordinate; requires x and no ref/testID'),
           testID: z
             .string()
             .optional()

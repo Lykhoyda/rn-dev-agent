@@ -121,6 +121,7 @@ function healDeps(overrides = {}) {
     },
     refreshSnapshot: async () => {
       calls.snapshot++;
+      return toolResult({ ok: true, data: { keyboardVisible: false } });
     },
     retryTap: async () => {
       calls.retry++;
@@ -181,16 +182,16 @@ test('heal: message-only refusal (old runner artifact) also heals', async () => 
   assert.equal(calls.retry, 1);
 });
 
-test('heal: snapshot refresh failure does not abort the bounded retry', async () => {
+test('heal: snapshot refresh failure cannot prove hidden state, so no tap occurs', async () => {
+  const refusal = occludedRefusal();
   const { deps, calls } = healDeps({
     refreshSnapshot: async () => {
       throw new Error('snapshot infra down');
     },
   });
-  const healed = await healKeyboardOccludedTap(occludedRefusal(), deps);
-  assert.equal(calls.retry, 1);
-  const envelope = JSON.parse(healed.content[0].text);
-  assert.equal(envelope.meta.keyboardGuard, 'auto_dismissed');
+  const healed = await healKeyboardOccludedTap(refusal, deps);
+  assert.equal(calls.retry, 0);
+  assert.equal(healed, refusal);
 });
 
 test('heal: retry that refuses again is returned as-is (bounded, keyboardGuard not overwritten)', async () => {

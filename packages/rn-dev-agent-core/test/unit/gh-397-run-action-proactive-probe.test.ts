@@ -38,7 +38,16 @@ function replayFixtureYaml({
 
 const PASS_ENV = {
   ok: true,
-  data: { passed: true, output: 'Flow PASSED', flowFile: 'x', platform: 'ios' },
+  data: {
+    passed: true,
+    output: 'Flow PASSED',
+    flowFile: 'x',
+    platform: 'ios',
+    transport: 'maestro-runner',
+    transportVersion: '1.0.9',
+    fallback: 'none',
+    steps: [{ index: 0, name: 'tapOn', verb: 'tapOn', status: 'pass', durationMs: 10 }],
+  },
 };
 
 function fakeMaestroRun(env: { ok: boolean }, counter: { calls: number }) {
@@ -130,7 +139,7 @@ test('gh-397: not at-risk (iOS 18, clean history) → maestro path exactly as to
   const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
   const env = readEnvelope(result);
   assert.equal(env.data.passed, true);
-  assert.equal(env.data.transport, undefined);
+  assert.equal(env.data.transport, 'maestro-runner');
   assert.equal(counter.calls, 1, 'maestro runs normally');
   assert.equal(lastRun('demo').deviceId, 'UDID-1');
 });
@@ -214,7 +223,7 @@ test('gh-397: RN_BLIND_PROBE=0 disables the gate even on at-risk runtimes', asyn
   process.env.RN_BLIND_PROBE = '0';
   try {
     const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
-    assert.equal(readEnvelope(result).data.transport, undefined);
+    assert.equal(readEnvelope(result).data.transport, 'maestro-runner');
     assert.equal(counter.calls, 1, 'maestro path with the gate disabled');
     assert.equal(
       lastRun('demo').deviceId,

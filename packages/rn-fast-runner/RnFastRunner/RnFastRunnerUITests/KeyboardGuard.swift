@@ -1,6 +1,12 @@
 import CoreGraphics
 
 enum KeyboardGuard {
+  static func isProvenOnScreen(appFrame: CGRect, targetRect: CGRect) -> Bool {
+    guard !appFrame.isEmpty, !targetRect.isEmpty else { return false }
+    let center = CGPoint(x: targetRect.midX, y: targetRect.midY)
+    return appFrame.intersects(targetRect) && appFrame.contains(center)
+  }
+
   static func shouldDismiss(keyboardFrame: CGRect, targetRect: CGRect, minHeight: CGFloat) -> Bool {
     guard !keyboardFrame.isEmpty,
           keyboardFrame.height >= minHeight,

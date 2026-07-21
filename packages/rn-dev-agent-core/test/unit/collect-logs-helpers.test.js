@@ -2,11 +2,45 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { parseEnvelope, expectOk, expectFail } from '../helpers/result-helpers.js';
-import { createCollectLogsHandler } from '../../dist/tools/collect-logs.js';
+import {
+  buildAndroidLogcatArgs,
+  buildIosLogStreamArgs,
+  createCollectLogsHandler,
+  parseIosAppPid,
+} from '../../dist/tools/collect-logs.js';
 
 // collect_logs has three source types: js_console, native_ios, native_android.
 // native_ios and native_android spawn xcrun/adb — not testable without those tools.
 // We test the js_console path and the orchestration logic.
+
+test('collect_logs: Android logcat is pinned to the selected serial', () => {
+  const args = buildAndroidLogcatArgs('emulator-5560');
+  assert.deepEqual(args.slice(0, 3), ['-s', 'emulator-5560', 'logcat']);
+  assert.equal(args.includes('emulator-5556'), false);
+});
+
+test('collect_logs: iOS log stream is pinned to exact device and target-app PID', () => {
+  const launchctl = [
+    'PID Status Label',
+    '555 0 UIKitApplication:com.other.app[abc]',
+    '777 0 UIKitApplication:com.rndevagent.testapp[target]',
+  ].join('\n');
+  assert.equal(parseIosAppPid(launchctl, 'com.rndevagent.testapp'), 777);
+  assert.equal(parseIosAppPid(launchctl, 'com.missing.app'), null);
+  assert.deepEqual(buildIosLogStreamArgs('exact-udid', 777), [
+    'simctl',
+    'spawn',
+    'exact-udid',
+    'log',
+    'stream',
+    '--style',
+    'ndjson',
+    '--level',
+    'debug',
+    '--predicate',
+    'processIdentifier == 777',
+  ]);
+});
 
 // ── js_console source ─────────────────────────────────────────────────
 

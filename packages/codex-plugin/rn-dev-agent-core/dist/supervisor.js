@@ -40899,6 +40899,77 @@ function isKeyboardOccludedRefusal(result) {
     return true;
   return typeof error2 === "string" && (error2.startsWith("KEYBOARD_OCCLUDED") || error2.startsWith("KEYBOARD_DISMISS_FAILED"));
 }
+function keyboardVisibility(result) {
+  const text = result?.content?.[0]?.text;
+  if (typeof text !== "string")
+    return null;
+  try {
+    const envelope = JSON.parse(text);
+    if (envelope.ok === false)
+      return null;
+    if (typeof envelope.data?.keyboardVisible === "boolean") {
+      return envelope.data.keyboardVisible;
+    }
+    return typeof envelope.data?.visible === "boolean" ? envelope.data.visible : null;
+  } catch {
+    return null;
+  }
+}
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms))) {
+  for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
+    if (keyboardVisibility(await refreshSnapshot()) === false)
+      return true;
+    if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1)
+      await sleep6(KEYBOARD_POSTCHECK_DELAY_MS);
+  }
+  return false;
+}
+async function dismissKeyboardWithParity(deps) {
+  const native = await deps.nativeDismiss();
+  if (!native.isError) {
+    try {
+      const envelope = JSON.parse(native.content[0]?.text ?? "{}");
+      const data = envelope.data;
+      if (data?.wasVisible === false && data.visible === false) {
+        return okResult({
+          dismissed: false,
+          keyboardGuard: "no_keyboard",
+          via: "no_keyboard",
+          attemptedTiers: []
+        });
+      }
+      if (data?.dismissed === true && data.visible === false) {
+        const via = typeof data.via === "string" ? data.via : "native-control";
+        return okResult({
+          dismissed: true,
+          keyboardGuard: "auto_dismissed",
+          via,
+          attemptedTiers: via === "native-swipe" ? ["native-swipe"] : ["native-swipe", via]
+        });
+      }
+    } catch {
+    }
+  }
+  const attemptedTiers = ["native-swipe", "native-control"];
+  if (deps.dismissViaJs) {
+    attemptedTiers.push("js");
+    try {
+      if (await deps.dismissViaJs()) {
+        const hidden = await waitForKeyboardHidden(deps.refreshSnapshot);
+        if (hidden) {
+          return okResult({
+            dismissed: true,
+            keyboardGuard: "auto_dismissed",
+            via: "js",
+            attemptedTiers
+          });
+        }
+      }
+    } catch {
+    }
+  }
+  return failResult("KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; keyboard visibility was not proven false.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers });
+}
 async function healKeyboardOccludedTap(first, deps) {
   if (!deps || !isKeyboardOccludedRefusal(first))
     return first;
@@ -40912,14 +40983,10 @@ async function healKeyboardOccludedTap(first, deps) {
   if (!dismissed)
     return first;
   try {
-    const refreshed = await deps.refreshSnapshot();
-    const text = refreshed?.content?.[0]?.text;
-    if (typeof text === "string") {
-      const envelope = JSON.parse(text);
-      if (envelope.data?.keyboardVisible === true)
-        return first;
-    }
+    if (!await waitForKeyboardHidden(deps.refreshSnapshot))
+      return first;
   } catch {
+    return first;
   }
   const retried = await deps.retryTap();
   return tagKeyboardAutoHeal(retried, Date.now() - t0);
@@ -40949,11 +41016,14 @@ function tagKeyboardAutoHeal(result, healMs) {
     content: [{ type: "text", text: JSON.stringify(envelope) }]
   };
 }
-var GUARDED_VERBS;
+var GUARDED_VERBS, KEYBOARD_POSTCHECK_ATTEMPTS, KEYBOARD_POSTCHECK_DELAY_MS;
 var init_keyboard_guard = __esm({
   "packages/rn-dev-agent-core/dist/runners/keyboard-guard.js"() {
     "use strict";
+    init_utils();
     GUARDED_VERBS = /* @__PURE__ */ new Set(["tap", "press", "longPress"]);
+    KEYBOARD_POSTCHECK_ATTEMPTS = 5;
+    KEYBOARD_POSTCHECK_DELAY_MS = 100;
   }
 });
 
@@ -41526,6 +41596,7 @@ __export(rn_fast_runner_client_exports, {
   acquireRunnerRebuildLock: () => acquireRunnerRebuildLock,
   adoptPersistedFastRunnerState: () => adoptPersistedFastRunnerState,
   buildRunnerPortEnv: () => buildRunnerPortEnv,
+  buildRunnerTestFaultEnv: () => buildRunnerTestFaultEnv,
   buildRunnerVersionEnv: () => buildRunnerVersionEnv,
   consumePendingFastRunnerArtifactNote: () => consumePendingFastRunnerArtifactNote,
   createReadySignalParser: () => createReadySignalParser,
@@ -41812,6 +41883,15 @@ function buildRunnerPortEnv(port) {
     TEST_RUNNER_RN_FAST_RUNNER_PORT: value
   };
 }
+function buildRunnerTestFaultEnv(env) {
+  const value = env.TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT ?? env.RN_FAST_RUNNER_TEST_FAULT;
+  if (!value)
+    return {};
+  return {
+    RN_FAST_RUNNER_TEST_FAULT: value,
+    TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT: value
+  };
+}
 function runXcodebuildToExit(args, timeoutMs) {
   return new Promise((resolve5, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -41865,13 +41945,15 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
     }
   }
   const launch = plan[plan.length - 1];
+  const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
   return new Promise((resolve5, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
         ...buildRunnerPortEnv(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
-        ...buildRunnerQuiescenceEnv(process.env)
+        ...buildRunnerQuiescenceEnv(process.env),
+        ...runnerTestFaultEnv
       },
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -41911,6 +41993,8 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
         ...result.quiescence !== void 0 ? { quiescence: result.quiescence } : {}
       };
       runnerState = state;
+      if (Object.keys(runnerTestFaultEnv).length > 0)
+        runnerTestFaultForwarded = true;
       quiescenceAnnouncementPending = true;
       try {
         writeJsonStateFileAtomic(iosStatePath(deviceId), state);
@@ -42098,6 +42182,8 @@ async function reapStaleFastRunner(deps = {}) {
   const state = getState();
   if (!state)
     return;
+  const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve5) => spawnedChild.once("exit", () => resolve5())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -42108,6 +42194,9 @@ async function reapStaleFastRunner(deps = {}) {
       sendSignal(state.pid, "SIGKILL");
     } catch {
     }
+  }
+  if (spawnedExit) {
+    await Promise.race([spawnedExit, sleep6(250)]);
   }
   clearState();
 }
@@ -42189,6 +42278,13 @@ async function postCommand(body) {
   return (await postCommandWithRecovery(body)).resp;
 }
 async function containTypeTimeout(args) {
+  const runnerBefore = runnerState ? {
+    pid: runnerState.pid,
+    port: runnerState.port,
+    deviceId: runnerState.deviceId,
+    statePath: iosStatePath(runnerState.deviceId),
+    provenance: runnerProcess ? "spawned" : "adopted"
+  } : null;
   runnerPoisoned = true;
   let verification = { matches: false };
   try {
@@ -42209,6 +42305,15 @@ async function containTypeTimeout(args) {
     poisoned: true,
     reaped: true,
     verification: verification.matches ? "exact-readback" : "unverified",
+    runner: {
+      before: runnerBefore,
+      afterReapPid: runnerState?.pid ?? null,
+      stateCleared: runnerState === null,
+      nextMutationRequiresRespawn: true
+    },
+    runnerPostMortem: getRunnerPostMortem(),
+    containmentOrder: ["poison", "independent-readback", "reap", "result"],
+    lateMutationContainment: "runner-process-reaped-before-next-mutation",
     targetApp: {
       wasRunningBeforeRecovery: "unverified",
       pidPreserved: "unverified",
@@ -42404,7 +42509,7 @@ async function runIOS(args) {
   };
   return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
 }
-var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS;
+var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS;
 var init_rn_fast_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
     "use strict";
@@ -42454,6 +42559,7 @@ var init_rn_fast_runner_client = __esm({
       }
     };
     staleHittableWarned = false;
+    runnerTestFaultForwarded = false;
     fetchImpl = globalThis.fetch;
     httpTimeoutOverrideMs = null;
     SLOW_RUNNER_COMMANDS = /* @__PURE__ */ new Set(["type", "snapshot", "screenshot"]);
@@ -44353,10 +44459,10 @@ function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
   const eligible = RETRYABLE_TAP_COMMANDS.has(builtCommand) && opts.retryIfNoChange !== false && selfHealEnabled(process.env) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
   return { eligible, targetKey: `${builtCommand}@${x},${y}` };
 }
-function hasTransportRecovery(result) {
+function hasConsumedTapRetryBudget(result) {
   try {
     const env = JSON.parse(result.content[0].text);
-    return env.meta?.transportRecovery !== void 0;
+    return env.meta?.transportRecovery !== void 0 || env.meta?.keyboardGuard === "auto_dismissed";
   } catch {
     return false;
   }
@@ -44378,7 +44484,7 @@ async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, dep
       recordUiChange();
     return first.result;
   }
-  if (hasTransportRecovery(firstResult)) {
+  if (hasConsumedTapRetryBudget(firstResult)) {
     return flagNoUiChange(first.result, policy.targetKey);
   }
   const second = await dispatch();
@@ -44475,7 +44581,7 @@ async function runNative(cliArgs, opts = {}) {
       upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
     }
     const { runIOS: runIOS2 } = await Promise.resolve().then(() => (init_rn_fast_runner_client(), rn_fast_runner_client_exports));
-    const ios = buildRunIOSArgs(cliArgs, appId);
+    let ios = buildRunIOSArgs(cliArgs, appId);
     if (ios.command === "type" && opts.verifyTypeReadback) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
     }
@@ -44488,9 +44594,12 @@ async function runNative(cliArgs, opts = {}) {
       }));
       if (healed.kind === "failed")
         return healed.result;
-      ios.x = healed.x;
-      ios.y = healed.y;
-      delete ios._staleRef;
+      const reboundArgs = [...cliArgs];
+      reboundArgs[1] = healed.newRef.startsWith("@") ? healed.newRef : `@${healed.newRef}`;
+      ios = buildRunIOSArgs(reboundArgs, appId);
+      if (ios._staleRef) {
+        return staleRefFail(ios._staleRef, "absent", getCachedMetadata(ios._staleRef));
+      }
       healMeta = {
         reResolved: true,
         reResolvedRef: healed.newRef,
@@ -47033,10 +47142,12 @@ function runnerLeakFailResult(query, recoveryReason) {
     hint: "Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context \u2014 re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35."
   });
 }
-async function pressCandidate(candidate, action) {
+async function pressCandidate(candidate, action, getClient2) {
   const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
   if (action === "click") {
-    return surfaceKeyboardGuard(await runNative(["press", ref]));
+    const tap = async () => surfaceKeyboardGuard(await runNative(["press", ref]));
+    const first = await tap();
+    return first.isError && getClient2 ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient2, tap)) : first;
   }
   return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
@@ -47051,7 +47162,7 @@ function tagPressIfRecovered(result, tier) {
     return result;
   }
 }
-function createDeviceFindHandler() {
+function createDeviceFindHandler(getClient2) {
   return withSession(async (args) => {
     if (args.exact === true || args.index !== void 0) {
       const find = await fetchFindCandidates(args.text, args.exact === true, true);
@@ -47075,10 +47186,10 @@ function createDeviceFindHandler() {
         if (args.index < 0 || args.index >= candidates.length) {
           return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: "INDEX_OUT_OF_RANGE", count: candidates.length, candidates });
         }
-        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient2), recoveredTier);
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
       }
       return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
         code: "AMBIGUOUS_MATCH",
@@ -47113,7 +47224,7 @@ function createDeviceFindHandler() {
         });
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
       }
       return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
         code: "AMBIGUOUS_MATCH",
@@ -47173,8 +47284,15 @@ function keyboardHealDeps(getClient2, retryTap) {
 }
 function createDevicePressHandler(getClient2) {
   return withSession(async (args) => {
-    const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
-    const cliArgs = ["press", ref];
+    const hasRef = typeof args.ref === "string" && args.ref.length > 0;
+    const hasCoordinates = args.x !== void 0 && args.y !== void 0;
+    if (hasRef === hasCoordinates) {
+      return failResult("Provide exactly one press target: ref, or both x and y coordinates", {
+        code: "INVALID_ARGUMENT"
+      });
+    }
+    const target = hasRef ? args.ref.startsWith("@") ? args.ref : `@${args.ref}` : void 0;
+    const cliArgs = hasRef ? ["press", target] : ["press", String(args.x), String(args.y)];
     if (args.doubleTap)
       cliArgs.push("--double-tap");
     if (args.count && args.count > 1)
@@ -48798,7 +48916,7 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured) {
   return { ok: true, platformMatched, finalPlatform };
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}) {
-  const execFile28 = deps.execFile ?? defaultExecFile;
+  const execFile29 = deps.execFile ?? defaultExecFile;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const loadPersistedBundleIdFn = deps.loadPersistedBundleId ?? loadPersistedBundleId;
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured);
@@ -48828,13 +48946,13 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
     return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
   }
   try {
-    await execFile28("xcrun", ["simctl", "terminate", "booted", bundleId], { timeout: 5e3 });
+    await execFile29("xcrun", ["simctl", "terminate", "booted", bundleId], { timeout: 5e3 });
     steps.push(`simctl terminate ${bundleId}:ok`);
   } catch (err) {
     steps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
   }
   try {
-    await execFile28("xcrun", ["simctl", "launch", "booted", bundleId], { timeout: 8e3 });
+    await execFile29("xcrun", ["simctl", "launch", "booted", bundleId], { timeout: 8e3 });
     steps.push(`simctl launch ${bundleId}:ok`);
   } catch (err) {
     const msg3 = err instanceof Error ? err.message : String(err);
@@ -52315,32 +52433,6 @@ async function guardedBatchPress(cliArgs, opts, getClient2) {
     retryTap: tap
   });
 }
-async function dismissKeyboardWithParity(settleOpts2, getClient2) {
-  const native = await runNative(["keyboard", "dismiss"], settleOpts2);
-  if (!native.isError)
-    return native;
-  const attemptedTiers = ["native-swipe", "native-control"];
-  if (getClient2) {
-    const client2 = getClient2();
-    if (client2.isConnected && client2.helpersInjected) {
-      attemptedTiers.push("js");
-      try {
-        const js = await client2.evaluate("__RN_AGENT.dismissKeyboard()");
-        const parsed = typeof js.value === "string" ? JSON.parse(js.value) : null;
-        if (parsed?.dismissed) {
-          const check2 = await runNative(["snapshot", "-i"]);
-          const text = check2.content?.[0]?.text;
-          const visible = typeof text === "string" ? JSON.parse(text).data?.keyboardVisible : void 0;
-          if (visible === false) {
-            return okResult({ dismissed: true, via: "js", attemptedTiers });
-          }
-        }
-      } catch {
-      }
-    }
-  }
-  return failResult("KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; keyboard visibility was not proven false.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers });
-}
 async function executeStep(step, getClient2) {
   switch (step.action) {
     case "find": {
@@ -52387,7 +52479,7 @@ async function executeStep(step, getClient2) {
         });
       }
       if (step.tap)
-        return pressCandidate(findResult.candidates[0], "click");
+        return pressCandidate(findResult.candidates[0], "click", getClient2);
       return okResult({
         ref: findResult.candidates[0].ref,
         label: findResult.candidates[0].label,
@@ -52402,18 +52494,22 @@ async function executeStep(step, getClient2) {
         }
         if (refs.length > 1)
           return ambiguousTestIDFail(step.testID, refs);
-        const ref2 = refs[0];
-        if (!ref2) {
+        const ref = refs[0];
+        if (!ref) {
           return failResult(`testID "${step.testID}" not found in current UI snapshot`, "TESTID_NOT_FOUND", {
             testID: step.testID
           });
         }
-        return guardedBatchPress(["press", `@${ref2}`], stepSettleOpts(step), getClient2);
+        return guardedBatchPress(["press", `@${ref}`], stepSettleOpts(step), getClient2);
       }
-      if (!step.ref)
-        return failResult("press requires ref or testID");
-      const ref = step.ref.startsWith("@") ? step.ref : `@${step.ref}`;
-      return guardedBatchPress(["press", ref], stepSettleOpts(step), getClient2);
+      if (step.ref) {
+        const ref = step.ref.startsWith("@") ? step.ref : `@${step.ref}`;
+        return guardedBatchPress(["press", ref], stepSettleOpts(step), getClient2);
+      }
+      if (step.x !== void 0 && step.y !== void 0) {
+        return guardedBatchPress(["press", String(step.x), String(step.y)], stepSettleOpts(step), getClient2);
+      }
+      return failResult("press requires ref, testID, or both x and y coordinates");
     }
     case "fill": {
       if (!step.text)
@@ -52452,7 +52548,26 @@ async function executeStep(step, getClient2) {
       return runNative(["back"], stepSettleOpts(step));
     }
     case "hideKeyboard": {
-      return dismissKeyboardWithParity(stepSettleOpts(step), getClient2);
+      let dismissViaJs;
+      if (getClient2) {
+        try {
+          const client2 = getClient2();
+          if (client2.isConnected && client2.helpersInjected) {
+            dismissViaJs = async () => {
+              const result = await client2.evaluate("__RN_AGENT.dismissKeyboard()");
+              if (typeof result.value !== "string")
+                return false;
+              return JSON.parse(result.value).dismissed === true;
+            };
+          }
+        } catch {
+        }
+      }
+      return dismissKeyboardWithParity({
+        nativeDismiss: () => runNative(["keyboard", "dismiss"], stepSettleOpts(step)),
+        ...dismissViaJs ? { dismissViaJs } : {},
+        refreshSnapshot: () => runNative(["snapshot", "-i"])
+      });
     }
     case "snapshot": {
       return runNative(["snapshot", "-i"]);
@@ -52530,7 +52645,7 @@ function createDeviceBatchHandler(getClient2) {
       }
       if (step.action === "snapshot" && success) {
         finalSnapshot = extractData(result);
-      } else if (step.action === "find" && success && step.testID !== void 0 && !step.tap) {
+      } else if (success && (step.action === "press" || step.action === "hideKeyboard" || step.action === "find")) {
         stepResult.data = extractData(result);
       }
       results.push(stepResult);
@@ -53284,21 +53399,48 @@ function acknowledgeExternalEdit(action) {
   });
   return { ...action, state: nextState };
 }
-function saveActionWithCAS(action) {
-  const sidecarPath = sidecarPathFor(action.filePath);
+function saveActionRuntimeWithCAS(expected, nextState) {
+  const sidecarPath = sidecarPathFor(expected.filePath);
+  if (actionWasEditedExternally(expected))
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
   if (existsSync20(sidecarPath)) {
     try {
       const onDisk = JSON.parse(readFileSync18(sidecarPath, "utf8"));
-      const diskMtimeMs = onDisk.lastSeenMtimeMs ?? 0;
-      const expectedMtimeMs = action.state.lastSeenMtimeMs;
-      if (expectedMtimeMs > 0 && diskMtimeMs > expectedMtimeMs) {
-        return { ok: false, conflict: "EXTERNAL_WRITE", diskMtimeMs, expectedMtimeMs };
+      if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
+        return { ok: false, conflict: "EXTERNAL_WRITE" };
       }
     } catch {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
+    }
+  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  }
+  saveSidecar(expected.filePath, nextState);
+  expected.state = nextState;
+  return { ok: true, sidecarPath };
+}
+function promoteActionRuntimeWithCAS(expected, nextState) {
+  const sidecarPath = sidecarPathFor(expected.filePath);
+  if (existsSync20(sidecarPath)) {
+    try {
+      const onDisk = JSON.parse(readFileSync18(sidecarPath, "utf8"));
+      if (JSON.stringify(onDisk) !== JSON.stringify(expected.state)) {
+        return { ok: false, conflict: "EXTERNAL_WRITE" };
+      }
+    } catch {
+      return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
   }
-  const { filePath, sidecarPath: writtenSidecarPath } = saveAction(action);
-  return { ok: true, filePath, sidecarPath: writtenSidecarPath };
+  if (actionWasEditedExternally(expected))
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  const yaml2 = readFileSync18(expected.filePath, "utf8");
+  const marker = "# status: experimental";
+  if (yaml2.split(marker).length !== 2)
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
+  const promoted = yaml2.replace(marker, "# status: active");
+  const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
+  expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
+  return { ok: true, sidecarPath };
 }
 function withMetadata(action, metadata) {
   return { ...action, metadata };
@@ -54996,6 +55138,9 @@ function createMaestroRunHandler() {
         flowFile,
         platform,
         runner: dispatch.runner,
+        transport: dispatch.runner,
+        transportVersion: engineStatus?.version ?? null,
+        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
         output: output.slice(0, 2e3),
         ...summary,
         ...!passed ? { terminal: buildTerminalEvidence(output), runnerResume } : {},
@@ -55034,6 +55179,9 @@ function createMaestroRunHandler() {
         flowFile,
         platform,
         runner: dispatch.runner,
+        transport: dispatch.runner,
+        transportVersion: engineStatus?.version ?? null,
+        fallback: dispatch.fallbackReason ? dispatch.runner : "none",
         passed: false,
         // `output` mirrors the success/warn shape so callers can read
         // it the same way regardless of which path they hit.
@@ -55426,6 +55574,25 @@ function parseEnvelope(toolResult, toolName) {
     return { ok: false, error: `Unparseable ${toolName} envelope` };
   }
 }
+function replaySuccessEvidence(env) {
+  const reportedSteps = env.data?.steps ?? [];
+  const steps = reportedSteps.map(({ index, verb, status, durationMs }) => ({
+    index,
+    verb,
+    status,
+    durationMs
+  }));
+  return {
+    transport: env.data?.transport ?? env.data?.runner ?? "unproven",
+    transportVersion: env.data?.transportVersion ?? null,
+    fallback: env.data?.fallback ?? "unproven",
+    perStepReadback: {
+      source: "maestro-runner-step-report",
+      complete: steps.length > 0 && steps.every((step) => step.status === "pass"),
+      steps
+    }
+  };
+}
 function readMaestroTerminal(env) {
   const fromData = env.data?.terminal;
   if (fromData)
@@ -55517,6 +55684,11 @@ function createRunActionHandler(deps = {}) {
     const t0 = Date.now();
     let probeDeviceId = null;
     const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve() : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
+    const writeDisclosure = (actionYaml = "none") => ({
+      actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : { written: true, authorized: true, reason: actionYaml },
+      runtimeState: proofReplay ? "none" : "sidecar",
+      databaseMirror: proofReplay ? "none" : "best-effort"
+    });
     try {
       let atRisk = null;
       const blindProbeDisabled = process.env.RN_BLIND_PROBE === "0" || process.env.RN_BLIND_PROBE === "false";
@@ -55569,6 +55741,10 @@ function createRunActionHandler(deps = {}) {
                   passed: true,
                   actionId: args.actionId,
                   transport: "cdp-js",
+                  transportVersion: null,
+                  fallback: "none",
+                  repair: autoRepair2,
+                  writes: writeDisclosure(),
                   blindProbe,
                   timings_ms,
                   autoRepair: autoRepair2,
@@ -55619,7 +55795,10 @@ function createRunActionHandler(deps = {}) {
           passed: true,
           actionId: args.actionId,
           ...proofReplay ? { proofReplay: true } : {},
+          ...replaySuccessEvidence(firstEnv),
+          repair: autoRepair2,
           autoRepair: autoRepair2,
+          writes: writeDisclosure(action.metadata.status === "experimental" ? "lifecycle-promotion" : "none"),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500)
@@ -55694,7 +55873,11 @@ function createRunActionHandler(deps = {}) {
                   passed: true,
                   actionId: args.actionId,
                   transport: "cdp-js",
+                  transportVersion: null,
+                  fallback: "cdp-js",
+                  repair: autoRepair2,
                   autoRepair: autoRepair2,
+                  writes: writeDisclosure(action.metadata.status === "experimental" ? "lifecycle-promotion" : "none"),
                   durationMs: Date.now() - t0,
                   flowFile: action.filePath
                 });
@@ -55858,7 +56041,10 @@ function createRunActionHandler(deps = {}) {
         return okResult({
           passed: true,
           actionId: args.actionId,
+          ...replaySuccessEvidence(retryEnv),
+          repair: autoRepair,
           autoRepair,
+          writes: writeDisclosure("auto-repair"),
           durationMs: Date.now() - t0,
           flowFile: reloadedAction.filePath,
           retriedAfterRepair: true,
@@ -55868,6 +56054,7 @@ function createRunActionHandler(deps = {}) {
       return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`, "TESTID_NOT_FOUND", {
         actionId: args.actionId,
         autoRepair,
+        writes: writeDisclosure("auto-repair"),
         firstAttemptOutput: firstOutput.slice(0, 500),
         retryOutput: retryOutput.slice(0, 500),
         underlyingFailure: retryFailureDetail
@@ -55903,29 +56090,24 @@ async function persistRun(actionId, projectRoot, record2) {
       console.error(`cdp_run_action: persistRun could not reload action "${actionId}" \u2014 RunRecord dropped (status=${record2.status}, autoRepair.outcome=${record2.autoRepair?.outcome ?? "n/a"})`);
       return;
     }
-    const promotedMetadata = shouldAutoPromoteToActive(fresh.metadata, record2) ? { ...fresh.metadata, status: "active" } : fresh.metadata;
-    const next = {
-      ...fresh,
-      metadata: promotedMetadata,
-      state: appendRunRecord(fresh.state, record2)
-    };
-    const result = saveActionWithCAS(next);
+    const nextState = appendRunRecord(fresh.state, record2);
+    const promotes = shouldAutoPromoteToActive(fresh.metadata, record2);
+    const result = promotes ? promoteActionRuntimeWithCAS(fresh, nextState) : saveActionRuntimeWithCAS(fresh, nextState);
     if (result.ok) {
       mirrorToDb({
-        yamlFilePath: next.filePath,
-        state: next.state,
+        yamlFilePath: fresh.filePath,
+        state: fresh.state,
         newRunRecord: record2,
         meta: {
-          appId: next.metadata.appId,
-          status: next.metadata.status,
-          path: next.filePath
+          appId: fresh.metadata.appId,
+          status: promotes ? "active" : fresh.metadata.status,
+          path: fresh.filePath
         }
       });
       return;
     }
     if (attempt === MAX_ATTEMPTS) {
-      console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; disk mtime=${result.diskMtimeMs}, expected=${result.expectedMtimeMs}. RunRecord dropped \u2014 investigate concurrent writers.`);
-      return;
+      throw new Error(`persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; the action YAML or runtime sidecar changed after load. RunRecord was not written.`);
     }
   }
 }
@@ -56254,7 +56436,8 @@ var init_interact = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
-import { spawn as spawn4 } from "node:child_process";
+import { execFile as execFileCb17, spawn as spawn4 } from "node:child_process";
+import { promisify as promisify21 } from "node:util";
 function normalizeTimestamp(ts) {
   if (!ts)
     return (/* @__PURE__ */ new Date()).toISOString();
@@ -56294,9 +56477,45 @@ async function collectJsConsole(client2, level, limit) {
     return [];
   }
 }
-function collectNativeIos(durationMs, signal) {
+function parseIosAppPid(launchctlList, bundleId) {
+  for (const line of launchctlList.split("\n")) {
+    const columns = line.trim().split(/\s+/);
+    if (!/^\d+$/.test(columns[0] ?? ""))
+      continue;
+    const label = columns.slice(2).join(" ");
+    if (label === bundleId || label.startsWith(`UIKitApplication:${bundleId}[`) || label.startsWith(`UIKitApplication:${bundleId}<`)) {
+      return Number(columns[0]);
+    }
+  }
+  return null;
+}
+function buildIosLogStreamArgs(deviceId, pid) {
+  return [
+    "simctl",
+    "spawn",
+    deviceId,
+    "log",
+    "stream",
+    "--style",
+    "ndjson",
+    "--level",
+    "debug",
+    "--predicate",
+    `processIdentifier == ${pid}`
+  ];
+}
+async function resolveIosAppPid(deviceId, bundleId) {
+  const { stdout } = await execFile20("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"]);
+  const pid = parseIosAppPid(stdout, bundleId);
+  if (pid === null)
+    throw new Error(`target app ${bundleId} is not running on ${deviceId}`);
+  return pid;
+}
+async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolvedPid) {
   if (signal.aborted)
-    return Promise.resolve([]);
+    return [];
+  const pid = await resolveIosAppPid(deviceId, bundleId);
+  onResolvedPid?.(pid);
   return new Promise((resolve5, reject) => {
     const entries = [];
     let killed = false;
@@ -56304,7 +56523,9 @@ function collectNativeIos(durationMs, signal) {
     let settled = false;
     let proc;
     try {
-      proc = spawn4("xcrun", ["simctl", "spawn", "booted", "log", "stream", "--style", "ndjson", "--level", "debug"], { stdio: ["ignore", "pipe", "pipe"] });
+      proc = spawn4("xcrun", buildIosLogStreamArgs(deviceId, pid), {
+        stdio: ["ignore", "pipe", "pipe"]
+      });
     } catch (err) {
       reject(err instanceof Error ? err : new Error("Failed to spawn xcrun"));
       return;
@@ -56398,17 +56619,35 @@ function parseIosNdjson(line) {
       Error: "error",
       Fault: "error"
     };
+    const pid = Number(obj.processIdentifier);
     return {
       source: "native_ios",
       level: levelMap[messageType] ?? "log",
       text: String(obj.eventMessage ?? ""),
-      timestamp: ts
+      timestamp: ts,
+      ...Number.isInteger(pid) && pid > 0 ? { pid } : {}
     };
   } catch {
     return null;
   }
 }
-function collectNativeAndroid(durationMs, signal) {
+function buildAndroidLogcatArgs(serial) {
+  return [
+    "-s",
+    serial,
+    "logcat",
+    "-v",
+    "threadtime",
+    "-T",
+    "1",
+    "-s",
+    "ReactNative:V",
+    "ReactNativeJS:V",
+    "AndroidRuntime:E",
+    "DEBUG:V"
+  ];
+}
+function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
   return new Promise((resolve5, reject) => {
@@ -56420,18 +56659,7 @@ function collectNativeAndroid(durationMs, signal) {
     let settled = false;
     let proc;
     try {
-      proc = spawn4("adb", [
-        "logcat",
-        "-v",
-        "threadtime",
-        "-T",
-        "1",
-        "-s",
-        "ReactNative:V",
-        "ReactNativeJS:V",
-        "AndroidRuntime:E",
-        "DEBUG:V"
-      ], { stdio: ["ignore", "pipe", "pipe"] });
+      proc = spawn4("adb", buildAndroidLogcatArgs(serial), { stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       reject(err instanceof Error ? err : new Error("Failed to spawn adb"));
       return;
@@ -56539,6 +56767,8 @@ function createCollectLogsHandler(getClient2) {
     const controller = new AbortController();
     const hardDeadline = setTimeout(() => controller.abort(), Math.max(args.durationMs + 2e3, 5e3));
     try {
+      const session = getActiveSession();
+      const scopes = {};
       for (const source of args.sources) {
         switch (source) {
           case "js_console": {
@@ -56556,15 +56786,31 @@ function createCollectLogsHandler(getClient2) {
             break;
           }
           case "native_ios":
+            if (session?.platform !== "ios" || !session.deviceId || !session.appId) {
+              errors.native_ios = "No exact iOS app session \u2014 native logs require an open session with deviceId and appId.";
+              break;
+            }
+            scopes.native_ios = {
+              deviceId: session.deviceId,
+              appId: session.appId,
+              process: "resolved-current-pid"
+            };
             promises.push({
               source,
-              promise: collectNativeIos(args.durationMs, controller.signal)
+              promise: collectNativeIos(args.durationMs, controller.signal, session.deviceId, session.appId, (pid) => {
+                scopes.native_ios = { ...scopes.native_ios, pid };
+              })
             });
             break;
           case "native_android":
+            if (session?.platform !== "android" || !session.deviceId) {
+              errors.native_android = "No exact Android session \u2014 native logs require an open session with an adb serial.";
+              break;
+            }
+            scopes.native_android = { serial: session.deviceId };
             promises.push({
               source,
-              promise: collectNativeAndroid(args.durationMs, controller.signal)
+              promise: collectNativeAndroid(args.durationMs, controller.signal, session.deviceId)
             });
             break;
         }
@@ -56598,7 +56844,8 @@ function createCollectLogsHandler(getClient2) {
         truncated: totalBeforeLimit > args.limit,
         entries: allEntries,
         durationMs: args.durationMs,
-        sources: args.sources
+        sources: args.sources,
+        scopes
       };
       const hasErrors = Object.keys(errors).length > 0;
       if (hasErrors && allEntries.length === 0) {
@@ -56614,11 +56861,13 @@ function createCollectLogsHandler(getClient2) {
     }
   };
 }
-var SIGKILL_GRACE_MS3, LOGCAT_RE, ANDROID_LEVEL_MAP;
+var execFile20, SIGKILL_GRACE_MS3, LOGCAT_RE, ANDROID_LEVEL_MAP;
 var init_collect_logs = __esm({
   "packages/rn-dev-agent-core/dist/tools/collect-logs.js"() {
     "use strict";
+    init_agent_device_wrapper();
     init_utils();
+    execFile20 = promisify21(execFileCb17);
     SIGKILL_GRACE_MS3 = 1500;
     LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
     ANDROID_LEVEL_MAP = {
@@ -56634,8 +56883,8 @@ var init_collect_logs = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
-import { execFile as execFile20 } from "node:child_process";
-import { promisify as promisify21 } from "node:util";
+import { execFile as execFile21 } from "node:child_process";
+import { promisify as promisify22 } from "node:util";
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -56791,7 +57040,7 @@ var init_device_permission = __esm({
     init_utils();
     init_platform_utils();
     init_maestro_validator();
-    execFileAsync4 = promisify21(execFile20);
+    execFileAsync4 = promisify22(execFile21);
     EXEC_TIMEOUT = 1e4;
     IOS_PERMISSIONS = {
       notifications: "notifications",
@@ -56820,16 +57069,16 @@ var init_device_permission = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
-import { execFile as execFileCb17 } from "node:child_process";
-import { promisify as promisify22 } from "node:util";
+import { execFile as execFileCb18 } from "node:child_process";
+import { promisify as promisify23 } from "node:util";
 async function terminateApp(bundleId, platform) {
   if (platform === "ios") {
-    await execFile21("xcrun", ["simctl", "terminate", "booted", bundleId], {
+    await execFile22("xcrun", ["simctl", "terminate", "booted", bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
   } else {
-    await execFile21("adb", ["shell", "am", "force-stop", bundleId], {
+    await execFile22("adb", ["shell", "am", "force-stop", bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -56854,22 +57103,22 @@ function buildAndroidLaunchArgv(bundleId) {
 }
 async function launchApp(bundleId, platform) {
   if (platform === "ios") {
-    await execFile21("xcrun", ["simctl", "launch", "booted", bundleId], {
+    await execFile22("xcrun", ["simctl", "launch", "booted", bundleId], {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
   } else {
-    await execFile21("adb", buildAndroidLaunchArgv(bundleId), {
+    await execFile22("adb", buildAndroidLaunchArgv(bundleId), {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
   }
 }
-var execFile21, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS;
+var execFile22, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS;
 var init_app_lifecycle = __esm({
   "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
-    execFile21 = promisify22(execFileCb17);
+    execFile22 = promisify23(execFileCb18);
     TERMINATE_TIMEOUT_MS = 1e4;
     LAUNCH_TIMEOUT_MS = 15e3;
   }
@@ -57643,14 +57892,14 @@ var init_device_system_dialog = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
-import { execFile as execFileCb18 } from "node:child_process";
-import { promisify as promisify23 } from "node:util";
+import { execFile as execFileCb19 } from "node:child_process";
+import { promisify as promisify24 } from "node:util";
 function iosDeeplinkCommandArgs(url, deviceId) {
   return ["simctl", "openurl", deviceId ?? "booted", url];
 }
 async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile22("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
+    const { stdout, stderr } = await execFile23("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
@@ -57692,7 +57941,7 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
 async function openAndroidDeeplink(url, packageName, deviceId) {
   const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
-    const { stdout, stderr } = await execFile22("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile23("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
@@ -57769,7 +58018,7 @@ function createDeviceDeeplinkHandler() {
     return annotated;
   };
 }
-var execFile22, EXEC_TIMEOUT_MS;
+var execFile23, EXEC_TIMEOUT_MS;
 var init_device_deeplink = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-deeplink.js"() {
     "use strict";
@@ -57780,15 +58029,15 @@ var init_device_deeplink = __esm({
     init_maestro_validator();
     init_dev_client_picker();
     init_device_system_dialog();
-    execFile22 = promisify23(execFileCb18);
+    execFile23 = promisify24(execFileCb19);
     EXEC_TIMEOUT_MS = 1e4;
   }
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
-import { execFile as execFile23 } from "node:child_process";
+import { execFile as execFile24 } from "node:child_process";
 import { existsSync as existsSync23 } from "node:fs";
-import { promisify as promisify24 } from "node:util";
+import { promisify as promisify25 } from "node:util";
 import { fileURLToPath } from "node:url";
 import { dirname as dirname12, join as join29 } from "node:path";
 function parseAllBootedIosDevices(jsonText) {
@@ -58076,7 +58325,7 @@ var init_device_record = __esm({
     init_utils();
     init_platform_utils();
     init_path_safety();
-    execFileAsync5 = promisify24(execFile23);
+    execFileAsync5 = promisify25(execFile24);
     START_TIMEOUT_MS = 1e4;
     STOP_TIMEOUT_MS = 6e4;
     STATUS_TIMEOUT_MS = 5e3;
@@ -61085,8 +61334,8 @@ var init_nav_graph = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/auto-login.js
-import { execFile as execFileCb19 } from "node:child_process";
-import { promisify as promisify25 } from "node:util";
+import { execFile as execFileCb20 } from "node:child_process";
+import { promisify as promisify26 } from "node:util";
 import { existsSync as existsSync24, readFileSync as readFileSync21, writeFileSync as writeFileSync15, readdirSync as readdirSync7 } from "node:fs";
 import { join as join32 } from "node:path";
 import { homedir as homedir10 } from "node:os";
@@ -61217,7 +61466,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   try {
-    await runFlowParked(() => execFile24(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile25(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -61251,7 +61500,7 @@ async function handleAutoLogin(client2, opts = {}) {
     flow: flowPath
   };
 }
-var execFile24, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
+var execFile25, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
 var init_auto_login = __esm({
   "packages/rn-dev-agent-core/dist/tools/auto-login.js"() {
     "use strict";
@@ -61260,7 +61509,7 @@ var init_auto_login = __esm({
     init_project_config();
     init_maestro_validator();
     init_maestro_run();
-    execFile24 = promisify25(execFileCb19);
+    execFile25 = promisify26(execFileCb20);
     AUTH_ROUTE_PATTERNS = [
       "login",
       "signin",
@@ -61574,8 +61823,8 @@ var init_connection = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/restart.js
-import { execFile as execFileCb20 } from "node:child_process";
-import { promisify as promisify26 } from "node:util";
+import { execFile as execFileCb21 } from "node:child_process";
+import { promisify as promisify27 } from "node:util";
 function safeSimctlTarget(deviceId) {
   if (deviceId === "booted")
     return "booted";
@@ -61584,7 +61833,7 @@ function safeSimctlTarget(deviceId) {
   return "booted";
 }
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile28 = deps.execFile ?? defaultExecFile2;
+  const execFile29 = deps.execFile ?? defaultExecFile2;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const resolveBundleIdStrictFn = deps.resolveBundleIdStrict ?? resolveBundleIdStrict;
@@ -61627,7 +61876,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
         }
         if (bundleId && targetPlatform === "ios") {
           try {
-            await execFile28("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile29("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -61635,7 +61884,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile28("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile29("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -61724,7 +61973,7 @@ var init_restart = __esm({
     init_bundle_id_store();
     init_resolve_ios_app_file();
     init_maestro_validator();
-    defaultExecFile2 = promisify26(execFileCb20);
+    defaultExecFile2 = promisify27(execFileCb21);
     lastSeenBundleIds = /* @__PURE__ */ new Map();
     SIMULATOR_UDID_RE2 = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
     inflightRestart = null;
@@ -61884,8 +62133,8 @@ var init_maestro_generate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
-import { execFile as execFileCb21 } from "node:child_process";
-import { promisify as promisify27 } from "node:util";
+import { execFile as execFileCb22 } from "node:child_process";
+import { promisify as promisify28 } from "node:util";
 import { existsSync as existsSync26, readdirSync as readdirSync8, readFileSync as readFileSync22, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join34 } from "node:path";
 import { tmpdir as tmpdir10 } from "node:os";
@@ -61982,7 +62231,7 @@ function createMaestroTestAllHandler() {
         }
       }
       try {
-        const { stdout, stderr } = await runFlowParked(() => execFile25(flowDispatch.binPath, flowDispatch.buildArgs(platform, safeFlowFile, appFile), {
+        const { stdout, stderr } = await runFlowParked(() => execFile26(flowDispatch.binPath, flowDispatch.buildArgs(platform, safeFlowFile, appFile), {
           timeout,
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
@@ -62036,7 +62285,7 @@ function createMaestroTestAllHandler() {
     return okResult(summary);
   };
 }
-var execFile25;
+var execFile26;
 var init_maestro_test_all = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-test-all.js"() {
     "use strict";
@@ -62048,7 +62297,7 @@ var init_maestro_test_all = __esm({
     init_maestro_run();
     init_maestro_error_parser();
     init_resolve_ios_app_file();
-    execFile25 = promisify27(execFileCb21);
+    execFile26 = promisify28(execFileCb22);
   }
 });
 
@@ -63228,11 +63477,11 @@ var init_jpeg_stream = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn5, execFile as execFile26 } from "node:child_process";
+import { spawn as spawn5, execFile as execFile27 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir12 } from "node:os";
 import { join as join39 } from "node:path";
-async function detectIdb(execFileFn = execFile26) {
+async function detectIdb(execFileFn = execFile27) {
   return new Promise((resolve5) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve5(!err));
   });
@@ -63243,7 +63492,7 @@ function isEnoent(err) {
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
   return new Promise((resolve5, reject) => {
-    execFile26(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+    execFile27(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -64584,8 +64833,8 @@ __export(index_exports, {
 });
 import { createHash as createHash10 } from "node:crypto";
 import { readFileSync as readFileSync30, rmSync as rmSync6 } from "node:fs";
-import { execFile as execFile27 } from "node:child_process";
-import { promisify as promisify28 } from "node:util";
+import { execFile as execFile28 } from "node:child_process";
+import { promisify as promisify29 } from "node:util";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { dirname as dirname17, join as join45 } from "node:path";
 function trackedTool(name, desc, schema, handler) {
@@ -64783,7 +65032,7 @@ var init_index = __esm({
       client = c;
     };
     createClient = (port) => new CDPClient(port);
-    execFileP = promisify28(execFile27);
+    execFileP = promisify29(execFile28);
     mustOk = (res, what) => {
       const env = JSON.parse(res.content[0].text);
       if (env.ok === false)
@@ -65200,9 +65449,11 @@ var init_index = __esm({
       action: external_exports.string().optional().describe('Action to perform: "click" to tap, omit for search-only'),
       exact: external_exports.boolean().optional().describe("Require exact label match (case-sensitive). Skips fuzzy matching entirely."),
       index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.")
-    }, createDeviceFindHandler());
-    trackedTool("device_press", "Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once (meta.tapRetried/noUiChange).", {
-      ref: external_exports.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
+    }, createDeviceFindHandler(getClient));
+    trackedTool("device_press", "Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. A guarded raw-coordinate tap dismisses any visible keyboard before the single tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once unless keyboard/transport recovery already consumed that retry budget.", {
+      ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
+      x: external_exports.number().optional().describe("Raw tap X coordinate; requires y and no ref"),
+      y: external_exports.number().optional().describe("Raw tap Y coordinate; requires x and no ref"),
       doubleTap: external_exports.boolean().optional().describe("Use double-tap gesture"),
       count: external_exports.number().int().min(1).max(50).optional().describe("Repeat tap N times (for rapid-fire interactions)"),
       holdMs: external_exports.number().int().min(0).max(1e4).optional().describe("Hold duration in ms (for long-press via ref)"),
@@ -65432,6 +65683,8 @@ var init_index = __esm({
         ]).describe("Step action"),
         text: external_exports.string().optional().describe("(find) Visible text to match. (fill) Text to type into the field."),
         ref: external_exports.string().optional().describe('(press/fill) Element ref from snapshot (e.g. "e5"). Beware: refs can go stale across step transitions; prefer testID for cross-step actions.'),
+        x: external_exports.number().optional().describe("(press) Raw X coordinate; requires y and no ref/testID"),
+        y: external_exports.number().optional().describe("(press) Raw Y coordinate; requires x and no ref/testID"),
         testID: external_exports.string().optional().describe("(find/press/fill) PREFERRED for known testIDs \u2014 re-resolves via snapshot at execution time, immune to layout-change drift. Slower per-step than ref (each call snapshots) but eliminates stale-ref failures across step transitions. When set, ignores text/ref."),
         tap: external_exports.boolean().optional().describe("(find) Tap the found element"),
         direction: external_exports.enum(["up", "down", "left", "right"]).optional().describe("(scroll/swipe) Direction"),

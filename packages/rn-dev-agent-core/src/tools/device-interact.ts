@@ -273,10 +273,16 @@ function runnerLeakFailResult(query: string | undefined, recoveryReason?: string
 export async function pressCandidate(
   candidate: FindCandidate,
   action?: string,
+  getClient?: () => CDPClient,
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
-    return surfaceKeyboardGuard(await runNative(['press', ref]));
+    const tap = async (): Promise<ToolResult> =>
+      surfaceKeyboardGuard(await runNative(['press', ref]));
+    const first = await tap();
+    return first.isError && getClient
+      ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
+      : first;
   }
   return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
@@ -308,7 +314,9 @@ interface FindArgs {
   index?: number;
 }
 
-export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResult> {
+export function createDeviceFindHandler(
+  getClient?: () => CDPClient,
+): (args: FindArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
     // Fast path when caller already knows they want exact or a specific index:
     // go straight to a snapshot-based client-side match so we never roll the dice
@@ -345,13 +353,16 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
           );
         }
         return tagPressIfRecovered(
-          await pressCandidate(candidates[args.index], args.action),
+          await pressCandidate(candidates[args.index], args.action, getClient),
           recoveredTier,
         );
       }
       // exact=true, no index: require single match
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
+        return tagPressIfRecovered(
+          await pressCandidate(candidates[0], args.action, getClient),
+          recoveredTier,
+        );
       }
       return failResult(
         `AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`,
@@ -402,7 +413,10 @@ export function createDeviceFindHandler(): (args: FindArgs) => Promise<ToolResul
         });
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
+        return tagPressIfRecovered(
+          await pressCandidate(candidates[0], args.action, getClient),
+          recoveredTier,
+        );
       }
       return failResult(
         `AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`,
@@ -477,7 +491,9 @@ export function findInputForPressable(
 // --- Press (enhanced with doubleTap, count, holdMs, waitForFocusMs) ---
 
 interface PressArgs {
-  ref: string;
+  ref?: string;
+  x?: number;
+  y?: number;
   doubleTap?: boolean;
   count?: number;
   holdMs?: number;
@@ -535,8 +551,15 @@ export function createDevicePressHandler(
   getClient: () => CDPClient,
 ): (args: PressArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
-    const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-    const cliArgs = ['press', ref];
+    const hasRef = typeof args.ref === 'string' && args.ref.length > 0;
+    const hasCoordinates = args.x !== undefined && args.y !== undefined;
+    if (hasRef === hasCoordinates) {
+      return failResult('Provide exactly one press target: ref, or both x and y coordinates', {
+        code: 'INVALID_ARGUMENT',
+      });
+    }
+    const target = hasRef ? (args.ref!.startsWith('@') ? args.ref! : `@${args.ref!}`) : undefined;
+    const cliArgs = hasRef ? ['press', target!] : ['press', String(args.x!), String(args.y!)];
     if (args.doubleTap) cliArgs.push('--double-tap');
     if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
     if (args.holdMs && args.holdMs > 0) cliArgs.push('--hold-ms', String(args.holdMs));
