@@ -20,10 +20,10 @@ import {
   type MaestroDeviceAuthority,
 } from './domain/maestro-device-authority.js';
 import {
+  collectDirectRunnerEvidence,
   createRunnerReportDir,
   disposeRunnerReportDir,
   runnerReportArgs,
-  withDirectRunnerEvidence,
 } from './domain/maestro-runner-report.js';
 
 const execFile = promisify(execFileCb);
@@ -182,8 +182,8 @@ export async function runMaestroInline(
         baseArgs[baseArgs.length - 1],
       ]
     : baseArgs;
-  const directRunnerOutput = (output: string): string =>
-    withDirectRunnerEvidence(runnerReportDir, output);
+  const directRunnerEvidence = (output: string) =>
+    collectDirectRunnerEvidence(runnerReportDir, output);
 
   try {
     const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, {
@@ -196,11 +196,13 @@ export async function runMaestroInline(
     // own status LINES (GH#249: a bare `FAILED` substring false-flagged passing
     // runs whose app logs contained the token; mirrors maestro_run).
     const passed = !outputIndicatesFlowFailure(output);
+    const directEvidence = directRunnerEvidence(output);
     const deviceAuthority = verifyMaestroDeviceAuthority({
       runner: dispatch.runner,
       platform: opts.platform,
       requestedDeviceId,
-      output: directRunnerOutput(output),
+      output: directEvidence.output,
+      directReportDeviceIds: directEvidence.reportDeviceIds,
       requireWdaProvenance: passed,
     });
     if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
@@ -234,11 +236,13 @@ export async function runMaestroInline(
       };
     }
     if (capturedOutput) {
+      const directEvidence = directRunnerEvidence(capturedOutput);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
         platform: opts.platform,
         requestedDeviceId,
-        output: directRunnerOutput(capturedOutput),
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
       });
       return {
         passed: false,

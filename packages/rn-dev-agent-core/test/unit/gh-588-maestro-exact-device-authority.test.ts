@@ -13,7 +13,7 @@ const APP_ID = 'com.rndevagent.testapp';
 function runnerLog(found: string, wda = found): string {
   return [
     'Single device execution mode',
-    `  ✓ Found device: ${found}`,
+    `Using specified iOS device: ${found}`,
     `Building WDA for device ${wda} (team ID: )`,
     `Starting WDA on device ${wda} (port: 8447)`,
     'Flow execution completed: 1 passed, 0 failed, 0 skipped',
@@ -63,7 +63,7 @@ test('exact active UDID is forwarded to maestro-runner and official Maestro befo
   ]);
 });
 
-test('direct runner evidence verifies exact runner and WDA identity, not requested metadata', () => {
+test('actual pinned-device log verifies exact runner and WDA identity, not requested metadata', () => {
   const exact = verifyMaestroDeviceAuthority({
     runner: 'maestro-runner',
     platform: 'ios',
@@ -74,6 +74,16 @@ test('direct runner evidence verifies exact runner and WDA identity, not request
   assert.equal(exact.verified, true);
   assert.equal(exact.reportedDeviceId, EXACT);
   assert.equal(exact.reason, 'exact-runner-and-wda-match');
+
+  const autoDetected = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(EXACT).replace('Using specified iOS device:', 'Found iOS device:'),
+    requireWdaProvenance: true,
+  });
+  assert.equal(autoDetected.verified, true);
+  assert.equal(autoDetected.reportedDeviceId, EXACT);
 
   const wrongRunner = verifyMaestroDeviceAuthority({
     runner: 'maestro-runner',
@@ -95,6 +105,48 @@ test('direct runner evidence verifies exact runner and WDA identity, not request
   });
   assert.equal(wrongWda.verified, false);
   assert.equal(wrongWda.reason, 'wda-device-mismatch');
+});
+
+test('structured report identity fills the direct receipt only when exact and unambiguous', () => {
+  const exact = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: [
+      `Building WDA for device ${EXACT} (team ID: )`,
+      `Starting WDA on device ${EXACT} (port: 8447)`,
+    ].join('\n'),
+    directReportDeviceIds: [EXACT],
+    requireWdaProvenance: true,
+  });
+  assert.equal(exact.verified, true);
+  assert.equal(exact.reportedDeviceId, EXACT);
+  assert.deepEqual(exact.observedDeviceIds, [EXACT]);
+
+  const ambiguous = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(EXACT),
+    directReportDeviceIds: [EXACT, FOREIGN],
+    requireWdaProvenance: true,
+  });
+  assert.equal(ambiguous.verified, false);
+  assert.equal(ambiguous.reportedDeviceId, null);
+  assert.equal(ambiguous.reason, 'reported-device-ambiguous');
+  assert.deepEqual(new Set(ambiguous.observedDeviceIds), new Set([EXACT, FOREIGN]));
+
+  const missing = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: `Starting WDA on device ${EXACT} (port: 8447)`,
+    directReportDeviceIds: [],
+    requireWdaProvenance: true,
+  });
+  assert.equal(missing.verified, false);
+  assert.equal(missing.reportedDeviceId, null);
+  assert.equal(missing.reason, 'reported-device-missing');
 });
 
 test('real maestro_run path forwards active UDID and accepts only matching direct evidence', async () => {
@@ -192,6 +244,58 @@ beforeEach(() => {
   project = createTmpProject();
 });
 afterEach(() => project.cleanup());
+
+test('cdp_run_action persists a verified direct report identity on success', async () => {
+  project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
+  const authority = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: [
+      `Building WDA for device ${EXACT} (team ID: )`,
+      `Starting WDA on device ${EXACT} (port: 8447)`,
+    ].join('\n'),
+    directReportDeviceIds: [EXACT],
+    requireWdaProvenance: true,
+  });
+  const handler = createRunActionHandler({
+    targetContext: () => ({ platform: 'ios', deviceId: EXACT, appId: APP_ID }),
+    blindProbeContext: async () => ({ deviceId: EXACT, iosRuntimeMajor: 26 }),
+    maestroRun: async () => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            data: {
+              passed: true,
+              transport: 'maestro-runner',
+              transportVersion: '1.0.9',
+              fallback: 'none',
+              deviceAuthority: authority,
+              steps: [{ index: 0, name: 'tapOn', verb: 'tapOn', status: 'pass', durationMs: 1 }],
+            },
+          }),
+        },
+      ],
+    }),
+  });
+
+  const result = await handler({
+    actionId: 'demo',
+    projectRoot: project.root,
+    platform: 'ios',
+    autoRepair: false,
+    blindProbeMode: 'forbid',
+  });
+  const body = envelope(result);
+  assert.equal(body.ok, true, result.content[0].text);
+  assert.equal(body.data.deviceAuthority.reportedDeviceId, EXACT);
+
+  const record = project.readSidecar('demo').runHistory.at(-1);
+  assert.equal(record.status, 'pass');
+  assert.equal(record.deviceId, EXACT, 'RunRecord must use the verified direct report identity');
+});
 
 test('cdp_run_action persists the direct wrong device and never requested metadata', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));

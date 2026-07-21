@@ -12,7 +12,7 @@ import { runFlowParked } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
-import { createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, withDirectRunnerEvidence, } from '../domain/maestro-runner-report.js';
+import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
     if (!existsSync(dir))
@@ -157,12 +157,13 @@ export function createMaestroTestAllHandler() {
                 // status LINES (GH#249: a bare `FAILED` substring false-flagged passing
                 // runs whose app logs contained the token; mirrors the maestro_run fix).
                 const outputPassed = !outputIndicatesFlowFailure(output);
-                const authorityOutput = withDirectRunnerEvidence(runnerReportDir, output);
+                const directEvidence = collectDirectRunnerEvidence(runnerReportDir, output);
                 const deviceAuthority = verifyMaestroDeviceAuthority({
                     runner: flowDispatch.runner,
                     platform,
                     requestedDeviceId,
-                    output: authorityOutput,
+                    output: directEvidence.output,
+                    directReportDeviceIds: directEvidence.reportDeviceIds,
                     requireWdaProvenance: outputPassed,
                 });
                 const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
@@ -187,14 +188,15 @@ export function createMaestroTestAllHandler() {
             catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 const errWithOutput = err;
-                const authorityOutput = withDirectRunnerEvidence(runnerReportDir, [errWithOutput.stdout, errWithOutput.stderr]
+                const directEvidence = collectDirectRunnerEvidence(runnerReportDir, [errWithOutput.stdout, errWithOutput.stderr]
                     .filter((value) => typeof value === 'string')
                     .join('\n'));
                 const deviceAuthority = verifyMaestroDeviceAuthority({
                     runner: flowDispatch.runner,
                     platform,
                     requestedDeviceId,
-                    output: authorityOutput,
+                    output: directEvidence.output,
+                    directReportDeviceIds: directEvidence.reportDeviceIds,
                 });
                 const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
                 results.push({

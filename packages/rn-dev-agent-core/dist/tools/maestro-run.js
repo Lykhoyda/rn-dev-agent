@@ -17,7 +17,7 @@ import { fastHealthCheck as defaultFastHealthCheck, stopFastRunner as defaultSto
 import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
-import { createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, withDirectRunnerEvidence, } from '../domain/maestro-runner-report.js';
+import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
 const defaultExecFile = promisify(execFileCb);
 /**
  * GH#202 Phase 2a + GH#237: run a Maestro flow with L2 parked. iOS stops the
@@ -210,7 +210,7 @@ export function createMaestroRunHandler(deps = {}) {
             ...runnerReportArgs(runnerReportDir),
             ...paramArgs,
         ]);
-        const directRunnerOutput = (output) => withDirectRunnerEvidence(runnerReportDir, output);
+        const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
         // GH #397: engine-pin visibility. Detection is process-cached and fail-open
         // (null on error). The caveat rides the existing warn-once mechanism below;
         // RN_ENGINE_PIN_STRICT=1 opts into refusing PROVEN divergence only.
@@ -239,11 +239,13 @@ export function createMaestroRunHandler(deps = {}) {
             // keyed on Maestro's own status LINES (GH#249: the prior bare `FAILED`
             // substring false-flagged passing runs whose app logs contained the token).
             const passed = !outputIndicatesFlowFailure(output);
+            const directEvidence = directRunnerEvidence(output);
             const deviceAuthority = verifyMaestroDeviceAuthority({
                 runner: dispatch.runner,
                 platform,
                 requestedDeviceId,
-                output: directRunnerOutput(output),
+                output: directEvidence.output,
+                directReportDeviceIds: directEvidence.reportDeviceIds,
                 requireWdaProvenance: passed,
             });
             if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
@@ -317,11 +319,13 @@ export function createMaestroRunHandler(deps = {}) {
             const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
             const combined = combineRunnerOutput(stdout, stderr);
             const { timedOut, outputTruncated } = classifyExecError(err);
+            const directEvidence = directRunnerEvidence(combined);
             const deviceAuthority = verifyMaestroDeviceAuthority({
                 runner: dispatch.runner,
                 platform,
                 requestedDeviceId,
-                output: directRunnerOutput(combined),
+                output: directEvidence.output,
+                directReportDeviceIds: directEvidence.reportDeviceIds,
             });
             const summary = buildStepSummary(combined, { failed: true });
             const spawnError = combined.length === 0 &&

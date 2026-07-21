@@ -1,6 +1,25 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+const DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+function reportDeviceIds(reportDir) {
+    const reportPath = join(reportDir, 'report.json');
+    if (!existsSync(reportPath))
+        return [];
+    try {
+        const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+        const ids = [report.device?.id, ...(report.flows ?? []).map((flow) => flow.device?.id)];
+        return [
+            ...new Set(ids
+                .filter((id) => typeof id === 'string')
+                .map((id) => id.trim())
+                .filter((id) => DIRECT_DEVICE_ID_RE.test(id))),
+        ];
+    }
+    catch {
+        return [];
+    }
+}
 export function createRunnerReportDir(runner, prefix) {
     if (runner !== 'maestro-runner')
         return null;
@@ -9,18 +28,23 @@ export function createRunnerReportDir(runner, prefix) {
 export function runnerReportArgs(reportDir) {
     return reportDir ? ['--output', reportDir, '--flatten'] : [];
 }
-export function withDirectRunnerEvidence(reportDir, output) {
+export function collectDirectRunnerEvidence(reportDir, output) {
     if (!reportDir)
-        return output;
+        return { output, reportDeviceIds: [] };
+    const evidence = {
+        output,
+        reportDeviceIds: reportDeviceIds(reportDir),
+    };
     const logPath = join(reportDir, 'maestro-runner.log');
     if (!existsSync(logPath))
-        return output;
+        return evidence;
     try {
-        return `${output}\n${readFileSync(logPath, 'utf8')}`;
+        evidence.output = `${output}\n${readFileSync(logPath, 'utf8')}`;
     }
     catch {
-        return output;
+        // Structured report evidence remains available when the log is unreadable.
     }
+    return evidence;
 }
 // The report tree is scratch space for direct device/WDA evidence only; keeping it
 // would leak one full tree (log, html, json, screenshots) per flow into tmpdir.

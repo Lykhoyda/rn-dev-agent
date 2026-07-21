@@ -25,10 +25,10 @@ import {
   verifyMaestroDeviceAuthority,
 } from '../domain/maestro-device-authority.js';
 import {
+  collectDirectRunnerEvidence,
   createRunnerReportDir,
   disposeRunnerReportDir,
   runnerReportArgs,
-  withDirectRunnerEvidence,
 } from '../domain/maestro-runner-report.js';
 
 const execFile = promisify(execFileCb);
@@ -218,12 +218,13 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         // status LINES (GH#249: a bare `FAILED` substring false-flagged passing
         // runs whose app logs contained the token; mirrors the maestro_run fix).
         const outputPassed = !outputIndicatesFlowFailure(output);
-        const authorityOutput = withDirectRunnerEvidence(runnerReportDir, output);
+        const directEvidence = collectDirectRunnerEvidence(runnerReportDir, output);
         const deviceAuthority = verifyMaestroDeviceAuthority({
           runner: flowDispatch.runner,
           platform,
           requestedDeviceId,
-          output: authorityOutput,
+          output: directEvidence.output,
+          directReportDeviceIds: directEvidence.reportDeviceIds,
           requireWdaProvenance: outputPassed,
         });
         const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
@@ -247,7 +248,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const errWithOutput = err as { stdout?: unknown; stderr?: unknown };
-        const authorityOutput = withDirectRunnerEvidence(
+        const directEvidence = collectDirectRunnerEvidence(
           runnerReportDir,
           [errWithOutput.stdout, errWithOutput.stderr]
             .filter((value): value is string => typeof value === 'string')
@@ -257,7 +258,8 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
           runner: flowDispatch.runner,
           platform,
           requestedDeviceId,
-          output: authorityOutput,
+          output: directEvidence.output,
+          directReportDeviceIds: directEvidence.reportDeviceIds,
         });
         const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
         results.push({

@@ -2,6 +2,35 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+export interface DirectMaestroRunnerEvidence {
+  output: string;
+  reportDeviceIds: string[];
+}
+
+const DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+
+function reportDeviceIds(reportDir: string): string[] {
+  const reportPath = join(reportDir, 'report.json');
+  if (!existsSync(reportPath)) return [];
+  try {
+    const report = JSON.parse(readFileSync(reportPath, 'utf8')) as {
+      device?: { id?: unknown };
+      flows?: Array<{ device?: { id?: unknown } }>;
+    };
+    const ids = [report.device?.id, ...(report.flows ?? []).map((flow) => flow.device?.id)];
+    return [
+      ...new Set(
+        ids
+          .filter((id): id is string => typeof id === 'string')
+          .map((id) => id.trim())
+          .filter((id) => DIRECT_DEVICE_ID_RE.test(id)),
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
 export function createRunnerReportDir(runner: string, prefix: string): string | null {
   if (runner !== 'maestro-runner') return null;
   return join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -11,15 +40,23 @@ export function runnerReportArgs(reportDir: string | null): string[] {
   return reportDir ? ['--output', reportDir, '--flatten'] : [];
 }
 
-export function withDirectRunnerEvidence(reportDir: string | null, output: string): string {
-  if (!reportDir) return output;
+export function collectDirectRunnerEvidence(
+  reportDir: string | null,
+  output: string,
+): DirectMaestroRunnerEvidence {
+  if (!reportDir) return { output, reportDeviceIds: [] };
+  const evidence: DirectMaestroRunnerEvidence = {
+    output,
+    reportDeviceIds: reportDeviceIds(reportDir),
+  };
   const logPath = join(reportDir, 'maestro-runner.log');
-  if (!existsSync(logPath)) return output;
+  if (!existsSync(logPath)) return evidence;
   try {
-    return `${output}\n${readFileSync(logPath, 'utf8')}`;
+    evidence.output = `${output}\n${readFileSync(logPath, 'utf8')}`;
   } catch {
-    return output;
+    // Structured report evidence remains available when the log is unreadable.
   }
+  return evidence;
 }
 
 // The report tree is scratch space for direct device/WDA evidence only; keeping it

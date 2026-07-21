@@ -41,10 +41,10 @@ import {
   verifyMaestroDeviceAuthority,
 } from '../domain/maestro-device-authority.js';
 import {
+  collectDirectRunnerEvidence,
   createRunnerReportDir,
   disposeRunnerReportDir,
   runnerReportArgs,
-  withDirectRunnerEvidence,
 } from '../domain/maestro-runner-report.js';
 import type { SessionState } from '../types.js';
 
@@ -328,8 +328,8 @@ export function createMaestroRunHandler(
       ...runnerReportArgs(runnerReportDir),
       ...paramArgs,
     ]);
-    const directRunnerOutput = (output: string): string =>
-      withDirectRunnerEvidence(runnerReportDir, output);
+    const directRunnerEvidence = (output: string) =>
+      collectDirectRunnerEvidence(runnerReportDir, output);
 
     // GH #397: engine-pin visibility. Detection is process-cached and fail-open
     // (null on error). The caveat rides the existing warn-once mechanism below;
@@ -366,11 +366,13 @@ export function createMaestroRunHandler(
       // keyed on Maestro's own status LINES (GH#249: the prior bare `FAILED`
       // substring false-flagged passing runs whose app logs contained the token).
       const passed = !outputIndicatesFlowFailure(output);
+      const directEvidence = directRunnerEvidence(output);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
         platform,
         requestedDeviceId,
-        output: directRunnerOutput(output),
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
         requireWdaProvenance: passed,
       });
       if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
@@ -454,11 +456,13 @@ export function createMaestroRunHandler(
       const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
       const combined = combineRunnerOutput(stdout, stderr);
       const { timedOut, outputTruncated } = classifyExecError(err);
+      const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
         platform,
         requestedDeviceId,
-        output: directRunnerOutput(combined),
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
       });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError =

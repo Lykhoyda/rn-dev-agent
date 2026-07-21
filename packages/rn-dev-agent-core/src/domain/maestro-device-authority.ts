@@ -19,28 +19,36 @@ export interface MaestroDeviceAuthority {
     | 'wda-provenance-missing';
 }
 
+function uniqueValues(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
 function uniqueMatches(output: string, pattern: RegExp): string[] {
-  return [...new Set([...output.matchAll(pattern)].map((match) => match[1]).filter(Boolean))];
+  return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
 }
 
 /**
  * Verify the process that actually executed the flow, not the metadata used to
- * request it. maestro-runner 1.0.9 emits the selected device and every iOS WDA
- * build/start target in its own log stream; those lines are the replay
- * authority. A requested UDID alone is never accepted as execution proof.
+ * request it. maestro-runner 1.0.9 emits the selected device in its report/log
+ * and every iOS WDA build/start target in its log stream; those direct receipts
+ * are replay authority. A requested UDID alone is never accepted as proof.
  */
 export function verifyMaestroDeviceAuthority(input: {
   runner: MaestroRunner;
   platform: 'ios' | 'android';
   requestedDeviceId?: string | null;
   output: string;
+  directReportDeviceIds?: string[];
   requireWdaProvenance?: boolean;
 }): MaestroDeviceAuthority {
   const requestedDeviceId = input.requestedDeviceId?.trim() || null;
-  const reportedIds = uniqueMatches(
-    input.output,
-    /\bFound (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi,
-  );
+  const reportedIds = uniqueValues([
+    ...(input.directReportDeviceIds ?? []),
+    ...uniqueMatches(
+      input.output,
+      /\b(?:Found|Using specified) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi,
+    ),
+  ]);
   const wdaDeviceIds = uniqueMatches(
     input.output,
     /\b(?:Building WDA for|Starting WDA on) device\s+([A-Za-z0-9._:-]+)/gi,

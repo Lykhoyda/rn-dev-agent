@@ -11,7 +11,6 @@ const APP_ID = 'com.rndevagent.testapp';
 function runnerLog(): string {
   return [
     'Single device execution mode',
-    `  ✓ Found device: ${EXACT}`,
     `Building WDA for device ${EXACT} (team ID: )`,
     `Starting WDA on device ${EXACT} (port: 8447)`,
     'Flow execution completed: 1 passed, 0 failed, 0 skipped',
@@ -35,7 +34,7 @@ function reportDirFrom(args: string[]): string {
   return args[index + 1];
 }
 
-function handlerWriting(exit: 'zero' | 'nonzero', seen: { dir?: string }) {
+function handlerWriting(exit: 'zero' | 'nonzero', seen: { dir?: string }, flowDeviceId = EXACT) {
   return createMaestroRunHandler({
     getActiveSession: () => ({
       name: 'exact',
@@ -51,6 +50,14 @@ function handlerWriting(exit: 'zero' | 'nonzero', seen: { dir?: string }) {
       seen.dir = dir;
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'maestro-runner.log'), runnerLog(), 'utf8');
+      writeFileSync(
+        join(dir, 'report.json'),
+        JSON.stringify({
+          device: { id: EXACT, platform: 'ios' },
+          flows: [{ device: { id: flowDeviceId, platform: 'ios' } }],
+        }),
+        'utf8',
+      );
       writeFileSync(join(dir, 'report.html'), '<html></html>', 'utf8');
       if (exit === 'nonzero') {
         throw Object.assign(new Error('runner exited 1'), {
@@ -76,10 +83,28 @@ test('a passing runner flow consumes then deletes its temporary report tree', as
   });
   const body = JSON.parse(result.content[0].text);
   assert.equal(body.ok, true, result.content[0].text);
-  assert.equal(body.data.deviceAuthority.verified, true, 'report log evidence must be consumed');
+  assert.equal(body.data.deviceAuthority.verified, true, 'structured report must be consumed');
   assert.equal(body.data.deviceAuthority.reportedDeviceId, EXACT);
   assert.equal(body.data.runnerReportDir, undefined, 'no deleted path may leak into the envelope');
   assert.equal(existsSync(seen.dir!), false, 'report tree must be removed after the run');
+});
+
+test('contradictory report device identities refuse and still delete the report tree', async () => {
+  const seen: { dir?: string } = {};
+  const result = await handlerWriting(
+    'zero',
+    seen,
+    'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
+  )({
+    inlineYaml: '- launchApp',
+    platform: 'ios',
+    appId: APP_ID,
+  });
+  const body = JSON.parse(result.content[0].text);
+  assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(body.meta.deviceAuthority.reportedDeviceId, null);
+  assert.equal(body.meta.deviceAuthority.reason, 'reported-device-ambiguous');
+  assert.equal(existsSync(seen.dir!), false, 'ambiguous report tree must be removed');
 });
 
 test('a non-zero runner exit still deletes its temporary report tree', async () => {

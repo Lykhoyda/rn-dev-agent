@@ -24199,12 +24199,18 @@ var init_resolve_ios_app_file = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
+function uniqueValues(values) {
+  return [...new Set(values.filter((value) => Boolean(value)))];
+}
 function uniqueMatches(output, pattern) {
-  return [...new Set([...output.matchAll(pattern)].map((match) => match[1]).filter(Boolean))];
+  return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
 }
 function verifyMaestroDeviceAuthority(input) {
   const requestedDeviceId = input.requestedDeviceId?.trim() || null;
-  const reportedIds = uniqueMatches(input.output, /\bFound (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi);
+  const reportedIds = uniqueValues([
+    ...input.directReportDeviceIds ?? [],
+    ...uniqueMatches(input.output, /\b(?:Found|Using specified) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
+  ]);
   const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building WDA for|Starting WDA on) device\s+([A-Za-z0-9._:-]+)/gi);
   const observedDeviceIds = [.../* @__PURE__ */ new Set([...reportedIds, ...wdaDeviceIds])];
   const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
@@ -24271,6 +24277,20 @@ var init_maestro_device_authority = __esm({
 import { existsSync as existsSync12, readFileSync as readFileSync10, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { join as join17 } from "node:path";
+function reportDeviceIds(reportDir) {
+  const reportPath = join17(reportDir, "report.json");
+  if (!existsSync12(reportPath))
+    return [];
+  try {
+    const report = JSON.parse(readFileSync10(reportPath, "utf8"));
+    const ids = [report.device?.id, ...(report.flows ?? []).map((flow) => flow.device?.id)];
+    return [
+      ...new Set(ids.filter((id) => typeof id === "string").map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
+    ];
+  } catch {
+    return [];
+  }
+}
 function createRunnerReportDir(runner, prefix) {
   if (runner !== "maestro-runner")
     return null;
@@ -24279,18 +24299,22 @@ function createRunnerReportDir(runner, prefix) {
 function runnerReportArgs(reportDir) {
   return reportDir ? ["--output", reportDir, "--flatten"] : [];
 }
-function withDirectRunnerEvidence(reportDir, output) {
+function collectDirectRunnerEvidence(reportDir, output) {
   if (!reportDir)
-    return output;
+    return { output, reportDeviceIds: [] };
+  const evidence = {
+    output,
+    reportDeviceIds: reportDeviceIds(reportDir)
+  };
   const logPath = join17(reportDir, "maestro-runner.log");
   if (!existsSync12(logPath))
-    return output;
+    return evidence;
   try {
-    return `${output}
+    evidence.output = `${output}
 ${readFileSync10(logPath, "utf8")}`;
   } catch {
-    return output;
   }
+  return evidence;
 }
 function disposeRunnerReportDir(reportDir) {
   if (!reportDir)
@@ -24300,9 +24324,11 @@ function disposeRunnerReportDir(reportDir) {
   } catch {
   }
 }
+var DIRECT_DEVICE_ID_RE;
 var init_maestro_runner_report = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
     "use strict";
+    DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
   }
 });
 
@@ -24395,7 +24421,7 @@ async function runMaestroInline(yaml2, opts) {
     ...runnerReportArgs(runnerReportDir),
     baseArgs[baseArgs.length - 1]
   ] : baseArgs;
-  const directRunnerOutput = (output) => withDirectRunnerEvidence(runnerReportDir, output);
+  const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
   try {
     const { stdout, stderr } = await execFile5(dispatch.binPath, finalArgs, {
       timeout,
@@ -24404,11 +24430,13 @@ async function runMaestroInline(yaml2, opts) {
     });
     const output = (stdout + "\n" + stderr).trim();
     const passed = !outputIndicatesFlowFailure(output);
+    const directEvidence = directRunnerEvidence(output);
     const deviceAuthority = verifyMaestroDeviceAuthority({
       runner: dispatch.runner,
       platform: opts.platform,
       requestedDeviceId,
-      output: directRunnerOutput(output),
+      output: directEvidence.output,
+      directReportDeviceIds: directEvidence.reportDeviceIds,
       requireWdaProvenance: passed
     });
     if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
@@ -24433,11 +24461,13 @@ async function runMaestroInline(yaml2, opts) {
       };
     }
     if (capturedOutput) {
+      const directEvidence = directRunnerEvidence(capturedOutput);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
         platform: opts.platform,
         requestedDeviceId,
-        output: directRunnerOutput(capturedOutput)
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds
       });
       return {
         passed: false,
@@ -53796,7 +53826,7 @@ function createMaestroRunHandler(deps = {}) {
       ...runnerReportArgs(runnerReportDir),
       ...paramArgs
     ]);
-    const directRunnerOutput = (output) => withDirectRunnerEvidence(runnerReportDir, output);
+    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
     const engineStatus = dispatch.runner === "maestro-runner" ? await getEngineStatus().catch(() => null) : null;
     const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
     const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
@@ -53811,11 +53841,13 @@ function createMaestroRunHandler(deps = {}) {
       }), { platform, deviceId: requestedDeviceId });
       const output = combineRunnerOutput(stdout, stderr);
       const passed = !outputIndicatesFlowFailure(output);
+      const directEvidence = directRunnerEvidence(output);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
         platform,
         requestedDeviceId,
-        output: directRunnerOutput(output),
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
         requireWdaProvenance: passed
       });
       if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
@@ -53866,11 +53898,13 @@ function createMaestroRunHandler(deps = {}) {
       const stderr = typeof errAny?.stderr === "string" ? errAny.stderr : "";
       const combined = combineRunnerOutput(stdout, stderr);
       const { timedOut, outputTruncated } = classifyExecError(err);
+      const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
         platform,
         requestedDeviceId,
-        output: directRunnerOutput(combined)
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds
       });
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(err?.code ?? ""));
@@ -61235,12 +61269,13 @@ function createMaestroTestAllHandler() {
         }), { platform, deviceId: requestedDeviceId });
         const output = (stdout + "\n" + stderr).trim();
         const outputPassed = !outputIndicatesFlowFailure(output);
-        const authorityOutput = withDirectRunnerEvidence(runnerReportDir, output);
+        const directEvidence = collectDirectRunnerEvidence(runnerReportDir, output);
         const deviceAuthority = verifyMaestroDeviceAuthority({
           runner: flowDispatch.runner,
           platform,
           requestedDeviceId,
-          output: authorityOutput,
+          output: directEvidence.output,
+          directReportDeviceIds: directEvidence.reportDeviceIds,
           requireWdaProvenance: outputPassed
         });
         const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
@@ -61260,12 +61295,13 @@ function createMaestroTestAllHandler() {
       } catch (err) {
         const msg3 = err instanceof Error ? err.message : String(err);
         const errWithOutput = err;
-        const authorityOutput = withDirectRunnerEvidence(runnerReportDir, [errWithOutput.stdout, errWithOutput.stderr].filter((value) => typeof value === "string").join("\n"));
+        const directEvidence = collectDirectRunnerEvidence(runnerReportDir, [errWithOutput.stdout, errWithOutput.stderr].filter((value) => typeof value === "string").join("\n"));
         const deviceAuthority = verifyMaestroDeviceAuthority({
           runner: flowDispatch.runner,
           platform,
           requestedDeviceId,
-          output: authorityOutput
+          output: directEvidence.output,
+          directReportDeviceIds: directEvidence.reportDeviceIds
         });
         const authorityRejected = shouldRejectMaestroDeviceAuthority(deviceAuthority);
         results.push({

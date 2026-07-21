@@ -10,7 +10,7 @@ import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { getActiveSession } from './agent-device-wrapper.js';
 import { shouldRejectMaestroDeviceAuthority, verifyMaestroDeviceAuthority, } from './domain/maestro-device-authority.js';
-import { createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, withDirectRunnerEvidence, } from './domain/maestro-runner-report.js';
+import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from './domain/maestro-runner-report.js';
 const execFile = promisify(execFileCb);
 // Escape a user-supplied string for safe embedding inside a double-quoted YAML scalar.
 // Handles backslash, double quote, and control characters that would break the scalar.
@@ -128,7 +128,7 @@ export async function runMaestroInline(yaml, opts) {
             baseArgs[baseArgs.length - 1],
         ]
         : baseArgs;
-    const directRunnerOutput = (output) => withDirectRunnerEvidence(runnerReportDir, output);
+    const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
     try {
         const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, {
             timeout,
@@ -140,11 +140,13 @@ export async function runMaestroInline(yaml, opts) {
         // own status LINES (GH#249: a bare `FAILED` substring false-flagged passing
         // runs whose app logs contained the token; mirrors maestro_run).
         const passed = !outputIndicatesFlowFailure(output);
+        const directEvidence = directRunnerEvidence(output);
         const deviceAuthority = verifyMaestroDeviceAuthority({
             runner: dispatch.runner,
             platform: opts.platform,
             requestedDeviceId,
-            output: directRunnerOutput(output),
+            output: directEvidence.output,
+            directReportDeviceIds: directEvidence.reportDeviceIds,
             requireWdaProvenance: passed,
         });
         if (shouldRejectMaestroDeviceAuthority(deviceAuthority)) {
@@ -179,11 +181,13 @@ export async function runMaestroInline(yaml, opts) {
             };
         }
         if (capturedOutput) {
+            const directEvidence = directRunnerEvidence(capturedOutput);
             const deviceAuthority = verifyMaestroDeviceAuthority({
                 runner: dispatch.runner,
                 platform: opts.platform,
                 requestedDeviceId,
-                output: directRunnerOutput(capturedOutput),
+                output: directEvidence.output,
+                directReportDeviceIds: directEvidence.reportDeviceIds,
             });
             return {
                 passed: false,

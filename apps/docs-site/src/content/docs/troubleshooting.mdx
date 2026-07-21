@@ -182,8 +182,8 @@ refused on purpose until the flow ends.
 ### DEVICE_AUTHORITY_MISMATCH
 
 `maestro_run`/`cdp_run_action` forwarded the active session's exact device
-ID (`--device`/`--udid`) but maestro-runner's own log did not prove it ran
-there: the selected device was missing, ambiguous, different from the
+ID (`--device`/`--udid`) but maestro-runner's own report/log did not prove it
+ran there: the selected device was missing, ambiguous, different from the
 request, or an iOS WDA build/start line named another device. The replay is
 refused even when the runner exited 0, because requested metadata is never
 execution proof — `meta.deviceAuthority` carries the observed IDs and the
