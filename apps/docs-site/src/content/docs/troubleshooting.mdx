@@ -194,6 +194,17 @@ The runner build predates a newer command verb. Re-open the device session
 automatically (one multi-minute build on iOS). If a cold build still
 reports missing commands, update the plugin checkout.
 
+### RUNNER_TIMEOUT
+
+The iOS runner didn't answer within the command budget. On a
+non-cancellable `type`/`fill` main-thread timeout the runner is poisoned
+and reaped, and the call succeeds only when an independent exact CDP
+readback proves the requested value landed
+(`meta.runnerTimeoutRecovery.verification: "exact-readback"`); otherwise it
+fails closed. Further commands are refused before dispatch while the
+poisoned runner is being reaped. Reconnect CDP, re-open the device session,
+and retry from a fresh snapshot — don't re-type blindly.
+
 ### KEYBOARD_DISMISS_FAILED
 
 A visible software keyboard could not be proven dismissed — native swipe,
