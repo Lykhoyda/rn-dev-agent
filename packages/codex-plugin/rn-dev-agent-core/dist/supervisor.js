@@ -40801,44 +40801,6 @@ var init_fast_runner_ref_map = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/runners/free-port.js
-import { createServer as createServer2 } from "node:net";
-function isPortFree(port) {
-  return new Promise((resolve5) => {
-    const srv = createServer2();
-    srv.once("error", () => resolve5(false));
-    srv.listen({ port, host: "127.0.0.1" }, () => srv.close(() => resolve5(true)));
-  });
-}
-function findFreePort(preferred) {
-  return new Promise((resolve5, reject) => {
-    const tryListen = (port, fallbackToAny) => {
-      const srv = createServer2();
-      srv.once("error", (err) => {
-        if (fallbackToAny && err.code === "EADDRINUSE")
-          tryListen(0, false);
-        else
-          reject(err);
-      });
-      srv.listen({ port, host: "127.0.0.1" }, () => {
-        const addr = srv.address();
-        const chosen = typeof addr === "object" && addr ? addr.port : 0;
-        if (!chosen) {
-          srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
-          return;
-        }
-        srv.close(() => resolve5(chosen));
-      });
-    };
-    tryListen(preferred, true);
-  });
-}
-var init_free_port = __esm({
-  "packages/rn-dev-agent-core/dist/runners/free-port.js"() {
-    "use strict";
-  }
-});
-
 // packages/rn-dev-agent-core/dist/runners/keyboard-guard.js
 function resolveKeyboardGuard(env) {
   const raw = (env.RN_KEYBOARD_GUARD ?? "").trim().toLowerCase();
@@ -41617,6 +41579,7 @@ __export(rn_fast_runner_client_exports, {
   reapStaleFastRunner: () => reapStaleFastRunner,
   releaseRunnerRebuildLock: () => releaseRunnerRebuildLock,
   resolveReadyTimeoutMs: () => resolveReadyTimeoutMs,
+  resolveRunnerRequestedPort: () => resolveRunnerRequestedPort,
   resolveRunnerStartPlan: () => resolveRunnerStartPlan,
   runIOS: () => runIOS,
   runnerRebuildBudget: () => runnerRebuildBudget,
@@ -41917,11 +41880,14 @@ function runXcodebuildToExit(args, timeoutMs) {
     });
   });
 }
+function resolveRunnerRequestedPort(explicitPort) {
+  return explicitPort ?? 0;
+}
 async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId))
     return runnerState;
-  const desired = port ?? (await isPortFree(DEFAULT_PORT) ? DEFAULT_PORT : 0);
+  const desired = resolveRunnerRequestedPort(port);
   const projectPath = join11(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
   if (!existsSync8(projectPath)) {
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
@@ -42509,13 +42475,12 @@ async function runIOS(args) {
   };
   return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
 }
-var DEFAULT_PORT, READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS;
+var READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS;
 var init_rn_fast_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
     "use strict";
     init_utils();
     init_fast_runner_ref_map();
-    init_free_port();
     init_keyboard_guard();
     init_secure_state_file();
     init_protocol2();
@@ -42523,7 +42488,6 @@ var init_rn_fast_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     init_transport_recovery();
-    DEFAULT_PORT = 22088;
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     BUILD_READY_TIMEOUT_MS = 36e4;
     HTTP_TIMEOUT_MS = 1e4;
@@ -42797,6 +42761,37 @@ var init_no_change_tracker = __esm({
     WEDGED_DISTINCT_TARGETS = 3;
     WEDGED_RUNTIME_HINT = `${WEDGED_DISTINCT_TARGETS} consecutive taps on distinct targets produced no UI change \u2014 the app runtime may be wedged (JS thread paused or touch events swallowed). Run cdp_status (iOS auto-recovers a paused JS thread), then cdp_restart with hardReset=true if it persists.`;
     streak = [];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/free-port.js
+import { createServer as createServer2 } from "node:net";
+function findFreePort(preferred) {
+  return new Promise((resolve5, reject) => {
+    const tryListen = (port, fallbackToAny) => {
+      const srv = createServer2();
+      srv.once("error", (err) => {
+        if (fallbackToAny && err.code === "EADDRINUSE")
+          tryListen(0, false);
+        else
+          reject(err);
+      });
+      srv.listen({ port, host: "127.0.0.1" }, () => {
+        const addr = srv.address();
+        const chosen = typeof addr === "object" && addr ? addr.port : 0;
+        if (!chosen) {
+          srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
+          return;
+        }
+        srv.close(() => resolve5(chosen));
+      });
+    };
+    tryListen(preferred, true);
+  });
+}
+var init_free_port = __esm({
+  "packages/rn-dev-agent-core/dist/runners/free-port.js"() {
+    "use strict";
   }
 });
 
@@ -43298,7 +43293,7 @@ function invalidateAndroidRunnerApks(rm2 = (p) => rmSync3(p, { force: true })) {
     }
   }
 }
-async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT2, opts = {}) {
+async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
   try {
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
@@ -43315,7 +43310,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT2
     throw err;
   }
 }
-async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT2, opts = {}) {
+async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
   const serial = deviceId ?? await resolveAndroidSerial();
   adoptPersistedAndroidState(serial);
   let forceReinstall = opts._forceReinstall === true;
@@ -43689,7 +43684,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync2, DEFAULT_PORT2, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -43703,7 +43698,7 @@ var init_rn_android_runner_client = __esm({
     init_runtime_paths();
     init_transport_recovery();
     execFileAsync2 = promisify3(execFile3);
-    DEFAULT_PORT2 = 22089;
+    DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
     INSTRUMENTATION = "dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner";
     MAIN_LOOP_CLASS = "dev.lykhoyda.rndevagent.androidrunner.RnAndroidRunnerInstrumentedTest#mainLoop";

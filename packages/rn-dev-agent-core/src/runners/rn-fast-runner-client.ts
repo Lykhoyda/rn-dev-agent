@@ -20,7 +20,6 @@ import {
   getFreshRefTarget,
   type FlatNode,
 } from '../fast-runner-ref-map.js';
-import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import {
   runnerStatePath,
@@ -49,7 +48,6 @@ import {
   parseStatusProbeReply,
 } from './transport-recovery.js';
 
-const DEFAULT_PORT = 22088;
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
 // + attach the XCUITest runner (device-proven on GitHub macos runners).
@@ -581,6 +579,15 @@ function runXcodebuildToExit(args: string[], timeoutMs: number): Promise<void> {
   });
 }
 
+export function resolveRunnerRequestedPort(explicitPort?: number): number {
+  // Simulator listeners bind in the host network namespace and may occupy an
+  // IPv6 wildcard while a 127.0.0.1 IPv4 probe still reports the same number
+  // free. Defaulting to NWListener's port 0 is the only race- and
+  // address-family-safe allocation when multiple simulators have live runners.
+  // The READY handshake reports the actual assigned port back to the client.
+  return explicitPort ?? 0;
+}
+
 export async function startFastRunner(
   deviceId: string,
   bundleId: string,
@@ -592,7 +599,7 @@ export async function startFastRunner(
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
 
-  const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
+  const desired = resolveRunnerRequestedPort(port);
 
   const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
   if (!existsSync(projectPath)) {

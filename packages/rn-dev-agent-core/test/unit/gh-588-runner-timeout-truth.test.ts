@@ -4,8 +4,10 @@ import { readFileSync } from 'node:fs';
 import {
   _setFastRunnerStateForTest,
   _setFetchForTest,
+  buildRunnerPortEnv,
   buildRunnerTestFaultEnv,
   getRunnerPostMortem,
+  resolveRunnerRequestedPort,
   runIOS,
 } from '../../dist/runners/rn-fast-runner-client.js';
 
@@ -45,6 +47,16 @@ function body(result: { content: Array<{ text: string }> }) {
     meta?: Record<string, unknown>;
   };
 }
+
+test('GH-588 runner lifecycle: default launch requests an isolated OS-assigned listener port', () => {
+  const requested = resolveRunnerRequestedPort();
+  assert.equal(requested, 0, 'parallel simulator runners must never contend for fixed port 22088');
+  assert.deepEqual(buildRunnerPortEnv(requested), {
+    RN_FAST_RUNNER_PORT: '0',
+    TEST_RUNNER_RN_FAST_RUNNER_PORT: '0',
+  });
+  assert.equal(resolveRunnerRequestedPort(31_337), 31_337, 'explicit test seam remains available');
+});
 
 test('GH-588 Slice C: deterministic wedge hook is compile-gated out of release artifacts', () => {
   const source = readFileSync(

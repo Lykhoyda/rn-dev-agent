@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { existsSync, readdirSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync, } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, getFreshRefTarget, } from '../fast-runner-ref-map.js';
-import { isPortFree } from './free-port.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
 import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
@@ -11,7 +10,6 @@ import { buildRunnerQuiescenceEnv } from './quiescence.js';
 import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
-const DEFAULT_PORT = 22088;
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
 // + attach the XCUITest runner (device-proven on GitHub macos runners).
@@ -460,6 +458,14 @@ function runXcodebuildToExit(args, timeoutMs) {
         });
     });
 }
+export function resolveRunnerRequestedPort(explicitPort) {
+    // Simulator listeners bind in the host network namespace and may occupy an
+    // IPv6 wildcard while a 127.0.0.1 IPv4 probe still reports the same number
+    // free. Defaulting to NWListener's port 0 is the only race- and
+    // address-family-safe allocation when multiple simulators have live runners.
+    // The READY handshake reports the actual assigned port back to the client.
+    return explicitPort ?? 0;
+}
 export async function startFastRunner(deviceId, bundleId, port, 
 // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
 // by bypassing the prebuilt artifact tier.
@@ -467,7 +473,7 @@ opts = {}) {
     adoptPersistedFastRunnerState(deviceId);
     if (shouldReuseRunner(runnerState, deviceId))
         return runnerState;
-    const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
+    const desired = resolveRunnerRequestedPort(port);
     const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
     if (!existsSync(projectPath)) {
         throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
