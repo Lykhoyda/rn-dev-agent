@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const src = (rel) => readFileSync(resolve(__dirname, '../../src', rel), 'utf8');
+const src = (rel: string) => readFileSync(resolve(__dirname, '../../src', rel), 'utf8');
 
 const sessionSrc = src('tools/device-session.ts');
 const repairSrc = src('tools/repair-action.ts');
