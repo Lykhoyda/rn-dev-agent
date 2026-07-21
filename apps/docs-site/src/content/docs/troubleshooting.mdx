@@ -179,6 +179,18 @@ Your own Maestro flow holds the device (L3 is exclusive). Reads
 (`cdp_component_tree`, `cdp_store_state`) still work mid-flow; taps are
 refused on purpose until the flow ends.
 
+### DEVICE_AUTHORITY_MISMATCH
+
+`maestro_run`/`cdp_run_action` forwarded the active session's exact device
+ID (`--device`/`--udid`) but maestro-runner's own log did not prove it ran
+there: the selected device was missing, ambiguous, different from the
+request, or an iOS WDA build/start line named another device. The replay is
+refused even when the runner exited 0, because requested metadata is never
+execution proof — `meta.deviceAuthority` carries the observed IDs and the
+exact reason. Re-open the device session on the intended simulator/emulator
+(`device_snapshot action=open`), shut down stray devices, and retry; pass
+`deviceId` explicitly to `maestro_run` to pin the target.
+
 ### RUNNER_PROTOCOL_MISMATCH
 
 The bridge and the native runner disagree on the wire protocol and the

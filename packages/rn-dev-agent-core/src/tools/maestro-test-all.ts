@@ -192,10 +192,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         }
       }
 
-      const runnerReportDir = createRunnerReportDir(
-        flowDispatch.runner,
-        'rn-maestro-suite-report',
-      );
+      const runnerReportDir = createRunnerReportDir(flowDispatch.runner, 'rn-maestro-suite-report');
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
       const finalArgs = runnerReportDir
         ? [
