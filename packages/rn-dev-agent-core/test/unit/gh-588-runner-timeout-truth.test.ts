@@ -209,7 +209,8 @@ test('GH-588 V6: a replacement runner is preserved when prior type authority is 
 
   assert.equal(result.code, 'RUNNER_TIMEOUT');
   assert.equal(
-    (result.meta?.runnerTimeoutRecovery as { reapDisposition?: string }).reapDisposition,
+    (result.meta?.runnerTimeoutRecovery as { reapDisposition?: string } | undefined)
+      ?.reapDisposition,
     'replacement-preserved',
   );
   assert.equal(getFastRunnerState()?.pid, 222_222_222, 'replacement PID is never signaled');
