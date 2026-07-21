@@ -8,20 +8,38 @@ const execFile = promisify(execFileCb);
 
 const TERMINATE_TIMEOUT_MS = 10_000;
 const LAUNCH_TIMEOUT_MS = 15_000;
+const IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+
+export function resolveIosLifecycleTarget(deviceId?: string): string {
+  if (deviceId === undefined) return 'booted';
+  if (!IOS_UDID_RE.test(deviceId)) {
+    throw new Error('iOS lifecycle deviceId must be an exact simulator UDID');
+  }
+  return deviceId;
+}
 
 /**
  * Force-stop the app. Idempotent on both platforms — exits 0 even if the app
- * wasn't running. iOS: `xcrun simctl terminate booted <bundleId>`. Android:
+ * wasn't running. iOS: `xcrun simctl terminate <exact-udid|booted> <bundleId>`;
+ * callers with an active session pass its exact UDID. Android:
  * `adb shell am force-stop <bundleId>`. Errors are propagated so callers can
  * decide whether to abort or continue (a hung adb is more interesting than
  * an iOS app that wasn't running).
  */
-export async function terminateApp(bundleId: string, platform: 'ios' | 'android'): Promise<void> {
+export async function terminateApp(
+  bundleId: string,
+  platform: 'ios' | 'android',
+  deviceId?: string,
+): Promise<void> {
   if (platform === 'ios') {
-    await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], {
-      timeout: TERMINATE_TIMEOUT_MS,
-      encoding: 'utf8',
-    });
+    await execFile(
+      'xcrun',
+      ['simctl', 'terminate', resolveIosLifecycleTarget(deviceId), bundleId],
+      {
+        timeout: TERMINATE_TIMEOUT_MS,
+        encoding: 'utf8',
+      },
+    );
   } else {
     await execFile('adb', ['shell', 'am', 'force-stop', bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
@@ -61,13 +79,18 @@ export function buildAndroidLaunchArgv(bundleId: string): string[] {
 }
 
 /**
- * Launch the app. iOS: `xcrun simctl launch booted <bundleId>`. Android:
- * the MAIN/LAUNCHER intent scoped to the package via `-p` (CDP-004).
+ * Launch the app. iOS: `xcrun simctl launch <exact-udid|booted> <bundleId>`;
+ * active-session callers use the exact UDID. Android: the MAIN/LAUNCHER intent
+ * scoped to the package via `-p` (CDP-004).
  * Throws on failure.
  */
-export async function launchApp(bundleId: string, platform: 'ios' | 'android'): Promise<void> {
+export async function launchApp(
+  bundleId: string,
+  platform: 'ios' | 'android',
+  deviceId?: string,
+): Promise<void> {
   if (platform === 'ios') {
-    await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
+    await execFile('xcrun', ['simctl', 'launch', resolveIosLifecycleTarget(deviceId), bundleId], {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: 'utf8',
     });

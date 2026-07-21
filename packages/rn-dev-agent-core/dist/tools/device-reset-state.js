@@ -114,32 +114,46 @@ async function runStorageSteps(client, keys, instanceId) {
     }
     return results;
 }
-async function runTerminateStep(appId, platform) {
+async function runTerminateStep(appId, platform, deviceId, terminate) {
     const start = Date.now();
     try {
-        await terminateApp(appId, platform);
-        return { step: 'terminate', target: appId, ok: true, durationMs: Date.now() - start };
+        await terminate(appId, platform, deviceId);
+        return {
+            step: 'terminate',
+            target: appId,
+            ...(deviceId ? { deviceId } : {}),
+            ok: true,
+            durationMs: Date.now() - start,
+        };
     }
     catch (e) {
         return {
             step: 'terminate',
             target: appId,
+            ...(deviceId ? { deviceId } : {}),
             ok: false,
             durationMs: Date.now() - start,
             error: e instanceof Error ? e.message : String(e),
         };
     }
 }
-async function runLaunchStep(appId, platform) {
+async function runLaunchStep(appId, platform, deviceId, launch) {
     const start = Date.now();
     try {
-        await launchApp(appId, platform);
-        return { step: 'launch', target: appId, ok: true, durationMs: Date.now() - start };
+        await launch(appId, platform, deviceId);
+        return {
+            step: 'launch',
+            target: appId,
+            ...(deviceId ? { deviceId } : {}),
+            ok: true,
+            durationMs: Date.now() - start,
+        };
     }
     catch (e) {
         return {
             step: 'launch',
             target: appId,
+            ...(deviceId ? { deviceId } : {}),
             ok: false,
             durationMs: Date.now() - start,
             error: e instanceof Error ? e.message : String(e),
@@ -242,7 +256,9 @@ function safeParseError(r) {
         return {};
     }
 }
-export function createDeviceResetStateHandler(getClient) {
+export function createDeviceResetStateHandler(getClient, deps = {}) {
+    const terminate = deps.terminateApp ?? terminateApp;
+    const launch = deps.launchApp ?? launchApp;
     return async (args) => {
         if (!args.appId || typeof args.appId !== 'string') {
             return failResult('appId is required.', 'DEVICE_RESET_INVALID_ARGS');
@@ -263,6 +279,13 @@ export function createDeviceResetStateHandler(getClient) {
         const relaunch = args.relaunch ?? true;
         const waitForReady = args.waitForReady ?? true;
         const waitForNavReady = args.waitForNavReady ?? false;
+        const session = deps.getSession?.() ?? null;
+        const lifecycleDeviceId = platform === 'ios' &&
+            session?.platform === 'ios' &&
+            session.appId === args.appId &&
+            typeof session.deviceId === 'string'
+            ? session.deviceId
+            : undefined;
         const steps = [];
         let reconnected = false;
         let helpersInjected = false;
@@ -312,10 +335,10 @@ export function createDeviceResetStateHandler(getClient) {
             }
         }
         // Step 3: terminate.
-        steps.push(await runTerminateStep(args.appId, platform));
+        steps.push(await runTerminateStep(args.appId, platform, lifecycleDeviceId, terminate));
         // Step 4: launch + reconnect (gated by relaunch / waitForReady).
         if (relaunch) {
-            const launchResult = await runLaunchStep(args.appId, platform);
+            const launchResult = await runLaunchStep(args.appId, platform, lifecycleDeviceId, launch);
             steps.push(launchResult);
             if (launchResult.ok && waitForReady) {
                 // Re-fetch client AFTER launch in case anything swapped it. (No swap
@@ -347,6 +370,7 @@ export function createDeviceResetStateHandler(getClient) {
         const data = {
             appId: args.appId,
             platform,
+            ...(lifecycleDeviceId ? { deviceId: lifecycleDeviceId } : {}),
             relaunch,
             waitForReady,
             summary,

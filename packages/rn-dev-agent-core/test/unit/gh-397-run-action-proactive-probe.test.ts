@@ -235,6 +235,34 @@ test('gh-397: RN_BLIND_PROBE=0 disables the gate even on at-risk runtimes', asyn
   }
 });
 
+test('gh-588 V2b: per-call allow reaches normal fallback while binding env remains disabled', async () => {
+  project.seedAction('demo', replayFixtureYaml());
+  const counter = { calls: 0 };
+  const { deps: replay } = makeReplayDeps({ present: true });
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun(PASS_ENV, counter),
+    replayDeps: () => replay,
+    blindProbeContext: IOS26_CTX,
+    probeRetry: { attempts: 1, delayMs: 0 },
+  });
+  process.env.RN_BLIND_PROBE = '0';
+  try {
+    const result = await handler({
+      actionId: 'demo',
+      projectRoot: project.root,
+      platform: 'ios',
+      blindProbeMode: 'allow',
+    });
+    const env = readEnvelope(result);
+    assert.equal(env.data.transport, 'cdp-js');
+    assert.equal(env.data.blindProbeMode, 'allow');
+    assert.equal(counter.calls, 0, 'the explicit call override must not invoke maestro');
+    assert.equal(process.env.RN_BLIND_PROBE, '0', 'the sole MCP process policy is not mutated');
+  } finally {
+    delete process.env.RN_BLIND_PROBE;
+  }
+});
+
 test('gh-397: prior TRANSPORT_BLIND history + anchor present → probe routes even on iOS 18', async () => {
   project.seedAction('demo', replayFixtureYaml());
   appendRunRecordToSidecar(project.root, 'demo', {

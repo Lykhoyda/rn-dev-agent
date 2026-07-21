@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 39;
+export const HELPERS_VERSION = 40;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2776,6 +2776,8 @@ export const INJECTED_HELPERS = `
       } catch (e) { /* require-by-name unavailable (bridgeless/Metro) */ }
       if (!method) {
         var blurred = 0;
+        var blurredWithoutFocusOracle = 0;
+        var blurredHostInstances = new WeakSet();
         var scanned = 0;
         forEachRootFiber(function (rootFiber) {
           var stack = [rootFiber];
@@ -2784,11 +2786,43 @@ export const INJECTED_HELPERS = `
             var f = stack.pop();
             if (!f) continue;
             var sn = f.stateNode;
-            if (sn && typeof sn.isFocused === 'function' && typeof sn.blur === 'function') {
+            var blurInstance = sn;
+            // Bridgeless Fabric stores the public ReactNativeElement under
+            // stateNode.canonical.publicInstance; the host stateNode itself is
+            // only an internal {node, canonical} record with no focus methods.
+            if (
+              blurInstance &&
+              typeof blurInstance.blur !== 'function' &&
+              blurInstance.canonical &&
+              blurInstance.canonical.publicInstance
+            ) {
+              blurInstance = blurInstance.canonical.publicInstance;
+            }
+            if (blurInstance && typeof blurInstance.blur === 'function') {
               try {
-                if (sn.isFocused()) {
-                  sn.blur();
-                  blurred++;
+                if (typeof blurInstance.isFocused === 'function') {
+                  if (blurInstance.isFocused()) {
+                    blurInstance.blur();
+                    blurred++;
+                  }
+                } else {
+                  // Some host adapters expose focus()/blur() but no isFocused()
+                  // oracle. Restrict the no-oracle call to RN's native text-input
+                  // host fibers; blur() is idempotent for an unfocused input,
+                  // and the caller still proves the keyboard
+                  // hidden before reporting success or dispatching a tap.
+                  var fiberType = '';
+                  if (typeof f.type === 'string') fiberType = f.type;
+                  else if (f.type && typeof f.type.displayName === 'string') fiberType = f.type.displayName;
+                  else if (f.type && typeof f.type.name === 'string') fiberType = f.type.name;
+                  if (
+                    /textinput|textfield|textview/i.test(fiberType) &&
+                    !blurredHostInstances.has(blurInstance)
+                  ) {
+                    blurredHostInstances.add(blurInstance);
+                    blurInstance.blur();
+                    blurredWithoutFocusOracle++;
+                  }
                 }
               } catch (e) {}
             }
@@ -2798,6 +2832,7 @@ export const INJECTED_HELPERS = `
           return null;
         });
         if (blurred > 0) method = 'blur-focused-input';
+        else if (blurredWithoutFocusOracle > 0) method = 'blur-text-input-hosts';
       }
       if (!method) {
         return JSON.stringify({

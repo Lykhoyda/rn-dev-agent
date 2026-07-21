@@ -218,6 +218,17 @@ export function adoptPersistedFastRunnerState(deviceId) {
 export function getFastRunnerState() {
     return runnerState;
 }
+export function captureFastRunnerCommandAuthority() {
+    if (!runnerState)
+        return null;
+    return {
+        pid: runnerState.pid,
+        port: runnerState.port,
+        deviceId: runnerState.deviceId,
+        statePath: iosStatePath(runnerState.deviceId),
+        provenance: runnerProcess?.pid === runnerState.pid ? 'spawned' : 'adopted',
+    };
+}
 /**
  * Test-only seam: inject a fake runner state so callers (e.g. runIOS)
  * can be unit-tested without spawning xcodebuild. Production code must
@@ -905,18 +916,10 @@ async function postCommand(body) {
  * for the ref-map. Each runner node gets a synthetic ref `@e<index>` so
  * downstream press/fill can target it.
  */
-async function containTypeTimeout(args) {
+async function containTypeTimeout(args, authorityBefore = captureFastRunnerCommandAuthority(), trigger = 'main-thread-timeout') {
     // Poison before any asynchronous readback: concurrently queued mutators are
     // refused at postCommandWithRecovery and cannot reach this XCTest instance.
-    const runnerBefore = runnerState
-        ? {
-            pid: runnerState.pid,
-            port: runnerState.port,
-            deviceId: runnerState.deviceId,
-            statePath: iosStatePath(runnerState.deviceId),
-            provenance: runnerProcess ? 'spawned' : 'adopted',
-        }
-        : null;
+    const runnerBefore = authorityBefore;
     runnerPoisoned = true;
     let verification = { matches: false };
     try {
@@ -927,27 +930,43 @@ async function containTypeTimeout(args) {
     catch {
         verification = { matches: false };
     }
-    poisonReap ??= reapStaleFastRunner();
+    let reapDisposition;
     try {
-        await poisonReap;
+        if (runnerBefore && runnerState?.pid === runnerBefore.pid) {
+            poisonReap ??= reapStaleFastRunner();
+            await poisonReap;
+            reapDisposition = 'reaped';
+        }
+        else {
+            // A concurrent health gate may already have reaped the triggering runner
+            // and even spawned its replacement. Never signal that replacement merely
+            // because the prior command's authority was lost.
+            reapDisposition = runnerState ? 'replacement-preserved' : 'already-absent';
+        }
     }
     finally {
         poisonReap = null;
         runnerPoisoned = false;
     }
     const runnerTimeoutRecovery = {
+        trigger,
         poisoned: true,
-        reaped: true,
+        reaped: reapDisposition === 'reaped',
+        reapDisposition,
         verification: verification.matches ? 'exact-readback' : 'unverified',
         runner: {
             before: runnerBefore,
             afterReapPid: runnerState?.pid ?? null,
             stateCleared: runnerState === null,
-            nextMutationRequiresRespawn: true,
+            nextMutationRequiresRespawn: runnerState === null,
         },
         runnerPostMortem: getRunnerPostMortem(),
         containmentOrder: ['poison', 'independent-readback', 'reap', 'result'],
-        lateMutationContainment: 'runner-process-reaped-before-next-mutation',
+        lateMutationContainment: reapDisposition === 'reaped'
+            ? 'runner-process-reaped-before-next-mutation'
+            : reapDisposition === 'replacement-preserved'
+                ? 'replacement-preserved-no-signal-dispatched'
+                : 'triggering-runner-state-already-absent',
         targetApp: {
             wasRunningBeforeRecovery: 'unverified',
             pidPreserved: 'unverified',
@@ -964,7 +983,38 @@ async function containTypeTimeout(args) {
             verification: 'exact-readback',
         }, { meta: { runnerTimeoutRecovery } });
     }
-    return failResult('RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was reaped before any further mutation.', 'RUNNER_TIMEOUT', { runnerTimeoutRecovery });
+    return failResult(trigger === 'main-thread-timeout'
+        ? 'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation.'
+        : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.', 'RUNNER_TIMEOUT', { runnerTimeoutRecovery });
+}
+function hasRunnerTimeoutRecovery(result) {
+    try {
+        const envelope = JSON.parse(result.content[0]?.text ?? '{}');
+        return envelope.meta?.runnerTimeoutRecovery !== undefined;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * A success-shaped native type reply is not authoritative if the XCTest runner
+ * wedges, disappears, or is replaced before post-mutation settling finishes.
+ * Re-check the exact dispatch authority and /health after settle; only exact
+ * independent readback may recover such a result to success.
+ */
+export async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
+    if (args.command !== 'type' || result.isError || hasRunnerTimeoutRecovery(result))
+        return result;
+    const sameAuthority = authorityBefore !== null &&
+        runnerState?.pid === authorityBefore.pid &&
+        runnerState.port === authorityBefore.port &&
+        runnerState.deviceId === authorityBefore.deviceId;
+    if (sameAuthority) {
+        const health = await probeFastRunnerLivenessDetailed();
+        if (health.liveness === 'alive')
+            return result;
+    }
+    return containTypeTimeout(args, authorityBefore, 'post-settle-runner-authority-lost');
 }
 function mapRunnerNodesToFlat(nodes) {
     const out = [];

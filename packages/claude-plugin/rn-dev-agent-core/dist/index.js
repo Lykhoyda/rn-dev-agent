@@ -20572,6 +20572,7 @@ __export(rn_fast_runner_client_exports, {
   buildRunnerPortEnv: () => buildRunnerPortEnv,
   buildRunnerTestFaultEnv: () => buildRunnerTestFaultEnv,
   buildRunnerVersionEnv: () => buildRunnerVersionEnv,
+  captureFastRunnerCommandAuthority: () => captureFastRunnerCommandAuthority,
   consumePendingFastRunnerArtifactNote: () => consumePendingFastRunnerArtifactNote,
   createReadySignalParser: () => createReadySignalParser,
   derivedDataPathForRunner: () => derivedDataPathForRunner,
@@ -20597,7 +20598,8 @@ __export(rn_fast_runner_client_exports, {
   runnerRebuildBudget: () => runnerRebuildBudget,
   shouldReuseRunner: () => shouldReuseRunner,
   startFastRunner: () => startFastRunner,
-  stopFastRunner: () => stopFastRunner
+  stopFastRunner: () => stopFastRunner,
+  verifyTypeResultAfterSettle: () => verifyTypeResultAfterSettle
 });
 import { spawn } from "node:child_process";
 import { join as join10 } from "node:path";
@@ -20751,6 +20753,17 @@ function adoptPersistedFastRunnerState(deviceId) {
 }
 function getFastRunnerState() {
   return runnerState;
+}
+function captureFastRunnerCommandAuthority() {
+  if (!runnerState)
+    return null;
+  return {
+    pid: runnerState.pid,
+    port: runnerState.port,
+    deviceId: runnerState.deviceId,
+    statePath: iosStatePath(runnerState.deviceId),
+    provenance: runnerProcess?.pid === runnerState.pid ? "spawned" : "adopted"
+  };
 }
 function _setRunnerStateForTest(state) {
   runnerState = state;
@@ -21255,14 +21268,8 @@ async function postCommandWithRecovery(body) {
 async function postCommand(body) {
   return (await postCommandWithRecovery(body)).resp;
 }
-async function containTypeTimeout(args) {
-  const runnerBefore = runnerState ? {
-    pid: runnerState.pid,
-    port: runnerState.port,
-    deviceId: runnerState.deviceId,
-    statePath: iosStatePath(runnerState.deviceId),
-    provenance: runnerProcess ? "spawned" : "adopted"
-  } : null;
+async function containTypeTimeout(args, authorityBefore = captureFastRunnerCommandAuthority(), trigger = "main-thread-timeout") {
+  const runnerBefore = authorityBefore;
   runnerPoisoned = true;
   let verification = { matches: false };
   try {
@@ -21272,26 +21279,34 @@ async function containTypeTimeout(args) {
   } catch {
     verification = { matches: false };
   }
-  poisonReap ??= reapStaleFastRunner();
+  let reapDisposition;
   try {
-    await poisonReap;
+    if (runnerBefore && runnerState?.pid === runnerBefore.pid) {
+      poisonReap ??= reapStaleFastRunner();
+      await poisonReap;
+      reapDisposition = "reaped";
+    } else {
+      reapDisposition = runnerState ? "replacement-preserved" : "already-absent";
+    }
   } finally {
     poisonReap = null;
     runnerPoisoned = false;
   }
   const runnerTimeoutRecovery = {
+    trigger,
     poisoned: true,
-    reaped: true,
+    reaped: reapDisposition === "reaped",
+    reapDisposition,
     verification: verification.matches ? "exact-readback" : "unverified",
     runner: {
       before: runnerBefore,
       afterReapPid: runnerState?.pid ?? null,
       stateCleared: runnerState === null,
-      nextMutationRequiresRespawn: true
+      nextMutationRequiresRespawn: runnerState === null
     },
     runnerPostMortem: getRunnerPostMortem(),
     containmentOrder: ["poison", "independent-readback", "reap", "result"],
-    lateMutationContainment: "runner-process-reaped-before-next-mutation",
+    lateMutationContainment: reapDisposition === "reaped" ? "runner-process-reaped-before-next-mutation" : reapDisposition === "replacement-preserved" ? "replacement-preserved-no-signal-dispatched" : "triggering-runner-state-already-absent",
     targetApp: {
       wasRunningBeforeRecovery: "unverified",
       pidPreserved: "unverified",
@@ -21308,7 +21323,26 @@ async function containTypeTimeout(args) {
       verification: "exact-readback"
     }, { meta: { runnerTimeoutRecovery } });
   }
-  return failResult("RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was reaped before any further mutation.", "RUNNER_TIMEOUT", { runnerTimeoutRecovery });
+  return failResult(trigger === "main-thread-timeout" ? "RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation." : "RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.", "RUNNER_TIMEOUT", { runnerTimeoutRecovery });
+}
+function hasRunnerTimeoutRecovery(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    return envelope.meta?.runnerTimeoutRecovery !== void 0;
+  } catch {
+    return false;
+  }
+}
+async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
+  if (args.command !== "type" || result.isError || hasRunnerTimeoutRecovery(result))
+    return result;
+  const sameAuthority = authorityBefore !== null && runnerState?.pid === authorityBefore.pid && runnerState.port === authorityBefore.port && runnerState.deviceId === authorityBefore.deviceId;
+  if (sameAuthority) {
+    const health = await probeFastRunnerLivenessDetailed();
+    if (health.liveness === "alive")
+      return result;
+  }
+  return containTypeTimeout(args, authorityBefore, "post-settle-runner-authority-lost");
 }
 function mapRunnerNodesToFlat(nodes) {
   const out = [];
@@ -23587,7 +23621,7 @@ async function runNative(cliArgs, opts = {}) {
       }
       upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
     }
-    const { runIOS: runIOS2 } = await Promise.resolve().then(() => (init_rn_fast_runner_client(), rn_fast_runner_client_exports));
+    const { runIOS: runIOS2, captureFastRunnerCommandAuthority: captureFastRunnerCommandAuthority2, verifyTypeResultAfterSettle: verifyTypeResultAfterSettle2 } = await Promise.resolve().then(() => (init_rn_fast_runner_client(), rn_fast_runner_client_exports));
     let ios = buildRunIOSArgs(cliArgs, appId);
     if (ios.command === "type" && opts.verifyTypeReadback) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
@@ -23616,6 +23650,7 @@ async function runNative(cliArgs, opts = {}) {
         timings_ms: { reResolve: healed.ms }
       };
     }
+    const runnerAuthorityBefore = captureFastRunnerCommandAuthority2();
     let result = await runIOS2(ios);
     const iosPolicy = tapRetryPolicy(cliArgs, ios.command, ios.x, ios.y, opts.retryIfNoChange !== void 0 ? { retryIfNoChange: opts.retryIfNoChange } : {});
     result = await settleWithRetryIfNoChange(result, () => runIOS2(ios), {
@@ -23624,6 +23659,7 @@ async function runNative(cliArgs, opts = {}) {
       ...appId ? { appId } : {},
       ...opts.settle ? { settle: opts.settle } : {}
     }, iosPolicy);
+    result = await verifyTypeResultAfterSettle2(ios, result, runnerAuthorityBefore);
     if (healMeta)
       result = attachMeta(result, healMeta);
     return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
@@ -42847,7 +42883,7 @@ async function detectBridge(client2) {
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 39;
+var HELPERS_VERSION = 40;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -45620,6 +45656,8 @@ var INJECTED_HELPERS = `
       } catch (e) { /* require-by-name unavailable (bridgeless/Metro) */ }
       if (!method) {
         var blurred = 0;
+        var blurredWithoutFocusOracle = 0;
+        var blurredHostInstances = new WeakSet();
         var scanned = 0;
         forEachRootFiber(function (rootFiber) {
           var stack = [rootFiber];
@@ -45628,11 +45666,43 @@ var INJECTED_HELPERS = `
             var f = stack.pop();
             if (!f) continue;
             var sn = f.stateNode;
-            if (sn && typeof sn.isFocused === 'function' && typeof sn.blur === 'function') {
+            var blurInstance = sn;
+            // Bridgeless Fabric stores the public ReactNativeElement under
+            // stateNode.canonical.publicInstance; the host stateNode itself is
+            // only an internal {node, canonical} record with no focus methods.
+            if (
+              blurInstance &&
+              typeof blurInstance.blur !== 'function' &&
+              blurInstance.canonical &&
+              blurInstance.canonical.publicInstance
+            ) {
+              blurInstance = blurInstance.canonical.publicInstance;
+            }
+            if (blurInstance && typeof blurInstance.blur === 'function') {
               try {
-                if (sn.isFocused()) {
-                  sn.blur();
-                  blurred++;
+                if (typeof blurInstance.isFocused === 'function') {
+                  if (blurInstance.isFocused()) {
+                    blurInstance.blur();
+                    blurred++;
+                  }
+                } else {
+                  // Some host adapters expose focus()/blur() but no isFocused()
+                  // oracle. Restrict the no-oracle call to RN's native text-input
+                  // host fibers; blur() is idempotent for an unfocused input,
+                  // and the caller still proves the keyboard
+                  // hidden before reporting success or dispatching a tap.
+                  var fiberType = '';
+                  if (typeof f.type === 'string') fiberType = f.type;
+                  else if (f.type && typeof f.type.displayName === 'string') fiberType = f.type.displayName;
+                  else if (f.type && typeof f.type.name === 'string') fiberType = f.type.name;
+                  if (
+                    /textinput|textfield|textview/i.test(fiberType) &&
+                    !blurredHostInstances.has(blurInstance)
+                  ) {
+                    blurredHostInstances.add(blurInstance);
+                    blurInstance.blur();
+                    blurredWithoutFocusOracle++;
+                  }
                 }
               } catch (e) {}
             }
@@ -45642,6 +45712,7 @@ var INJECTED_HELPERS = `
           return null;
         });
         if (blurred > 0) method = 'blur-focused-input';
+        else if (blurredWithoutFocusOracle > 0) method = 'blur-text-input-hosts';
       }
       if (!method) {
         return JSON.stringify({
@@ -54035,6 +54106,7 @@ function createRunActionHandler(deps = {}) {
     const forceReload = proofReplay ? false : args.forceReload !== false;
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
     const autoRepairEnabled = args.autoRepair !== false;
+    const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};
     const trigger = args.trigger ?? "agent";
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
@@ -54047,7 +54119,8 @@ function createRunActionHandler(deps = {}) {
     });
     try {
       let atRisk = null;
-      const blindProbeDisabled = process.env.RN_BLIND_PROBE === "0" || process.env.RN_BLIND_PROBE === "false";
+      const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === "0" || process.env.RN_BLIND_PROBE === "false";
+      const blindProbeDisabled = args.blindProbeMode === "forbid" || args.blindProbeMode !== "allow" && inheritedBlindProbeDisabled;
       if (args.platform !== "android") {
         const ctx = await blindProbeContext2().catch(() => null);
         if (ctx) {
@@ -54102,6 +54175,7 @@ function createRunActionHandler(deps = {}) {
                   repair: autoRepair2,
                   writes: writeDisclosure(promotionDisclosure(persisted)),
                   blindProbe,
+                  ...blindProbeControl,
                   timings_ms,
                   autoRepair: autoRepair2,
                   durationMs: Date.now() - t0,
@@ -54112,6 +54186,7 @@ function createRunActionHandler(deps = {}) {
                 actionId: args.actionId,
                 transport: "cdp-js",
                 blindProbe,
+                ...blindProbeControl,
                 timings_ms,
                 failedStepIndex: replay.failedStepIndex
               });
@@ -55403,9 +55478,18 @@ import { promisify as promisify23 } from "node:util";
 var execFile22 = promisify23(execFileCb18);
 var TERMINATE_TIMEOUT_MS = 1e4;
 var LAUNCH_TIMEOUT_MS = 15e3;
-async function terminateApp(bundleId, platform) {
+var IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+function resolveIosLifecycleTarget(deviceId) {
+  if (deviceId === void 0)
+    return "booted";
+  if (!IOS_UDID_RE.test(deviceId)) {
+    throw new Error("iOS lifecycle deviceId must be an exact simulator UDID");
+  }
+  return deviceId;
+}
+async function terminateApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile22("xcrun", ["simctl", "terminate", "booted", bundleId], {
+    await execFile22("xcrun", ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -55433,9 +55517,9 @@ function buildAndroidLaunchArgv(bundleId) {
     bundleId
   ];
 }
-async function launchApp(bundleId, platform) {
+async function launchApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile22("xcrun", ["simctl", "launch", "booted", bundleId], {
+    await execFile22("xcrun", ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId], {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -55755,30 +55839,44 @@ async function runStorageSteps(client2, keys, instanceId) {
   }
   return results;
 }
-async function runTerminateStep(appId, platform) {
+async function runTerminateStep(appId, platform, deviceId, terminate) {
   const start = Date.now();
   try {
-    await terminateApp(appId, platform);
-    return { step: "terminate", target: appId, ok: true, durationMs: Date.now() - start };
+    await terminate(appId, platform, deviceId);
+    return {
+      step: "terminate",
+      target: appId,
+      ...deviceId ? { deviceId } : {},
+      ok: true,
+      durationMs: Date.now() - start
+    };
   } catch (e) {
     return {
       step: "terminate",
       target: appId,
+      ...deviceId ? { deviceId } : {},
       ok: false,
       durationMs: Date.now() - start,
       error: e instanceof Error ? e.message : String(e)
     };
   }
 }
-async function runLaunchStep(appId, platform) {
+async function runLaunchStep(appId, platform, deviceId, launch) {
   const start = Date.now();
   try {
-    await launchApp(appId, platform);
-    return { step: "launch", target: appId, ok: true, durationMs: Date.now() - start };
+    await launch(appId, platform, deviceId);
+    return {
+      step: "launch",
+      target: appId,
+      ...deviceId ? { deviceId } : {},
+      ok: true,
+      durationMs: Date.now() - start
+    };
   } catch (e) {
     return {
       step: "launch",
       target: appId,
+      ...deviceId ? { deviceId } : {},
       ok: false,
       durationMs: Date.now() - start,
       error: e instanceof Error ? e.message : String(e)
@@ -55871,7 +55969,9 @@ function safeParseError(r) {
     return {};
   }
 }
-function createDeviceResetStateHandler(getClient2) {
+function createDeviceResetStateHandler(getClient2, deps = {}) {
+  const terminate = deps.terminateApp ?? terminateApp;
+  const launch = deps.launchApp ?? launchApp;
   return async (args) => {
     if (!args.appId || typeof args.appId !== "string") {
       return failResult("appId is required.", "DEVICE_RESET_INVALID_ARGS");
@@ -55888,6 +55988,8 @@ function createDeviceResetStateHandler(getClient2) {
     const relaunch = args.relaunch ?? true;
     const waitForReady = args.waitForReady ?? true;
     const waitForNavReady = args.waitForNavReady ?? false;
+    const session = deps.getSession?.() ?? null;
+    const lifecycleDeviceId = platform === "ios" && session?.platform === "ios" && session.appId === args.appId && typeof session.deviceId === "string" ? session.deviceId : void 0;
     const steps = [];
     let reconnected = false;
     let helpersInjected = false;
@@ -55929,9 +56031,9 @@ function createDeviceResetStateHandler(getClient2) {
         steps.push(...storageResults);
       }
     }
-    steps.push(await runTerminateStep(args.appId, platform));
+    steps.push(await runTerminateStep(args.appId, platform, lifecycleDeviceId, terminate));
     if (relaunch) {
-      const launchResult = await runLaunchStep(args.appId, platform);
+      const launchResult = await runLaunchStep(args.appId, platform, lifecycleDeviceId, launch);
       steps.push(launchResult);
       if (launchResult.ok && waitForReady) {
         const client2 = getClient2();
@@ -55960,6 +56062,7 @@ function createDeviceResetStateHandler(getClient2) {
     const data = {
       appId: args.appId,
       platform,
+      ...lifecycleDeviceId ? { deviceId: lifecycleDeviceId } : {},
       relaunch,
       waitForReady,
       summary,
@@ -56621,7 +56724,7 @@ function createDeviceRecordHandler() {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { chmodSync, closeSync as closeSync3, fsyncSync, lstatSync as lstatSync3, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync19, renameSync as renameSync5, unlinkSync as unlinkSync9, writeFileSync as writeFileSync13 } from "node:fs";
+import { chmodSync, closeSync as closeSync3, fsyncSync, lstatSync as lstatSync3, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync19, realpathSync as realpathSync3, renameSync as renameSync5, unlinkSync as unlinkSync9, writeFileSync as writeFileSync13 } from "node:fs";
 import { basename as basename5, dirname as dirname13, extname, isAbsolute as isAbsolute3, join as join29, relative, resolve as resolve3, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -57131,6 +57234,86 @@ var readinessSchema = external_exports.object({
 function hashBytes(bytes) {
   return createHash6("sha256").update(bytes).digest("hex");
 }
+function resolveProofCandidateEntrypoint(candidateRoot, argv) {
+  let root;
+  try {
+    root = realpathSync3(candidateRoot);
+  } catch {
+    return null;
+  }
+  for (const authorityArg of argv) {
+    if (!isAbsolute3(authorityArg))
+      continue;
+    let arg;
+    try {
+      arg = realpathSync3(authorityArg);
+    } catch {
+      continue;
+    }
+    for (const host of ["claude-plugin", "codex-plugin"]) {
+      const hostRoot = join29(root, "packages", host);
+      const coreIndex = join29(hostRoot, "rn-dev-agent-core", "dist", "index.js");
+      const coreSupervisor = join29(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js");
+      if (arg === coreIndex) {
+        return {
+          host,
+          coreBundle: coreIndex,
+          coreSupervisor,
+          authorityArg,
+          kind: "core-index"
+        };
+      }
+      if (arg === coreSupervisor) {
+        return {
+          host,
+          coreBundle: coreIndex,
+          coreSupervisor,
+          authorityArg,
+          kind: "core-supervisor"
+        };
+      }
+      if (host === "codex-plugin" && arg === join29(hostRoot, "bin", "cdp-supervisor.js")) {
+        try {
+          return {
+            host,
+            coreBundle: realpathSync3(coreIndex),
+            coreSupervisor: realpathSync3(coreSupervisor),
+            authorityArg,
+            kind: "codex-launcher"
+          };
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
+  const normalizedOverride = (value) => {
+    if (!value || !isAbsolute3(value))
+      return value ? null : "";
+    try {
+      return realpathSync3(value);
+    } catch {
+      return null;
+    }
+  };
+  const supervisorOverride = normalizedOverride(env.RN_DEV_AGENT_CORE_SUPERVISOR);
+  const coreRootOverride = normalizedOverride(env.RN_DEV_AGENT_CORE_ROOT);
+  const workerOverride = normalizedOverride(env.RN_BRIDGE_WORKER_PATH);
+  if (supervisorOverride === null || coreRootOverride === null || workerOverride === null) {
+    return false;
+  }
+  if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
+    return false;
+  if (coreRootOverride && join29(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+    return false;
+  }
+  if (workerOverride && workerOverride !== entrypoint.coreBundle)
+    return false;
+  return true;
+}
 function readProofCandidateRuntime(candidateRoot) {
   const root = resolve3(candidateRoot);
   if (root !== candidateRoot)
@@ -57145,11 +57328,11 @@ function readProofCandidateRuntime(candidateRoot) {
     throw new Error("CANDIDATE_REPOSITORY_MISMATCH");
   }
   const argv = [...process.argv];
-  const loadedBundle = argv.filter(isAbsolute3).map((arg) => resolve3(arg)).find((arg) => arg.startsWith(`${join29(root, "packages")}${sep5}`) && /\/rn-dev-agent-core\/dist\/(?:index|supervisor)\.js$/.test(arg));
-  const host = loadedBundle?.includes(`${sep5}claude-plugin${sep5}`) ? "claude-plugin" : loadedBundle?.includes(`${sep5}codex-plugin${sep5}`) ? "codex-plugin" : null;
-  if (!host || !loadedBundle)
+  const entrypoint = resolveProofCandidateEntrypoint(root, argv);
+  if (!entrypoint || !proofCandidateEntrypointEnvironmentMatches(entrypoint, process.env)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
-  const coreBundle = loadedBundle;
+  }
+  const { host, coreBundle } = entrypoint;
   const runnerManifest = join29(root, "packages", host, "runner-manifest.json");
   return proofCandidateRuntimeSchema.parse({
     repo: "Lykhoyda/rn-dev-agent",
@@ -63716,7 +63899,7 @@ trackedTool("device_reset_state", "One-shot preflight: revoke/reset permissions,
   relaunch: external_exports.boolean().optional().describe("Launch the app after terminate. Default true."),
   waitForReady: external_exports.boolean().optional().describe("After relaunch, wait for CDP reconnect + helpers injection. Default true. Set false to return immediately and let the caller poll."),
   waitForNavReady: external_exports.boolean().optional().describe("After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.")
-}, createDeviceResetStateHandler(getClient));
+}, createDeviceResetStateHandler(getClient, { getSession: getActiveSession }));
 trackedTool("device_deeplink", "Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less \u2014 no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.", {
   url: external_exports.string().describe('URL to open, e.g. "myapp://claims/new" or "https://example.com/page".'),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
@@ -64050,7 +64233,7 @@ trackedTool("cdp_repair_action", 'Self-repair an L3 reusable action whose Maestr
 }, createRepairActionHandler());
 trackedTool(
   "cdp_run_action",
-  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.`,
+  `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`,
   {
     actionId: external_exports.string().describe("Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml."),
     projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
@@ -64060,6 +64243,7 @@ trackedTool(
     trigger: external_exports.enum(["agent", "ci", "human"]).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
     forceReload: external_exports.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
     proofReplay: external_exports.boolean().optional().describe("Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state."),
+    blindProbeMode: external_exports.enum(["inherit", "allow", "forbid"]).optional().describe("Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged."),
     params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).")
   },
   // GH #186: supply a CDP-backed live-route reader so the route-drift guard is

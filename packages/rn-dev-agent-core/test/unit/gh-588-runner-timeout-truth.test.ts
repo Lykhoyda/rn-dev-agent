@@ -1,15 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { _setActiveSessionForTest, runNative } from '../../dist/agent-device-wrapper.js';
+import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
 import {
   _setFastRunnerStateForTest,
   _setFetchForTest,
   buildRunnerPortEnv,
   buildRunnerTestFaultEnv,
+  getFastRunnerState,
   getRunnerPostMortem,
   resolveRunnerRequestedPort,
   runIOS,
+  verifyTypeResultAfterSettle,
 } from '../../dist/runners/rn-fast-runner-client.js';
+import { okResult } from '../../dist/utils.js';
 
 function state() {
   _setFastRunnerStateForTest({
@@ -168,4 +174,126 @@ test('GH-588 Slice C: a second mutator is refused while the triggering runner is
   assert.equal((second.meta as { dispatched?: boolean }).dispatched, false);
   release();
   await first;
+});
+
+test('GH-588 V6: a replacement runner is preserved when prior type authority is lost', async (t) => {
+  t.after(() => _setFastRunnerStateForTest(null));
+  _setFastRunnerStateForTest({
+    schemaVersion: 1,
+    pid: 222_222_222,
+    port: 22089,
+    deviceId: 'fixture-ios',
+    bundleId: 'dev.fixture',
+    startedAt: new Date(1).toISOString(),
+    protocolVersion: 2,
+    provenance: 'build-local',
+  } as never);
+
+  const result = body(
+    await verifyTypeResultAfterSettle(
+      {
+        command: 'type',
+        text: 'never-landed',
+        _verifyExactReadback: async () => ({ matches: false, actual: '' }),
+      },
+      okResult({ message: 'typed' }),
+      {
+        pid: 111_111_111,
+        port: 22088,
+        deviceId: 'fixture-ios',
+        statePath: '/tmp/old-state.json',
+        provenance: 'spawned',
+      },
+    ),
+  );
+
+  assert.equal(result.code, 'RUNNER_TIMEOUT');
+  assert.equal(
+    (result.meta?.runnerTimeoutRecovery as { reapDisposition?: string }).reapDisposition,
+    'replacement-preserved',
+  );
+  assert.equal(getFastRunnerState()?.pid, 222_222_222, 'replacement PID is never signaled');
+});
+
+test('GH-588 V6: success-shaped fill fails closed when settle observes runner authority loss', async (t) => {
+  const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  assert.ok(dummy.pid);
+  t.after(() => {
+    dummy.kill('SIGKILL');
+    _setFastRunnerStateForTest(null);
+    _setActiveSessionForTest(null);
+    _setFetchForTest(globalThis.fetch);
+  });
+  _setActiveSessionForTest({
+    platform: 'ios',
+    deviceId: 'fixture-ios',
+    appId: 'dev.fixture',
+  });
+  _setFastRunnerStateForTest({
+    schemaVersion: 1,
+    pid: dummy.pid!,
+    port: 22088,
+    deviceId: 'fixture-ios',
+    bundleId: 'dev.fixture',
+    startedAt: new Date(0).toISOString(),
+    protocolVersion: 2,
+    provenance: 'build-local',
+  } as never);
+  let typeReplies = 0;
+  _setFetchForTest(async (_input, init) => {
+    if ((init?.method ?? 'GET') === 'GET') {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          protocolVersion: 2,
+          runnerVersion: '0.70.8',
+          capabilities: ['SCREEN_STATIC', 'HONEST_HITTABLE'],
+          commands: REQUIRED_IOS_COMMANDS,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    const request = JSON.parse(String(init?.body ?? '{}')) as { command?: string };
+    if (request.command === 'type') {
+      typeReplies++;
+      return new Response(
+        JSON.stringify({ ok: true, v: 2, data: { message: 'typed', typingBurst: true } }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    if (request.command === 'isScreenStatic') {
+      // Reproduce the live race: the type reply was success-shaped, then the
+      // health/settle window observed the triggering XCTest state disappear.
+      _setFastRunnerStateForTest(null);
+      return new Response(JSON.stringify({ ok: true, v: 2, data: { static: true } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    throw new Error(`unexpected command ${String(request.command)}`);
+  });
+
+  const result = body(
+    await runNative(['fill', '@e0', 'never-landed', '--at-x', '10', '--at-y', '10'], {
+      platform: 'ios',
+      settle: { timeoutMs: 100 },
+      verifyTypeReadback: async () => ({ matches: false, actual: '' }),
+    }),
+  );
+
+  assert.equal(typeReplies, 1, 'the mutating type command is never resent');
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'RUNNER_TIMEOUT');
+  const recovery = result.meta?.runnerTimeoutRecovery as {
+    trigger?: string;
+    reaped?: boolean;
+    reapDisposition?: string;
+    verification?: string;
+  };
+  assert.equal(recovery.trigger, 'post-settle-runner-authority-lost');
+  assert.equal(recovery.verification, 'unverified');
+  assert.equal(recovery.reaped, false);
+  assert.equal(recovery.reapDisposition, 'already-absent');
 });

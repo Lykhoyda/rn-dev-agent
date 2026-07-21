@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -92,6 +92,99 @@ function hashBytes(bytes) {
     return createHash('sha256').update(bytes).digest('hex');
 }
 /**
+ * Resolve only shipped MCP entry points beneath the immutable candidate. The
+ * Codex supervisor launcher is a valid process authority even though it then
+ * execs the packaged core worker; in that case the digest remains bound to the
+ * exact packaged core bundle that executes tool behavior. realpath closes the
+ * macOS /tmp -> /private/tmp spelling gap without accepting paths outside the
+ * candidate.
+ */
+export function resolveProofCandidateEntrypoint(candidateRoot, argv) {
+    let root;
+    try {
+        root = realpathSync(candidateRoot);
+    }
+    catch {
+        return null;
+    }
+    for (const authorityArg of argv) {
+        if (!isAbsolute(authorityArg))
+            continue;
+        let arg;
+        try {
+            arg = realpathSync(authorityArg);
+        }
+        catch {
+            continue;
+        }
+        for (const host of ['claude-plugin', 'codex-plugin']) {
+            const hostRoot = join(root, 'packages', host);
+            const coreIndex = join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js');
+            const coreSupervisor = join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js');
+            if (arg === coreIndex) {
+                return {
+                    host,
+                    coreBundle: coreIndex,
+                    coreSupervisor,
+                    authorityArg,
+                    kind: 'core-index',
+                };
+            }
+            if (arg === coreSupervisor) {
+                return {
+                    host,
+                    coreBundle: coreIndex,
+                    coreSupervisor,
+                    authorityArg,
+                    kind: 'core-supervisor',
+                };
+            }
+            if (host === 'codex-plugin' && arg === join(hostRoot, 'bin', 'cdp-supervisor.js')) {
+                try {
+                    return {
+                        host,
+                        coreBundle: realpathSync(coreIndex),
+                        coreSupervisor: realpathSync(coreSupervisor),
+                        authorityArg,
+                        kind: 'codex-launcher',
+                    };
+                }
+                catch {
+                    return null;
+                }
+            }
+        }
+    }
+    return null;
+}
+export function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
+    const normalizedOverride = (value) => {
+        if (!value || !isAbsolute(value))
+            return value ? null : '';
+        try {
+            return realpathSync(value);
+        }
+        catch {
+            return null;
+        }
+    };
+    const supervisorOverride = normalizedOverride(env.RN_DEV_AGENT_CORE_SUPERVISOR);
+    const coreRootOverride = normalizedOverride(env.RN_DEV_AGENT_CORE_ROOT);
+    const workerOverride = normalizedOverride(env.RN_BRIDGE_WORKER_PATH);
+    if (supervisorOverride === null || coreRootOverride === null || workerOverride === null) {
+        return false;
+    }
+    if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
+        return false;
+    if (coreRootOverride &&
+        join(coreRootOverride, 'dist', 'supervisor.js') !== entrypoint.coreSupervisor) {
+        return false;
+    }
+    if (workerOverride && workerOverride !== entrypoint.coreBundle)
+        return false;
+    return true;
+}
+/**
  * Read dual proof authority from immutable candidate bytes. Nothing in this
  * block is caller-authored prose: Git, package digests, and the live MCP
  * process identity are captured at the strict-proof boundary.
@@ -110,19 +203,11 @@ export function readProofCandidateRuntime(candidateRoot) {
         throw new Error('CANDIDATE_REPOSITORY_MISMATCH');
     }
     const argv = [...process.argv];
-    const loadedBundle = argv
-        .filter(isAbsolute)
-        .map((arg) => resolve(arg))
-        .find((arg) => arg.startsWith(`${join(root, 'packages')}${sep}`) &&
-        /\/rn-dev-agent-core\/dist\/(?:index|supervisor)\.js$/.test(arg));
-    const host = loadedBundle?.includes(`${sep}claude-plugin${sep}`)
-        ? 'claude-plugin'
-        : loadedBundle?.includes(`${sep}codex-plugin${sep}`)
-            ? 'codex-plugin'
-            : null;
-    if (!host || !loadedBundle)
+    const entrypoint = resolveProofCandidateEntrypoint(root, argv);
+    if (!entrypoint || !proofCandidateEntrypointEnvironmentMatches(entrypoint, process.env)) {
         throw new Error('CANDIDATE_MCP_PROCESS_MISMATCH');
-    const coreBundle = loadedBundle;
+    }
+    const { host, coreBundle } = entrypoint;
     const runnerManifest = join(root, 'packages', host, 'runner-manifest.json');
     return proofCandidateRuntimeSchema.parse({
         repo: 'Lykhoyda/rn-dev-agent',

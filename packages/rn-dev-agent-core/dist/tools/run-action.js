@@ -224,6 +224,7 @@ export function createRunActionHandler(deps = {}) {
         const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
         const autoRepairEnabled = args.autoRepair !== false;
+        const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};
         const trigger = args.trigger ?? 'agent';
         const timeoutMs = args.timeoutMs ?? 120_000;
         const t0 = Date.now();
@@ -254,7 +255,9 @@ export function createRunActionHandler(deps = {}) {
             // directly. Every branch fails open to the maestro-first path below.
             // Opt out globally with RN_BLIND_PROBE=0.
             let atRisk = null;
-            const blindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
+            const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
+            const blindProbeDisabled = args.blindProbeMode === 'forbid' ||
+                (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
             if (args.platform !== 'android') {
                 // Resolve the device context even when the gate is opted out: a clean
                 // maestro pass recorded WITHOUT deviceId can never clear a prior
@@ -313,6 +316,7 @@ export function createRunActionHandler(deps = {}) {
                                     repair: autoRepair,
                                     writes: writeDisclosure(promotionDisclosure(persisted)),
                                     blindProbe,
+                                    ...blindProbeControl,
                                     timings_ms,
                                     autoRepair,
                                     durationMs: Date.now() - t0,
@@ -327,6 +331,7 @@ export function createRunActionHandler(deps = {}) {
                                 actionId: args.actionId,
                                 transport: 'cdp-js',
                                 blindProbe,
+                                ...blindProbeControl,
                                 timings_ms,
                                 failedStepIndex: replay.failedStepIndex,
                             });

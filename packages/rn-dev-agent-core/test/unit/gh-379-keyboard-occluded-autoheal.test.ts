@@ -293,6 +293,66 @@ test('dismissKeyboard: unfocused inputs are not blurred → dismissed:false', ()
   assert.equal(idleInput.stateNode._blurred, 0);
 });
 
+test('dismissKeyboard: live Bridgeless Fabric wrapper reaches canonical.publicInstance', () => {
+  const publicInstance = {
+    _focused: true,
+    _blurred: 0,
+    isFocused() {
+      return this._focused;
+    },
+    blur() {
+      this._blurred++;
+      this._focused = false;
+    },
+  };
+  const fabricInput = {
+    type: 'RCTMultilineTextInputView',
+    stateNode: { node: {}, canonical: { publicInstance } },
+    child: null,
+    sibling: null,
+  };
+  const root = { type: 'View', stateNode: null, child: fabricInput, sibling: null };
+  const sandbox = createSandbox({ fiberRoot: root });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.dismissKeyboard());
+
+  assert.deepEqual(result, { dismissed: true, method: 'blur-focused-input' });
+  assert.equal(publicInstance._blurred, 1);
+});
+
+test('dismissKeyboard: text host without a focus oracle uses restricted idempotent blur', () => {
+  const fabricInput = {
+    type: 'RCTMultilineTextInputView',
+    stateNode: {
+      _blurred: 0,
+      blur() {
+        this._blurred++;
+      },
+    },
+    child: null,
+    sibling: null,
+  };
+  const inertView = {
+    type: 'RCTView',
+    stateNode: {
+      _blurred: 0,
+      blur() {
+        this._blurred++;
+      },
+    },
+    child: null,
+    sibling: fabricInput,
+  };
+  const root = { type: 'View', stateNode: null, child: inertView, sibling: null };
+  const sandbox = createSandbox({ fiberRoot: root });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.dismissKeyboard());
+
+  assert.deepEqual(result, { dismissed: true, method: 'blur-text-input-hosts' });
+  assert.equal(fabricInput.stateNode._blurred, 1);
+  assert.equal(inertView.stateNode._blurred, 0, 'no-oracle blur is text-host restricted');
+});
+
 test('dismissKeyboard: prefers the RN Keyboard module when require resolves it', () => {
   let dismissCalls = 0;
   const sandbox = createSandbox({

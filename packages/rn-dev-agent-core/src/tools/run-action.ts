@@ -136,6 +136,14 @@ export interface RunActionArgs {
   forceReload?: boolean;
   /** Execute the action without persistence for strict proof rehearsal. */
   proofReplay?: boolean;
+  /**
+   * Per-call proactive CDP/JS compatibility control. `inherit` (default)
+   * honors RN_BLIND_PROBE; `allow` explicitly enables the normal at-risk
+   * probe for this call; `forbid` keeps this call maestro-first even when the
+   * process default enables the probe. Reactive fallback semantics are
+   * unchanged.
+   */
+  blindProbeMode?: 'inherit' | 'allow' | 'forbid';
 }
 
 interface MaestroTerminal {
@@ -408,6 +416,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
 
     const autoRepairEnabled = args.autoRepair !== false;
+    const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};
     const trigger: 'agent' | 'ci' | 'human' = args.trigger ?? 'agent';
     const timeoutMs = args.timeoutMs ?? 120_000;
     const t0 = Date.now();
@@ -446,8 +455,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // directly. Every branch fails open to the maestro-first path below.
       // Opt out globally with RN_BLIND_PROBE=0.
       let atRisk: BlindProbeAtRisk | null = null;
-      const blindProbeDisabled =
+      const inheritedBlindProbeDisabled =
         process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
+      const blindProbeDisabled =
+        args.blindProbeMode === 'forbid' ||
+        (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
       if (args.platform !== 'android') {
         // Resolve the device context even when the gate is opted out: a clean
         // maestro pass recorded WITHOUT deviceId can never clear a prior
@@ -507,6 +519,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   repair: autoRepair,
                   writes: writeDisclosure(promotionDisclosure(persisted)),
                   blindProbe,
+                  ...blindProbeControl,
                   timings_ms,
                   autoRepair,
                   durationMs: Date.now() - t0,
@@ -524,6 +537,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   actionId: args.actionId,
                   transport: 'cdp-js',
                   blindProbe,
+                  ...blindProbeControl,
                   timings_ms,
                   failedStepIndex: replay.failedStepIndex,
                 },

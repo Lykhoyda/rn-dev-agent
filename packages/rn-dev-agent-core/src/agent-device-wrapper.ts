@@ -1326,7 +1326,8 @@ export async function runNative(
       }
       upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
     }
-    const { runIOS } = await import('./runners/rn-fast-runner-client.js');
+    const { runIOS, captureFastRunnerCommandAuthority, verifyTypeResultAfterSettle } =
+      await import('./runners/rn-fast-runner-client.js');
     let ios = buildRunIOSArgs(cliArgs, appId);
     if (ios.command === 'type' && opts.verifyTypeReadback) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
@@ -1356,6 +1357,7 @@ export async function runNative(
         timings_ms: { reResolve: healed.ms },
       };
     }
+    const runnerAuthorityBefore = captureFastRunnerCommandAuthority();
     let result = await runIOS(ios);
     const iosPolicy = tapRetryPolicy(
       cliArgs,
@@ -1375,6 +1377,7 @@ export async function runNative(
       },
       iosPolicy,
     );
+    result = await verifyTypeResultAfterSettle(ios, result, runnerAuthorityBefore);
     if (healMeta) result = attachMeta(result, healMeta);
     return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
   }
