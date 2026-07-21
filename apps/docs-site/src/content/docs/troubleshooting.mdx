@@ -156,6 +156,16 @@ a cold build takes several minutes; if it times out, pre-build once with
 `xcodebuild build-for-testing` (see Getting Started) and re-open the device
 session.
 
+### APP_LAUNCH_FAILED
+
+The native runner started, but launching the app itself failed
+(`device_snapshot action=open` on Android) — reported separately from
+`RN_ANDROID_RUNNER_DOWN` so a launcher problem isn't mistaken for a runner
+problem. Check that the exact `appId` is installed on the selected device
+(`adb -s <serial> shell pm list packages`). Keyless AVDs are handled
+automatically: the launcher runs `monkey` with `--pct-syskeys 0`, so
+missing physical system keys no longer abort the launch with exit 251.
+
 ### BUSY_FOREIGN_FLOW
 
 A foreign Maestro/XCUITest session (e.g. a standalone maestro-mcp) is
