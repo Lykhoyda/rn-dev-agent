@@ -138,6 +138,15 @@ test('GH-588 Slice A: defaulted iOS identity is unproven; filterless Android rem
   ]);
   assert.equal(filterless.targets.length, 1);
   assert.match(filterless.warning!, /No platform filter/);
+
+  const filterlessSorted = selectTarget([
+    { id: 'dev-1', title: 'Older page', platform: 'android', platformInference: 'probed' } as never,
+    { id: 'dev-2', title: 'Newer page', platform: 'ios', platformInference: 'probed' } as never,
+  ]);
+  assert.equal(filterlessSorted.targets[0].id, 'dev-2');
+  assert.match(filterlessSorted.warning!, /No platform filter/);
+  assert.match(filterlessSorted.warning!, /\(dev-2 /);
+  assert.doesNotMatch(filterlessSorted.warning!, /\(dev-1 /);
 });
 
 const BRIDGELESS_TARGET = {

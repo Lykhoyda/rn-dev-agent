@@ -363,6 +363,7 @@ export function selectTarget(
 
   let filteredTargets = validTargets;
   const warnings: string[] = [];
+  let warnNoPlatformFilter = false;
 
   // Selection precedence starts with an exact target id. It is exact identity,
   // but it never overrides an explicit/session platform constraint.
@@ -403,9 +404,7 @@ export function selectTarget(
     !filters.deviceKind &&
     !filters.preferredBundleId
   ) {
-    warnings.push(
-      `No platform filter was supplied; connecting to the best available target without cross-platform affinity (${describeTarget(validTargets[0])}). Pass platform to fail closed.`,
-    );
+    warnNoPlatformFilter = true;
   }
 
   if (filters.deviceKind) {
@@ -477,6 +476,12 @@ export function selectTarget(
     }
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+
+  if (warnNoPlatformFilter && sorted.length > 0) {
+    warnings.push(
+      `No platform filter was supplied; connecting to the best available target without cross-platform affinity (${describeTarget(sorted[0])}). Pass platform to fail closed.`,
+    );
+  }
 
   return { targets: sorted, warning: warnings.length > 0 ? warnings.join(' | ') : undefined };
 }

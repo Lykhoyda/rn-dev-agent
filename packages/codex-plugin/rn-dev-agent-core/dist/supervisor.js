@@ -39151,6 +39151,7 @@ function selectTarget(validTargets, filtersOrPlatform) {
   const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
   let filteredTargets = validTargets;
   const warnings = [];
+  let warnNoPlatformFilter = false;
   if (filters.targetId) {
     const idMatched = validTargets.filter((t) => t.id === filters.targetId);
     if (idMatched.length === 0) {
@@ -39174,7 +39175,7 @@ function selectTarget(validTargets, filtersOrPlatform) {
     }
     filteredTargets = platformMatched;
   } else if (validTargets.length > 0 && !filters.targetId && !filters.bundleId && !filters.deviceKind && !filters.preferredBundleId) {
-    warnings.push(`No platform filter was supplied; connecting to the best available target without cross-platform affinity (${describeTarget(validTargets[0])}). Pass platform to fail closed.`);
+    warnNoPlatformFilter = true;
   }
   if (filters.deviceKind) {
     const kind = filters.deviceKind;
@@ -39222,6 +39223,9 @@ function selectTarget(validTargets, filtersOrPlatform) {
     }
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+  if (warnNoPlatformFilter && sorted.length > 0) {
+    warnings.push(`No platform filter was supplied; connecting to the best available target without cross-platform affinity (${describeTarget(sorted[0])}). Pass platform to fail closed.`);
+  }
   return { targets: sorted, warning: warnings.length > 0 ? warnings.join(" | ") : void 0 };
 }
 function selectMetroPort(attached, runningPorts, ctx) {
