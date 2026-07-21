@@ -126,7 +126,27 @@ Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 i
 
 ## Error codes
 
-Codes returned by `device_*`/flow tools, what they mean, and the fix.
+Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
+
+### PLATFORM_TARGET_NOT_FOUND / TARGET_PLATFORM_CONFLICT
+
+`cdp_status`/`cdp_connect` refused to connect (or disconnected right after
+connecting) because the requested platform or bundleId could not be
+**proven** for any live Metro target. A target only proves its identity
+through one internally consistent Metro field — `appId`, an exact bundle-id
+`description`, or the canonical `<bundleId> (<device>)` title; a defaulted
+or ambiguous platform guess never satisfies a platform filter. The refusal
+lists the candidate targets with their inference confidence. Run
+`cdp_targets`, relaunch the requested app, or pass a `targetId` from a
+proven target. With no filters at all, connection proceeds to the best
+available target with a warning instead of failing closed.
+
+### TARGET_SESSION_MISMATCH
+
+`cdp_status`/`cdp_connect` requested a platform or bundleId that conflicts
+with the active device session's binding. Close the device session or
+request the same platform/bundle — cross-platform fallback is refused
+rather than silently targeting a different device.
 
 ### RN_FAST_RUNNER_DOWN / RN_ANDROID_RUNNER_DOWN
 
@@ -197,6 +217,15 @@ The plugin attempts to self-repair small UI drift: it looks at the live UI, find
 Self-repair refuses if the file has been hand-edited (mtime check), or after 3 repairs in 24h. If repair is refused or fails, the plugin asks before forcing. If the underlying flow has changed structurally (extra step, removed screen), re-record with `/rn-dev-agent:test-feature`.
 
 See the [Actions guide](/rn-dev-agent/actions/) for full details.
+
+### Action replay refused with WDA_BOOTSTRAP_FAILED
+
+The iOS Maestro driver (WebDriverAgent) failed to bootstrap before the
+first replay step ran, so the flow was refused — no self-repair, cache
+mutation, or preparation was attempted, because nothing about the flow
+itself was proven wrong. Re-run the replay (bootstrap retries itself),
+check network access, and inspect the maestro-runner WDA installation
+(`~/.maestro-runner/bin/maestro-runner`).
 
 ### `/setup` skipped a step
 
