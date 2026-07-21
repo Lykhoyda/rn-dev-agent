@@ -1460,6 +1460,21 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
   return out;
 }
 
+function staleAfterKeyboardDismissal(ref: string | undefined): ToolResult {
+  return failResult(
+    `Element at ref ${ref ?? '?'} could not be re-resolved by identity after the keyboard was dismissed — no tap was performed`,
+    'STALE_REF',
+    {
+      keyboardGuard: 'auto_dismissed',
+      reResolved: false,
+      cachedMetadata: ref ? getCachedMetadata(ref) : null,
+      reResolution: 'no-signature',
+      candidates: [],
+      hint: 'The keyboard was dismissed successfully; the ref no longer identifies the same element. Call device_snapshot action=snapshot and retry with the new ref.',
+    },
+  );
+}
+
 export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   // STALE_REF sentinel from buildRunIOSArgs(): the caller tried to press/type
   // a @ref but refCenter() returned null. Surface cached metadata so the agent
@@ -1562,11 +1577,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     return true;
   };
   if (keyboardRelayoutRecovered && !(await refreshTargetAfterKeyboard())) {
-    return failResult(
-      'KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the target could not be re-resolved from a fresh snapshot; no tap was performed.',
-      'KEYBOARD_DISMISS_FAILED',
-      { keyboardGuard: 'auto_dismissed', reResolved: false },
-    );
+    return staleAfterKeyboardDismissal(args._targetRef);
   }
 
   let resp: RunnerResponse;
@@ -1590,11 +1601,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   }
   if (!resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
     if (!(await refreshTargetAfterKeyboard())) {
-      return failResult(
-        'KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the ref target could not be re-resolved from a fresh snapshot; no tap was performed.',
-        'KEYBOARD_DISMISS_FAILED',
-        { keyboardGuard: 'auto_dismissed', reResolved: false },
-      );
+      return staleAfterKeyboardDismissal(args._targetRef);
     }
     ({ resp, recovery } = await postCommandWithRecovery(
       withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,

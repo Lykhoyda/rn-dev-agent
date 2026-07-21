@@ -7,6 +7,7 @@ import {
   selectTarget,
   targetBundleIdentity,
 } from '../../dist/cdp/discovery.js';
+import * as discovery from '../../dist/cdp/discovery.js';
 import { _setActiveSessionForTest } from '../../dist/agent-device-wrapper.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 
@@ -303,4 +304,36 @@ test('GH-588 Slice A: exact targetId cannot override platform authority', () => 
   );
   assert.equal(result.errorCode, 'TARGET_PLATFORM_CONFLICT');
   assert.equal(result.targets.length, 0);
+});
+
+test('a failed package probe is not sticky enough to fail-close later connects', () => {
+  const { cachedPackageProbe, clearPackageProbeCache } = discovery;
+  clearPackageProbeCache();
+
+  let calls = 0;
+  const failing = () => {
+    calls += 1;
+    return null;
+  };
+  assert.equal(cachedPackageProbe('ios', failing, 0), null);
+  // A burst of connects within the failure window reuses the one probe...
+  assert.equal(cachedPackageProbe('ios', failing, 1_000), null);
+  assert.equal(calls, 1);
+  // ...but the blip must self-heal rather than fail-close targets for 15s.
+  const healed = new Set(['dev.fixture']);
+  assert.deepEqual(
+    cachedPackageProbe('ios', () => healed, 2_000),
+    healed,
+  );
+
+  let successCalls = 0;
+  const succeeding = () => {
+    successCalls += 1;
+    return healed;
+  };
+  clearPackageProbeCache();
+  assert.deepEqual(cachedPackageProbe('android', succeeding, 0), healed);
+  assert.deepEqual(cachedPackageProbe('android', succeeding, 14_000), healed);
+  assert.equal(successCalls, 1);
+  clearPackageProbeCache();
 });

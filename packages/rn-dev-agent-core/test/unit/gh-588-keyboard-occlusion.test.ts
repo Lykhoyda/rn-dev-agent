@@ -309,7 +309,15 @@ test('GH-588 Slice D: a positionally reused ref refuses instead of tapping a for
   try {
     const result = await runIOS({ command: 'tap', x: 10, y: 20, _targetRef: '@e7' } as never);
     assert.equal(result.isError, true);
-    assert.match(result.content[0]!.text, /KEYBOARD_DISMISS_FAILED/);
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      code?: string;
+      meta?: { keyboardGuard?: string; reResolved?: boolean };
+    };
+    // The dismissal succeeded; the ref is what went stale, so the remedy is a
+    // fresh snapshot, not a CDP reconnect.
+    assert.equal(envelope.code, 'STALE_REF');
+    assert.equal(envelope.meta?.keyboardGuard, 'auto_dismissed');
+    assert.equal(envelope.meta?.reResolved, false);
     assert.deepEqual(commands, ['keyboardDismiss', 'snapshot']);
   } finally {
     _setFetchForTest(globalThis.fetch);
@@ -331,7 +339,15 @@ test('GH-588 Slice D: an unlabeled ref is never re-served on type alone', async 
   try {
     const result = await runIOS({ command: 'tap', x: 10, y: 20, _targetRef: '@e7' } as never);
     assert.equal(result.isError, true);
-    assert.match(result.content[0]!.text, /KEYBOARD_DISMISS_FAILED/);
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      code?: string;
+      meta?: { keyboardGuard?: string; reResolved?: boolean };
+    };
+    // The dismissal succeeded; the ref is what went stale, so the remedy is a
+    // fresh snapshot, not a CDP reconnect.
+    assert.equal(envelope.code, 'STALE_REF');
+    assert.equal(envelope.meta?.keyboardGuard, 'auto_dismissed');
+    assert.equal(envelope.meta?.reResolved, false);
     assert.deepEqual(commands, ['keyboardDismiss', 'snapshot']);
   } finally {
     _setFetchForTest(globalThis.fetch);

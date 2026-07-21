@@ -39104,11 +39104,13 @@ function targetBundleIdentity(target) {
 function targetMatchesBundleId(target, bundleId) {
   return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
 }
-function cachedPackageProbe(key, probe) {
+function cachedPackageProbe(key, probe, now = Date.now()) {
   const hit = packageProbeCache.get(key);
-  const now = Date.now();
-  if (hit && now - hit.at < PACKAGE_PROBE_TTL_MS)
-    return hit.value;
+  if (hit) {
+    const ttl = hit.value === null ? PACKAGE_PROBE_FAILURE_TTL_MS : PACKAGE_PROBE_TTL_MS;
+    if (now - hit.at < ttl)
+      return hit.value;
+  }
   const value = probe();
   packageProbeCache.set(key, { at: now, value });
   return value;
@@ -39442,7 +39444,7 @@ async function enumerateMetroCandidates(connectedPort, projectRoot) {
     timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe }
   };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS, PACKAGE_PROBE_TTL_MS, packageProbeCache, TargetSelectionError;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, packageProbeCache, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
@@ -39466,6 +39468,7 @@ var init_discovery = __esm({
     };
     DISCOVERY_TIMEOUT_MS = 1500;
     PACKAGE_PROBE_TTL_MS = 15e3;
+    PACKAGE_PROBE_FAILURE_TTL_MS = 1500;
     packageProbeCache = /* @__PURE__ */ new Map();
     TargetSelectionError = class extends Error {
       code;
@@ -42465,6 +42468,16 @@ function mapRunnerNodesToFlat(nodes) {
   }
   return out;
 }
+function staleAfterKeyboardDismissal(ref) {
+  return failResult(`Element at ref ${ref ?? "?"} could not be re-resolved by identity after the keyboard was dismissed \u2014 no tap was performed`, "STALE_REF", {
+    keyboardGuard: "auto_dismissed",
+    reResolved: false,
+    cachedMetadata: ref ? getCachedMetadata(ref) : null,
+    reResolution: "no-signature",
+    candidates: [],
+    hint: "The keyboard was dismissed successfully; the ref no longer identifies the same element. Call device_snapshot action=snapshot and retry with the new ref."
+  });
+}
 async function runIOS(args) {
   if (args._staleRef) {
     return failResult(`Element at ref ${args._staleRef} no longer hittable \u2014 UI re-rendered since snapshot`, "STALE_REF", {
@@ -42556,7 +42569,7 @@ async function runIOS(args) {
     return true;
   };
   if (keyboardRelayoutRecovered && !await refreshTargetAfterKeyboard()) {
-    return failResult("KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the target could not be re-resolved from a fresh snapshot; no tap was performed.", "KEYBOARD_DISMISS_FAILED", { keyboardGuard: "auto_dismissed", reResolved: false });
+    return staleAfterKeyboardDismissal(args._targetRef);
   }
   let resp;
   let recovery;
@@ -42577,7 +42590,7 @@ async function runIOS(args) {
   }
   if (!resp.ok && resp.error?.code === "KEYBOARD_RELAYOUT_REQUIRED") {
     if (!await refreshTargetAfterKeyboard()) {
-      return failResult("KEYBOARD_DISMISS_FAILED: keyboard was dismissed but the ref target could not be re-resolved from a fresh snapshot; no tap was performed.", "KEYBOARD_DISMISS_FAILED", { keyboardGuard: "auto_dismissed", reResolved: false });
+      return staleAfterKeyboardDismissal(args._targetRef);
     }
     ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
     keyboardRelayoutRecovered = true;
