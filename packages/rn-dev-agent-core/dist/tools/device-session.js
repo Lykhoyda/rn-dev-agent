@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, attachMetaNote, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { consumePendingFastRunnerArtifactNote, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, runAndroid, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
+import { launchApp } from './app-lifecycle.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice, } from '../runners/external-runner-detect.js';
@@ -519,10 +520,7 @@ async function reacquireIosTargetApp(appId, deviceId) {
         /* best-effort — may already be dead */
     }
     try {
-        await execFile('xcrun', ['simctl', 'launch', 'booted', appId], {
-            timeout: 5000,
-            encoding: 'utf8',
-        });
+        await launchApp(appId, 'ios', deviceId);
     }
     catch {
         /* best-effort — the sentinel re-check covers a failed foreground */

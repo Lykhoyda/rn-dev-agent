@@ -22,6 +22,7 @@ import {
   runAndroid,
   consumePendingAndroidUpgradeNote,
 } from '../runners/rn-android-runner-client.js';
+import { launchApp } from './app-lifecycle.js';
 import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import {
@@ -674,10 +675,7 @@ async function reacquireIosTargetApp(appId: string, deviceId: string): Promise<T
     /* best-effort — may already be dead */
   }
   try {
-    await execFile('xcrun', ['simctl', 'launch', 'booted', appId], {
-      timeout: 5000,
-      encoding: 'utf8',
-    });
+    await launchApp(appId, 'ios', deviceId);
   } catch {
     /* best-effort — the sentinel re-check covers a failed foreground */
   }
