@@ -162,7 +162,9 @@ together (a sync test keeps the two copies equal). Opt into hard enforcement wit
 On WDA-blind runtimes (iOS 26 bridgeless, or after a transport-blind failure on the same
 device), `cdp_run_action` probes the component tree first and — when the action's anchor is
 visible — replays through the CDP/JS fallback directly instead of paying the doomed ~40s WDA
-attempt (`RunRecord.blindProbe` records the routing; disable with `RN_BLIND_PROBE=0`).
+attempt (`RunRecord.blindProbe` records the routing; disable with `RN_BLIND_PROBE=0`). Per call,
+`cdp_run_action(blindProbeMode: …)` overrides that default: `inherit` honors the env var,
+`allow` enables the probe for this call, `forbid` keeps this call maestro-first.
 
 ## What actions are NOT
 
