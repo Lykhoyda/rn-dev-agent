@@ -46814,11 +46814,17 @@ async function isAppRunning(platform, bundleId, probes, deviceId) {
   if (p === "android") {
     return (probes?.android ?? defaultAndroidProbe)(bundleId, deviceId);
   }
-  return (probes?.ios ?? defaultIOSProbe)(bundleId);
+  const exactDeviceId = deviceId?.trim();
+  if (!exactDeviceId)
+    return false;
+  return (probes?.ios ?? defaultIOSProbe)(bundleId, exactDeviceId);
 }
-async function defaultIOSProbe(bundleId) {
+function buildIosAppRunningArgs(deviceId) {
+  return ["simctl", "spawn", deviceId, "launchctl", "list"];
+}
+async function defaultIOSProbe(bundleId, deviceId) {
   try {
-    const { stdout } = await execFile11("xcrun", ["simctl", "spawn", "booted", "launchctl", "list"], {
+    const { stdout } = await execFile11("xcrun", buildIosAppRunningArgs(deviceId), {
       timeout: 5e3,
       encoding: "utf8"
     });
@@ -66048,7 +66054,7 @@ var init_index = __esm({
       maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
       quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
     }, createDeviceScreenshotHandler(getClient));
-    trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).", {
+    trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.", {
       action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
       appId: external_exports.string().optional().describe('App bundle ID \u2014 required for action=open (e.g. "com.example.app")'),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),

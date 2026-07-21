@@ -57,20 +57,26 @@ export function deviceBusyMessage(deviceId, holder) {
 }
 /**
  * B112 (D641): check whether a given bundleId is currently running on the
- * booted device. iOS uses `xcrun simctl spawn booted launchctl list`;
- * Android uses `adb shell pidof <pkg>`. Exported for unit tests via the
- * optional probe injection.
+ * exact selected device. iOS uses that simulator UDID with `simctl spawn`;
+ * Android uses that adb serial with `adb shell pidof`. Missing identity refuses
+ * instead of consulting the ambiguous `booted` alias.
  */
 export async function isAppRunning(platform, bundleId, probes, deviceId) {
     const p = (platform ?? 'ios').toLowerCase();
     if (p === 'android') {
         return (probes?.android ?? defaultAndroidProbe)(bundleId, deviceId);
     }
-    return (probes?.ios ?? defaultIOSProbe)(bundleId);
+    const exactDeviceId = deviceId?.trim();
+    if (!exactDeviceId)
+        return false;
+    return (probes?.ios ?? defaultIOSProbe)(bundleId, exactDeviceId);
 }
-async function defaultIOSProbe(bundleId) {
+export function buildIosAppRunningArgs(deviceId) {
+    return ['simctl', 'spawn', deviceId, 'launchctl', 'list'];
+}
+async function defaultIOSProbe(bundleId, deviceId) {
     try {
-        const { stdout } = await execFile('xcrun', ['simctl', 'spawn', 'booted', 'launchctl', 'list'], {
+        const { stdout } = await execFile('xcrun', buildIosAppRunningArgs(deviceId), {
             timeout: 5000,
             encoding: 'utf8',
         });
