@@ -417,19 +417,19 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     let probeDeviceId: string | null = null;
     const persistRunWithDevice = (record: RunRecord): Promise<PersistRunOutcome> =>
       proofReplay
-        ? Promise.resolve({ promoted: false })
+        ? Promise.resolve({ promoted: false, promotionRefused: false })
         : persistRun(
             args.actionId,
             projectRoot,
             probeDeviceId ? { ...record, deviceId: probeDeviceId } : record,
           );
-    const writeDisclosure = (
-      actionYaml: 'none' | 'auto-repair' | 'lifecycle-promotion' = 'none',
-    ) => ({
+    const writeDisclosure = (actionYaml: WriteDisclosureKind = 'none') => ({
       actionYaml:
         actionYaml === 'none'
           ? { written: false, reason: 'repair-not-applied' }
-          : { written: true, authorized: true, reason: actionYaml },
+          : actionYaml === 'lifecycle-promotion-refused'
+            ? { written: false, reason: 'lifecycle-promotion-refused' }
+            : { written: true, authorized: true, reason: actionYaml },
       runtimeState: proofReplay ? 'none' : 'sidecar',
       databaseMirror: proofReplay ? 'none' : 'best-effort',
     });
@@ -505,7 +505,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   transportVersion: null,
                   fallback: 'none',
                   repair: autoRepair,
-                  writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
+                  writes: writeDisclosure(promotionDisclosure(persisted)),
                   blindProbe,
                   timings_ms,
                   autoRepair,
@@ -578,7 +578,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair,
           autoRepair,
-          writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
+          writes: writeDisclosure(promotionDisclosure(persisted)),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500),
@@ -684,7 +684,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
                   fallback: 'cdp-js',
                   repair: autoRepair,
                   autoRepair,
-                  writes: writeDisclosure(persisted.promoted ? 'lifecycle-promotion' : 'none'),
+                  writes: writeDisclosure(promotionDisclosure(persisted)),
                   durationMs: Date.now() - t0,
                   flowFile: action.filePath,
                 });
@@ -1001,6 +1001,22 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
  */
 interface PersistRunOutcome {
   promoted: boolean;
+  promotionRefused: boolean;
+}
+
+type WriteDisclosureKind =
+  | 'none'
+  | 'auto-repair'
+  | 'lifecycle-promotion'
+  | 'lifecycle-promotion-refused';
+
+/**
+ * A refused promotion must not read like a run that had nothing to promote —
+ * the action stays `experimental` and the operator needs to see why.
+ */
+function promotionDisclosure(outcome: PersistRunOutcome): WriteDisclosureKind {
+  if (outcome.promoted) return 'lifecycle-promotion';
+  return outcome.promotionRefused ? 'lifecycle-promotion-refused' : 'none';
 }
 
 async function persistRun(
@@ -1018,13 +1034,13 @@ async function persistRun(
       console.error(
         `cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`,
       );
-      return { promoted: false };
+      return { promoted: false, promotionRefused: false };
     }
     const nextState = appendRunRecord(fresh.state, record);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record);
     // Runtime telemetry is sidecar-only. A replay that did not apply repair
     // must preserve tracked YAML bytes (including documentation comments).
-    const commit = (promoted: boolean): PersistRunOutcome => {
+    const commit = (promoted: boolean, promotionRefused: boolean): PersistRunOutcome => {
       mirrorToDb({
         yamlFilePath: fresh.filePath,
         state: fresh.state,
@@ -1035,13 +1051,14 @@ async function persistRun(
           path: fresh.filePath,
         },
       });
-      return { promoted };
+      return { promoted, promotionRefused };
     };
     // A promotion refusal is deterministic (externally edited YAML, or a missing
     // `# status: experimental` marker) — retrying cannot clear it, so degrade to
     // the sidecar-only append instead of failing an otherwise successful replay.
-    if (promotes && promoteActionRuntimeWithCAS(fresh, nextState).ok) return commit(true);
-    if (saveActionRuntimeWithCAS(fresh, nextState).ok) return commit(false);
+    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
+    if (promotes && !promotionRefused) return commit(true, false);
+    if (saveActionRuntimeWithCAS(fresh, nextState).ok) return commit(false, promotionRefused);
     // Sidecar CAS conflict — another writer raced us. Reload and retry.
     if (attempt === MAX_ATTEMPTS) {
       throw new Error(
@@ -1050,5 +1067,5 @@ async function persistRun(
       );
     }
   }
-  return { promoted: false };
+  return { promoted: false, promotionRefused: false };
 }

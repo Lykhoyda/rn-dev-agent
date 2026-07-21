@@ -54039,9 +54039,9 @@ function createRunActionHandler(deps = {}) {
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
     let probeDeviceId = null;
-    const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve({ promoted: false }) : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
+    const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve({ promoted: false, promotionRefused: false }) : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
     const writeDisclosure = (actionYaml = "none") => ({
-      actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : { written: true, authorized: true, reason: actionYaml },
+      actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
       runtimeState: proofReplay ? "none" : "sidecar",
       databaseMirror: proofReplay ? "none" : "best-effort"
     });
@@ -54100,7 +54100,7 @@ function createRunActionHandler(deps = {}) {
                   transportVersion: null,
                   fallback: "none",
                   repair: autoRepair2,
-                  writes: writeDisclosure(persisted.promoted ? "lifecycle-promotion" : "none"),
+                  writes: writeDisclosure(promotionDisclosure(persisted)),
                   blindProbe,
                   timings_ms,
                   autoRepair: autoRepair2,
@@ -54154,7 +54154,7 @@ function createRunActionHandler(deps = {}) {
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair2,
           autoRepair: autoRepair2,
-          writes: writeDisclosure(persisted.promoted ? "lifecycle-promotion" : "none"),
+          writes: writeDisclosure(promotionDisclosure(persisted)),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
           firstAttemptOutput: firstOutput.slice(0, 500)
@@ -54233,7 +54233,7 @@ function createRunActionHandler(deps = {}) {
                   fallback: "cdp-js",
                   repair: autoRepair2,
                   autoRepair: autoRepair2,
-                  writes: writeDisclosure(persisted.promoted ? "lifecycle-promotion" : "none"),
+                  writes: writeDisclosure(promotionDisclosure(persisted)),
                   durationMs: Date.now() - t0,
                   flowFile: action.filePath
                 });
@@ -54438,17 +54438,22 @@ function createRunActionHandler(deps = {}) {
     }
   };
 }
+function promotionDisclosure(outcome) {
+  if (outcome.promoted)
+    return "lifecycle-promotion";
+  return outcome.promotionRefused ? "lifecycle-promotion-refused" : "none";
+}
 async function persistRun(actionId, projectRoot, record2) {
   const MAX_ATTEMPTS = 5;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const fresh = loadAction(projectRoot, actionId);
     if (!fresh) {
       console.error(`cdp_run_action: persistRun could not reload action "${actionId}" \u2014 RunRecord dropped (status=${record2.status}, autoRepair.outcome=${record2.autoRepair?.outcome ?? "n/a"})`);
-      return { promoted: false };
+      return { promoted: false, promotionRefused: false };
     }
     const nextState = appendRunRecord(fresh.state, record2);
     const promotes = shouldAutoPromoteToActive(fresh.metadata, record2);
-    const commit = (promoted) => {
+    const commit = (promoted, promotionRefused2) => {
       mirrorToDb({
         yamlFilePath: fresh.filePath,
         state: fresh.state,
@@ -54459,17 +54464,18 @@ async function persistRun(actionId, projectRoot, record2) {
           path: fresh.filePath
         }
       });
-      return { promoted };
+      return { promoted, promotionRefused: promotionRefused2 };
     };
-    if (promotes && promoteActionRuntimeWithCAS(fresh, nextState).ok)
-      return commit(true);
+    const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
+    if (promotes && !promotionRefused)
+      return commit(true, false);
     if (saveActionRuntimeWithCAS(fresh, nextState).ok)
-      return commit(false);
+      return commit(false, promotionRefused);
     if (attempt === MAX_ATTEMPTS) {
       throw new Error(`persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive sidecar CAS conflicts; the runtime sidecar changed after load. RunRecord was not written.`);
     }
   }
-  return { promoted: false };
+  return { promoted: false, promotionRefused: false };
 }
 
 // packages/rn-dev-agent-core/dist/tools/dispatch.js

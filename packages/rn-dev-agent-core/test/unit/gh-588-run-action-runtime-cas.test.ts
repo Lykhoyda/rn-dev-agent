@@ -266,10 +266,11 @@ test('GH-588 V2: a blocked promotion degrades to sidecar-only telemetry, not a f
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data.passed, true);
   assert.equal(envelope.data.writes.runtimeState, 'sidecar');
-  assert.deepEqual(envelope.data.writes.actionYaml, {
-    written: false,
-    reason: 'repair-not-applied',
-  });
+  assert.deepEqual(
+    envelope.data.writes.actionYaml,
+    { written: false, reason: 'lifecycle-promotion-refused' },
+    'a withheld promotion must not be disclosed as "nothing to promote"',
+  );
 
   const persisted = project.readSidecar('wizard-create-task');
   assert.equal(persisted.runHistory.length, 3);
