@@ -177,23 +177,37 @@ export function targetMatchesBundleId(target: HermesTarget, bundleId: string): b
 // multi-simulator host off the blocking path without going stale in practice.
 const PACKAGE_PROBE_TTL_MS = 15_000;
 // A failed probe leaves every target 'defaulted', which fail-closes any
-// platform-filtered connect. Keep that state barely long enough to absorb a
-// burst of connects so a transient adb/simctl blip still self-heals on retry.
+// platform-filtered connect. Keep a CHEAP failure barely long enough to absorb
+// a burst of connects so a transient adb/simctl blip still self-heals on retry.
 const PACKAGE_PROBE_FAILURE_TTL_MS = 1_500;
-const packageProbeCache = new Map<string, { at: number; value: Set<string> | null }>();
+// A failure that burned this long came from subprocess timeouts, not a fast
+// "tool absent" error. Re-paying it on every connect would block the event loop
+// far worse than the staleness the short TTL buys.
+const PACKAGE_PROBE_SLOW_FAILURE_MS = 1_000;
+const packageProbeCache = new Map<string, { at: number; ttl: number; value: Set<string> | null }>();
+
+function packageProbeTtl(value: Set<string> | null, elapsedMs: number): number {
+  if (value !== null) return PACKAGE_PROBE_TTL_MS;
+  return elapsedMs >= PACKAGE_PROBE_SLOW_FAILURE_MS
+    ? PACKAGE_PROBE_TTL_MS
+    : PACKAGE_PROBE_FAILURE_TTL_MS;
+}
 
 export function cachedPackageProbe(
   key: string,
   probe: () => Set<string> | null,
-  now: number = Date.now(),
+  clock: () => number = Date.now,
 ): Set<string> | null {
   const hit = packageProbeCache.get(key);
-  if (hit) {
-    const ttl = hit.value === null ? PACKAGE_PROBE_FAILURE_TTL_MS : PACKAGE_PROBE_TTL_MS;
-    if (now - hit.at < ttl) return hit.value;
-  }
+  const now = clock();
+  if (hit && now - hit.at < hit.ttl) return hit.value;
+  const startedAt = clock();
   const value = probe();
-  packageProbeCache.set(key, { at: now, value });
+  packageProbeCache.set(key, {
+    at: startedAt,
+    ttl: packageProbeTtl(value, clock() - startedAt),
+    value,
+  });
   return value;
 }
 

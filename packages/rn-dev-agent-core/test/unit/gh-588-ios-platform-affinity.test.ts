@@ -310,19 +310,20 @@ test('a failed package probe is not sticky enough to fail-close later connects',
   const { cachedPackageProbe, clearPackageProbeCache } = discovery;
   clearPackageProbeCache();
 
+  const at = (t: number) => () => t;
   let calls = 0;
   const failing = () => {
     calls += 1;
     return null;
   };
-  assert.equal(cachedPackageProbe('ios', failing, 0), null);
+  assert.equal(cachedPackageProbe('ios', failing, at(0)), null);
   // A burst of connects within the failure window reuses the one probe...
-  assert.equal(cachedPackageProbe('ios', failing, 1_000), null);
+  assert.equal(cachedPackageProbe('ios', failing, at(1_000)), null);
   assert.equal(calls, 1);
   // ...but the blip must self-heal rather than fail-close targets for 15s.
   const healed = new Set(['dev.fixture']);
   assert.deepEqual(
-    cachedPackageProbe('ios', () => healed, 2_000),
+    cachedPackageProbe('ios', () => healed, at(2_000)),
     healed,
   );
 
@@ -332,8 +333,36 @@ test('a failed package probe is not sticky enough to fail-close later connects',
     return healed;
   };
   clearPackageProbeCache();
-  assert.deepEqual(cachedPackageProbe('android', succeeding, 0), healed);
-  assert.deepEqual(cachedPackageProbe('android', succeeding, 14_000), healed);
+  assert.deepEqual(cachedPackageProbe('android', succeeding, at(0)), healed);
+  assert.deepEqual(cachedPackageProbe('android', succeeding, at(14_000)), healed);
   assert.equal(successCalls, 1);
+  clearPackageProbeCache();
+});
+
+test('a failure that burned seconds of subprocess timeouts is not re-paid per connect', () => {
+  const { cachedPackageProbe, clearPackageProbeCache } = discovery;
+  clearPackageProbeCache();
+
+  const at = (t: number) => () => t;
+  // Every booted simulator timing out costs N x 5s; that must not be repeated
+  // on the next connect just because the result was null.
+  const slowTicks = [0, 0, 10_000];
+  let cursor = 0;
+  const slowClock = () => slowTicks[Math.min(cursor++, slowTicks.length - 1)];
+  let slowCalls = 0;
+  const slowFailing = () => {
+    slowCalls += 1;
+    return null;
+  };
+  assert.equal(cachedPackageProbe('ios', slowFailing, slowClock), null);
+  assert.equal(slowCalls, 1);
+
+  assert.equal(cachedPackageProbe('ios', slowFailing, at(5_000)), null);
+  assert.equal(cachedPackageProbe('ios', slowFailing, at(14_000)), null);
+  assert.equal(slowCalls, 1, 'a slow failure keeps the long TTL');
+
+  // It still expires — this is a cache, not a latch.
+  assert.equal(cachedPackageProbe('ios', slowFailing, at(16_000)), null);
+  assert.equal(slowCalls, 2);
   clearPackageProbeCache();
 });

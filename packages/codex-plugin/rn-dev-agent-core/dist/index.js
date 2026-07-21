@@ -19040,15 +19040,23 @@ function targetBundleIdentity(target) {
 function targetMatchesBundleId(target, bundleId) {
   return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
 }
-function cachedPackageProbe(key, probe, now = Date.now()) {
+function packageProbeTtl(value, elapsedMs) {
+  if (value !== null)
+    return PACKAGE_PROBE_TTL_MS;
+  return elapsedMs >= PACKAGE_PROBE_SLOW_FAILURE_MS ? PACKAGE_PROBE_TTL_MS : PACKAGE_PROBE_FAILURE_TTL_MS;
+}
+function cachedPackageProbe(key, probe, clock = Date.now) {
   const hit = packageProbeCache.get(key);
-  if (hit) {
-    const ttl = hit.value === null ? PACKAGE_PROBE_FAILURE_TTL_MS : PACKAGE_PROBE_TTL_MS;
-    if (now - hit.at < ttl)
-      return hit.value;
-  }
+  const now = clock();
+  if (hit && now - hit.at < hit.ttl)
+    return hit.value;
+  const startedAt = clock();
   const value = probe();
-  packageProbeCache.set(key, { at: now, value });
+  packageProbeCache.set(key, {
+    at: startedAt,
+    ttl: packageProbeTtl(value, clock() - startedAt),
+    value
+  });
   return value;
 }
 function probeAndroidPackages() {
@@ -19380,7 +19388,7 @@ async function enumerateMetroCandidates(connectedPort, projectRoot) {
     timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe }
   };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, packageProbeCache, TargetSelectionError;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
@@ -19405,6 +19413,7 @@ var init_discovery = __esm({
     DISCOVERY_TIMEOUT_MS = 1500;
     PACKAGE_PROBE_TTL_MS = 15e3;
     PACKAGE_PROBE_FAILURE_TTL_MS = 1500;
+    PACKAGE_PROBE_SLOW_FAILURE_MS = 1e3;
     packageProbeCache = /* @__PURE__ */ new Map();
     TargetSelectionError = class extends Error {
       code;
