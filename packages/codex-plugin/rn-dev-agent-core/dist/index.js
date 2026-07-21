@@ -19040,7 +19040,16 @@ function targetBundleIdentity(target) {
 function targetMatchesBundleId(target, bundleId) {
   return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
 }
-function readAndroidPackages() {
+function cachedPackageProbe(key, probe) {
+  const hit = packageProbeCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < PACKAGE_PROBE_TTL_MS)
+    return hit.value;
+  const value = probe();
+  packageProbeCache.set(key, { at: now, value });
+  return value;
+}
+function probeAndroidPackages() {
   try {
     const out = execFileSync2("adb", ["shell", "pm", "list", "packages"], {
       timeout: 3e3,
@@ -19065,7 +19074,7 @@ function bootedSimulatorUdids() {
     return [];
   }
 }
-function readIOSPackages() {
+function probeIOSPackages() {
   const udids = bootedSimulatorUdids();
   if (udids.length === 0)
     return null;
@@ -19085,6 +19094,12 @@ function readIOSPackages() {
     }
   }
   return probed ? ids : null;
+}
+function readAndroidPackages() {
+  return cachedPackageProbe("android", probeAndroidPackages);
+}
+function readIOSPackages() {
+  return cachedPackageProbe("ios", probeIOSPackages);
 }
 function inferPlatformFromDeviceName(deviceName) {
   if (!deviceName)
@@ -19363,7 +19378,7 @@ async function enumerateMetroCandidates(connectedPort, projectRoot) {
     timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe }
   };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS, TargetSelectionError;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS, PACKAGE_PROBE_TTL_MS, packageProbeCache, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
@@ -19386,6 +19401,8 @@ var init_discovery = __esm({
       }
     };
     DISCOVERY_TIMEOUT_MS = 1500;
+    PACKAGE_PROBE_TTL_MS = 15e3;
+    packageProbeCache = /* @__PURE__ */ new Map();
     TargetSelectionError = class extends Error {
       code;
       candidates;
@@ -19928,6 +19945,12 @@ async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promi
 function nativeDismissTiers(via) {
   return via === "native-control" ? ["native-control"] : ["native-control", via];
 }
+function nativeTiersAttempted(native) {
+  if (!native.isError)
+    return ["native-control", "native-swipe"];
+  const text = native.content?.[0]?.text ?? "";
+  return text.includes("KEYBOARD_DISMISS_FAILED") ? ["native-control", "native-swipe"] : [];
+}
 async function dismissKeyboardWithParity(deps) {
   const native = await deps.nativeDismiss();
   if (!native.isError) {
@@ -19958,7 +19981,7 @@ async function dismissKeyboardWithParity(deps) {
       }
     }
   }
-  const attemptedTiers = ["native-control", "native-swipe"];
+  const attemptedTiers = nativeTiersAttempted(native);
   if (deps.dismissViaJs) {
     attemptedTiers.push("js");
     try {
@@ -19977,7 +20000,7 @@ async function dismissKeyboardWithParity(deps) {
     } catch {
     }
   }
-  return failResult("KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; the keyboard was still observed visible.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers });
+  return failResult("KEYBOARD_DISMISS_FAILED: no dismissal tier proved the keyboard hidden; it was still visible or its state could not be established.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers });
 }
 async function healKeyboardOccludedTap(first, deps) {
   if (!deps || !isKeyboardOccludedRefusal(first))
@@ -21393,7 +21416,7 @@ function sameRefIdentity(before, after) {
   if (before.label !== void 0 || after.label !== void 0) {
     return before.label === after.label && before.type === after.type;
   }
-  return before.type === after.type;
+  return false;
 }
 function mapRunnerNodesToFlat(nodes) {
   const out = [];
@@ -55408,15 +55431,16 @@ function buildIosLogStreamArgs(deviceId, pid) {
 }
 var PID_PROBE_TIMEOUT_MS = 5e3;
 async function resolveIosAppPid(deviceId, bundleId, signal) {
+  let stdout;
   try {
-    const { stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
+    ({ stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal
-    });
-    return parseIosAppPid(stdout, bundleId);
-  } catch {
-    return null;
+    }));
+  } catch (err) {
+    throw new Error(`exact iOS log scope unresolved on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`);
   }
+  return parseIosAppPid(stdout, bundleId);
 }
 async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolvedPid) {
   if (signal.aborted)

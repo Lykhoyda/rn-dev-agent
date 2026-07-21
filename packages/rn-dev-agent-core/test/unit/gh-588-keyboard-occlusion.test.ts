@@ -316,3 +316,36 @@ test('GH-588 Slice D: a positionally reused ref refuses instead of tapping a for
     _setFastRunnerStateForTest(null);
   }
 });
+
+test('GH-588 Slice D: an unlabeled ref is never re-served on type alone', async () => {
+  clearRefMap();
+  updateRefMapFromFlat([{ ref: '@e7', type: 'Button', rect: node.rect }], {
+    snapshotGeneration: 41,
+    keyboardVisible: true,
+  });
+  _setFastRunnerStateForTest(fastRunnerV1State());
+  const commands: string[] = [];
+  _setFetchForTest(
+    v1DismissFetch([{ index: 7, type: 'Button', rect: node.rect }], commands) as never,
+  );
+  try {
+    const result = await runIOS({ command: 'tap', x: 10, y: 20, _targetRef: '@e7' } as never);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0]!.text, /KEYBOARD_DISMISS_FAILED/);
+    assert.deepEqual(commands, ['keyboardDismiss', 'snapshot']);
+  } finally {
+    _setFetchForTest(globalThis.fetch);
+    _setFastRunnerStateForTest(null);
+  }
+});
+
+test('GH-588 Slice D: a native dismiss that never ran is not reported as an attempted tier', async () => {
+  const refused = await dismissKeyboardWithParity({
+    nativeDismiss: async () =>
+      failResult('RUNNER_TIMEOUT: runner never answered', 'RUNNER_TIMEOUT'),
+    refreshSnapshot: async () => okResult({ nodes: [node], keyboardVisible: true }),
+  });
+  const envelope = JSON.parse(refused.content[0]!.text) as { meta?: { attemptedTiers?: string[] } };
+  assert.equal(refused.isError, true);
+  assert.deepEqual(envelope.meta?.attemptedTiers, []);
+});

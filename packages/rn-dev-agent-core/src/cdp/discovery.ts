@@ -171,7 +171,27 @@ export function targetMatchesBundleId(target: HermesTarget, bundleId: string): b
   return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
 }
 
-function readAndroidPackages(): Set<string> | null {
+// inferPlatforms runs on every connect/auto-connect, and each probe is a
+// synchronous subprocess (1 + one per booted simulator). Installed-package sets
+// change on the scale of installs, not connects, so a short TTL keeps the
+// multi-simulator host off the blocking path without going stale in practice.
+const PACKAGE_PROBE_TTL_MS = 15_000;
+const packageProbeCache = new Map<string, { at: number; value: Set<string> | null }>();
+
+function cachedPackageProbe(key: string, probe: () => Set<string> | null): Set<string> | null {
+  const hit = packageProbeCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < PACKAGE_PROBE_TTL_MS) return hit.value;
+  const value = probe();
+  packageProbeCache.set(key, { at: now, value });
+  return value;
+}
+
+export function clearPackageProbeCache(): void {
+  packageProbeCache.clear();
+}
+
+function probeAndroidPackages(): Set<string> | null {
   try {
     const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
       timeout: 3000,
@@ -210,7 +230,7 @@ export function bootedSimulatorUdids(): string[] {
 // booted — the exact case this inference must survive. Probe each booted UDID
 // exactly and union the results: platform inference asks "is this bundle an iOS
 // app", which no single device owns.
-function readIOSPackages(): Set<string> | null {
+function probeIOSPackages(): Set<string> | null {
   const udids = bootedSimulatorUdids();
   if (udids.length === 0) return null;
   const ids = new Set<string>();
@@ -229,6 +249,14 @@ function readIOSPackages(): Set<string> | null {
     }
   }
   return probed ? ids : null;
+}
+
+function readAndroidPackages(): Set<string> | null {
+  return cachedPackageProbe('android', probeAndroidPackages);
+}
+
+function readIOSPackages(): Set<string> | null {
+  return cachedPackageProbe('ios', probeIOSPackages);
 }
 
 export interface PlatformInferenceReaders {

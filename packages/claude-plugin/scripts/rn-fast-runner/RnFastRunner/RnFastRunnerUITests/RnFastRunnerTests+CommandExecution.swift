@@ -235,7 +235,7 @@ extension RnFastRunnerTests {
         if keyboardGuardStatus == "dismiss_failed" {
           return Response(
             ok: false,
-            error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native swipe/control; no tap was performed. The client may attempt its JS tier.")
+            error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native control/swipe; no tap was performed. The client may attempt its JS tier.")
           )
         }
         if keyboardGuardStatus == "auto_dismissed_requires_reresolve" {
@@ -379,7 +379,7 @@ extension RnFastRunnerTests {
       if keyboardGuardStatus == "dismiss_failed" {
         return Response(
           ok: false,
-          error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native swipe/control; no tap was performed. The client may attempt its JS tier.")
+          error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native control/swipe; no tap was performed. The client may attempt its JS tier.")
         )
       }
       if keyboardGuardStatus == "auto_dismissed_requires_reresolve" {
@@ -742,7 +742,7 @@ extension RnFastRunnerTests {
           ok: false,
           error: ErrorPayload(
             code: "KEYBOARD_DISMISS_FAILED",
-            message: "Unable to dismiss the iOS keyboard via native swipe or dismiss control"
+            message: "Unable to dismiss the iOS keyboard via native dismiss control or swipe"
           )
         )
       }

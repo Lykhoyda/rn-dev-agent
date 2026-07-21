@@ -1034,7 +1034,9 @@ function sameRefIdentity(before, after) {
     if (before.label !== undefined || after.label !== undefined) {
         return before.label === after.label && before.type === after.type;
     }
-    return before.type === after.type;
+    // Type alone is not an identity: a positional id can rebind to a different
+    // element of the same type once the keyboard leaves the tree.
+    return false;
 }
 function mapRunnerNodesToFlat(nodes) {
     const out = [];

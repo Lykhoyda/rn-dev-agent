@@ -219,8 +219,8 @@ and retry from a fresh snapshot — don't re-type blindly.
 
 ### KEYBOARD_DISMISS_FAILED
 
-A visible software keyboard could not be proven dismissed — native swipe,
-then a native dismiss control, then (when CDP is connected) injected
+A visible software keyboard could not be proven dismissed — the native
+dismiss control, then a native swipe, then (when CDP is connected) injected
 `Keyboard.dismiss()` all failed — so the guarded tap was refused before
 touching the screen. Older protocol-v1 runners surfaced this as
 `KEYBOARD_OCCLUDED`. Dismiss the keyboard yourself (e.g. `cdp_evaluate` →

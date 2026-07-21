@@ -153,7 +153,25 @@ export function targetBundleIdentity(target) {
 export function targetMatchesBundleId(target, bundleId) {
     return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
 }
-function readAndroidPackages() {
+// inferPlatforms runs on every connect/auto-connect, and each probe is a
+// synchronous subprocess (1 + one per booted simulator). Installed-package sets
+// change on the scale of installs, not connects, so a short TTL keeps the
+// multi-simulator host off the blocking path without going stale in practice.
+const PACKAGE_PROBE_TTL_MS = 15_000;
+const packageProbeCache = new Map();
+function cachedPackageProbe(key, probe) {
+    const hit = packageProbeCache.get(key);
+    const now = Date.now();
+    if (hit && now - hit.at < PACKAGE_PROBE_TTL_MS)
+        return hit.value;
+    const value = probe();
+    packageProbeCache.set(key, { at: now, value });
+    return value;
+}
+export function clearPackageProbeCache() {
+    packageProbeCache.clear();
+}
+function probeAndroidPackages() {
     try {
         const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
             timeout: 3000,
@@ -190,7 +208,7 @@ export function bootedSimulatorUdids() {
 // booted — the exact case this inference must survive. Probe each booted UDID
 // exactly and union the results: platform inference asks "is this bundle an iOS
 // app", which no single device owns.
-function readIOSPackages() {
+function probeIOSPackages() {
     const udids = bootedSimulatorUdids();
     if (udids.length === 0)
         return null;
@@ -212,6 +230,12 @@ function readIOSPackages() {
         }
     }
     return probed ? ids : null;
+}
+function readAndroidPackages() {
+    return cachedPackageProbe('android', probeAndroidPackages);
+}
+function readIOSPackages() {
+    return cachedPackageProbe('ios', probeIOSPackages);
 }
 /**
  * B116 (D639): look up each target's description against BOTH iOS simctl and

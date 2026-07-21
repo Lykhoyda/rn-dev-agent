@@ -125,20 +125,25 @@ export function buildIosLogStreamArgs(deviceId: string, pid: number | null): str
 
 const PID_PROBE_TIMEOUT_MS = 5_000;
 
+// A probe that could not run leaves the scope unresolved and must fail closed;
+// only a probe that ran and proved the app absent may widen to device scope.
 async function resolveIosAppPid(
   deviceId: string,
   bundleId: string,
   signal: AbortSignal,
 ): Promise<number | null> {
+  let stdout: string;
   try {
-    const { stdout } = await execFile('xcrun', ['simctl', 'spawn', deviceId, 'launchctl', 'list'], {
+    ({ stdout } = await execFile('xcrun', ['simctl', 'spawn', deviceId, 'launchctl', 'list'], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal,
-    });
-    return parseIosAppPid(stdout, bundleId);
-  } catch {
-    return null;
+    }));
+  } catch (err) {
+    throw new Error(
+      `exact iOS log scope unresolved on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+  return parseIosAppPid(stdout, bundleId);
 }
 
 async function collectNativeIos(

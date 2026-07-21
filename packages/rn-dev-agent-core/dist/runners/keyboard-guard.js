@@ -106,6 +106,14 @@ export async function waitForKeyboardHidden(refreshSnapshot, sleep = (ms) => new
 function nativeDismissTiers(via) {
     return via === 'native-control' ? ['native-control'] : ['native-control', via];
 }
+// The runner only answers KEYBOARD_DISMISS_FAILED after running its own native
+// tiers; any other error means the command never reached them.
+function nativeTiersAttempted(native) {
+    if (!native.isError)
+        return ['native-control', 'native-swipe'];
+    const text = native.content?.[0]?.text ?? '';
+    return text.includes('KEYBOARD_DISMISS_FAILED') ? ['native-control', 'native-swipe'] : [];
+}
 /** Shared standalone/batch dismissal chain with an independent hidden-state check. */
 export async function dismissKeyboardWithParity(deps) {
     const native = await deps.nativeDismiss();
@@ -143,7 +151,7 @@ export async function dismissKeyboardWithParity(deps) {
             }
         }
     }
-    const attemptedTiers = ['native-control', 'native-swipe'];
+    const attemptedTiers = nativeTiersAttempted(native);
     if (deps.dismissViaJs) {
         attemptedTiers.push('js');
         try {
@@ -164,7 +172,7 @@ export async function dismissKeyboardWithParity(deps) {
             // Fall through to the typed refusal; no hidden state was proven.
         }
     }
-    return failResult('KEYBOARD_DISMISS_FAILED: every available dismissal tier failed; the keyboard was still observed visible.', 'KEYBOARD_DISMISS_FAILED', { attemptedTiers });
+    return failResult('KEYBOARD_DISMISS_FAILED: no dismissal tier proved the keyboard hidden; it was still visible or its state could not be established.', 'KEYBOARD_DISMISS_FAILED', { attemptedTiers });
 }
 /**
  * #379 KEYBOARD_OCCLUDED auto-heal (JS-first, per D1250's fill pattern).

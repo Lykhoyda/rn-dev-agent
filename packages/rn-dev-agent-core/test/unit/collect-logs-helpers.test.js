@@ -42,6 +42,12 @@ test('collect_logs: iOS log stream is pinned to exact device and target-app PID'
   ]);
 });
 
+test('collect_logs: an unresolvable pid keeps the exact device scope without a predicate', () => {
+  const args = buildIosLogStreamArgs('exact-udid', null);
+  assert.deepEqual(args.slice(0, 3), ['simctl', 'spawn', 'exact-udid']);
+  assert.equal(args.includes('--predicate'), false);
+});
+
 // ── js_console source ─────────────────────────────────────────────────
 
 test('collect_logs: js_console returns entries from connected client', async () => {
