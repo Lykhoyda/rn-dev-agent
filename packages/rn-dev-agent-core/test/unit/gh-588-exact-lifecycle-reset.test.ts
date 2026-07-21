@@ -6,6 +6,7 @@ import {
   resolveAndroidLifecycleTarget,
   resolveIosLifecycleTarget,
 } from '../../dist/tools/app-lifecycle.js';
+import { resolveReplayLifecycleDevice } from '../../dist/tools/startup-replay.js';
 
 const UDID = '5C10B45B-2065-458B-B885-0F83F49747C8';
 const SERIAL = 'emulator-5556';
@@ -129,4 +130,30 @@ test('GH-588 V4: Android lifecycle argv binds adb to the exact serial or fails c
 
   assert.deepEqual(buildAndroidLaunchArgv(APP_ID, SERIAL).slice(0, 3), ['-s', SERIAL, 'shell']);
   assert.equal(buildAndroidLaunchArgv(APP_ID)[0], 'shell');
+});
+
+test('GH-588 V4: startup replay refuses rather than dropping a cross-platform session device', () => {
+  const refused = resolveReplayLifecycleDevice(
+    { platform: 'ios', deviceId: UDID, appId: APP_ID },
+    'android',
+  );
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /Refusing startup replay on android/);
+  assert.match(refused.error, new RegExp(UDID));
+});
+
+test('GH-588 V4: startup replay threads a matching session device and never invents one', () => {
+  assert.deepEqual(resolveReplayLifecycleDevice({ platform: 'ios', deviceId: UDID }, 'ios'), {
+    ok: true,
+    deviceId: UDID,
+  });
+  assert.deepEqual(resolveReplayLifecycleDevice({ platform: 'android', deviceId: SERIAL }, 'android'), {
+    ok: true,
+    deviceId: SERIAL,
+  });
+  assert.deepEqual(resolveReplayLifecycleDevice(null, 'ios'), { ok: true, deviceId: undefined });
+  assert.deepEqual(resolveReplayLifecycleDevice({ platform: 'ios' }, 'android'), {
+    ok: true,
+    deviceId: undefined,
+  });
 });

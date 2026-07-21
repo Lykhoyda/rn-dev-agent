@@ -181,15 +181,26 @@ refused on purpose until the flow ends.
 
 ### DEVICE_AUTHORITY_MISMATCH
 
-`maestro_run`/`cdp_run_action` forwarded the active session's exact device
-ID (`--device`/`--udid`) but maestro-runner's own report/log did not prove it
-ran there: the selected device was missing, ambiguous, different from the
-request, or an iOS WDA build/start line named another device. The replay is
-refused even when the runner exited 0, because requested metadata is never
-execution proof — `meta.deviceAuthority` carries the observed IDs and the
-exact reason. Re-open the device session on the intended simulator/emulator
+`maestro_run`/`maestro_test_all`/`cdp_run_action` forwarded the active
+session's exact device ID (`--device`/`--udid`) but maestro-runner's own
+report/log did not prove it ran there: the selected device was missing,
+ambiguous, different from the request, carried only a weak identity, or an
+iOS WDA build/start line named another device. The replay is refused even
+when the runner exited 0, because requested metadata is never execution
+proof — `meta.deviceAuthority` carries the observed IDs and the exact reason.
+Re-open the device session on the intended simulator/emulator
 (`device_snapshot action=open`), shut down stray devices, and retry; pass
-`deviceId` explicitly to `maestro_run` to pin the target.
+`deviceId` explicitly to `maestro_run` or `maestro_test_all` to pin the
+target.
+
+`reason: 'reported-device-weak-identity'` is the one case where stray devices
+are **not** the cause. Your maestro-runner build's report writer emitted only
+a last-resort identifier — a bare model name such as `iPhone-16-Pro`, or an
+`id` field naming the run rather than the device — so nothing was proven
+either way and the replay fails closed. Shutting down simulators will not
+clear it; upgrade maestro-runner to a build whose report carries a real
+`udid`/`deviceId`/`deviceSerial` (`~/.maestro-runner/bin/maestro-runner`,
+reinstalled via `scripts/ensure-maestro-runner.sh`).
 
 ### RUNNER_PROTOCOL_MISMATCH
 

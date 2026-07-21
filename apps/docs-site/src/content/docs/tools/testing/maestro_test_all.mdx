@@ -12,6 +12,7 @@ Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `platform` | `unknown` | No |  |  | Target platform (auto-detected from session) |
+| `deviceId` | `unknown` | No |  | min: 1, max: 256 |  |
 | `flowDir` | `unknown` | No |  |  | Directory to scan for .yaml flows (default: &lt;project&gt;/.rn-agent/actions/) |
 | `pattern` | `unknown` | No |  |  | Regex pattern to filter flow files (e.g. "cart|checkout") |
 | `timeoutPerFlow` | `unknown` | No | `120000` | min: 5000, max: 300000, integer | Timeout per flow in ms |

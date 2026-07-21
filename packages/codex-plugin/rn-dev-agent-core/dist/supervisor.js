@@ -57831,6 +57831,15 @@ var init_device_permission = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/startup-replay.js
+function resolveReplayLifecycleDevice(session, platform) {
+  if (session?.deviceId && session.platform !== platform) {
+    return {
+      ok: false,
+      error: `Refusing startup replay on ${platform}: the active session is bound to ${session.platform} device ${session.deviceId}. Close that session or replay on its platform so an exact device identity is used instead of an ambiguous target.`
+    };
+  }
+  return { ok: true, deviceId: session?.platform === platform ? session.deviceId : void 0 };
+}
 async function waitForNavigationReady(client2, timeoutMs = 12e3) {
   const checkExpr = `(function() {
     var ref = globalThis.__NAV_REF__;
@@ -57879,17 +57888,18 @@ async function launchAndNavigate(client2, screen, params, opts = {}) {
       error: "Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project."
     };
   }
-  if (session?.deviceId && session.platform !== platform) {
+  const lifecycleDevice = resolveReplayLifecycleDevice(session, platform);
+  if (!lifecycleDevice.ok) {
     return {
       arrived: false,
       screen,
       current_screen: null,
       method: "startup_replay_failed",
       latency_ms: Date.now() - startTime,
-      error: `Refusing startup replay on ${platform}: the active session is bound to ${session.platform} device ${session.deviceId}. Close that session or replay on its platform so an exact device identity is used instead of an ambiguous target.`
+      error: lifecycleDevice.error
     };
   }
-  const lifecycleDeviceId = session?.platform === platform ? session.deviceId : void 0;
+  const lifecycleDeviceId = lifecycleDevice.deviceId;
   let pickerDismissed = false;
   let reconnectAttempts = 0;
   try {
@@ -66635,7 +66645,7 @@ var init_index = __esm({
     }, createMaestroGenerateHandler());
     trackedTool("maestro_test_all", "Discover and run all Maestro flows in .rn-agent/actions/ as a regression suite. Returns per-flow pass/fail with durations. Use for CI or after refactoring to verify no regressions. Pass flowDir to override the default directory.", {
       platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
-      deviceId: external_exports.string().optional().describe("Exact simulator UDID / adb serial to run the suite on (defaults to the active session device)."),
+      deviceId: external_exports.string().min(1).max(256).optional().describe("Exact simulator UDID / adb serial to run the suite on (defaults to the active session device)."),
       flowDir: external_exports.string().optional().describe("Directory to scan for .yaml flows (default: <project>/.rn-agent/actions/)"),
       pattern: external_exports.string().optional().describe('Regex pattern to filter flow files (e.g. "cart|checkout")'),
       timeoutPerFlow: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Timeout per flow in ms"),

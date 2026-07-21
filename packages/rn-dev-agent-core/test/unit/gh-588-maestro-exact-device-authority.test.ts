@@ -2,7 +2,10 @@ import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
-import { verifyMaestroDeviceAuthority } from '../../dist/domain/maestro-device-authority.js';
+import {
+  shouldRejectMaestroDeviceAuthority,
+  verifyMaestroDeviceAuthority,
+} from '../../dist/domain/maestro-device-authority.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
 
@@ -471,4 +474,48 @@ test('UDID letter case never splits one device into ambiguous or foreign identit
   });
   assert.equal(stillForeign.verified, false);
   assert.equal(stillForeign.reason, 'reported-device-mismatch');
+});
+
+test('a weak-only report identity refuses with its own diagnosable reason', () => {
+  const modelName = 'iPhone-16-Pro';
+
+  const weak = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: 'Flow execution completed: 1 passed, 0 failed, 0 skipped',
+    directReportDeviceIds: [modelName],
+    directReportIdentityStrength: 'weak',
+    requireWdaProvenance: true,
+  });
+  assert.equal(weak.verified, false);
+  assert.equal(weak.reason, 'reported-device-weak-identity');
+  assert.equal(weak.reportedDeviceId, modelName);
+  assert.equal(shouldRejectMaestroDeviceAuthority(weak), true);
+
+  const strongForeign = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: 'Flow execution completed: 1 passed, 0 failed, 0 skipped',
+    directReportDeviceIds: [FOREIGN],
+    directReportIdentityStrength: 'strong',
+    requireWdaProvenance: true,
+  });
+  assert.equal(strongForeign.reason, 'reported-device-mismatch');
+  assert.equal(shouldRejectMaestroDeviceAuthority(strongForeign), true);
+});
+
+test('a weak identity that DOES match the request is not downgraded to the weak reason', () => {
+  const weakButExact = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(EXACT),
+    directReportDeviceIds: [EXACT],
+    directReportIdentityStrength: 'weak',
+    requireWdaProvenance: true,
+  });
+  assert.equal(weakButExact.verified, true);
+  assert.equal(weakButExact.reason, 'exact-runner-and-wda-match');
 });
