@@ -304,8 +304,11 @@ async function guardedBatchPress(
   });
 }
 
-async function dismissKeyboardWithParity(getClient?: () => CDPClient): Promise<ToolResult> {
-  const native = await runNative(['keyboard', 'dismiss']);
+async function dismissKeyboardWithParity(
+  settleOpts: { settle: { enabled?: boolean; timeoutMs?: number } },
+  getClient?: () => CDPClient,
+): Promise<ToolResult> {
+  const native = await runNative(['keyboard', 'dismiss'], settleOpts);
   if (!native.isError) return native;
   const attemptedTiers = ['native-swipe', 'native-control'];
   if (getClient) {
@@ -477,7 +480,7 @@ async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promis
       return runNative(['back'], stepSettleOpts(step));
     }
     case 'hideKeyboard': {
-      return dismissKeyboardWithParity(getClient);
+      return dismissKeyboardWithParity(stepSettleOpts(step), getClient);
     }
     case 'snapshot': {
       return runNative(['snapshot', '-i']);

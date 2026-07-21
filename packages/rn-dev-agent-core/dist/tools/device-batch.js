@@ -205,8 +205,8 @@ async function guardedBatchPress(cliArgs, opts, getClient) {
         retryTap: tap,
     });
 }
-async function dismissKeyboardWithParity(getClient) {
-    const native = await runNative(['keyboard', 'dismiss']);
+async function dismissKeyboardWithParity(settleOpts, getClient) {
+    const native = await runNative(['keyboard', 'dismiss'], settleOpts);
     if (!native.isError)
         return native;
     const attemptedTiers = ['native-swipe', 'native-control'];
@@ -356,7 +356,7 @@ async function executeStep(step, getClient) {
             return runNative(['back'], stepSettleOpts(step));
         }
         case 'hideKeyboard': {
-            return dismissKeyboardWithParity(getClient);
+            return dismissKeyboardWithParity(stepSettleOpts(step), getClient);
         }
         case 'snapshot': {
             return runNative(['snapshot', '-i']);
