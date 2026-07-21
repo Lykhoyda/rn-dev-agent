@@ -106,12 +106,21 @@ export function buildStepSummary(output, opts) {
         lastStep: lastObservedStep(steps),
     };
 }
-const WDA_EVIDENCE_RE = /(?:\bWDA\b|WebDriverAgent|Checking WDA installation|Downloading WebDriverAgent)/i;
+// Every healthy iOS run narrates WDA ("Building WebDriverAgent for the first
+// time...", "Starting WDA on device ..."), so a bare WDA mention proves nothing.
+// Bootstrap evidence must carry failure semantics, otherwise an unrelated
+// pre-step death (app not installed, locked device, simctl error) gets reported
+// as a WDA bootstrap failure and auto-repair is refused for the wrong reason.
+const WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
+const WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
+function isWdaFailureLine(line) {
+    return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
+}
 export function buildTerminalEvidence(output, opts = {}) {
     const summary = buildStepSummary(output, { failed: true });
     const bootstrapEvidence = stripAnsi(output)
         .split('\n')
-        .filter((line) => WDA_EVIDENCE_RE.test(line))
+        .filter((line) => isWdaFailureLine(line))
         .join('\n')
         .slice(0, 500);
     const exitClass = opts.timedOut

@@ -1,9 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
+import {
+  collectDirectRunnerEvidence,
+  disposeRunnerReportDir,
+} from '../../dist/domain/maestro-runner-report.js';
 
 const EXACT = '5C10B45B-2065-458B-B885-0F83F49747C8';
 const APP_ID = 'com.rndevagent.testapp';
@@ -121,4 +126,29 @@ test('a non-zero runner exit still deletes its temporary report tree', async () 
   assert.equal(body.meta.deviceAuthority.reportedDeviceId, EXACT);
   assert.equal(body.meta.runnerReportDir, undefined);
   assert.equal(existsSync(seen.dir!), false, 'report tree must be removed on the failure path');
+});
+
+test('structured report identity survives scalar and alternate device key spellings', () => {
+  const shapes = [
+    { device: EXACT },
+    { device: { udid: EXACT } },
+    { device: { deviceId: EXACT } },
+    { flows: [{ device: { serial: EXACT } }] },
+    { udid: EXACT },
+    { id: 'run-42', flows: [{ id: 'flow-1', deviceId: EXACT }] },
+  ];
+  for (const shape of shapes) {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-588-report-shape-'));
+    try {
+      writeFileSync(join(dir, 'report.json'), JSON.stringify(shape), 'utf8');
+      assert.deepEqual(
+        collectDirectRunnerEvidence(dir, '').reportDeviceIds,
+        [EXACT],
+        `report shape ${JSON.stringify(shape)} must yield exactly the executing device`,
+      );
+    } finally {
+      disposeRunnerReportDir(dir);
+      assert.equal(existsSync(dir), false);
+    }
+  }
 });

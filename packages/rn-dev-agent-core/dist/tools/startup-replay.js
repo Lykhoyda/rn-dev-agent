@@ -57,13 +57,14 @@ export async function launchAndNavigate(client, screen, params, opts = {}) {
             error: 'Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project.',
         };
     }
+    const lifecycleDeviceId = session?.platform === platform && session.appId === bundleId ? session.deviceId : undefined;
     let pickerDismissed = false;
     let reconnectAttempts = 0;
     try {
-        await terminateApp(bundleId, platform).catch(() => {
+        await terminateApp(bundleId, platform, lifecycleDeviceId).catch(() => {
             /* idempotent */
         });
-        await launchApp(bundleId, platform);
+        await launchApp(bundleId, platform, lifecycleDeviceId);
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

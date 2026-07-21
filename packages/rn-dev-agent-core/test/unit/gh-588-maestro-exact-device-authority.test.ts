@@ -350,3 +350,54 @@ test('cdp_run_action persists the direct wrong device and never requested metada
   assert.equal(record.deviceId, FOREIGN, 'direct runner identity must replace requested metadata');
   assert.notEqual(record.deviceId, EXACT);
 });
+
+const ANDROID_SERIAL = 'emulator-5556';
+
+test('an Android pinned-device receipt is direct evidence, not a missing-report refusal', () => {
+  const pinned = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'android',
+    requestedDeviceId: ANDROID_SERIAL,
+    output: [
+      'Single device execution mode',
+      `Connecting to Android device: ${ANDROID_SERIAL}`,
+      'Flow execution completed: 1 passed, 0 failed, 0 skipped',
+    ].join('\n'),
+  });
+  assert.equal(pinned.verified, true);
+  assert.equal(pinned.reportedDeviceId, ANDROID_SERIAL);
+  assert.equal(pinned.reason, 'exact-runner-match');
+
+  const foreign = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'android',
+    requestedDeviceId: ANDROID_SERIAL,
+    output: 'Connecting to Android device: emulator-5554',
+  });
+  assert.equal(foreign.verified, false);
+  assert.equal(foreign.reason, 'reported-device-mismatch');
+});
+
+test('UDID letter case never splits one device into ambiguous or foreign identities', () => {
+  const mixedCase = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(EXACT.toLowerCase(), EXACT),
+    directReportDeviceIds: [EXACT.toLowerCase()],
+    requireWdaProvenance: true,
+  });
+  assert.equal(mixedCase.verified, true);
+  assert.equal(mixedCase.reason, 'exact-runner-and-wda-match');
+  assert.equal(mixedCase.observedDeviceIds.length, 1);
+
+  const stillForeign = verifyMaestroDeviceAuthority({
+    runner: 'maestro-runner',
+    platform: 'ios',
+    requestedDeviceId: EXACT,
+    output: runnerLog(FOREIGN.toLowerCase()),
+    requireWdaProvenance: true,
+  });
+  assert.equal(stillForeign.verified, false);
+  assert.equal(stillForeign.reason, 'reported-device-mismatch');
+});

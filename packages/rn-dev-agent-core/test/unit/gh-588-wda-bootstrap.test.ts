@@ -26,7 +26,16 @@ test('GH-588 Slice B: >4KB pre-step WDA death classifies from full terminal evid
   const failure = parseMaestroFailure(output.slice(0, 4_000), terminal);
   assert.equal(terminal.exitClass, 'before-first-step');
   assert.equal(failure.kind, 'WDA_BOOTSTRAP_FAILED');
-  assert.match(failure.kind === 'WDA_BOOTSTRAP_FAILED' ? failure.detail : '', /WebDriverAgent/);
+  assert.match(failure.kind === 'WDA_BOOTSTRAP_FAILED' ? failure.detail : '', /WDA start failed/);
+});
+
+test('GH-588 Slice B: a healthy WDA banner never manufactures a bootstrap failure', async () => {
+  const output = await fixtureOutput('benign');
+  assert.ok(output.length > 4_000, 'sub-4KB parser fixtures are a rejected false proof');
+  const terminal = buildTerminalEvidence(output);
+  assert.equal(terminal.exitClass, 'before-first-step');
+  assert.equal(terminal.bootstrapEvidence, undefined);
+  assert.equal(parseMaestroFailure(output.slice(0, 4_000), terminal).kind, 'UNKNOWN');
 });
 
 for (const [variant, kind] of [

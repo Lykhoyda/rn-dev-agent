@@ -81,14 +81,17 @@ export async function launchAndNavigate(
     };
   }
 
+  const lifecycleDeviceId =
+    session?.platform === platform && session.appId === bundleId ? session.deviceId : undefined;
+
   let pickerDismissed = false;
   let reconnectAttempts = 0;
 
   try {
-    await terminateApp(bundleId, platform as 'ios' | 'android').catch(() => {
+    await terminateApp(bundleId, platform as 'ios' | 'android', lifecycleDeviceId).catch(() => {
       /* idempotent */
     });
-    await launchApp(bundleId, platform as 'ios' | 'android');
+    await launchApp(bundleId, platform as 'ios' | 'android', lifecycleDeviceId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {

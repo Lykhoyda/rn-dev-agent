@@ -45222,8 +45222,22 @@ var init_resolve_ios_app_file = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
+function canonicalDeviceId(value) {
+  return value.toLowerCase();
+}
+function sameDevice(left, right) {
+  return canonicalDeviceId(left) === canonicalDeviceId(right);
+}
 function uniqueValues(values) {
-  return [...new Set(values.filter((value) => Boolean(value)))];
+  const seen = /* @__PURE__ */ new Map();
+  for (const value of values) {
+    if (!value)
+      continue;
+    const key = canonicalDeviceId(value);
+    if (!seen.has(key))
+      seen.set(key, value);
+  }
+  return [...seen.values()];
 }
 function uniqueMatches(output, pattern) {
   return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
@@ -45232,10 +45246,10 @@ function verifyMaestroDeviceAuthority(input) {
   const requestedDeviceId = input.requestedDeviceId?.trim() || null;
   const reportedIds = uniqueValues([
     ...input.directReportDeviceIds ?? [],
-    ...uniqueMatches(input.output, /\b(?:Found|Using specified) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
+    ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi)
   ]);
   const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building WDA for|Starting WDA on) device\s+([A-Za-z0-9._:-]+)/gi);
-  const observedDeviceIds = [.../* @__PURE__ */ new Set([...reportedIds, ...wdaDeviceIds])];
+  const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
   const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
   if (!requestedDeviceId) {
     return {
@@ -45272,10 +45286,10 @@ function verifyMaestroDeviceAuthority(input) {
   if (reportedIds.length !== 1) {
     return { ...base, verified: false, reason: "reported-device-ambiguous" };
   }
-  if (reportedDeviceId !== requestedDeviceId) {
+  if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
     return { ...base, verified: false, reason: "reported-device-mismatch" };
   }
-  if (observedDeviceIds.some((id) => id !== requestedDeviceId)) {
+  if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
     return { ...base, verified: false, reason: "wda-device-mismatch" };
   }
   if (input.platform === "ios" && input.requireWdaProvenance === true && wdaDeviceIds.length === 0) {
@@ -45300,16 +45314,38 @@ var init_maestro_device_authority = __esm({
 import { existsSync as existsSync13, readFileSync as readFileSync11, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
 import { join as join18 } from "node:path";
+function idsFrom(value, keys) {
+  if (typeof value === "string")
+    return [value];
+  if (!value || typeof value !== "object")
+    return [];
+  const record2 = value;
+  return keys.map((key) => record2[key]).filter((id) => typeof id === "string");
+}
+function deviceIdsFrom(value) {
+  return idsFrom(value, DEVICE_ID_KEYS);
+}
+function containerDeviceIdsFrom(value) {
+  if (typeof value === "string")
+    return [];
+  return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
+}
 function reportDeviceIds(reportDir) {
   const reportPath = join18(reportDir, "report.json");
   if (!existsSync13(reportPath))
     return [];
   try {
     const report = JSON.parse(readFileSync11(reportPath, "utf8"));
-    const ids = [report.device?.id, ...(report.flows ?? []).map((flow) => flow.device?.id)];
-    return [
-      ...new Set(ids.filter((id) => typeof id === "string").map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))
+    const flows = Array.isArray(report.flows) ? report.flows : [];
+    const ids = [
+      ...deviceIdsFrom(report.device),
+      ...containerDeviceIdsFrom(report),
+      ...flows.flatMap((flow) => [
+        ...deviceIdsFrom(flow?.device),
+        ...containerDeviceIdsFrom(flow)
+      ])
     ];
+    return [...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))];
   } catch {
     return [];
   }
@@ -45347,11 +45383,13 @@ function disposeRunnerReportDir(reportDir) {
   } catch {
   }
 }
-var DIRECT_DEVICE_ID_RE;
+var DIRECT_DEVICE_ID_RE, DEVICE_ID_KEYS, CONTAINER_DEVICE_ID_KEYS;
 var init_maestro_runner_report = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
     "use strict";
     DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+    DEVICE_ID_KEYS = ["id", "udid", "deviceId", "serial"];
+    CONTAINER_DEVICE_ID_KEYS = ["udid", "deviceId", "deviceSerial"];
   }
 });
 
@@ -55191,9 +55229,12 @@ function buildStepSummary(output, opts) {
     lastStep: lastObservedStep(steps)
   };
 }
+function isWdaFailureLine(line) {
+  return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
+}
 function buildTerminalEvidence(output, opts = {}) {
   const summary = buildStepSummary(output, { failed: true });
-  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => WDA_EVIDENCE_RE.test(line)).join("\n").slice(0, 500);
+  const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
   const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : summary.steps.length === 0 ? "before-first-step" : "step-failure";
   return {
     completedSteps: summary.steps.filter((step) => step.status === "pass").length,
@@ -55230,7 +55271,7 @@ function formatFailureHeadline(summary, cls, fallbackMsg) {
   }
   return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
 }
-var ANSI_RE, STEP_RE, MAX_FIELD, MAX_STEPS, WDA_EVIDENCE_RE;
+var ANSI_RE, STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
 var init_maestro_step_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
     "use strict";
@@ -55239,7 +55280,8 @@ var init_maestro_step_parser = __esm({
     STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
     MAX_FIELD = 200;
     MAX_STEPS = 1e3;
-    WDA_EVIDENCE_RE = /(?:\bWDA\b|WebDriverAgent|Checking WDA installation|Downloading WebDriverAgent)/i;
+    WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
+    WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
   }
 });
 
@@ -57516,6 +57558,14 @@ function resolveIosLifecycleTarget(deviceId) {
   }
   return deviceId;
 }
+function resolveAndroidLifecycleTarget(deviceId) {
+  if (deviceId === void 0)
+    return [];
+  if (!ANDROID_SERIAL_RE.test(deviceId)) {
+    throw new Error("Android lifecycle deviceId must be an exact adb serial");
+  }
+  return ["-s", deviceId];
+}
 async function terminateApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
     await execFile21("xcrun", ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId], {
@@ -57523,17 +57573,18 @@ async function terminateApp(bundleId, platform, deviceId) {
       encoding: "utf8"
     });
   } else {
-    await execFile21("adb", ["shell", "am", "force-stop", bundleId], {
+    await execFile21("adb", [...resolveAndroidLifecycleTarget(deviceId), "shell", "am", "force-stop", bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
   }
 }
-function buildAndroidLaunchArgv(bundleId) {
+function buildAndroidLaunchArgv(bundleId, deviceId) {
   if (typeof bundleId !== "string" || bundleId.length === 0) {
     throw new Error("buildAndroidLaunchArgv: bundleId is required");
   }
   return [
+    ...resolveAndroidLifecycleTarget(deviceId),
     "shell",
     "am",
     "start",
@@ -57553,13 +57604,13 @@ async function launchApp(bundleId, platform, deviceId) {
       encoding: "utf8"
     });
   } else {
-    await execFile21("adb", buildAndroidLaunchArgv(bundleId), {
+    await execFile21("adb", buildAndroidLaunchArgv(bundleId, deviceId), {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
   }
 }
-var execFile21, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, IOS_UDID_RE;
+var execFile21, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, IOS_UDID_RE, ANDROID_SERIAL_RE;
 var init_app_lifecycle = __esm({
   "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
@@ -57567,6 +57618,7 @@ var init_app_lifecycle = __esm({
     TERMINATE_TIMEOUT_MS = 1e4;
     LAUNCH_TIMEOUT_MS = 15e3;
     IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+    ANDROID_SERIAL_RE = /^[A-Za-z0-9._:-]{1,128}$/;
   }
 });
 
@@ -57619,12 +57671,13 @@ async function launchAndNavigate(client2, screen, params, opts = {}) {
       error: "Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project."
     };
   }
+  const lifecycleDeviceId = session?.platform === platform && session.appId === bundleId ? session.deviceId : void 0;
   let pickerDismissed = false;
   let reconnectAttempts = 0;
   try {
-    await terminateApp(bundleId, platform).catch(() => {
+    await terminateApp(bundleId, platform, lifecycleDeviceId).catch(() => {
     });
-    await launchApp(bundleId, platform);
+    await launchApp(bundleId, platform, lifecycleDeviceId);
   } catch (err) {
     const msg3 = err instanceof Error ? err.message : String(err);
     return {
@@ -58026,7 +58079,7 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
     const waitForReady = args.waitForReady ?? true;
     const waitForNavReady = args.waitForNavReady ?? false;
     const session = deps.getSession?.() ?? null;
-    const lifecycleDeviceId = platform === "ios" && session?.platform === "ios" && session.appId === args.appId && typeof session.deviceId === "string" ? session.deviceId : void 0;
+    const lifecycleDeviceId = session?.platform === platform && session.appId === args.appId && typeof session.deviceId === "string" ? session.deviceId : void 0;
     const steps = [];
     let reconnected = false;
     let helpersInjected = false;

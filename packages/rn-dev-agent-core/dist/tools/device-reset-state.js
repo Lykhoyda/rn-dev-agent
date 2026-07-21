@@ -280,8 +280,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
         const waitForReady = args.waitForReady ?? true;
         const waitForNavReady = args.waitForNavReady ?? false;
         const session = deps.getSession?.() ?? null;
-        const lifecycleDeviceId = platform === 'ios' &&
-            session?.platform === 'ios' &&
+        const lifecycleDeviceId = session?.platform === platform &&
             session.appId === args.appId &&
             typeof session.deviceId === 'string'
             ? session.deviceId

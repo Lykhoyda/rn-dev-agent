@@ -9,6 +9,7 @@ const execFile = promisify(execFileCb);
 const TERMINATE_TIMEOUT_MS = 10_000;
 const LAUNCH_TIMEOUT_MS = 15_000;
 const IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+const ANDROID_SERIAL_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export function resolveIosLifecycleTarget(deviceId?: string): string {
   if (deviceId === undefined) return 'booted';
@@ -18,11 +19,19 @@ export function resolveIosLifecycleTarget(deviceId?: string): string {
   return deviceId;
 }
 
+export function resolveAndroidLifecycleTarget(deviceId?: string): string[] {
+  if (deviceId === undefined) return [];
+  if (!ANDROID_SERIAL_RE.test(deviceId)) {
+    throw new Error('Android lifecycle deviceId must be an exact adb serial');
+  }
+  return ['-s', deviceId];
+}
+
 /**
  * Force-stop the app. Idempotent on both platforms — exits 0 even if the app
  * wasn't running. iOS: `xcrun simctl terminate <exact-udid|booted> <bundleId>`;
  * callers with an active session pass its exact UDID. Android:
- * `adb shell am force-stop <bundleId>`. Errors are propagated so callers can
+ * `adb [-s <serial>] shell am force-stop <bundleId>`. Errors are propagated so callers can
  * decide whether to abort or continue (a hung adb is more interesting than
  * an iOS app that wasn't running).
  */
@@ -41,10 +50,14 @@ export async function terminateApp(
       },
     );
   } else {
-    await execFile('adb', ['shell', 'am', 'force-stop', bundleId], {
-      timeout: TERMINATE_TIMEOUT_MS,
-      encoding: 'utf8',
-    });
+    await execFile(
+      'adb',
+      [...resolveAndroidLifecycleTarget(deviceId), 'shell', 'am', 'force-stop', bundleId],
+      {
+        timeout: TERMINATE_TIMEOUT_MS,
+        encoding: 'utf8',
+      },
+    );
   }
 }
 
@@ -60,11 +73,12 @@ export async function terminateApp(
  * Exported as a pure helper so the argv shape can be regression-tested
  * without spawning adb.
  */
-export function buildAndroidLaunchArgv(bundleId: string): string[] {
+export function buildAndroidLaunchArgv(bundleId: string, deviceId?: string): string[] {
   if (typeof bundleId !== 'string' || bundleId.length === 0) {
     throw new Error('buildAndroidLaunchArgv: bundleId is required');
   }
   return [
+    ...resolveAndroidLifecycleTarget(deviceId),
     'shell',
     'am',
     'start',
@@ -95,7 +109,7 @@ export async function launchApp(
       encoding: 'utf8',
     });
   } else {
-    await execFile('adb', buildAndroidLaunchArgv(bundleId), {
+    await execFile('adb', buildAndroidLaunchArgv(bundleId, deviceId), {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: 'utf8',
     });

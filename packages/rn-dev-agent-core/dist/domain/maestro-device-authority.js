@@ -1,5 +1,22 @@
+// iOS UDIDs are hex and are rendered in different cases by the report writer,
+// the log stream and the session store; identity must stay exact but must not
+// depend on which producer emitted it.
+function canonicalDeviceId(value) {
+    return value.toLowerCase();
+}
+function sameDevice(left, right) {
+    return canonicalDeviceId(left) === canonicalDeviceId(right);
+}
 function uniqueValues(values) {
-    return [...new Set(values.filter((value) => Boolean(value)))];
+    const seen = new Map();
+    for (const value of values) {
+        if (!value)
+            continue;
+        const key = canonicalDeviceId(value);
+        if (!seen.has(key))
+            seen.set(key, value);
+    }
+    return [...seen.values()];
 }
 function uniqueMatches(output, pattern) {
     return uniqueValues([...output.matchAll(pattern)].map((match) => match[1]));
@@ -14,10 +31,10 @@ export function verifyMaestroDeviceAuthority(input) {
     const requestedDeviceId = input.requestedDeviceId?.trim() || null;
     const reportedIds = uniqueValues([
         ...(input.directReportDeviceIds ?? []),
-        ...uniqueMatches(input.output, /\b(?:Found|Using specified) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi),
+        ...uniqueMatches(input.output, /\b(?:Found|Using specified|Connecting to) (?:(?:iOS|Android) )?device:\s*([A-Za-z0-9._:-]+)/gi),
     ]);
     const wdaDeviceIds = uniqueMatches(input.output, /\b(?:Building WDA for|Starting WDA on) device\s+([A-Za-z0-9._:-]+)/gi);
-    const observedDeviceIds = [...new Set([...reportedIds, ...wdaDeviceIds])];
+    const observedDeviceIds = uniqueValues([...reportedIds, ...wdaDeviceIds]);
     const reportedDeviceId = reportedIds.length === 1 ? reportedIds[0] : null;
     if (!requestedDeviceId) {
         return {
@@ -57,10 +74,10 @@ export function verifyMaestroDeviceAuthority(input) {
     if (reportedIds.length !== 1) {
         return { ...base, verified: false, reason: 'reported-device-ambiguous' };
     }
-    if (reportedDeviceId !== requestedDeviceId) {
+    if (!reportedDeviceId || !sameDevice(reportedDeviceId, requestedDeviceId)) {
         return { ...base, verified: false, reason: 'reported-device-mismatch' };
     }
-    if (observedDeviceIds.some((id) => id !== requestedDeviceId)) {
+    if (observedDeviceIds.some((id) => !sameDevice(id, requestedDeviceId))) {
         return { ...base, verified: false, reason: 'wda-device-mismatch' };
     }
     if (input.platform === 'ios' &&

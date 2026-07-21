@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeviceResetStateHandler } from '../../dist/tools/device-reset-state.js';
-import { resolveIosLifecycleTarget } from '../../dist/tools/app-lifecycle.js';
+import {
+  buildAndroidLaunchArgv,
+  resolveAndroidLifecycleTarget,
+  resolveIosLifecycleTarget,
+} from '../../dist/tools/app-lifecycle.js';
 
 const UDID = '5C10B45B-2065-458B-B885-0F83F49747C8';
+const SERIAL = 'emulator-5556';
 const APP_ID = 'com.rndevagent.testapp';
 
 function client() {
@@ -79,4 +84,42 @@ test('GH-588 V4: supplied iOS lifecycle identities are exact UDIDs or fail close
   assert.equal(resolveIosLifecycleTarget(), 'booted');
   assert.throws(() => resolveIosLifecycleTarget('booted'), /exact simulator UDID/);
   assert.throws(() => resolveIosLifecycleTarget('emulator-5560'), /exact simulator UDID/);
+});
+
+test('GH-588 V4: lifecycle reset threads the matching active Android serial to terminate and launch', async () => {
+  const calls: Array<{ operation: string; deviceId?: string }> = [];
+  const handler = createDeviceResetStateHandler(() => client(), {
+    getSession: () => ({ platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    terminateApp: async (_appId, _platform, deviceId) => {
+      calls.push({ operation: 'terminate', deviceId });
+    },
+    launchApp: async (_appId, _platform, deviceId) => {
+      calls.push({ operation: 'launch', deviceId });
+    },
+  });
+
+  const result = envelope(
+    await handler({
+      appId: APP_ID,
+      platform: 'android',
+      relaunch: true,
+      waitForReady: false,
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [
+    { operation: 'terminate', deviceId: SERIAL },
+    { operation: 'launch', deviceId: SERIAL },
+  ]);
+});
+
+test('GH-588 V4: Android lifecycle argv binds adb to the exact serial or fails closed', () => {
+  assert.deepEqual(resolveAndroidLifecycleTarget(SERIAL), ['-s', SERIAL]);
+  assert.deepEqual(resolveAndroidLifecycleTarget(), []);
+  assert.throws(() => resolveAndroidLifecycleTarget('emulator 5556'), /exact adb serial/);
+  assert.throws(() => resolveAndroidLifecycleTarget('a;rm -rf /'), /exact adb serial/);
+
+  assert.deepEqual(buildAndroidLaunchArgv(APP_ID, SERIAL).slice(0, 3), ['-s', SERIAL, 'shell']);
+  assert.equal(buildAndroidLaunchArgv(APP_ID)[0], 'shell');
 });

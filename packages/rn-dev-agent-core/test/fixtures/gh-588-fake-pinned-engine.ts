@@ -5,7 +5,9 @@
 const variant = process.argv[2] ?? 'bootstrap';
 const preamble = `${'Checking WDA installation… Downloading WebDriverAgent v15.1.6\n'.repeat(100)}`;
 process.stdout.write(preamble);
-if (variant === 'selector') {
+if (variant === 'bootstrap') {
+  process.stdout.write('WDA start failed: WebDriverAgent session could not be created\n');
+} else if (variant === 'selector') {
   process.stdout.write("    ✗ tapOn id=continue (0.2s)\nElement with id 'continue' not found\n");
 } else if (variant === 'assertion') {
   process.stdout.write(

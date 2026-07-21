@@ -9,23 +9,49 @@ export interface DirectMaestroRunnerEvidence {
 
 const DIRECT_DEVICE_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
 
+// maestro-runner renders the executing device either as a nested object or as a
+// bare identifier, and names the identity field differently across its report
+// writers. Harvest every documented spelling so a shape drift degrades one key,
+// not the whole structured-evidence source.
+const DEVICE_ID_KEYS = ['id', 'udid', 'deviceId', 'serial'] as const;
+// `id` is deliberately absent here: on a run/flow container it names the run or
+// flow, and harvesting it would inject a foreign identity into the evidence set.
+const CONTAINER_DEVICE_ID_KEYS = ['udid', 'deviceId', 'deviceSerial'] as const;
+
+function idsFrom(value: unknown, keys: readonly string[]): string[] {
+  if (typeof value === 'string') return [value];
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  return keys.map((key) => record[key]).filter((id): id is string => typeof id === 'string');
+}
+
+function deviceIdsFrom(value: unknown): string[] {
+  return idsFrom(value, DEVICE_ID_KEYS);
+}
+
+function containerDeviceIdsFrom(value: unknown): string[] {
+  if (typeof value === 'string') return [];
+  return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
+}
+
 function reportDeviceIds(reportDir: string): string[] {
   const reportPath = join(reportDir, 'report.json');
   if (!existsSync(reportPath)) return [];
   try {
     const report = JSON.parse(readFileSync(reportPath, 'utf8')) as {
-      device?: { id?: unknown };
-      flows?: Array<{ device?: { id?: unknown } }>;
+      device?: unknown;
+      flows?: unknown;
     };
-    const ids = [report.device?.id, ...(report.flows ?? []).map((flow) => flow.device?.id)];
-    return [
-      ...new Set(
-        ids
-          .filter((id): id is string => typeof id === 'string')
-          .map((id) => id.trim())
-          .filter((id) => DIRECT_DEVICE_ID_RE.test(id)),
-      ),
+    const flows = Array.isArray(report.flows) ? report.flows : [];
+    const ids = [
+      ...deviceIdsFrom(report.device),
+      ...containerDeviceIdsFrom(report),
+      ...flows.flatMap((flow) => [
+        ...deviceIdsFrom((flow as { device?: unknown } | null)?.device),
+        ...containerDeviceIdsFrom(flow),
+      ]),
     ];
+    return [...new Set(ids.map((id) => id.trim()).filter((id) => DIRECT_DEVICE_ID_RE.test(id)))];
   } catch {
     return [];
   }
