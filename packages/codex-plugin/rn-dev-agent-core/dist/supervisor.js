@@ -53399,8 +53399,6 @@ function acknowledgeExternalEdit(action) {
 }
 function saveActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (actionWasEditedExternally(expected))
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
   if (existsSync20(sidecarPath)) {
     try {
       const onDisk = JSON.parse(readFileSync18(sidecarPath, "utf8"));

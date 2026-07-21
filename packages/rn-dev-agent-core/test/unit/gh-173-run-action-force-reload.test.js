@@ -11,13 +11,18 @@
 //      sidecar's lastSeenMtimeMs is bumped to match the YAML's current
 //      stat-mtime, and the no-op path (mtime unchanged) does not write.
 //   2. `cdp_run_action` handler — verifies the flag is wired and acted
-//      on: forceReload=true (default) bumps the sidecar BEFORE the run;
-//      forceReload=false leaves the sidecar untouched.
+//      on: forceReload=true (default) bumps the baseline BEFORE the run;
+//      forceReload=false leaves that baseline untouched even when the
+//      independent runtime history is appended.
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { acknowledgeExternalEdit, loadAction } from '../../dist/domain/action-store.js';
+import {
+  acknowledgeExternalEdit,
+  actionWasEditedExternally,
+  loadAction,
+} from '../../dist/domain/action-store.js';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
 
 let project;
@@ -140,37 +145,41 @@ test('cdp_run_action: forceReload=true (default) acknowledges the human edit BEF
   );
 });
 
-test('cdp_run_action: forceReload=false on externally-edited YAML preserves strict Phase 129 behavior (run fails)', async () => {
-  // Companion to the forceReload=true test: with strict mode, the human
-  // edit is NOT acknowledged before the run, so the downstream
-  // persistRun flow (which uses saveActionWithCAS + atomicWriter) sees
-  // a YAML mtime greater than the in-memory action.state.lastSeenMtimeMs
-  // and aborts. This is the user-facing pain that motivates GH #173 —
-  // it's the right behavior when the human intends to protect offline
-  // edits, the wrong behavior when they're actively composing. The
-  // forceReload flag lets the caller pick.
+test('cdp_run_action: forceReload=false preserves the stale YAML baseline while allowing sidecar-only telemetry', async () => {
+  // Companion to the forceReload=true test: strict mode must NOT acknowledge
+  // the edit. A passing active action may still append runtime telemetry,
+  // because that write cannot clobber YAML; promotion/repair continue to use
+  // the stale baseline and refuse any YAML mutation.
   const id = 'demo';
-  project.seedAction(id, fixtureYaml({ id }));
+  project.seedAction(id, fixtureYaml({ id, status: 'active' }));
   const baselineSidecar = project.readSidecar(id);
   const baselineMtime = baselineSidecar.lastSeenMtimeMs;
+  const editedYaml = fixtureYaml({ id, status: 'active', selectors: ['user-edited'] });
 
-  project.simulateHumanEdit(id, fixtureYaml({ id, selectors: ['user-edited'] }));
+  project.simulateHumanEdit(id, editedYaml);
 
   const snapshot = {};
   const handler = createRunActionHandler({
     maestroRun: fakeMaestroPassWithSnapshot(snapshot),
     repairAction: fakeRepairUnused(),
   });
-  const result = await handler({ actionId: id, projectRoot: project.root, forceReload: false });
-  assert.equal(result.isError, true, 'strict mode should refuse to persist over a stale sidecar');
+  const result = await handler({
+    actionId: id,
+    projectRoot: project.root,
+    forceReload: false,
+    autoRepair: false,
+  });
+  assert.equal(result.isError, undefined, 'sidecar-only telemetry should persist');
 
-  // The discriminating assertion: at the moment maestroRun fired, the
-  // sidecar's lastSeenMtimeMs was STILL at baseline (no pre-run bump).
-  // A regression that incorrectly behaves like forceReload=true would
-  // advance the sidecar before this snapshot.
+  // The discriminating assertion: neither the pre-run path nor the runtime
+  // append acknowledges the YAML mtime. forceReload=false therefore retains
+  // the exact Phase 129 guard for any later YAML-mutating operation.
+  assert.equal(snapshot.midRunMtime, baselineMtime);
+  assert.equal(project.readSidecar(id).lastSeenMtimeMs, baselineMtime);
+  assert.equal(project.readYaml(id), editedYaml, 'runtime persistence must not rewrite YAML');
   assert.equal(
-    snapshot.midRunMtime,
-    baselineMtime,
-    `forceReload=false must skip pre-run acknowledgment (baseline=${baselineMtime}, midRun=${snapshot.midRunMtime})`,
+    actionWasEditedExternally(loadAction(project.root, id)),
+    true,
+    'the unacknowledged YAML edit must remain visible to promotion/repair guards',
   );
 });

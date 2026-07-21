@@ -388,14 +388,20 @@ export type SaveActionRuntimeCASResult =
 /**
  * Persist run telemetry without reserializing the tracked action YAML. The
  * synchronous compare+write is atomic with respect to this MCP process and
- * preserves the same reload/retry contract as saveActionWithCAS.
+ * preserves the bounded sidecar reload/retry contract used by persistRun.
+ *
+ * YAML mtime divergence is deliberately not a conflict here: this path writes
+ * only the runtime sidecar, so a stale lastSeenMtimeMs cannot cause a lost YAML
+ * update. The stale baseline remains unchanged, which means forceReload=false
+ * still blocks later YAML-mutating promotion/repair through their existing
+ * actionWasEditedExternally guards. The sidecar equality check below remains
+ * the CAS authority for telemetry lost-update protection.
  */
 export function saveActionRuntimeWithCAS(
   expected: ReusableAction,
   nextState: ReusableAction['state'],
 ): SaveActionRuntimeCASResult {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (actionWasEditedExternally(expected)) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   if (existsSync(sidecarPath)) {
     try {
       const onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8')) as ReusableAction['state'];
