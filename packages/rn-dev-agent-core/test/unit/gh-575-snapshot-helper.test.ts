@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
+  access,
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -22,6 +24,18 @@ const snapshotHelper = resolve('scripts/snapshot_state.sh');
 async function executable(path: string, contents: string): Promise<void> {
   await writeFile(path, contents);
   await chmod(path, 0o755);
+}
+
+async function waitForPath(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      await access(path);
+      return;
+    } catch {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    }
+  }
+  throw new Error(`Timed out waiting for ${path}`);
 }
 
 test('GH-575 snapshot guidance uses package-local exact-device invocations', async () => {
@@ -233,6 +247,136 @@ exit 1
   }
 });
 
+test(
+  'GH-575 concurrent snapshots preserve one staged evidence set and its owned lock',
+  { timeout: 10_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rn-agent-snapshot-lock-'));
+    const bin = join(root, 'bin');
+    const output = join(root, 'output');
+    const started = join(root, 'started');
+    const release = join(root, 'release');
+    const serial = 'emulator-5556';
+    await mkdir(bin);
+    await mkdir(output);
+    await chmod(output, 0o700);
+    await writeFile(join(output, 'screenshot.png'), 'old screenshot\n');
+    await writeFile(join(output, 'ui_elements.json'), '[{"text":"Old"}]\n');
+    await executable(
+      join(bin, 'adb'),
+      `#!/bin/sh
+if [ "$1" = "devices" ]; then
+  printf 'List of devices attached\nemulator-5556\tdevice\n'
+  exit 0
+fi
+if [ "$3 $4 $5" = "exec-out screencap -p" ]; then
+  touch "$MOCK_STARTED"
+  attempts=0
+  while [ ! -f "$MOCK_RELEASE" ]; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 200 ] || exit 70
+    sleep 0.01
+  done
+  printf 'new screenshot\n'
+  exit 0
+fi
+if [ "$3 $4 $5" = "shell uiautomator dump" ]; then
+  exit 0
+fi
+if [ "$3 $4" = "exec-out cat" ]; then
+  printf '<hierarchy><node text="New" resource-id="new" content-desc="" bounds="[0,0][1,1]" clickable="true"/></hierarchy>\n'
+  exit 0
+fi
+exit 0
+`,
+    );
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      MOCK_STARTED: started,
+      MOCK_RELEASE: release,
+    };
+    let first: ReturnType<typeof pexecFile> | undefined;
+    try {
+      first = pexecFile(
+        'bash',
+        [snapshotHelper, 'android', '--device-id', serial, '--output-dir', output],
+        { env, timeout: 5_000 },
+      );
+      await waitForPath(started);
+      assert.equal(await readFile(join(output, 'screenshot.png'), 'utf8'), 'old screenshot\n');
+      assert.equal(await readFile(join(output, 'ui_elements.json'), 'utf8'), '[{"text":"Old"}]\n');
+
+      await assert.rejects(
+        pexecFile(
+          'bash',
+          [snapshotHelper, 'android', '--device-id', serial, '--output-dir', output],
+          { env },
+        ),
+        /already in progress/,
+      );
+      assert.equal((await stat(join(output, '.snapshot.lock'))).isDirectory(), true);
+      assert.equal(await readFile(join(output, 'screenshot.png'), 'utf8'), 'old screenshot\n');
+      assert.equal(await readFile(join(output, 'ui_elements.json'), 'utf8'), '[{"text":"Old"}]\n');
+
+      await writeFile(release, '');
+      await first;
+      await assert.rejects(stat(join(output, '.snapshot.lock')));
+      assert.equal(await readFile(join(output, 'screenshot.png'), 'utf8'), 'new screenshot\n');
+      const hierarchy = JSON.parse(
+        await readFile(join(output, 'ui_elements.json'), 'utf8'),
+      ) as Array<{ text: string }>;
+      assert.equal(hierarchy[0]?.text, 'New');
+      assert.equal(
+        (await readdir(output)).some((name) => name.startsWith('.snapshot-stage.')),
+        false,
+      );
+    } finally {
+      await writeFile(release, '').catch(() => undefined);
+      if (first) await first.catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test('GH-575 snapshot rejects and preserves a pre-existing lock symlink', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-snapshot-lock-link-'));
+  const bin = join(root, 'bin');
+  const output = join(root, 'output');
+  const foreign = join(root, 'foreign');
+  const lock = join(output, '.snapshot.lock');
+  const serial = 'emulator-5556';
+  await mkdir(bin);
+  await mkdir(output);
+  await chmod(output, 0o700);
+  await mkdir(foreign);
+  await symlink(foreign, lock);
+  await executable(
+    join(bin, 'adb'),
+    `#!/bin/sh
+if [ "$1" = "devices" ]; then
+  printf 'List of devices attached\nemulator-5556\tdevice\n'
+  exit 0
+fi
+exit 1
+`,
+  );
+  try {
+    await assert.rejects(
+      pexecFile(
+        'bash',
+        [snapshotHelper, 'android', '--device-id', serial, '--output-dir', output],
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
+      ),
+      /already in progress/,
+    );
+    assert.equal((await lstat(lock)).isSymbolicLink(), true);
+    assert.equal((await stat(foreign)).isDirectory(), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('GH-575 published snapshot docs describe exact sequential private capture', async () => {
   const docs = await readFile(
     resolve('apps/docs-site/src/content/docs/skills/rn-device-control.mdx'),
@@ -242,5 +386,6 @@ test('GH-575 published snapshot docs describe exact sequential private capture',
   assert.match(docs, /captures state sequentially/);
   assert.match(docs, /owner-only private directory/);
   assert.match(docs, /fails closed.*identity/s);
+  assert.match(docs, /Concurrent captures.*fail closed/s);
   assert.doesNotMatch(docs, /Concurrent State Snapshot|simultaneously, cutting state-check time by ~40%/);
 });

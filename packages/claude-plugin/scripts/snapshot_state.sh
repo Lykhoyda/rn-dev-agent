@@ -11,10 +11,19 @@ OUTPUT_DIR=""
 OWN_OUTPUT_DIR=0
 CAPTURE_SUCCEEDED=0
 TMP_XML=""
+LOCK_DIR=""
+LOCK_OWNED=0
+STAGE_DIR=""
 
 cleanup() {
   if [ -n "$TMP_XML" ] && [ -n "$DEVICE_ID" ]; then
     adb -s "$DEVICE_ID" shell rm -f "$TMP_XML" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$STAGE_DIR" ]; then
+    rm -rf -- "$STAGE_DIR" 2>/dev/null || true
+  fi
+  if [ "$LOCK_OWNED" -eq 1 ] && [ -n "$LOCK_DIR" ]; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
   fi
   if [ "$OWN_OUTPUT_DIR" -eq 1 ] && [ "$CAPTURE_SUCCEEDED" -ne 1 ] && [ -n "$OUTPUT_DIR" ]; then
     rm -rf -- "$OUTPUT_DIR" 2>/dev/null || true
@@ -135,6 +144,31 @@ if [ "$OUTPUT_OWNER" != "$(id -u)" ] || [ "$OUTPUT_MODE" != "700" ]; then
 fi
 
 OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd -P)
+LOCK_DIR="$OUTPUT_DIR/.snapshot.lock"
+if ! mkdir -m 700 -- "$LOCK_DIR" 2>/dev/null; then
+  echo "Error: Snapshot capture is already in progress for this output directory." >&2
+  exit 1
+fi
+LOCK_OWNED=1
+if [ -L "$LOCK_DIR" ] || [ ! -d "$LOCK_DIR" ]; then
+  echo "Error: Snapshot lock must be a real directory, not a symlink." >&2
+  exit 1
+fi
+if [ "$(uname)" = "Darwin" ]; then
+  LOCK_OWNER=$(stat -f '%u' "$LOCK_DIR" 2>/dev/null || true)
+  LOCK_MODE=$(stat -f '%Lp' "$LOCK_DIR" 2>/dev/null || true)
+else
+  LOCK_OWNER=$(stat -c '%u' "$LOCK_DIR" 2>/dev/null || true)
+  LOCK_MODE=$(stat -c '%a' "$LOCK_DIR" 2>/dev/null || true)
+fi
+if [ "$LOCK_OWNER" != "$(id -u)" ] || [ "$LOCK_MODE" != "700" ]; then
+  echo "Error: Snapshot lock must be owned by the current user with mode 0700." >&2
+  exit 1
+fi
+STAGE_DIR=$(mktemp -d "${OUTPUT_DIR}/.snapshot-stage.XXXXXX") || {
+  echo "Error: Unable to create a private snapshot staging directory." >&2
+  exit 1
+}
 
 validate_output_target() {
   local target="$1"
@@ -147,10 +181,15 @@ validate_output_target() {
 case "$PLATFORM" in
   ios)
     SCREENSHOT_PATH="$OUTPUT_DIR/screenshot.jpg"
+    STAGED_SCREENSHOT="$STAGE_DIR/screenshot.jpg"
     validate_output_target "$SCREENSHOT_PATH"
-    if ! xcrun simctl io "$DEVICE_ID" screenshot --type=jpeg "$SCREENSHOT_PATH"; then
-      rm -f -- "$SCREENSHOT_PATH"
+    if ! xcrun simctl io "$DEVICE_ID" screenshot --type=jpeg "$STAGED_SCREENSHOT"; then
       echo "Error: iOS screenshot capture failed." >&2
+      exit 1
+    fi
+    validate_output_target "$SCREENSHOT_PATH"
+    if ! mv -f -- "$STAGED_SCREENSHOT" "$SCREENSHOT_PATH"; then
+      echo "Error: Unable to publish iOS screenshot." >&2
       exit 1
     fi
     CAPTURE_SUCCEEDED=1
@@ -160,16 +199,18 @@ case "$PLATFORM" in
   android)
     SCREENSHOT_PATH="$OUTPUT_DIR/screenshot.png"
     HIERARCHY_PATH="$OUTPUT_DIR/ui_elements.json"
+    STAGED_SCREENSHOT="$STAGE_DIR/screenshot.png"
+    STAGED_HIERARCHY="$STAGE_DIR/ui_elements.json"
     validate_output_target "$SCREENSHOT_PATH"
     validate_output_target "$HIERARCHY_PATH"
     TMP_XML="/data/local/tmp/rn-dev-agent-uidump-$$.xml"
 
     SCREENSHOT_OK=0
-    if adb -s "$DEVICE_ID" exec-out screencap -p > "$SCREENSHOT_PATH"; then
+    if adb -s "$DEVICE_ID" exec-out screencap -p > "$STAGED_SCREENSHOT"; then
       :
     else
       SCREENSHOT_OK=$?
-      rm -f -- "$SCREENSHOT_PATH"
+      rm -f -- "$STAGED_SCREENSHOT"
       echo "Warning: Screenshot capture failed (exit $SCREENSHOT_OK)." >&2
     fi
 
@@ -188,17 +229,28 @@ try:
 except Exception as e:
     print(f'Error parsing UI hierarchy XML: {e}', file=sys.stderr)
     sys.exit(1)
-" > "$HIERARCHY_PATH"; then
+" > "$STAGED_HIERARCHY"; then
       :
     else
       HIERARCHY_OK=$?
-      rm -f -- "$HIERARCHY_PATH"
+      rm -f -- "$STAGED_HIERARCHY"
       echo "Warning: UI hierarchy dump failed (exit $HIERARCHY_OK)." >&2
     fi
 
     adb -s "$DEVICE_ID" shell rm -f "$TMP_XML" >/dev/null 2>&1 || true
     TMP_XML=""
     if [ "$SCREENSHOT_OK" -ne 0 ] && [ "$HIERARCHY_OK" -ne 0 ]; then
+      exit 1
+    fi
+    validate_output_target "$SCREENSHOT_PATH"
+    validate_output_target "$HIERARCHY_PATH"
+    rm -f -- "$SCREENSHOT_PATH" "$HIERARCHY_PATH"
+    if [ "$SCREENSHOT_OK" -eq 0 ] && ! mv -- "$STAGED_SCREENSHOT" "$SCREENSHOT_PATH"; then
+      echo "Error: Unable to publish Android screenshot." >&2
+      exit 1
+    fi
+    if [ "$HIERARCHY_OK" -eq 0 ] && ! mv -- "$STAGED_HIERARCHY" "$HIERARCHY_PATH"; then
+      echo "Error: Unable to publish Android UI hierarchy." >&2
       exit 1
     fi
     CAPTURE_SUCCEEDED=1

@@ -268,7 +268,9 @@ bash "<package-root>/scripts/snapshot_state.sh" android --device-id "$ANDROID_SE
 missing, unavailable, or ambiguous. If `--output-dir` is omitted, the helper
 creates an owner-only private directory, removes it when no artifact succeeds,
 and reports the retained path after capture; a supplied directory must be owned
-by the current user with mode `0700` and must not be a symlink.
+by the current user with mode `0700` and must not be a symlink. Concurrent
+captures targeting the same output directory fail closed while its owned lock
+is held.
 
 ---
 

@@ -219,6 +219,7 @@ test('GH-575 EAS cache keys profiles by exact artifact name', async () => {
     join(bin, 'curl'),
     `#!/bin/sh
 while [ "$1" != "-o" ]; do shift; done
+cat >/dev/null
 printf 'dev artifact\n' > "$2"
 `,
   );
@@ -228,7 +229,8 @@ printf 'dev artifact\n' > "$2"
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
     });
     const result = JSON.parse(stdout) as { path: string; source: string };
-    assert.equal(result.path, await realpath(join(cache, 'dev-ios.tar.gz')));
+    assert.match(result.path, /\/dev-ios-[A-Za-z0-9]+\.tar\.gz$/);
+    assert.equal(resolve(result.path, '..'), await realpath(cache));
     assert.equal(result.source, 'eas');
     assert.equal(await readFile(result.path, 'utf8'), 'dev artifact\n');
   } finally {
@@ -240,6 +242,7 @@ test('GH-575 default EAS output is private, retained, and does not log signed UR
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-private-'));
   const project = join(root, 'project');
   const bin = join(root, 'bin');
+  const curlArgs = join(root, 'curl.args');
   await mkdir(project);
   await mkdir(bin);
   await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
@@ -250,6 +253,12 @@ test('GH-575 default EAS output is private, retained, and does not log signed UR
   await executable(
     join(bin, 'curl'),
     `#!/bin/sh
+printf '%s\n' "$*" > "$MOCK_CURL_ARGS"
+config=$(cat)
+case "$config" in
+  *signed-secret*) ;;
+  *) exit 9 ;;
+esac
 while [ "$1" != "-o" ]; do shift; done
 printf 'artifact\n' > "$2"
 `,
@@ -257,7 +266,12 @@ printf 'artifact\n' > "$2"
   try {
     const { stdout, stderr } = await pexecFile('bash', [easHelper, 'ios', 'development'], {
       cwd: project,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        TMPDIR: root,
+        MOCK_CURL_ARGS: curlArgs,
+      },
     });
     const result = JSON.parse(stdout) as { path: string };
     const output = resolve(result.path, '..');
@@ -265,6 +279,9 @@ printf 'artifact\n' > "$2"
     assert.equal((await stat(output)).mode & 0o777, 0o700);
     assert.equal(await readFile(result.path, 'utf8'), 'artifact\n');
     assert.doesNotMatch(stderr, /X-Amz-Signature|signed-secret|https:\/\//);
+    const args = await readFile(curlArgs, 'utf8');
+    assert.match(args, /--config -/);
+    assert.doesNotMatch(args, /X-Amz-Signature|signed-secret|https:\/\//);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -345,7 +362,7 @@ test('GH-575 auto-selected EAS profiles cannot escape the output directory', asy
   }
 });
 
-test('GH-575 EAS publication rejects unsafe destinations and reports rename failures', async () => {
+test('GH-575 EAS publication rejects unsafe destinations and reports publication failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-publish-'));
   const project = join(root, 'project');
   const cache = join(root, 'artifacts');
@@ -378,10 +395,11 @@ test('GH-575 EAS publication rejects unsafe destinations and reports rename fail
       join(bin, 'curl'),
       `#!/bin/sh
 while [ "$1" != "-o" ]; do shift; done
+cat >/dev/null
 printf 'artifact\n' > "$2"
 `,
     );
-    await executable(join(bin, 'mv'), '#!/bin/sh\nexit 1\n');
+    await executable(join(bin, 'ln'), '#!/bin/sh\nexit 1\n');
     await assert.rejects(
       pexecFile('bash', [easHelper, 'ios', 'development', cache], {
         cwd: project,
@@ -451,13 +469,13 @@ fi
       join(bin, 'curl'),
       `#!/bin/sh
 output=""
-url=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then output="$2"; shift 2
-  elif [ "\${1#http}" != "$1" ]; then url="$1"; shift
   else shift
   fi
 done
+config=$(cat)
+url=$(printf '%s\n' "$config" | cut -d '"' -f 2)
 printf '%s\n' "$url" > "$output"
 `,
     );
@@ -480,7 +498,62 @@ printf '%s\n' "$url" > "$output"
       const betaResult = JSON.parse(beta.stdout) as { path: string };
       assert.equal(await readFile(alphaResult.path, 'utf8'), 'https://example.invalid/alpha\n');
       assert.equal(await readFile(betaResult.path, 'utf8'), 'https://example.invalid/beta\n');
-      assert.deepEqual((await readdir(cache)).sort(), ['alpha-ios.tar.gz', 'beta-ios.tar.gz']);
+      assert.match(alphaResult.path, /\/alpha-ios-[A-Za-z0-9]+\.tar\.gz$/);
+      assert.match(betaResult.path, /\/beta-ios-[A-Za-z0-9]+\.tar\.gz$/);
+      assert.equal((await readdir(cache)).length, 2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'GH-575 concurrent same-profile EAS results keep immutable paths',
+  { timeout: 10_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-same-profile-'));
+    const project = join(root, 'project');
+    const cache = join(root, 'artifacts');
+    const bin = join(root, 'bin');
+    await mkdir(project);
+    await mkdir(cache);
+    await chmod(cache, 0o700);
+    await mkdir(bin);
+    await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+    await executable(
+      join(bin, 'eas'),
+      '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/build?signed=credential"}}]\\n\'\n',
+    );
+    await executable(
+      join(bin, 'curl'),
+      `#!/bin/sh
+while [ "$1" != "-o" ]; do shift; done
+output="$2"
+config=$(cat)
+case "$config" in
+  *'https://example.invalid/build?signed=credential'*) ;;
+  *) exit 9 ;;
+esac
+printf 'artifact-%s\n' "$$" > "$output"
+`,
+    );
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    try {
+      const [first, second] = await Promise.all([
+        pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project, env }),
+        pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project, env }),
+      ]);
+      const firstResult = JSON.parse(first.stdout) as { path: string };
+      const secondResult = JSON.parse(second.stdout) as { path: string };
+      assert.notEqual(firstResult.path, secondResult.path);
+      assert.match(firstResult.path, /\/development-ios-[A-Za-z0-9]+\.tar\.gz$/);
+      assert.match(secondResult.path, /\/development-ios-[A-Za-z0-9]+\.tar\.gz$/);
+      const firstContents = await readFile(firstResult.path, 'utf8');
+      const secondContents = await readFile(secondResult.path, 'utf8');
+      assert.notEqual(firstContents, secondContents);
+      assert.equal(await readFile(firstResult.path, 'utf8'), firstContents);
+      assert.equal(await readFile(secondResult.path, 'utf8'), secondContents);
+      assert.equal((await readdir(cache)).length, 2);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -54,7 +54,8 @@ not connected, or ambiguous across platforms. If `--output-dir` is omitted, it
 creates an owner-only private directory, removes it when capture produces no
 artifact, and reports the retained path after a successful capture. A supplied
 directory must be owned by the current user, use mode `0700`, and not be a
-symlink.
+symlink. Concurrent captures targeting the same output directory fail closed
+while its owner-controlled lock is held.
 
 ### Benchmark Reference
 

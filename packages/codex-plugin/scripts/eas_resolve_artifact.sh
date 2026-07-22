@@ -195,24 +195,25 @@ fi
 OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd -P)
 
 if [ "$PLATFORM" = "ios" ]; then
-  ARTIFACT_NAME="${PROFILE}-${PLATFORM}.tar.gz"
+  ARTIFACT_SUFFIX=".tar.gz"
 else
-  ARTIFACT_NAME="${PROFILE}-${PLATFORM}.apk"
+  ARTIFACT_SUFFIX=".apk"
 fi
-ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
-if [ "$(dirname "$ARTIFACT_PATH")" != "$OUTPUT_DIR" ] || \
-  [ "$(basename "$ARTIFACT_PATH")" != "$ARTIFACT_NAME" ]; then
+ARTIFACT_NAME="${PROFILE}-${PLATFORM}${ARTIFACT_SUFFIX}"
+CACHE_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
+if [ "$(dirname "$CACHE_PATH")" != "$OUTPUT_DIR" ] || \
+  [ "$(basename "$CACHE_PATH")" != "$ARTIFACT_NAME" ]; then
   json_error 1 "Artifact destination must be one immediate file child of the output directory."
 fi
-if [ -L "$ARTIFACT_PATH" ] || { [ -e "$ARTIFACT_PATH" ] && [ ! -f "$ARTIFACT_PATH" ]; }; then
-  json_error 1 "Artifact destination must be a regular file path: $ARTIFACT_PATH"
+if [ -L "$CACHE_PATH" ] || { [ -e "$CACHE_PATH" ] && [ ! -f "$CACHE_PATH" ]; }; then
+  json_error 1 "Artifact destination must be a regular file path: $CACHE_PATH"
 fi
 
 # --- Tier 1: Local cache ---
 
 check_cache() {
   local cached
-  cached=$(find "$ARTIFACT_PATH" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print 2>/dev/null || true)
+  cached=$(find "$CACHE_PATH" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print 2>/dev/null || true)
 
   if [ -n "$cached" ]; then
     echo "$cached"
@@ -243,6 +244,20 @@ echo "Downloading artifact from EAS (platform=$PLATFORM, profile=$PROFILE)..." >
 
 RUN_DIR=$(mktemp -d "${OUTPUT_DIR}/.resolve.XXXXXX") || \
   json_error 1 "Unable to create a private resolver directory."
+RUN_TOKEN="${RUN_DIR##*/}"
+RUN_TOKEN="${RUN_TOKEN#.resolve.}"
+if [ -z "$RUN_TOKEN" ] || ! [[ "$RUN_TOKEN" =~ ^[a-zA-Z0-9]+$ ]]; then
+  json_error 1 "Unable to derive a safe resolver identity."
+fi
+PUBLISHED_NAME="${PROFILE}-${PLATFORM}-${RUN_TOKEN}${ARTIFACT_SUFFIX}"
+PUBLISHED_PATH="${OUTPUT_DIR}/${PUBLISHED_NAME}"
+if [ "$(dirname "$PUBLISHED_PATH")" != "$OUTPUT_DIR" ] || \
+  [ "$(basename "$PUBLISHED_PATH")" != "$PUBLISHED_NAME" ]; then
+  json_error 1 "Published artifact must be one immediate file child of the output directory."
+fi
+if [ -e "$PUBLISHED_PATH" ] || [ -L "$PUBLISHED_PATH" ]; then
+  json_error 1 "Refusing to replace an existing artifact result."
+fi
 BUILD_INFO="${RUN_DIR}/build-info.json"
 BUILD_ERR="${RUN_DIR}/build-err.log"
 DOWNLOAD_PATH="${RUN_DIR}/artifact.part"
@@ -270,19 +285,30 @@ if "${EAS_CMD[@]}" build:list \
   fi
 
   if [ -n "$local_build_url" ]; then
+    if [[ ! "$local_build_url" =~ ^https?:// ]] || [[ "$local_build_url" =~ [[:cntrl:]] ]]; then
+      json_error 1 "EAS returned an invalid artifact URL."
+    fi
+    curl_config_url="${local_build_url//\\/\\\\}"
+    curl_config_url="${curl_config_url//\"/\\\"}"
     echo "Downloading resolved EAS artifact..." >&2
-    if curl -fSL --max-time 300 -o "$DOWNLOAD_PATH" "$local_build_url" 2>/dev/null; then
-      if [ -L "$ARTIFACT_PATH" ] || { [ -e "$ARTIFACT_PATH" ] && [ ! -f "$ARTIFACT_PATH" ]; }; then
-        json_error 1 "Artifact destination changed to a non-regular path: $ARTIFACT_PATH"
+    if printf 'url = "%s"\n' "$curl_config_url" | \
+      curl --config - -fSL --max-time 300 -o "$DOWNLOAD_PATH" 2>/dev/null; then
+      if [ -e "$PUBLISHED_PATH" ] || [ -L "$PUBLISHED_PATH" ]; then
+        json_error 1 "Refusing to replace an existing artifact result."
       fi
-      if ! mv -f -- "$DOWNLOAD_PATH" "$ARTIFACT_PATH"; then
-        json_error 1 "Failed to publish downloaded artifact: $ARTIFACT_PATH"
+      if ! ln "$DOWNLOAD_PATH" "$PUBLISHED_PATH"; then
+        json_error 1 "Failed to publish downloaded artifact: $PUBLISHED_PATH"
       fi
-      if [ -L "$ARTIFACT_PATH" ] || [ ! -f "$ARTIFACT_PATH" ]; then
-        json_error 1 "Published artifact is not a regular file: $ARTIFACT_PATH"
+      if ! rm -f -- "$DOWNLOAD_PATH"; then
+        rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
+        json_error 1 "Failed to finalize downloaded artifact."
       fi
-      echo "Downloaded to: $ARTIFACT_PATH" >&2
-      json_ok "$ARTIFACT_PATH" "eas"
+      if [ -L "$PUBLISHED_PATH" ] || [ ! -f "$PUBLISHED_PATH" ]; then
+        rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
+        json_error 1 "Published artifact is not a regular file: $PUBLISHED_PATH"
+      fi
+      echo "Downloaded to: $PUBLISHED_PATH" >&2
+      json_ok "$PUBLISHED_PATH" "eas"
       exit 0
     else
       echo "Download failed" >&2
