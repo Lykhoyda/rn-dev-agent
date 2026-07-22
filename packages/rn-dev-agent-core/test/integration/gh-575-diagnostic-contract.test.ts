@@ -4,10 +4,11 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, stat, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { startSupervisor } from '../helpers/supervisor-harness.js';
 
-const supervisor = resolve('packages/rn-dev-agent-core/dist/supervisor.js');
+const supervisor = resolve(dirname(fileURLToPath(import.meta.url)), '../../dist/supervisor.js');
 const proofActions = [
   'begin_rehearsal',
   'finish_rehearsal',
