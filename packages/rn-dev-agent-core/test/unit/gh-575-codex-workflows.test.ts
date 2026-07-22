@@ -56,8 +56,24 @@ test('GH-575 build workflow retains artifact and exact-device ownership through 
   const workflow = readFileSync(join(codex, 'commands/build-and-test.md'), 'utf8');
   assert.match(workflow, /--device-id "<device-id>"/);
   assert.match(workflow, /eas_resolve_artifact\.sh" "<platform>" "<profile>" "<artifact-dir>"/);
-  assert.match(workflow, /rm -rf -- "<artifact-dir>"/);
-  assert.match(workflow, /never clean it before the install helper returns/);
+  assert.match(workflow, /trap 'rm -rf -- \"\$artifact_dir\"' EXIT/);
+  assert.match(workflow, /every success\n\s+or failure path/);
+});
+
+test('GH-575 Claude build workflow uses package-local helpers and exact device identity', () => {
+  const shared = readFileSync(
+    join(root, 'packages/shared-agent-knowledge/commands/build-and-test.md'),
+    'utf8',
+  );
+  const claude = readFileSync(
+    join(root, 'packages/claude-plugin/commands/build-and-test.md'),
+    'utf8',
+  );
+  assert.equal(claude, shared);
+  assert.match(shared, /\$CLAUDE_PLUGIN_ROOT\/scripts\/expo_ensure_running\.sh/);
+  assert.match(shared, /--device-id "<device-id>"/);
+  assert.match(shared, /trap 'rm -rf -- \"\$artifact_dir\"' EXIT/);
+  assert.doesNotMatch(shared, /\$CLAUDE_PLUGIN_ROOT\/\.\.\/\.\.\/scripts/);
 });
 
 test('GH-575 setup appends its managed block only when both sentinels are absent', () => {

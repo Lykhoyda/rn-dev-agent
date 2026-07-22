@@ -82,6 +82,8 @@ fi
           RN_DEV_AGENT_CORE_ROOT: home,
           RN_BRIDGE_WORKER_PATH: poisonWorker,
           RN_BRIDGE_SUPERVISOR: '0',
+          RN_BRIDGE_MAX_RESPAWNS: '0',
+          RN_BRIDGE_LAST_EXIT: 'poisoned diagnostic state',
           RN_DEV_AGENT_CODEX_PLUGIN_ROOT: join(home, 'foreign-plugin'),
         },
         timeout: 25_000,

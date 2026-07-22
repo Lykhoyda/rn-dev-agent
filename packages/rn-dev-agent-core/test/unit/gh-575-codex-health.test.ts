@@ -225,3 +225,16 @@ test('GH-575 complete but incomplete inventories report each stale projection', 
     ['STALE_SKILL_DISCOVERY', 'STALE_MCP_DISCOVERY'],
   );
 });
+
+test('GH-575 transport closure has standalone owning-process recovery', () => {
+  const facts = healthyFacts();
+  facts.observedTransport.status = 'closed';
+  const result = classifyHealth(facts);
+  assert.equal(result.primaryFinding, 'ACTIVE_TRANSPORT_CLOSED');
+  assert.ok(result.nextActions.some((action) => action.includes('owns the active task')));
+  assert.ok(result.nextActions.some((action) => action.includes('never kill or signal')));
+  assert.equal(
+    result.nextActions.some((action) => action.includes('external plugin change')),
+    false,
+  );
+});

@@ -57,6 +57,8 @@ var CONTRACT_PROBE_RUNTIME_OVERRIDES = [
   "RN_DEV_AGENT_CORE_ROOT",
   "RN_BRIDGE_WORKER_PATH",
   "RN_BRIDGE_SUPERVISOR",
+  "RN_BRIDGE_MAX_RESPAWNS",
+  "RN_BRIDGE_LAST_EXIT",
   "RN_DEV_AGENT_CODEX_PLUGIN_ROOT"
 ];
 function parseVersion(raw) {
@@ -464,11 +466,15 @@ function classifyHealth(facts) {
       "User-confirm `codex plugin marketplace upgrade rn-dev-agent`, then `codex plugin add rn-dev-agent@rn-dev-agent --json`."
     );
   }
-  if ([...codes].some((code) => code.startsWith("STALE_")) || codes.has("ACTIVE_TRANSPORT_CLOSED")) {
+  if ([...codes].some((code) => code.startsWith("STALE_"))) {
     nextActions.push(
       "After an external plugin change, exit and relaunch Codex; same-app changes on Codex >= 0.145.0 can refresh on a later turn."
     );
   }
+  if (codes.has("ACTIVE_TRANSPORT_CLOSED"))
+    nextActions.push(
+      "Exit and relaunch the Codex process that owns the active task, then retry; never kill or signal it automatically."
+    );
   if (codes.has("LEGACY_HOST_RESTART_REQUIRED"))
     nextActions.push(
       "Upgrade Codex to >= 0.145.0 for same-app live refresh, or exit and relaunch this legacy host after plugin changes."

@@ -2,14 +2,14 @@
 # eas_resolve_artifact.sh — Resolve an EAS build artifact for local installation
 #
 # Given a platform and optional profile, finds a ready-to-install artifact by checking:
-#   Tier 1: Local cache (/tmp/rn-eas-builds/)
+#   Tier 1: Local cache in a private output directory
 #   Tier 2: EAS servers (eas build:list + download)
 #   Tier 3: Exit with "no artifact" status for manual resolution
 #
 # Usage: bash scripts/eas_resolve_artifact.sh <platform> [profile] [output_dir]
 #   platform:   ios | android
 #   profile:    EAS build profile name (optional, auto-selected if unambiguous)
-#   output_dir: where to store downloaded artifacts (default: $TMPDIR/rn-eas-builds)
+#   output_dir: private directory for completed artifacts (default: retained mktemp directory)
 #
 # Exit codes:
 #   0 — artifact resolved, JSON on stdout
@@ -21,10 +21,11 @@
 # Stdout is always valid JSON. Diagnostics go to stderr.
 
 set -euo pipefail
+umask 077
 
 PLATFORM="${1:-}"
 PROFILE="${2:-}"
-OUTPUT_DIR="${3:-${TMPDIR:-/tmp}/rn-eas-builds}"
+OUTPUT_DIR="${3:-}"
 CACHE_MAX_AGE_HOURS=24
 
 if [ -n "$PROFILE" ]; then
@@ -70,9 +71,6 @@ fi
 if [ ! -f "eas.json" ]; then
   json_error 4 "No eas.json found in current directory. This is not an EAS project."
 fi
-
-mkdir -p "$OUTPUT_DIR"
-OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd -P)
 
 # --- Profile auto-selection ---
 # Writes result to PROFILE global variable directly (not via subshell)
@@ -136,21 +134,42 @@ if [ -z "$PROFILE" ]; then
   echo "Auto-selected EAS profile: $PROFILE" >&2
 fi
 
+if [ -z "$OUTPUT_DIR" ]; then
+  OUTPUT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rn-eas-builds.XXXXXX") || \
+    json_error 1 "Unable to create a private artifact directory."
+elif [ ! -e "$OUTPUT_DIR" ]; then
+  mkdir -m 700 -- "$OUTPUT_DIR" || json_error 1 "Unable to create artifact directory: $OUTPUT_DIR"
+fi
+
+if [ -L "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
+  json_error 1 "Artifact output must be a real directory, not a symlink: $OUTPUT_DIR"
+fi
+
+if [ "$(uname)" = "Darwin" ]; then
+  OUTPUT_OWNER=$(stat -f '%u' "$OUTPUT_DIR" 2>/dev/null || true)
+  OUTPUT_MODE=$(stat -f '%Lp' "$OUTPUT_DIR" 2>/dev/null || true)
+else
+  OUTPUT_OWNER=$(stat -c '%u' "$OUTPUT_DIR" 2>/dev/null || true)
+  OUTPUT_MODE=$(stat -c '%a' "$OUTPUT_DIR" 2>/dev/null || true)
+fi
+if [ "$OUTPUT_OWNER" != "$(id -u)" ] || [ "$OUTPUT_MODE" != "700" ]; then
+  json_error 1 "Artifact output must be owned by the current user with mode 0700: $OUTPUT_DIR"
+fi
+
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd -P)
+
+if [ "$PLATFORM" = "ios" ]; then
+  ARTIFACT_NAME="${PROFILE}-${PLATFORM}.tar.gz"
+else
+  ARTIFACT_NAME="${PROFILE}-${PLATFORM}.apk"
+fi
+ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
+
 # --- Tier 1: Local cache ---
 
 check_cache() {
-  local ext
-  if [ "$PLATFORM" = "ios" ]; then ext="tar.gz"; else ext="apk"; fi
-
-  # Check output dir for cached artifacts matching profile. Pick the newest by
-  # mtime using the OS-appropriate stat (BSD `stat -f` on macOS vs GNU `stat -c`
-  # on Linux) — the prior `stat -f "%m %N"` silently failed on Linux Android
-  # hosts (GNU treats -f as --file-system), always missing the cache.
   local cached
-  if [ "$(uname)" = "Darwin" ]; then stat_mtime() { stat -f '%m' "$1"; }; else stat_mtime() { stat -c '%Y' "$1"; }; fi
-  cached=$(find "$OUTPUT_DIR" -name "*${PROFILE}*.${ext}" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print0 2>/dev/null \
-    | while IFS= read -r -d '' f; do printf '%s %s\n' "$(stat_mtime "$f")" "$f"; done \
-    | sort -rn | head -1 | cut -d' ' -f2- || true)
+  cached=$(find "$ARTIFACT_PATH" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print 2>/dev/null || true)
 
   if [ -n "$cached" ]; then
     echo "$cached"
@@ -179,14 +198,15 @@ fi
 
 echo "Downloading artifact from EAS (platform=$PLATFORM, profile=$PROFILE)..." >&2
 
-# Determine output filename
-if [ "$PLATFORM" = "ios" ]; then
-  ARTIFACT_NAME="${PROFILE}-${PLATFORM}.tar.gz"
-else
-  ARTIFACT_NAME="${PROFILE}-${PLATFORM}.apk"
-fi
-
-ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
+RUN_DIR=$(mktemp -d "${OUTPUT_DIR}/.resolve.XXXXXX") || \
+  json_error 1 "Unable to create a private resolver directory."
+BUILD_INFO="${RUN_DIR}/build-info.json"
+BUILD_ERR="${RUN_DIR}/build-err.log"
+DOWNLOAD_PATH="${RUN_DIR}/artifact.part"
+cleanup_run_dir() {
+  rm -rf -- "$RUN_DIR"
+}
+trap cleanup_run_dir EXIT
 
 # Query EAS for latest finished build
 if "${EAS_CMD[@]}" build:list \
@@ -195,23 +215,24 @@ if "${EAS_CMD[@]}" build:list \
   --status finished \
   --limit 1 \
   --non-interactive \
-  --json > "${OUTPUT_DIR}/build-info.json" 2>"${OUTPUT_DIR}/build-err.log"; then
+  --json > "$BUILD_INFO" 2>"$BUILD_ERR"; then
 
   # Extract artifact URL and download
   local_build_url=""
   if command -v jq &>/dev/null; then
-    local_build_url=$(jq -r '.[0].artifacts.buildUrl // empty' "${OUTPUT_DIR}/build-info.json" 2>/dev/null || true)
+    local_build_url=$(jq -r '.[0].artifacts.buildUrl // empty' "$BUILD_INFO" 2>/dev/null || true)
   elif command -v node &>/dev/null; then
     local_build_url=$(node -e "
       const d = require(process.argv[1]);
       const url = d?.[0]?.artifacts?.buildUrl;
       if (url) console.log(url);
-    " "${OUTPUT_DIR}/build-info.json" 2>/dev/null || true)
+    " "$BUILD_INFO" 2>/dev/null || true)
   fi
 
   if [ -n "$local_build_url" ]; then
     echo "Downloading from: $local_build_url" >&2
-    if curl -fSL --max-time 300 -o "$ARTIFACT_PATH" "$local_build_url" 2>/dev/null; then
+    if curl -fSL --max-time 300 -o "$DOWNLOAD_PATH" "$local_build_url" 2>/dev/null; then
+      mv -f -- "$DOWNLOAD_PATH" "$ARTIFACT_PATH"
       echo "Downloaded to: $ARTIFACT_PATH" >&2
       json_ok "$ARTIFACT_PATH" "eas"
       exit 0

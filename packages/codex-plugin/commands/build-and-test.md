@@ -34,15 +34,16 @@ MCP tools are not inherited by spawned subagents. Use `rn-device-control` and
    `bash "<package-root>/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>"`.
 5. EAS mode:
    - validate profile with `[A-Za-z0-9_-]+`;
-   - create one caller-owned artifact directory with `mktemp -d`, retain its
-     exact path, and invoke
+   - enter one shell scope, create one caller-owned artifact directory with
+     `artifact_dir=$(mktemp -d)`, retain its exact path, and immediately register
+     `trap 'rm -rf -- "$artifact_dir"' EXIT` in that same scope before invoking
      `bash "<package-root>/scripts/eas_resolve_artifact.sh" "<platform>" "<profile>" "<artifact-dir>"`;
    - parse its JSON and require `status: ok` plus an absolute artifact path;
    - invoke
      `bash "<package-root>/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>" --artifact "<artifact-path>"`;
-   - after the install attempt completes, run cleanup equivalent to
-     `rm -rf -- "<artifact-dir>"` for only that exact caller-owned directory;
-     never clean it before the install helper returns.
+   - keep resolution and installation inside the trapped scope so every success
+     or failure path cleans only that exact caller-owned directory after the
+     install helper returns.
 6. Parse helper JSON and surface stable errors. Do not silently fall back from a
    requested EAS build to local build.
 7. Call `cdp_status`; require `ok:true` and the intended app/device.

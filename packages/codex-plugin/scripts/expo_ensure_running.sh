@@ -183,7 +183,9 @@ detect_device() {
     fi
   else
     local devices device_count
-    devices=$(adb devices 2>/dev/null | awk '$2 == "device" { print $1 }')
+    if ! devices=$(adb devices 2>/dev/null | awk '$2 == "device" { print $1 }'); then
+      json_error 1 "Unable to list Android devices: adb is unavailable or failed."
+    fi
     device_count=$(printf '%s\n' "$devices" | grep -c . || true)
     if [ -n "$DEVICE_ID" ]; then
       if ! printf '%s\n' "$devices" | awk -v id="$DEVICE_ID" '$1 == id { found = 1 } END { exit !found }'; then

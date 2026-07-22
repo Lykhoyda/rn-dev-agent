@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -126,17 +137,45 @@ printf '%s\n' "$*" >> "$MOCK_LOG"
   }
 });
 
-test('GH-575 default EAS cache path survives resolver exit', async () => {
+test('GH-575 Android device discovery failure still returns valid JSON', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-android-failure-'));
+  const project = join(root, 'project');
+  const bin = join(root, 'bin');
+  await mkdir(project);
+  await mkdir(bin);
+  await executable(join(bin, 'adb'), '#!/bin/sh\nexit 127\n');
+  try {
+    await assert.rejects(
+      pexecFile(
+        'bash',
+        [expoHelper, 'android', '--bundle-id', 'com.example.preview', '--start-metro', 'false'],
+        { cwd: project, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
+      ),
+      (error: unknown) => {
+        const output = error as { stdout?: string };
+        const result = JSON.parse(output.stdout ?? '') as { status: string; message: string };
+        assert.equal(result.status, 'error');
+        assert.match(result.message, /adb is unavailable or failed/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 caller-owned EAS cache survives resolver exit', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-helper-'));
   const project = join(root, 'project');
-  const cache = join(root, 'rn-eas-builds');
+  const cache = join(root, 'artifacts');
   const artifact = join(cache, 'development-ios.tar.gz');
   await mkdir(project);
   await mkdir(cache);
+  await chmod(cache, 0o700);
   await writeFile(join(project, 'eas.json'), '{"build":{"development":{}}}\n');
   await writeFile(artifact, 'artifact');
   try {
-    const { stdout } = await pexecFile('bash', [easHelper, 'ios', 'development'], {
+    const { stdout } = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
       cwd: project,
       env: { ...process.env, TMPDIR: root },
     });
@@ -144,6 +183,172 @@ test('GH-575 default EAS cache path survives resolver exit', async () => {
     assert.equal(result.status, 'ok');
     assert.equal(result.path, await realpath(artifact));
     assert.equal(await readFile(artifact, 'utf8'), 'artifact');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 EAS cache keys profiles by exact artifact name', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-cache-key-'));
+  const project = join(root, 'project');
+  const cache = join(root, 'artifacts');
+  const bin = join(root, 'bin');
+  await mkdir(project);
+  await mkdir(cache);
+  await chmod(cache, 0o700);
+  await mkdir(bin);
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  await writeFile(join(cache, 'development-ios.tar.gz'), 'wrong profile');
+  await executable(
+    join(bin, 'eas'),
+    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/dev"}}]\\n\'\n',
+  );
+  await executable(
+    join(bin, 'curl'),
+    `#!/bin/sh
+while [ "$1" != "-o" ]; do shift; done
+printf 'dev artifact\n' > "$2"
+`,
+  );
+  try {
+    const { stdout } = await pexecFile('bash', [easHelper, 'ios', 'dev', cache], {
+      cwd: project,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    const result = JSON.parse(stdout) as { path: string; source: string };
+    assert.equal(result.path, await realpath(join(cache, 'dev-ios.tar.gz')));
+    assert.equal(result.source, 'eas');
+    assert.equal(await readFile(result.path, 'utf8'), 'dev artifact\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 default EAS output is private and retained', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-private-'));
+  const project = join(root, 'project');
+  const bin = join(root, 'bin');
+  await mkdir(project);
+  await mkdir(bin);
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  await executable(
+    join(bin, 'eas'),
+    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/private"}}]\\n\'\n',
+  );
+  await executable(
+    join(bin, 'curl'),
+    `#!/bin/sh
+while [ "$1" != "-o" ]; do shift; done
+printf 'artifact\n' > "$2"
+`,
+  );
+  try {
+    const { stdout } = await pexecFile('bash', [easHelper, 'ios', 'development'], {
+      cwd: project,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
+    });
+    const result = JSON.parse(stdout) as { path: string };
+    const output = resolve(result.path, '..');
+    assert.equal(output.startsWith(join(await realpath(root), 'rn-eas-builds.')), true);
+    assert.equal((await stat(output)).mode & 0o777, 0o700);
+    assert.equal(await readFile(result.path, 'utf8'), 'artifact\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 concurrent EAS resolutions isolate metadata and publish complete artifacts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-concurrency-'));
+  const project = join(root, 'project');
+  const cache = join(root, 'artifacts');
+  const bin = join(root, 'bin');
+  const sync = join(root, 'sync');
+  await mkdir(project);
+  await mkdir(cache);
+  await chmod(cache, 0o700);
+  await mkdir(bin);
+  await mkdir(sync);
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  await executable(
+    join(bin, 'eas'),
+    `#!/bin/sh
+profile=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--buildProfile" ]; then profile="$2"; shift 2; else shift; fi
+done
+touch "$MOCK_SYNC/$profile.ready"
+other=alpha
+[ "$profile" = "alpha" ] && other=beta
+while [ ! -f "$MOCK_SYNC/$other.ready" ]; do :; done
+if [ "$profile" = "beta" ]; then
+  printf '[{"artifacts":{"buildUrl":"https://example.invalid/beta"}}]\n'
+  touch "$MOCK_SYNC/beta.wrote"
+  while [ ! -f "$MOCK_SYNC/alpha.wrote" ]; do :; done
+else
+  while [ ! -f "$MOCK_SYNC/beta.wrote" ]; do :; done
+  printf '[{"artifacts":{"buildUrl":"https://example.invalid/alpha"}}]\n'
+  touch "$MOCK_SYNC/alpha.wrote"
+fi
+`,
+  );
+  await executable(
+    join(bin, 'curl'),
+    `#!/bin/sh
+output=""
+url=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then output="$2"; shift 2
+  elif [ "\${1#http}" != "$1" ]; then url="$1"; shift
+  else shift
+  fi
+done
+printf '%s\n' "$url" > "$output"
+`,
+  );
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    MOCK_SYNC: sync,
+  };
+  try {
+    const [alpha, beta] = await Promise.all(
+      ['alpha', 'beta'].map((profile) =>
+        pexecFile('bash', [easHelper, 'ios', profile, cache], { cwd: project, env }),
+      ),
+    );
+    const alphaResult = JSON.parse(alpha.stdout) as { path: string };
+    const betaResult = JSON.parse(beta.stdout) as { path: string };
+    assert.equal(await readFile(alphaResult.path, 'utf8'), 'https://example.invalid/alpha\n');
+    assert.equal(await readFile(betaResult.path, 'utf8'), 'https://example.invalid/beta\n');
+    assert.deepEqual((await readdir(cache)).sort(), ['alpha-ios.tar.gz', 'beta-ios.tar.gz']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 EAS resolver rejects permissive and symlinked output directories', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-safety-'));
+  const project = join(root, 'project');
+  const permissive = join(root, 'permissive');
+  const linked = join(root, 'linked');
+  await mkdir(project);
+  await mkdir(permissive);
+  await chmod(permissive, 0o755);
+  await symlink(permissive, linked);
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  try {
+    for (const output of [permissive, linked]) {
+      await assert.rejects(
+        pexecFile('bash', [easHelper, 'ios', 'development', output], { cwd: project }),
+        (error: unknown) => {
+          const result = JSON.parse((error as { stdout?: string }).stdout ?? '') as {
+            status: string;
+          };
+          assert.equal(result.status, 'error');
+          return true;
+        },
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
