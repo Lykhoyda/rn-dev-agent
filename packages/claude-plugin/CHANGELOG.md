@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.70.10
+
+### Patch Changes
+
+- ef084e4: Add native Codex parity for all fifteen workflows, deterministic read-only plugin health and restart guidance, Codex-native AGENTS.md setup, and complete packaged helpers. Disable best-effort command migration and publish a usable `proof_capture` action schema while retaining strict branch validation.
+- Updated dependencies [ef084e4]
+  - rn-dev-agent-core@0.65.8
+
 ## 0.70.9
 
 ### Patch Changes
