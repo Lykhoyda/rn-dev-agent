@@ -28,7 +28,7 @@ appId: com.example.shop
 #           (assert cart-item-${PRODUCT_ID} present)
 #
 # Replay:
-#   /rn-dev-agent:run-action add-product-to-cart -e PRODUCT_ID=7
+#   $rn-dev-agent:run-action add-product-to-cart -e PRODUCT_ID=7
 #   PRODUCT_ID is required — there is no default, so the run-action
 #   placeholder-coverage gate refuses a parameterless replay.
 - launchApp:

@@ -39,6 +39,7 @@ write_valid_repo() {
     "$tmp/packages/claude-plugin/templates" \
     "$tmp/packages/codex-plugin/agents" \
     "$tmp/packages/codex-plugin/bin" \
+    "$tmp/packages/codex-plugin/src" \
     "$tmp/packages/codex-plugin/.codex-plugin" \
     "$tmp/packages/codex-plugin/commands" \
     "$tmp/packages/codex-plugin/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj" \
@@ -60,6 +61,10 @@ write_valid_repo() {
   mkdir -p "$tmp/scripts"
   printf '%s\n' '#!/usr/bin/env bash' 'echo proof fixture' > "$tmp/scripts/record_proof.sh"
   printf '%s\n' '#!/usr/bin/env bash' 'echo feedback fixture' > "$tmp/scripts/collect-feedback.sh"
+  for helper in expo_ensure_running.sh eas_resolve_artifact.sh snapshot_state.sh; do
+    printf '%s\n' '#!/usr/bin/env bash' "echo $helper fixture" > "$tmp/scripts/$helper"
+  done
+  printf '%s\n' '#!/usr/bin/env node' 'console.log("checker fixture")' > "$tmp/scripts/check-vercel-rules.mjs"
   printf '%s\n' '{"ignore":["rn-dev-agent-codex-plugin","rn-dev-agent-android-runner","rn-dev-agent-ios-runner","rn-dev-agent-shared-agent-knowledge","rn-dev-agent-docs"]}' > "$tmp/.changeset/config.json"
   printf '%s\n' 'enableGlobalCache: true' 'nodeLinker: node-modules' 'yarnPath: .yarn/releases/yarn-4.17.0.cjs' > "$tmp/.yarnrc.yml"
   printf '%s\n' 'yarn release fixture' > "$tmp/.yarn/releases/yarn-4.17.0.cjs"
@@ -104,7 +109,15 @@ write_valid_repo() {
   /bin/cp "$tmp/CLAUDE-MD-TEMPLATE.md" "$tmp/packages/codex-plugin/CLAUDE-MD-TEMPLATE.md"
   /bin/cp "$tmp/scripts/record_proof.sh" "$tmp/packages/codex-plugin/scripts/record_proof.sh"
   /bin/cp "$tmp/scripts/collect-feedback.sh" "$tmp/packages/codex-plugin/scripts/collect-feedback.sh"
-  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./skills/","mcpServers":"./.mcp.json"}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
+  for helper in expo_ensure_running.sh eas_resolve_artifact.sh check-vercel-rules.mjs snapshot_state.sh; do
+    /bin/cp "$tmp/scripts/$helper" "$tmp/packages/codex-plugin/scripts/$helper"
+    /bin/cp "$tmp/scripts/$helper" "$tmp/packages/claude-plugin/scripts/$helper"
+  done
+  printf '%s\n' '# Codex AGENTS fixture' > "$tmp/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md"
+  /bin/cp "$tmp/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md" "$tmp/packages/codex-plugin/AGENTS-MD-TEMPLATE.md"
+  printf '%s\n' 'export const health = true;' > "$tmp/packages/codex-plugin/src/plugin-health.ts"
+  printf '%s\n' '// packages/codex-plugin/src/plugin-health.ts' 'console.log("health fixture")' > "$tmp/packages/codex-plugin/bin/plugin-health.js"
+  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./skills/","commands":[],"mcpServers":"./.mcp.json"}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
   printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["-e","const V='\''1.2.3'\'';require(\"child_process\").spawn(process.execPath,[\"bin/cdp-supervisor.js\"],{stdio:\"inherit\"})"],"tool_timeout_sec":900}}}' > "$tmp/packages/codex-plugin/.mcp.json"
   /bin/cp "$REPO_ROOT/packages/codex-plugin/bin/cdp-supervisor.js" "$tmp/packages/codex-plugin/bin/cdp-supervisor.js"
   printf '%s\n' '{"name":"rn-dev-agent-core-codex-runtime","version":"4.5.6","private":true,"type":"module"}' > "$tmp/packages/codex-plugin/rn-dev-agent-core/package.json"
@@ -122,14 +135,19 @@ write_valid_repo() {
   for helper in mcp-bridge-probe.mjs ensure-cdp-deps.sh ensure-maestro-runner.sh \
     ensure-idb-companion.sh ensure-idb.sh ensure-ffmpeg.sh \
     ensure-troubleshooting-doc.sh ensure-android-ready.sh \
-    check-physical-devices.sh check-vercel-rules.mjs; do
+    check-physical-devices.sh; do
     printf '%s\n' "helper fixture: $helper" > "$tmp/scripts/$helper"
     /bin/cp "$tmp/scripts/$helper" "$tmp/packages/claude-plugin/scripts/$helper"
   done
   printf '%s\n' '{"name":"rn-dev-agent-shared-agent-knowledge"}' > "$tmp/packages/shared-agent-knowledge/package.json"
-  printf '%s\n' '{"canonicalSources":{"skills":"./skills","commands":"./commands","agents":"./agents","templates":"./templates/rn-agent"},"nativeRunners":{"ios":"../rn-fast-runner","android":"../rn-android-runner"},"hostOutputs":{"claude":{"manifest":"../claude-plugin/.claude-plugin/plugin.json","legacyManifest":"../claude-plugin/plugin.json","rootMarketplace":"../../.claude-plugin/marketplace.json","packageMarketplace":"../claude-plugin/.claude-plugin/marketplace.json","legacyMarketplace":"../claude-plugin/marketplace.json","package":"../claude-plugin/package.json","hooks":"../claude-plugin/hooks","runtime":"../claude-plugin/rn-dev-agent-core/dist/supervisor.js","runnerManifest":"../claude-plugin/runner-manifest.json","nativeRunnerScripts":"../claude-plugin/scripts","skills":"../claude-plugin/skills","commands":"../claude-plugin/commands","agents":"../claude-plugin/agents","templates":"../claude-plugin/templates/rn-agent"},"codex":{"manifest":"../codex-plugin/.codex-plugin/plugin.json","mcp":"../codex-plugin/.mcp.json","launcher":"../codex-plugin/bin/cdp-supervisor.js","runtime":"../codex-plugin/rn-dev-agent-core/dist/supervisor.js","runnerManifest":"../codex-plugin/runner-manifest.json","nativeRunnerScripts":"../codex-plugin/scripts","skills":"../codex-plugin/skills","commands":"../codex-plugin/commands","agents":"../codex-plugin/agents","templates":"../codex-plugin/templates/rn-agent"}},"apps":{"docsSite":{"path":"../../apps/docs-site"}}}' > "$tmp/packages/shared-agent-knowledge/source-map.json"
-  printf '%s\n' '---' 'name: using-rn-dev-agent' '---' > "$tmp/packages/shared-agent-knowledge/skills/using-rn-dev-agent/SKILL.md"
-  printf '%s\n' '# test feature' > "$tmp/packages/shared-agent-knowledge/commands/test-feature.md"
+  /bin/cp "$REPO_ROOT/packages/shared-agent-knowledge/source-map.json" "$tmp/packages/shared-agent-knowledge/source-map.json"
+  for skill in capturing-proof creating-actions rn-best-practices rn-debugging rn-device-control rn-feature-development rn-setup rn-testing sending-feedback using-rn-dev-agent; do
+    mkdir -p "$tmp/packages/shared-agent-knowledge/skills/$skill"
+    printf '%s\n' '---' "name: $skill" '---' > "$tmp/packages/shared-agent-knowledge/skills/$skill/SKILL.md"
+  done
+  for command in build-and-test check-env check-vercel-rules debug-screen doctor list-learned-actions lock-e2e nav-graph observe proof-capture rn-feature-dev run-action send-feedback setup test-feature; do
+    printf '%s\n' "# $command" > "$tmp/packages/shared-agent-knowledge/commands/$command.md"
+  done
   printf '%s\n' '# rn tester' > "$tmp/packages/shared-agent-knowledge/agents/rn-tester.md"
 
   /bin/cp -R "$tmp/packages/shared-agent-knowledge/skills/." "$tmp/packages/claude-plugin/skills/"
@@ -140,6 +158,11 @@ write_valid_repo() {
   /bin/cp -R "$tmp/packages/shared-agent-knowledge/commands/." "$tmp/packages/codex-plugin/commands/"
   /bin/cp -R "$tmp/packages/shared-agent-knowledge/agents/." "$tmp/packages/codex-plugin/agents/"
   /bin/cp -R "$tmp/packages/shared-agent-knowledge/templates/." "$tmp/packages/codex-plugin/templates/"
+  for command in build-and-test check-env check-vercel-rules debug-screen doctor list-learned-actions lock-e2e nav-graph observe proof-capture rn-feature-dev run-action send-feedback setup test-feature; do
+    mkdir -p "$tmp/packages/codex-plugin/skills/$command/agents"
+    printf '%s\n' '<!-- GENERATED by scripts/build-host-runtimes.ts -->' '---' "name: $command" '---' > "$tmp/packages/codex-plugin/skills/$command/SKILL.md"
+    printf '%s\n' '# GENERATED' 'policy:' '  allow_implicit_invocation: false' > "$tmp/packages/codex-plugin/skills/$command/agents/openai.yaml"
+  done
 }
 
 write_valid_repo

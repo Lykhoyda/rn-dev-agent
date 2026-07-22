@@ -10,6 +10,10 @@ reading UI state, and managing device settings. All commands run via bash.
 
 **See also:** [3-Tier Interaction Model](references/interaction-model.md) — when to use cdp_interact vs device_press vs Maestro.
 
+When a packaged helper is referenced, resolve `<package-root>` as `../..` from
+this exact `SKILL.md`. Never interpret it as the user's workspace or scan Codex
+caches.
+
 ---
 
 ## iOS Simulator (simctl)
@@ -254,7 +258,7 @@ cutting state-check time by ~40%.
 
 ```bash
 # Usage
-bash scripts/snapshot_state.sh [ios|android] [output_dir]
+bash <package-root>/scripts/snapshot_state.sh [ios|android] [output_dir]
 
 # iOS output: /tmp/rn-dev-agent/screenshot.jpg
 # Android output: /tmp/rn-dev-agent/screenshot.png + ui_elements.json
@@ -337,7 +341,7 @@ The in-tree runner IS the device backend — there is nothing to "fall back from
 - **Raw device lifecycle** (boot / install / launch / terminate) → `xcrun simctl` (iOS) / `adb` (Android). The runners drive interaction, not device state.
 - **Whole-flow E2E** → maestro-runner (`.yaml`).
 
-If the runner itself is down, the bridge returns an actionable `RN_FAST_RUNNER_DOWN` (iOS) / `RN_ANDROID_RUNNER_DOWN` (Android) — fix the runner build (see `/rn-dev-agent:doctor`), it does not silently fall back to a legacy CLI.
+If the runner itself is down, the bridge returns an actionable `RN_FAST_RUNNER_DOWN` (iOS) / `RN_ANDROID_RUNNER_DOWN` (Android) — fix the runner build (see `$rn-dev-agent:doctor`), it does not silently fall back to a legacy CLI.
 
 ---
 

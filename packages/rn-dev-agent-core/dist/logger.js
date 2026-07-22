@@ -6,6 +6,10 @@ const configuredLevel = (process.env.LOG_LEVEL ??
     process.env.RN_DEV_AGENT_LOG_LEVEL ??
     'warn');
 function resolveLogPath() {
+    // The read-only MCP contract probe must not create a log directory or file,
+    // even when the parent environment requested debug/info logging.
+    if (process.argv.includes('--diagnostic-contract-probe'))
+        return null;
     if (configuredLevel !== 'debug' && configuredLevel !== 'info')
         return null;
     const pluginData = process.env.CLAUDE_PLUGIN_DATA;

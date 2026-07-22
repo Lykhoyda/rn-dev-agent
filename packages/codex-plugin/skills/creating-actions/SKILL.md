@@ -5,12 +5,12 @@ description: This skill should be used when the user asks to "create an action",
 
 # creating-actions — Author a Reusable Maestro Action
 
-An **action** is a parameterised Maestro flow at `<project>/.rn-agent/actions/<id>.yaml` with an M7 metadata header, replayable via `/rn-dev-agent:run-action` or `cdp_run_action` (auto-repair-aware). A well-authored action turns a ~minutes interactive walk into a ~seconds deterministic replay. Authoring one well means: **dedup first, ground every selector in evidence, design the flow as an ASCII diagram before writing YAML, validate, then replay to promote.**
+An **action** is a parameterised Maestro flow at `<project>/.rn-agent/actions/<id>.yaml` with an M7 metadata header, replayable via `$rn-dev-agent:run-action` or `cdp_run_action` (auto-repair-aware). A well-authored action turns a ~minutes interactive walk into a ~seconds deterministic replay. Authoring one well means: **dedup first, ground every selector in evidence, design the flow as an ASCII diagram before writing YAML, validate, then replay to promote.**
 
 ## When to Use
 
 - A verified flow is worth replaying: login, navigation prologue, multi-step setup, locale/theme switching, data seeding.
-- `/rn-dev-agent:test-feature` verification passed and the walk should be persisted.
+- `$rn-dev-agent:test-feature` verification passed and the walk should be persisted.
 - The user asks to make a flow replayable / save an action.
 
 **When NOT to author an action:**
@@ -22,21 +22,16 @@ An **action** is a parameterised Maestro flow at `<project>/.rn-agent/actions/<i
 
 Before authoring anything, check what already exists:
 
-```bash
-CODEX_PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}"
-if [ -z "$CODEX_PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
-  CODEX_PLUGIN_ROOT="packages/codex-plugin"
-fi
-if [ -z "$CODEX_PLUGIN_ROOT" ]; then
-  CODEX_PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" -print -quit 2>/dev/null || true)"
-  [ -n "$CODEX_PLUGIN_MANIFEST" ] && CODEX_PLUGIN_ROOT="$(dirname "$(dirname "$CODEX_PLUGIN_MANIFEST")")"
-fi
-test -n "$CODEX_PLUGIN_ROOT" || { echo "rn-dev-agent Codex plugin root not found" >&2; exit 2; }
-node "${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" --json --section b \
-  --workspace-root "$PWD" --memory-cwd "$PWD" --filter <keyword>
+Resolve `<package-root>` from this exact skill's `SKILL.md` path (`../..` from
+the skill directory), then invoke the selected package by separately quoted
+argv. Never scan caches or use a launcher-only environment variable:
+
+```text
+node <package-root>/rn-dev-agent-core/dist/learned-actions.js --json --section b \
+  --workspace-root <workspace> --memory-cwd <workspace> --filter <one keyword value>
 ```
 
-(or `/rn-dev-agent:list-learned-actions <keyword>`). If a match covers the goal, replay it. If a near-match exists (same flow, hardcoded values), parameterise THAT action with `${VAR}` placeholders rather than creating a sibling — duplicate actions rot independently and split the repair history.
+(or `$rn-dev-agent:list-learned-actions <keyword>`). If a match covers the goal, replay it. If a near-match exists (same flow, hardcoded values), parameterise THAT action with `${VAR}` placeholders rather than creating a sibling — duplicate actions rot independently and split the repair history.
 
 ## Step 1 — Pick the Creation Path
 
@@ -184,8 +179,8 @@ consult it before inventing a workaround.
 | Sidecar (auto-created) | `<project>/.rn-agent/state/<id>.state.json` |
 | id regex | `^[a-z0-9][a-z0-9-]*$` |
 | param key regex | `[A-Z_][A-Z0-9_]*` |
-| Inventory / dedup | `packages/rn-dev-agent-core/src/learned-actions.ts` (built → `dist/learned-actions.js`) or `/rn-dev-agent:list-learned-actions` |
-| Replay | `cdp_run_action` / `/rn-dev-agent:run-action <id> -e KEY=VAL` |
+| Inventory / dedup | `packages/rn-dev-agent-core/src/learned-actions.ts` (built → `dist/learned-actions.js`) or `$rn-dev-agent:list-learned-actions` |
+| Replay | `cdp_run_action` / `$rn-dev-agent:run-action <id> -e KEY=VAL` |
 | Lifecycle | `experimental` → (clean replay) → `active`; repair demotes back to `experimental`; `deprecated` = never replay |
 | Repair budget | 3 auto-repairs per rolling 24h per action |
 
@@ -209,4 +204,4 @@ consult it before inventing a workaround.
 - **rn-testing skill** — Maestro step patterns, timing rules, testID conventions, auth/permission pre-flights
 - **`references/m7-header-reference.md`** — every M7 field with semantics, parser behavior, lifecycle transitions
 - **`examples/add-product-to-cart.yaml`** — complete worked example with embedded diagram
-- **`/rn-dev-agent:run-action`** — replay-side pre-flight (mutates confirmation, appId match, param coverage)
+- **`$rn-dev-agent:run-action`** — replay-side pre-flight (mutates confirmation, appId match, param coverage)

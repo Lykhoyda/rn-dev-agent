@@ -1,70 +1,51 @@
 ---
 title: doctor
-description: Read-only environment diagnostic — checks 11 prerequisites and reports what's missing without modifying your project.
+description: Strictly read-only multi-axis Codex/plugin/MCP/schema/task and environment diagnosis.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-`/doctor` reports; [`/setup`](../setup/) fixes and instruments. Use `/doctor` when you want diagnostics without changing files.
-
 ## Usage
 
+```text
+Claude: /rn-dev-agent:doctor
+Codex:  $rn-dev-agent:doctor
 ```
-/rn-dev-agent:doctor
-```
 
-## What it checks
+## What it reports
 
-A dozen prerequisites, presented as a single table:
+Codex doctor runs the package-local health executable and keeps independent
+axes for:
 
-| # | Check | Required | Auto-install possible (via `/setup`) |
-|---|-------|----------|---------------------------------------|
-| 1 | Node.js >= 22.18 LTS | Yes | No (user must install) |
-| 2 | CDP bridge dependencies | Yes | Yes |
-| 3 | Device runner (iOS: rn-fast-runner / Android: rn-android-runner — in-tree) | One platform | Builds on first use / pre-build |
-| 4 | maestro-runner | Yes | Yes |
-| 5 | iOS Simulator booted | One platform | No |
-| 6 | Android Emulator running | One platform | No |
-| 7 | Metro dev server | Yes | No (you start it) |
-| 8 | CDP connection reachable | Yes | Auto via `cdp_status` |
-| 9 | Injected `__RN_AGENT` helpers fresh | Yes | Auto on connect |
-| 10 | ffmpeg | Optional | No |
-| 11 | Physical-device prerequisites | Optional | No |
-| 12 | Vercel rules sync freshness | Optional | Yes (re-sync on stale) |
+- Codex host support (`0.145.0` live-refresh floor; older hosts restart-only);
+- exact plugin ID/version/enabled state;
+- selected package materialization and all 25 skills/helpers;
+- effective `cdp` registration;
+- a side-effect-free MCP initialize/`tools/list` contract probe;
+- direct and caller-observed `proof_capture` schema state;
+- complete/partial caller-observed task skill and MCP inventories;
+- prior observed transport/app status;
+- all findings, a primary finding, and ordered recovery commands.
 
-For every red row, `/doctor` prints the exact install command tailored to your environment (e.g., the right `nvm`/`brew` flag).
+Unknown or partial task evidence is never classified stale. A direct contract
+probe is not represented as the active task transport or app state.
 
-<Aside type="note" title="`/doctor` is read-only">
-`/doctor` does not modify your project. It does not append to `CLAUDE.md`, scaffold `.rn-agent/`, or change source code. To do those things, run [`/setup`](../setup/) instead.
+<Aside type="caution" title="Strictly read-only">
+Doctor never installs, updates, removes, writes config/project/cache/state/log
+files, builds runners, attaches to an app/device, starts Observe, or
+kills/restarts a process. It prints commands for user confirmation. `cdp_status`
+is reserved for the active [`check-env`](../check-env/) workflow because it can
+attach.
 </Aside>
 
-## When to run
+A task that received zero rn-dev-agent skills cannot invoke doctor. Use the
+external exact-version cache bootstrap from [Troubleshooting](../../troubleshooting/).
+`/mcp verbose` is inventory inspection only.
 
-- After SessionStart shows WARNING messages
-- When `cdp_status` fails to connect
-- When `device_*` tools start failing
-- Before reporting a plugin bug — paste the table into the issue
+## Main diagnoses
 
-## Example output
-
-```
-| Check                  | Status                | Action Needed                          |
-|------------------------|-----------------------|----------------------------------------|
-| Node.js                | OK (v22.18.0)         | —                                      |
-| CDP bridge             | OK                    | —                                      |
-| rn-fast-runner (iOS)   | OK (built)            | —                                      |
-| maestro-runner         | OK (v1.0.9)           | —                                      |
-| iOS Simulator          | BOOTED (iPhone 16)    | —                                      |
-| Android emulator       | NOT RUNNING           | Boot one if you need Android coverage  |
-| Metro                  | RUNNING (port 8081)   | —                                      |
-| CDP connection         | CONNECTED             | —                                      |
-| __RN_AGENT helpers     | FRESH (v16)           | —                                      |
-| ffmpeg                 | OK (v7.1)             | —                                      |
-| Physical device        | NONE CONNECTED        | Skip if testing on simulator only      |
-```
-
-## See also
-
-- [`/setup`](../setup/) — onboarding sibling that fixes what `/doctor` reports
-- [`/check-env`](../check-env/) — quicker, narrower readiness check
-- [Troubleshooting](../../troubleshooting/) — common issues and fixes
+Missing/disabled installation, corrupt/version-mismatched materialization,
+missing/disabled MCP registration, contract-probe failure, explicit stale skill
+or MCP discovery, observed transport closure, server/host schema exposure,
+observed app disconnection, legacy restart requirement, healthy disk with
+unknown task state, and healthy.

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -7,7 +8,9 @@ import {
 } from '../../dist/tools/device-session.js';
 
 const EXACT = '5C10B45B-2065-458B-B885-0F83F49747C8';
-const FOREIGN = 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3';
+// A per-process valid UDID avoids colliding with a real simulator lock held by
+// another concurrent test/agent lane on the shared development machine.
+const FOREIGN = randomUUID().toUpperCase();
 const APP_ID = 'com.rndevagent.testapp';
 
 function envelope(result: { content: Array<{ text: string }> }): Record<string, any> {

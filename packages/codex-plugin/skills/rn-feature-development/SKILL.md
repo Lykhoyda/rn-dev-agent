@@ -2,13 +2,17 @@
 name: rn-feature-development
 description: >
   This skill should be used when building any new feature in a React Native
-  or Expo app, or when the /rn-dev-agent:rn-feature-dev command runs.
+  or Expo app, or when the $rn-dev-agent:rn-feature-dev command runs.
   Triggers on "build a feature", "add X to the app", "implement Y",
   "create a new screen", "rn-feature-dev", "feature development",
   "build me X", "add a screen", "wire up this flow".
 ---
 
 # React Native Feature Development (8-Phase Pipeline)
+
+For package helpers, resolve `<package-root>` as `../..` from this exact
+`SKILL.md`; never scan Codex caches or assume the user's workspace contains
+rn-dev-agent maintenance scripts.
 
 You are helping a developer implement a new feature in a React Native app.
 Follow this systematic approach: understand the codebase deeply, ask about
@@ -181,7 +185,7 @@ Call `cdp_status`. If it fails to connect:
 3. Instead, tell the user:
    - "CDP connection failed. Please ensure Metro is running (`npx expo start`
      or `npx react-native start`) and the app is loaded on a simulator."
-   - "Run `/rn-dev-agent:check-env` to diagnose missing dependencies."
+   - "Run `$rn-dev-agent:check-env` to diagnose missing dependencies."
 4. If Metro is running but CDP still fails, check:
    - Is another debugger connected? (React Native DevTools, Flipper, Chrome)
    - Is the app on the Dev Client launcher instead of the actual app?
@@ -197,7 +201,7 @@ First, verify the simulator is running and CDP is connected:
    - Run `rn-ensure-running <platform>`
    - If exit 0: call `cdp_status` to confirm connection
    - If the script fails: tell the user to boot a simulator and run
-     `/rn-dev-agent:setup` to verify all dependencies are installed.
+     `$rn-dev-agent:setup` to verify all dependencies are installed.
      Do not skip verification without user consent.
 3. Call `cdp_status` to confirm CDP connection before proceeding.
 
@@ -379,16 +383,16 @@ a PASS.
      on all interactive elements, `__DEV__` guards on debug code, Zustand
      exposure, selector memoization. Scope: [list of files changed]"
    - "Review the implementation for project conventions: file naming, folder
-     structure, import patterns, CLAUDE.md rules. Scope: [list of files changed]"
+     structure, import patterns, AGENTS.md rules. Scope: [list of files changed]"
 2. **Run Vercel rule audit** (added v0.45+ per docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
    ```bash
-   node scripts/check-vercel-rules.mjs --changed --format hook -- <changed file paths>
+   node <package-root>/scripts/check-vercel-rules.mjs --changed --format hook -- <changed file paths>
    ```
    - Surface any violations as line-level findings with rule IDs verbatim.
    - The `rn-code-reviewer` Pass 4 also runs an index-driven lookup, but this
      standalone check is faster (~50ms) and catches the 3 deterministic rules
      even when the reviewer agent skips Pass 4.
-   - For full-project audit (CI mode): `node scripts/check-vercel-rules.mjs --ci`.
+   - For full-project audit (CI mode): `node <package-root>/scripts/check-vercel-rules.mjs --ci`.
 3. Consolidate findings — only issues with confidence >= 80. Vercel-rule
    violations from step 2 carry confidence 95 (deterministic match).
 4. If no high-confidence issues found: confirm the code meets standards and
@@ -426,7 +430,7 @@ run its Protocol steps with `<feature-slug>`. In Codex, read
 `packages/codex-plugin/skills/capturing-proof/SKILL.md` from this repository
 checkout. The pipeline adds these deltas:
 
-**Strict factory routing**: execute `/rn-dev-agent:proof-capture --strict` when
+**Strict factory routing**: execute `$rn-dev-agent:proof-capture --strict` when
 the run is unattended, the PR will auto-merge, the caller asks for factory
 proof or merge-ready evidence, or a machine receipt is required. The controller
 consumes the resulting receipt. State, duration, and frame policy remain owned

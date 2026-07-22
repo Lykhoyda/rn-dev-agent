@@ -1,14 +1,25 @@
 ---
 command: lock-e2e
-description: Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair) via cdp_lock_e2e_test and freezes it to .rn-agent/e2e/<id>.yaml only if it passes. v1 supports param-free actions only.
-argument-hint: <action-name> [--relock]
-allowed-tools: Read, mcp__plugin_rn-dev-agent_cdp__cdp_lock_e2e_test
+description: Promote a verified param-free action into a frozen e2e regression test after one strict replay.
+argument-hint: "<action-name> [--relock]"
 ---
 
-Lock the action into a locked e2e test: $ARGUMENTS
+# Lock an e2e action
 
-Steps:
-1. Call `cdp_lock_e2e_test` with `actionId` = the first positional arg (add `relock: true` if `--relock` is present).
-2. If it returns `STRICT_RUN_FAILED`, tell the user the action must pass a strict (no-repair) run first — offer to run `cdp_run_action` to repair it, then retry the lock.
-3. If it returns `PARAMS_UNSUPPORTED`, explain that v1 supports param-free tests only.
-4. On success, report the frozen file path and that it will now be included in `cdp_run_e2e_suite`.
+Treat the text after `$rn-dev-agent:lock-e2e` as a conceptual request. Parse one
+required action ID and optional `--relock`. Reject missing/extra positionals,
+duplicate flags, and unknown flags; never place raw request text in a shell.
+
+Require `cdp_lock_e2e_test` in the active task. If absent, stop and use the
+read-only discovery diagnosis.
+
+1. Call `cdp_lock_e2e_test` with `{ actionId, relock }`.
+2. On `STRICT_RUN_FAILED`, explain that the action must first pass without
+   repair. Offer the separately confirmed repair/replay workflow, then retry
+   only after it passes strict.
+3. On `PARAMS_UNSUPPORTED`, explain that this lock version supports param-free
+   actions only.
+4. On success, report the frozen path and inclusion in `cdp_run_e2e_suite`.
+
+Do not bypass strict replay, edit the frozen output directly, or substitute a
+raw Maestro result.

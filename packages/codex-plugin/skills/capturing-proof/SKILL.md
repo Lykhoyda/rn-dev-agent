@@ -1,6 +1,6 @@
 ---
 name: capturing-proof
-description: This skill should be used when the user asks to "capture proof", "record a demo of this feature", "make a video showing it works", "record the flow for the PR", "generate a PR body", "capture screenshots for the PR", "proof-capture", or when a verified feature needs PR-ready proof artifacts (video + numbered screenshots + PROOF.md + PR-BODY.md). Also loaded by /rn-dev-agent:proof-capture and by rn-feature-dev Phase 8.
+description: This skill should be used when the user asks to "capture proof", "record a demo of this feature", "make a video showing it works", "record the flow for the PR", "generate a PR body", "capture screenshots for the PR", "proof-capture", or when a verified feature needs PR-ready proof artifacts (video + numbered screenshots + PROOF.md + PR-BODY.md). Also loaded by $rn-dev-agent:proof-capture and by rn-feature-dev Phase 8.
 ---
 
 # capturing-proof — Rehearsal-Gated Proof Artifacts for a PR

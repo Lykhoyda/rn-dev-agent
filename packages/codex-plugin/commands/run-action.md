@@ -1,16 +1,17 @@
 ---
 command: run-action
-description: Execute a learned Maestro flow ("action") by name with optional -e KEY=VALUE parameters. Looks the flow up via packages/rn-dev-agent-core/dist/learned-actions.js (same inventory as /rn-dev-agent:list-learned-actions), then replays it via cdp_run_action — auto-repair-aware orchestration with structured RunRecords (GH #116). Counterpart to /list-learned-actions — list discovers, run executes.
+description: Execute a learned Maestro flow ("action") by name with optional -e KEY=VALUE parameters. Looks the flow up via packages/rn-dev-agent-core/dist/learned-actions.js (same inventory as $rn-dev-agent:list-learned-actions), then replays it via cdp_run_action — auto-repair-aware orchestration with structured RunRecords (GH #116). Counterpart to /list-learned-actions — list discovers, run executes.
 argument-hint: <action-name> [-e KEY=VALUE ...] [--platform ios|android] [--no-auto-repair] [--dry-run]
-allowed-tools: Bash, Read, Glob, mcp__plugin_rn-dev-agent_cdp__cdp_run_action
 ---
 
-Execute the learned action: $ARGUMENTS
+Treat the text after `$rn-dev-agent:run-action` as a conceptual request. It is
+not a shell variable. Parse and validate it as specified below; pass only typed
+MCP arguments or separately quoted helper argv.
 
 ## What this command does
 
-`/rn-dev-agent:list-learned-actions` lists what's available;
-`/rn-dev-agent:run-action` actually replays one. Together they implement the
+`$rn-dev-agent:list-learned-actions` lists what's available;
+`$rn-dev-agent:run-action` actually replays one. Together they implement the
 artifact-first protocol from `feedback_execute_artifacts_before_manual.md`:
 list → match → run, before composing any `device_*` primitives manually.
 
@@ -31,43 +32,35 @@ passed through to `maestro-runner` verbatim:
 Example calls:
 
 ```
-/rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high -e TAG=feature -e DESC="Test"
-/rn-dev-agent:run-action mark-all-done --platform android
-/rn-dev-agent:run-action wizard-create-task --dry-run -e TITLE=foo -e PRIORITY=low -e TAG=bug -e DESC=test
-/rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw failure without patching
+$rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high -e TAG=feature -e DESC="Test"
+$rn-dev-agent:run-action mark-all-done --platform android
+$rn-dev-agent:run-action wizard-create-task --dry-run -e TITLE=foo -e PRIORITY=low -e TAG=bug -e DESC=test
+$rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw failure without patching
 ```
 
 ## Protocol
 
-1. **Parse arguments.** First word of `$ARGUMENTS` is the action name. Detect
-   `--platform`, `--dry-run`, `--no-auto-repair`, and collect every
-   `-e KEY=VALUE` pair into a `params` object (key must match
-   `[A-Z_][A-Z0-9_]*`; reject malformed early — `cdp_run_action` will
-   refuse them anyway, but catching at parse time gives a clearer
-   error). Treat anything else as a passthrough flag.
+1. **Parse arguments.** The first positional is the required action name.
+   Recognize `--platform ios|android`, `--dry-run`, `--no-auto-repair`, and
+   repeated `-e KEY=VALUE` entries. Preserve a quoted value such as
+   `TITLE="Buy milk"` as one string after removing only its syntactic quotes.
+   Keys must match `[A-Z_][A-Z0-9_]*`. Reject malformed/missing values,
+   duplicate singleton flags, stray positionals, and unknown flags; never
+   forward arbitrary text to Maestro.
 
-2. **Resolve the action via the script** (single source of truth — never glob
-   `.rn-agent/actions/` directly):
-   ```bash
-   ACTION_NAME="<first-arg>"
-   CODEX_PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}"
-   if [ -z "$CODEX_PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
-     CODEX_PLUGIN_ROOT="packages/codex-plugin"
-   fi
-   if [ -z "$CODEX_PLUGIN_ROOT" ]; then
-     CODEX_PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" -print -quit 2>/dev/null || true)"
-     [ -n "$CODEX_PLUGIN_MANIFEST" ] && CODEX_PLUGIN_ROOT="$(dirname "$(dirname "$CODEX_PLUGIN_MANIFEST")")"
-   fi
-   test -n "$CODEX_PLUGIN_ROOT" || { echo "rn-dev-agent Codex plugin root not found" >&2; exit 2; }
-   RESULT=$(node "${CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
-     --json --section b \
-     --workspace-root "$PWD" --memory-cwd "$PWD" \
-     --filter "$ACTION_NAME")
-   COUNT=$(echo "$RESULT" | jq '.sections.flows.count')
+2. **Resolve the action via the exact selected package script** (single source
+   of truth—never glob actions or scan caches). Resolve `<package-root>` as
+   `../..` from this workflow skill's exact `SKILL.md`, then invoke with an argv
+   array equivalent to:
+   ```text
+   node <package-root>/rn-dev-agent-core/dist/learned-actions.js \
+     --json --section b --workspace-root <cwd> --memory-cwd <cwd> \
+     --filter <one validated action-name value>
    ```
+   Parse JSON directly rather than shelling through `jq`.
    - **0 matches**: stop. Tell the user what they searched for, list the
      closest 5 alternatives by running the script again with a broader filter
-     (or no filter), and suggest creating the flow via `/rn-dev-agent:test-feature`.
+     (or no filter), and suggest creating the flow via `$rn-dev-agent:test-feature`.
    - **>1 match**: stop. Print the candidates with their full paths and ask
      the user to disambiguate (e.g. by passing the full filename without
      `.yaml`).
@@ -83,7 +76,7 @@ Example calls:
      parameter or running with `--dry-run` first.
    - **Check `appId` matches the booted app**: read `appId:` from the flow
      header; verify a device with that bundle is booted. If not, stop and
-     suggest running `/rn-dev-agent:setup` or booting the right simulator.
+     suggest running `$rn-dev-agent:setup` or booting the right simulator.
    - **Validate `-e` parameters cover the flow's `${VAR}` placeholders**:
      parse `${...}` from the flow body; report any unset placeholders and
      refuse to run unless the user confirms (Maestro will fail at runtime
@@ -210,12 +203,12 @@ Next step: <single concrete suggestion>
 
 | Command | When it calls into `run-action` (conceptually) |
 |---|---|
-| `/rn-dev-agent:test-feature` | Step 0: if `list-learned-actions` returns a match, the protocol says "run that flow" — equivalent to invoking this command |
-| `/rn-dev-agent:debug-screen` | Step 0a: same — replay the matching flow to deterministically reproduce the bug |
-| `/rn-dev-agent:proof-capture` | Future: replay an existing flow under recording to produce the proof video without manually walking the UI |
+| `$rn-dev-agent:test-feature` | Step 0: if `list-learned-actions` returns a match, the protocol says "run that flow" — equivalent to invoking this command |
+| `$rn-dev-agent:debug-screen` | Step 0a: same — replay the matching flow to deterministically reproduce the bug |
+| `$rn-dev-agent:proof-capture` | Future: replay an existing flow under recording to produce the proof video without manually walking the UI |
 
 These commands run the underlying script + maestro-runner directly rather
-than literally invoking `/rn-dev-agent:run-action` (slash commands cannot
+than literally invoking `$rn-dev-agent:run-action` (slash commands cannot
 reliably call other slash commands), but the contract is the same.
 
 ## Failure modes to flag

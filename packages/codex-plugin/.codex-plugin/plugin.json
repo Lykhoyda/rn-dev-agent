@@ -20,6 +20,7 @@
     "maestro"
   ],
   "skills": "./skills/",
+  "commands": [],
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "rn-dev-agent",

@@ -59,15 +59,19 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   }
 
   function spawnWorker(): void {
-    const child = spawn(process.execPath, workerSpawnArgs(workerPath), {
-      stdio: ['pipe', 'pipe', 'inherit'],
-      env: {
-        ...process.env,
-        RN_BRIDGE_SUPERVISED: '1',
-        RN_BRIDGE_RESTARTS: String(core.restartCount),
-        ...(core.lastExit ? { RN_BRIDGE_LAST_EXIT: core.lastExit } : {}),
+    const child = spawn(
+      process.execPath,
+      workerSpawnArgs(workerPath, undefined, process.argv.slice(2)),
+      {
+        stdio: ['pipe', 'pipe', 'inherit'],
+        env: {
+          ...process.env,
+          RN_BRIDGE_SUPERVISED: '1',
+          RN_BRIDGE_RESTARTS: String(core.restartCount),
+          ...(core.lastExit ? { RN_BRIDGE_LAST_EXIT: core.lastExit } : {}),
+        },
       },
-    });
+    );
     worker = child;
     process.stderr.write(`rn-bridge-supervisor: worker pid ${child.pid}\n`);
     // 'error' + 'exit' can both fire (or only 'error' for ENOENT) — funnel

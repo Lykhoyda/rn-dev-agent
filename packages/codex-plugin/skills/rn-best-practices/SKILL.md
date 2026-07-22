@@ -16,11 +16,11 @@ description: >
 
 # React Native Best Practices — Procedural Adapter
 
-This skill is the **routing surface** between Claude and the vendored
-[vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)
-content under `third_party/vercel-labs/agent-skills/`. **Don't read the 118
-rule files upfront.** Use the procedures below to look up only the rules
-that apply to the code you're about to write or review.
+This installed Codex skill routes through the packaged 118-rule
+`rules.index.json` plus package-local rn-dev-agent reference files. Do not
+assume an rn-dev-agent source checkout or a `third_party/` tree. Query only the
+index entries relevant to the code being written/reviewed; `title`, severity,
+triggers, and `applicable_when` are the installed metadata contract.
 
 ## Index
 
@@ -69,8 +69,10 @@ parents. **Good:** define outside, pass data via props. Full rule (web/RN):
 ## Procedural lookup — query the index BEFORE writing each category
 
 Use these procedures whenever you're about to write or review code in the
-listed scope. The procedure tells you which `rules.index.json` entries to
-load; you then read only the matched `upstream_path` files.
+listed scope. Load the matched packaged index entries. `upstream_path` is
+provenance metadata and may not exist in a marketplace package; do not try to
+read it unless working in a source checkout. Package-local custom references
+under `references/rn-dev-agent/` remain readable.
 
 ### Before writing list rendering (FlatList, FlashList, SectionList, ScrollView+map)
 
@@ -149,21 +151,18 @@ These also appear in `rules.index.json` under `category: "rn-dev-agent"`.
 
 ## Verification surface (where the deterministic checks live)
 
-A subset of rules has automated grep checking via `scripts/check-vercel-rules.mjs`
-running as a `PostToolUse` hook on every `Edit | MultiEdit | Write` against
-`.tsx`/`.jsx`/`.ts`/`.js` files. Currently 3 rules are `checkable: true` in
-the index:
+A subset has automated grep checking through the packaged
+`../../scripts/check-vercel-rules.mjs`. Codex has no Claude edit hook; invoke
+`$rn-dev-agent:check-vercel-rules` explicitly or use `--ci` in a project gate.
+Currently 3 rules are `checkable: true` in the index:
 
 - `react-native-skills/ui-pressable` → `no-touchable-new-code`
 - `react-native-skills/list-performance-inline-objects` → `no-inline-renderitem-literals`
 - `react-native-skills/rendering-no-falsy-and` → `no-falsy-jsx-and`
 
-Violations surface as `additionalContext` injected after the edit — Claude
-sees them but they don't block the edit. Block-on-violation behavior lives
-in `--ci` mode (used by the pre-ship-checker integration), not the live
-edit loop.
-
-For manual full-project audits: `/check-vercel-rules` slash command.
+Block-on-violation behavior lives in `--ci` mode. For a manual full-project
+audit use `$rn-dev-agent:check-vercel-rules`; the empty request maps to
+`--all`.
 
 ---
 

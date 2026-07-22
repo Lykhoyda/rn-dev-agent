@@ -10,42 +10,25 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code and Codex. **79 MCP tools**, **5 agents**, **15 commands**, **10 skills**.
+The Codex rn-dev-agent surface provides **79 MCP tools**, **15 explicit workflow skills**, and **10 implicit domain skills**—exactly **25 native Codex skills**. The five packaged agent files are inline playbooks, not a native Codex subagent contract.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
 ---
 
-## Host Surface Map
+## Codex surface map
 
-- **Claude Code** local development points at the repository root with
-  `claude --plugin-dir /path/to/rn-dev-agent`; the root
-  `.claude-plugin/marketplace.json` resolves the package at
-  `packages/claude-plugin/`. The Claude package owns slash commands in
-  `commands/`, Claude subagents in `agents/`, hooks in `hooks/`, skills in
-  `skills/`, and the `cdp` MCP server.
-- **Codex** local development points at
-  `/path/to/rn-dev-agent/packages/codex-plugin`. Codex loads
-  `.codex-plugin/plugin.json`, package-local shared skills in `skills/`, and the
-  same `cdp` MCP server from `.mcp.json`. Claude slash commands, subagents, and
-  hooks are not native Codex surfaces; treat `commands/*.md` and `agents/*.md`
-  as playbooks to execute inline. `No plugin hooks` in Codex is expected.
-- Keep the MCP server key named `cdp` in both manifests. Older sessions and
-  docs assume this stable key.
+Codex loads `.codex-plugin/plugin.json`, package-local `skills/`, and stable MCP
+server key `cdp` from `.mcp.json`. `No plugin hooks` is expected. Packaged
+`commands/*.md` are complete workflow playbooks reached through the fifteen
+native `$rn-dev-agent:<workflow>` skills; best-effort command migration is
+explicitly disabled, so `source-command-*` is not a supported vocabulary.
 
-Codex translation rule: when this skill routes to `/rn-dev-agent:<command>`,
-load the matching skill or command Markdown and run the underlying steps
-directly. For action inventory, the slash command wraps:
-
-```bash
-node <plugin-root>/rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
-```
-
-(`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the Codex package root on
-Codex — the bundled runtime lives INSIDE the installed package.)
-
-For action replay, prefer the MCP tool `cdp_run_action` after the same
-pre-flight checks documented in `commands/run-action.md`.
+Workflow adapters are explicit-only. Domain skills remain implicit knowledge
+owners. Resolve every playbook/helper relative to the exact selected
+`SKILL.md`; never scan caches or use a launcher-only package-root variable. For
+action replay, prefer structured `cdp_run_action` after the preflights in the
+package-local `run-action` workflow.
 
 ---
 
@@ -55,14 +38,14 @@ pre-flight checks documented in `commands/run-action.md`.
 What is the user asking for?
 │
 ├── INVENTORY of reusable actions ("what's already automated for this?")
-│   └─► /rn-dev-agent:list-learned-actions [keyword]
+│   └─► $rn-dev-agent:list-learned-actions [keyword]
 │       (Scans feedback memories + .rn-agent/actions/ + .rn-agent/skeleton.yaml.
 │        ALWAYS run this BEFORE any device_* sequence — replay an
 │        existing flow instead of recomposing primitives manually.
 │        See feedback_execute_artifacts_before_manual.md.)
 │
 ├── REPLAY a learned action (Maestro flow)
-│   └─► /rn-dev-agent:run-action <name> [-e KEY=VALUE …] [--platform ios|android]
+│   └─► $rn-dev-agent:run-action <name> [-e KEY=VALUE …] [--platform ios|android]
 │       (Counterpart to list-learned-actions: list discovers, run executes.
 │        Pre-flights mutates flag, appId match, parameter coverage. Use to
 │        skip a 7-min manual walk when a 23-sec flow already exists.)
@@ -74,49 +57,48 @@ What is the user asking for?
 │        the recorder path and direct YAML authoring.)
 │
 ├── BUILD a new feature / "add X to the app"
-│   └─► /rn-dev-agent:rn-feature-dev <description>
+│   └─► $rn-dev-agent:rn-feature-dev <description>
 │       (8-phase pipeline — see rn-feature-development skill)
 │
 ├── TEST an existing feature
-│   └─► /rn-dev-agent:test-feature <description>
+│   └─► $rn-dev-agent:test-feature <description>
 │       (Runs rn-tester protocol INLINE in parent session — MCP tools required.
 │        Step 0 is automatic artifact-first scan via list-learned-actions.)
 │
 ├── BUILD + TEST (app not yet installed)
-│   └─► /rn-dev-agent:build-and-test <description>
+│   └─► $rn-dev-agent:build-and-test <description>
 │       (Builds app via Expo/EAS, installs, starts Metro, then runs tester protocol inline)
 │
 ├── Something is BROKEN on the current screen
-│   └─► /rn-dev-agent:debug-screen
+│   └─► $rn-dev-agent:debug-screen
 │       (Runs rn-debugger protocol INLINE in parent session — MCP tools required)
 │
 ├── Plugin tools not working / environment broken
-│   └─► /rn-dev-agent:setup
-│       (13-check environment diagnostic with auto-retry + manual fallback,
-│        then CLAUDE.md/nav-ref/store-exposure injection)
+│   └─► $rn-dev-agent:setup
+│       (passive package health first, then consented AGENTS.md/nav/store/scaffold setup)
 │
 ├── DIAGNOSE the environment (read-only, no changes)
-│   └─► /rn-dev-agent:doctor
+│   └─► $rn-dev-agent:doctor
 │       (Same 13-check diagnostic as setup Phase 1 — reports, never modifies)
 │
 ├── Need PROOF for a PR ("record a demo", "capture proof", "PR video")
-│   └─► Load the capturing-proof skill (or run /rn-dev-agent:proof-capture <feature-slug>)
+│   └─► Load the capturing-proof skill (or run $rn-dev-agent:proof-capture <feature-slug>)
 │       (Rehearsal-gated video + screenshots + generated PR body)
 │
 ├── FREEZE a verified action into a locked regression test
-│   └─► /rn-dev-agent:lock-e2e <action-name>
+│   └─► $rn-dev-agent:lock-e2e <action-name>
 │       (Strict no-repair run via cdp_lock_e2e_test, freezes to .rn-agent/e2e/;
 │        the frozen suite runs via cdp_run_e2e_suite)
 │
 ├── Watch tool activity live in a browser ("observability UI")
-│   └─► /rn-dev-agent:observe
+│   └─► $rn-dev-agent:observe
 │       (Shows the observe web UI URL; stop/restart the server)
 │
 ├── Audit project rules sync (Vercel rules)
-│   └─► /rn-dev-agent:check-vercel-rules
+│   └─► $rn-dev-agent:check-vercel-rules
 │
 ├── REPORT a plugin bug / send feedback
-│   └─► Load `sending-feedback` (or run /rn-dev-agent:send-feedback in Claude)
+│   └─► $rn-dev-agent:send-feedback (routes to `sending-feedback`)
 │       (Sanitized environment context → GitHub issue, user-confirmed)
 │
 ├── Understand an existing feature (read, don't write)
@@ -132,11 +114,11 @@ What is the user asking for?
 │       (Confidence-filtered review, RN conventions + best practices)
 │
 ├── Just check if environment is ready
-│   └─► /rn-dev-agent:check-env
+│   └─► $rn-dev-agent:check-env
 │       (Quick cdp_status check, no setup attempt)
 │
 └── Extract the navigation graph
-    └─► /rn-dev-agent:nav-graph
+    └─► $rn-dev-agent:nav-graph
         (Maps all screens and navigators)
 ```
 
@@ -153,7 +135,7 @@ These apply to every RN task:
 4. **Do cross-platform checks** unless the user explicitly scoped to one platform
 5. **Filter `cdp_component_tree` queries** — never dump the full tree (10K+ tokens wasted)
 6. **Stop at the first red flag** from the agent's red flags list
-7. **Run `/rn-dev-agent:list-learned-actions` BEFORE composing any `device_*` sequence.** If a saved action already covers the request, replay it via `cdp_run_action` (or `/rn-dev-agent:run-action`) first — that path runs the mutates/appId/param pre-flights and auto-repair; reserve raw `maestro_run` for non-action YAML flows. Manual primitives are a fallback, not a default. (Codified in `feedback_execute_artifacts_before_manual.md`. The original failure case: a 7-minute / 11-tool-call manual walk that an existing 23-second Maestro flow would have covered.)
+7. **Run `$rn-dev-agent:list-learned-actions` BEFORE composing any `device_*` sequence.** If a saved action already covers the request, replay it via `cdp_run_action` (or `$rn-dev-agent:run-action`) first — that path runs the mutates/appId/param pre-flights and auto-repair; reserve raw `maestro_run` for non-action YAML flows. Manual primitives are a fallback, not a default. (Codified in `feedback_execute_artifacts_before_manual.md`. The original failure case: a 7-minute / 11-tool-call manual walk that an existing 23-second Maestro flow would have covered.)
 
 ### Ask First
 - Adding new dependencies to the user's project
@@ -177,8 +159,8 @@ These apply to every RN task:
 | Skill | Type | When loaded |
 |-------|------|-------------|
 | `using-rn-dev-agent` (this) | Meta / entry point | Start of any RN conversation |
-| `rn-setup` | Process | User runs `/rn-dev-agent:setup` or tools fail |
-| `rn-feature-development` | Process | Inside `/rn-dev-agent:rn-feature-dev` — 8-phase pipeline |
+| `rn-setup` | Process | User runs `$rn-dev-agent:setup` or tools fail |
+| `rn-feature-development` | Process | Inside `$rn-dev-agent:rn-feature-dev` — 8-phase pipeline |
 | `rn-testing` | Reference + process | Test writing, Maestro flows, E2E verification |
 | `creating-actions` | Process + reference | Authoring a new reusable action (save / replay a flow) |
 | `rn-debugging` | Reference + process | Diagnosing crashes, errors, blank screens |
@@ -227,7 +209,7 @@ Agents skip this skill at the start of conversations. Don't.
 |--------|---------|
 | "The user asked a specific question — I'll answer directly without routing" | You lose the workflow gates. `/rn-feature-dev` wouldn't skip Phase 5.5; neither should an ad-hoc answer. |
 | "I know what `cdp_store_state` does — skip reading rn-debugging" | Skills are not API docs. They contain the process knowledge (when to combine tools, when to fallback). You need that context. |
-| "The user said 'fix the bug' — I'll just edit the file directly" | Route to `/rn-dev-agent:debug-screen` which runs the rn-debugger protocol inline in the parent session. Enforces reproduce → diagnose → fix → verify. Never spawn `rn-debugger` via Task tool — MCP tools won't work (GH #31). |
+| "The user said 'fix the bug' — I'll just edit the file directly" | Route to `$rn-dev-agent:debug-screen` which runs the rn-debugger protocol inline in the parent session. Enforces reproduce → diagnose → fix → verify. Never spawn `rn-debugger` via Task tool — MCP tools won't work (GH #31). |
 | "I'll spawn `rn-tester` via Task to verify while I work on something else" | You can't — MCP stdio doesn't propagate to Task-spawned subagents (GH #31). rn-tester and rn-debugger are parent-session-only protocol playbooks. Only `rn-code-explorer`, `rn-code-architect`, `rn-code-reviewer` are safe to spawn (they're read-only, no MCP). |
 | "This is a trivial change — I'll skip Phase 5.5 verification" | Trivial changes are where verification gates matter most. They're the ones you tell yourself don't need testing. They do. |
 | "I got `HELPERS_NOT_INJECTED` — let me retry `cdp_status`" | Retrying `cdp_status` does NOT re-run helper injection if the bridge thinks it's connected; it just returns status. The plugin auto-retries injection internally on every gated call (see "Recovering from HELPERS_NOT_INJECTED" in the rn-debugging skill). If the auto-retry exhausted, switch to `device_*` tools (XCTest path — no helpers required) or call `cdp_reload`. Don't spin on `cdp_status`. |
@@ -241,8 +223,8 @@ If you notice yourself doing any of these at the start of an RN task, stop:
 - About to edit code without first reading `cdp_error_log` or `cdp_component_tree`
 - About to run `xcrun simctl` or `adb` instead of an MCP tool
 - About to claim "feature works" without any `device_screenshot` or `cdp_*` output
-- Skipping `/rn-dev-agent:setup` because "tools probably work"
-- Starting feature development without `/rn-dev-agent:rn-feature-dev`
+- Skipping `$rn-dev-agent:setup` because "tools probably work"
+- Starting feature development without `$rn-dev-agent:rn-feature-dev`
 - Spawning `rn-tester` or `rn-debugger` via Task tool — their protocols need MCP tools that don't propagate to subagents (GH #31). Run `/test-feature` or `/debug-screen` instead; the protocol executes inline in the parent session.
 - Spawning an agent without the matching skill loaded in context
 - Answering "is this broken?" without running `cdp_status` first
@@ -255,12 +237,12 @@ Things that repeatedly go wrong, cataloged for prevention:
 
 | Failure | Cause | Fix |
 |---------|-------|-----|
-| Manual `device_*` walk for a flow that already exists as a YAML | Skipped `/rn-dev-agent:list-learned-actions` at session start | Run it BEFORE any UI work; replay matching flows via `maestro_run` |
+| Manual `device_*` walk for a flow that already exists as a YAML | Skipped `$rn-dev-agent:list-learned-actions` at session start | Run it BEFORE any UI work; replay matching flows via `maestro_run` |
 | Feature ships with broken Android | Skipped `cross_platform_verify` | Always run it in Phase 5.5 unless explicitly scoped |
 | "Works on my machine" bug | Claimed done without Phase 5.5 evidence | Every row in the results table must have a concrete Evidence value |
 | Native crash missed entirely | Only checked `cdp_error_log`, not native logs | Use `collect_logs(sources=["js_console","native_ios"])` together |
 | Wasted 10K tokens on component tree | Called `cdp_component_tree()` without filter | Always filter by testID or component name |
-| Tests silently broken after refactor | No Maestro flow exists | `/rn-dev-agent:proof-capture` generates one; use it |
+| Tests silently broken after refactor | No Maestro flow exists | `$rn-dev-agent:proof-capture` generates one; use it |
 | CDP session lost mid-task | Another debugger (DevTools, Flipper) connected | Close all other debuggers before starting |
 | Stuck on `HELPERS_NOT_INJECTED` for minutes | Retrying `cdp_status` instead of letting the auto-retry surface a final answer, or instead of falling back to device tools | The error is authoritative (the bridge already auto-retried injection) — switch to `device_*` tools or call `cdp_reload`; never sit in a `cdp_status` retry loop. Full recovery protocol: rn-debugging skill § "Recovering from HELPERS_NOT_INJECTED". |
 

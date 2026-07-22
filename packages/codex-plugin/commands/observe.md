@@ -1,21 +1,24 @@
 ---
 command: observe
-description: Show the observability web UI URL (it autostarts with the session); stop or restart it.
-argument-hint: [stop|restart]
+description: Show the Observe web UI URL, stop it, or restart it through the active MCP server.
+argument-hint: "[stop|restart]"
 ---
 
-The observe web UI autostarts when the session begins in an RN project. Permanent opt-out:
-`.rn-agent/config.json` → `{ "observe": { "autoStart": false } }` (port via `observe.port`,
-default 7333; env `RN_AGENT_OBSERVE_AUTOSTART` / `RN_AGENT_OBSERVE_PORT` override config).
+# Observe
 
-The user's argument: "$ARGUMENTS"
+Treat the text after `$rn-dev-agent:observe` as the conceptual request. Accepted
+values are empty, `stop`, or `restart`; reject anything else. Require the
+`observe` MCP tool in the active task. If absent, stop and use the read-only
+discovery diagnosis—do not start a substitute shell web server.
 
-- If the argument is empty: call the `observe` MCP tool with `action: "status"`. If running,
-  print the returned `url` prominently and tell the user to open it in a browser to watch the
-  live tool-call timeline, live device mirror, and app state. If NOT running (autostart disabled
-  or previously stopped), call `action: "start"` — an explicit /observe is an explicit request
-  to see the UI — and print the URL.
-- If the argument is `stop`: call with `action: "stop"`. The UI stays down for the rest of the
-  session; mention the config opt-out if the user wants it permanent.
-- If the argument is `restart`: call with `action: "restart"` and print the (possibly new) URL.
-  The event timeline is preserved across restarts.
+- Empty: call `observe` with `action:"status"`. If running, print its URL. If
+  down, the explicit workflow invocation is consent to call `action:"start"`;
+  print the returned URL.
+- `stop`: call `action:"stop"` and explain the per-project permanent opt-out.
+- `restart`: call `action:"restart"`, preserving the event timeline, and print
+  the returned URL.
+
+Observe normally autostarts for an RN project. Configuration lives at
+`.rn-agent/config.json` under `observe.autoStart`, `observe.port`, and mirror
+settings. Environment overrides are `RN_AGENT_OBSERVE_AUTOSTART` and
+`RN_AGENT_OBSERVE_PORT`.

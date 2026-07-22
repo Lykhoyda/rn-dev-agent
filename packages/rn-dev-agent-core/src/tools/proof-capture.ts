@@ -88,6 +88,79 @@ const finalizeSchema = z
   })
   .strict();
 
+/**
+ * Plain-object MCP publication schema. @modelcontextprotocol/sdk normalizes
+ * object schemas for tools/list but replaces a top-level discriminated union
+ * with an empty object. Branch requirements remain authoritative in
+ * proofCaptureInputSchema below; this superset makes every supported field and
+ * the required action discriminator constructible by schema-respecting hosts.
+ */
+export const proofCapturePublishedInputSchema = z
+  .object({
+    action: z
+      .enum([
+        'begin_rehearsal',
+        'finish_rehearsal',
+        'arm',
+        'start_recording',
+        'stop_recording',
+        'validate',
+        'finalize',
+        'status',
+        'discard',
+        'contract',
+      ])
+      .describe(
+        'Proof transition. begin_rehearsal and finalize require their action-specific fields.',
+      ),
+    projectRoot: absolutePathSchema
+      .optional()
+      .describe('begin_rehearsal: absolute app worktree root.'),
+    candidateRoot: absolutePathSchema
+      .optional()
+      .describe('begin_rehearsal: absolute candidate plugin worktree root for cross-repo proof.'),
+    receiptPath: absolutePathSchema
+      .optional()
+      .describe('begin_rehearsal: fresh absolute receipt destination.'),
+    videoPath: absolutePathSchema
+      .optional()
+      .describe('begin_rehearsal: fresh absolute MP4 destination.'),
+    contactSheetPath: absolutePathSchema
+      .optional()
+      .describe('begin_rehearsal: fresh absolute contact-sheet destination.'),
+    writerProvider: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('begin_rehearsal: provider producing the implementation/proof run.'),
+    runId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('begin_rehearsal: unique lowercase proof run identifier.'),
+    issue: proofIssueSchema.optional().describe('begin_rehearsal: bound issue identity.'),
+    pullRequest: proofPullRequestSchema
+      .optional()
+      .describe('begin_rehearsal: bound pull request and head.'),
+    proofClass: proofClassSchema.optional().describe('begin_rehearsal: proof class.'),
+    acceptanceMappings: z
+      .array(acceptanceMappingSchema)
+      .min(1)
+      .optional()
+      .describe('begin_rehearsal: acceptance criteria mapped to evidence.'),
+    fixture: proofFixtureSchema.optional().describe('begin_rehearsal: tested fixture identity.'),
+    proofAction: proofActionSchema
+      .optional()
+      .describe('begin_rehearsal: pinned learned-action identity.'),
+    storyboard: storyboardSchema
+      .optional()
+      .describe('begin_rehearsal: typed result-bound storyboard.'),
+    evidenceReview: evidenceReviewSchema
+      .optional()
+      .describe('finalize: independent evidence review.'),
+  })
+  .strict();
+
 export const proofCaptureInputSchema = z.discriminatedUnion('action', [
   beginRehearsalSchema,
   sessionActionSchema('finish_rehearsal'),

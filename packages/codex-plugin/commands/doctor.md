@@ -1,15 +1,61 @@
 ---
 command: doctor
-description: Diagnose installation health. Check Node, CDP bridge, rn-fast-runner (iOS), rn-android-runner (Android), maestro-runner, simulators, Metro, CDP, injected helpers, ffmpeg, physical devices, plugin version, Vercel rules sync. Reports what's missing — does NOT modify your project.
-argument-hint: 
+description: Run strictly read-only Codex plugin, MCP contract, schema, and environment diagnostics; recommend but never execute recovery.
 ---
 
-Run the environment-diagnostic checklist from the `rn-setup` skill. Walk all 16 prerequisite checks (Node.js version, CDP bridge dependencies, **rn-fast-runner build (iOS)**, **rn-android-runner build/install (Android)**, maestro-runner, iOS simulator, Android emulator, Metro dev server, CDP connection, **injected `__RN_AGENT` helpers**, ffmpeg, **idb (screen-mirror fast path)**, physical-device prerequisites, **plugin version freshness**, **Vercel rules sync freshness**, **CDP auto-reconnect mode**) and surface install commands for any missing dependencies.
+# Doctor — passive recovery diagnosis
 
-iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project (D1219, PR #164); Android device automation is owned by the in-tree `rn-android-runner` (UiAutomator instrumentation). These in-tree runners are the sole device backend — there is no external CLI to install. Mark `rn-android-runner` as N/A on iOS-only setups and `rn-fast-runner` as N/A on Android-only / non-macOS setups. If a device tool fails with RUNNER_PROTOCOL_MISMATCH, the installed/prebuilt runner artifact predates the plugin's wire protocol: on iOS delete packages/rn-fast-runner/build/DerivedData and re-open the device session (or re-run xcodebuild build-for-testing); on Android re-run ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest and adb install -r both APKs.
+This workflow is strictly read-only. It does not install/update/reinstall,
+write config/project/cache/state/log files, build runners, attach to CDP/device,
+start Observe, or kill/restart any process.
 
-**This command is read-only.** It diagnoses the current environment and recommends fixes. It does NOT modify any files in the user's project, inject documentation, or instrument source code.
+Resolve `<package-root>` from this exact workflow skill's `SKILL.md` path and
+run `<package-root>/bin/plugin-health.js --json` with any caller-observed task
+facts. Never scan caches or use a launcher-only environment variable.
 
-Present results as a 16-row table. For the **idb** row: OK when `idb --help` exits 0 (a health probe — a client on an incompatible Python crashes on every invocation and must NOT count as present, B269) AND `idb_companion` is on PATH; INSTALLING when `~/.rn-dev-agent/idb/install.pid` holds a live PID (background auto-install from SessionStart — do not start a second install); otherwise MISSING with `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb`. YELLOW, never RED — the live mirror falls back to a ~6fps simctl loop without it. For any RED rows, give the user the exact install command (with `nvm` / `sudo` / `brew` flag selection based on their environment). For the `rn-fast-runner` row: if NEEDS_BUILD, note that the runner self-builds on first use (a slow cold build) and OFFER to run the one-time `xcodebuild build-for-testing` now to move that cost out of the first interaction (the rn-setup skill section 3 has the exact form + the offer prompt). Building the runner writes only to plugin-internal `scripts/rn-fast-runner/build/` under the Codex plugin package — it does not touch the user's project, so the offer is consistent with this command's read-only-on-your-project contract. When a device session is open, also annotate the runner rows with artifact provenance (GH #382): for `rn-fast-runner`, read `deviceSession.runnerProvenance` and `deviceSession.runnerProtocol.runnerVersion` from `cdp_status` and show `prebuilt v<X> (cache/download)` vs `local-built`; `rn-android-runner` records the same `provenance` field in its runner state file. `prebuilt` means the runner came from a verified prebuilt artifact (SHA-256-checked cache or release download) — no cold build was paid; `local-built` means it was compiled on this machine (dev checkout, offline, or `RN_RUNNER_BUILD=local`). For the helpers row specifically, do NOT suggest retrying `cdp_status` — the bridge already auto-retried injection. If MISSING, recommend `device_*` fallbacks or `cdp_reload`. For the **plugin version** row: if BEHIND, surface `/plugin update rn-dev-agent` and let the user decide whether to update before continuing. If OFFLINE (GitHub unreachable), skip without failing — plugin works fine without the upstream check. For the **Vercel rules sync** row: if MISSING, report that `skills/rn-best-practices/rules.index.json` is absent from the Codex package and recommend reinstalling the plugin; drift checks require a repository checkout and `node scripts/sync-vercel-skills.mjs --ref <sha>`. For the **CDP auto-reconnect** row: read `autoConnect` from `cdp_status` output; report `ON (default)`, `OFF (env)`, or `OFF (config)`. OFF is informational (YELLOW, not RED) with note "React Native DevTools can hold the debugger seat; the bridge reconnects only on tool calls".
+## Active-task observations
 
-If the user wants the plugin to also inject project instructions (CLAUDE.md template, nav-ref, store exposure) — point them at `/rn-dev-agent:setup` instead.
+Pass only facts actually observed in this task:
+
+```text
+--task-skill <qualified-name>      repeatable
+--task-skills-complete             only after inspecting the complete inventory
+--task-mcp-tool <qualified-name>   repeatable
+--task-mcp-complete                only after `/mcp verbose`/complete inventory
+--observed-transport healthy|closed|unknown
+--host-proof-schema usable|empty|unknown
+--observed-app-status connected|disconnected|unknown
+```
+
+Do not infer absence from a partial list. Running this skill proves only this
+skill is present, not all 25. A task with zero rn-dev-agent skills cannot invoke
+this workflow; use the documented external exact-cache bootstrap.
+
+## Report independent axes
+
+Present host support, installation/enabled state, exact materialization, `cdp`
+registration, side-effect-free MCP contract probe, direct proof schema, task
+skill/MCP observations, prior transport/schema/app observations, all findings,
+primary finding, and ordered next actions.
+
+Codex 0.145.0 is the live-refresh floor. Older/unknown hosts receive
+restart-required/unknown guidance, never corruption solely from version.
+`/mcp verbose` inspects only. Same-app supported mutation can refresh a later
+turn; external mutation and legacy hosts require relaunch.
+
+## Passive environment table
+
+In addition to package health, read only already available/version/file state
+for Node, core runtime, packaged iOS/Android runner sources/artifacts,
+maestro-runner, simulator/emulator presence, Metro reachability, ffmpeg, idb,
+physical-device prerequisites, packaged Vercel rules, and CDP auto-connect
+configuration. Do not call `cdp_status`: it can attach. Device/app/CDP state is
+`UNKNOWN` unless supplied from a prior structured observation.
+
+For missing components, print exact commands but do not offer to execute them
+inside doctor. Plugin recovery order is user-confirmed marketplace upgrade,
+materialization with `codex plugin add rn-dev-agent@rn-dev-agent --json`, Codex
+relaunch when required, then inventory recheck.
+
+Never recommend raw Maestro as strict-proof recovery and never kill a bridge
+owned by another host.

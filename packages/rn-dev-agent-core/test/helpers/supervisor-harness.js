@@ -17,9 +17,10 @@ export function startSupervisor({
   workerPath,
   env = {},
   cwd,
+  args = [],
   lineTimeoutMs = 15_000,
 } = {}) {
-  const child = spawn(process.execPath, [supervisorPath, '--no-lock'], {
+  const child = spawn(process.execPath, [supervisorPath, '--no-lock', ...args], {
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd,
     env: {

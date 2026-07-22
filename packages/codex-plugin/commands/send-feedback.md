@@ -1,224 +1,72 @@
 ---
 command: send-feedback
-description: Send feedback or report a bug for the rn-dev-agent plugin. Collects sanitized environment context and creates a GitHub issue. No sensitive data (paths, secrets, PII) is transmitted.
-argument-hint: [description or context from conversation]
-allowed-tools: Bash, Read, Write, Grep, mcp__*cdp__cdp_status, mcp__*cdp__cdp_error_log, AskUserQuestion
+description: Collect reviewed, sanitized rn-dev-agent feedback and create a GitHub issue only with user confirmation.
+argument-hint: "[description or conversation context]"
 ---
 
-# Send Feedback — Sanitized Bug Report / Feature Request
+# Send feedback safely
 
-Guide the user through submitting feedback for the rn-dev-agent plugin.
-All data is sanitized before submission — no home paths, secrets, PII, or
-IP addresses leave the local machine.
+Treat all text after `$rn-dev-agent:send-feedback` as optional descriptive data.
+It is never a shell command or environment assignment. Use it to prefill type,
+description, reproduction, workaround, related issues, and suggested fix.
 
-## Step 0: Check for pre-written context
+Resolve `<package-root>` from this workflow skill's exact `SKILL.md` path. Run
+the package collector by exact path:
 
-If `$ARGUMENTS` is provided, use it as the starting description. Scan the
-argument text for clues about type (bug/feature/question), steps to reproduce,
-workarounds, related issues, and suggested fixes. Pre-fill as much as
-possible so the user only confirms rather than re-typing.
-
-## Step 1: Gather feedback details
-
-Ask: "What would you like to report?"
-- **Bug report** — something broken or unexpected
-- **Feature request** — something missing or could be improved
-- **Question** — need help understanding something
-
-Then collect the following (skip what was already provided via $ARGUMENTS):
-
-1. **Description** (1-3 sentences) — what happened or what's needed
-2. **Steps to reproduce** (for bugs) — numbered list of steps. Ask: "How can I reproduce this?"
-3. **Known workaround** (optional) — "Did you find a workaround or fix?"
-4. **Related issues** (optional) — "Any related GitHub issues? (e.g., #22, #23)"
-5. **Suggested fix** (optional, for bugs) — "Do you know what should change?"
-
-## Step 2: Collect environment context (automated)
-
-Run the collection script to gather sanitized environment data:
-
-```bash
-PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
-if [ -z "$PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
-  PLUGIN_ROOT="packages/codex-plugin"
-fi
-if [ -z "$PLUGIN_ROOT" ]; then
-  PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" 2>/dev/null | sort -V | tail -n 1)"
-  [ -n "$PLUGIN_MANIFEST" ] && PLUGIN_ROOT="$(dirname "$(dirname "$PLUGIN_MANIFEST")")"
-fi
-if [ -n "$PLUGIN_ROOT" ] && [ -x "$PLUGIN_ROOT/scripts/collect-feedback.sh" ]; then
-  "$PLUGIN_ROOT/scripts/collect-feedback.sh"
-elif command -v rn-collect-feedback >/dev/null 2>&1; then
-  rn-collect-feedback
-else
-  echo "rn-dev-agent feedback collector is missing; reinstall or update the plugin" >&2
-  exit 1
-fi
+```text
+<package-root>/scripts/collect-feedback.sh
 ```
 
-Codex marketplace installs do not add global executables to `PATH`; use the
-package-local script. Claude sessions provide `CLAUDE_PLUGIN_ROOT`; installed
-Codex plugins resolve via the plugin-cache scan, which version-sorts the
-cached manifests (Codex stores each version under
-`plugins/cache/<marketplace>/rn-dev-agent/<version>/`) and picks the newest.
-`RN_DEV_AGENT_CODEX_PLUGIN_ROOT` and `CODEX_PLUGIN_ROOT` are explicit
-overrides only — the Codex launcher exports the former to the MCP supervisor
-process, not to this shell. The repo-checkout probe covers development
-checkouts. The command fallback exists for older Claude installations only.
+Do not scan caches, use a launcher-only environment variable, or require a
+global executable. If the collector is absent, stop with a corrupt-package
+finding and recommend the user-confirmed marketplace refresh/materialization
+sequence.
 
-This collects (all redacted):
-- Plugin version, cdp-bridge version, tool count
-- OS, Node.js, npm versions
-- Simulator/emulator status, Metro status
-- maestro-runner version, plus whether a legacy `agent-device` install is still
-  present (healthy = "not installed" — the in-tree rn-fast-runner/rn-android-runner
-  are the device backends; a leftover agent-device can interfere)
-- Last 20 telemetry events ONLY when fresh (<24h; tool name, result, latency — no params or paths), plus `telemetry_status` (`ok` / `stale (...)` / `none`). On current plugin versions `stale`/`none` is expected — per-tool-call telemetry capture was removed with the Experience Engine (GH #200); only legacy versions still write it.
+## 1. Gather only missing details
 
-Also call `cdp_status` to get current CDP connection state (if available).
+Ask in normal conversation; do not assume a host-specific question tool:
 
-Call `cdp_error_log` to check for recent JS errors (if connected).
+1. Bug, feature request, or question.
+2. One-to-three-sentence description.
+3. Reproduction steps for a bug.
+4. Optional workaround, related issues, and suggested fix.
 
-## Step 3: Present sanitized data for review
+## 2. Collect and sanitize
 
-**CRITICAL**: Before submitting, show the user EXACTLY what will be sent.
+Run the collector and parse its structured output. It may report plugin/core
+versions, OS/Node versions, device counts, Metro status, runner versions, and
+recent legacy telemetry status. If active `cdp_status`/`cdp_error_log` tools are
+available, their high-level connection/error counts may be added; absence or
+transport closure is itself valid feedback and must not block submission.
 
-Present the data in a clear format:
+Never include:
 
-```
-## Data that will be included in the GitHub issue:
+- absolute home/project paths;
+- secrets/tokens/credentials;
+- email, phone, IP, company/app/bundle identity;
+- tool arguments, store/component/network bodies, console contents, or stacks.
 
-**Type:** Bug report
-**Description:** <user's description>
+## 3. Mandatory review
 
-**Environment:**
-- Plugin: 0.11.0, CDP Bridge: 0.7.0
-- OS: Darwin 25.3.0, Node: v22.x
-- iOS Simulators: 1 booted
-- Metro: running on 8081
-- legacy agent-device: not installed
-- maestro-runner: 1.2.0
+Render the exact title/body/environment data that would be sent. Ask in
+conversation: **"Does this look correct, and should anything be removed?"**
+Wait for explicit confirmation and apply every requested removal.
 
-**Recent tool activity (last 5):**
-- cdp_status → PASS (120ms)
-- cdp_component_tree → PASS (340ms)
-- device_press → FAIL (timeout)
+## 4. Submit without shell interpolation
 
-**Current CDP state:**
-- Connected: yes
-- Errors: 0
-```
+1. Generate a conservative title from safe characters; never paste raw user
+   text into a shell command.
+2. Create a collision-safe private temporary body file with mode `0600` (for
+   example through Node `mkdtemp`/exclusive create), not a fixed `/tmp` path.
+3. Write the reviewed body to that file.
+4. Invoke `gh issue create` with a separately constructed argv array:
+   `--repo Lykhoyda/rn-dev-agent`, safe title, exact label, and `--body-file`
+   path. Do not use `bash -c` or `eval`.
+5. Remove the private temp file/directory after success. On authentication
+   failure, retain only with the user's consent and report its path.
+6. Report the created issue URL.
 
-Ask: **"Does this look correct? Should I remove anything before submitting?"**
-
-Wait for confirmation. If the user wants to remove something, remove it.
-
-## Step 4: Create the GitHub issue
-
-Write the issue body to a temp file FIRST (never inline user text into the
-shell command — quotes/backticks in a description would break or inject into
-the command), then create the issue with `--body-file`:
-
-1. Use the Write tool to save the composed body (template below) to
-   `/tmp/rn-dev-agent-feedback.md`.
-2. Compose the `--title` value YOURSELF as a fresh summary — never paste the
-   user's raw text into it. Use only letters, digits, spaces, hyphens, and one
-   leading `<type>:` colon (no quotes, backticks, `$`, or other shell
-   metacharacters — `$(…)` executes even inside double quotes).
-3. Run:
-
-```bash
-gh issue create \
-  --repo Lykhoyda/rn-dev-agent \
-  --title "<type>: <short description>" \
-  --label "<bug|enhancement|question>" \
-  --body-file /tmp/rn-dev-agent-feedback.md
-```
-
-Body template:
-
-```markdown
-## Description
-
-<user's description>
-
-## Environment
-
-| Field | Value |
-|-------|-------|
-| Plugin version | <version> |
-| CDP Bridge | <version> |
-| OS | <os> |
-| Node.js | <node> |
-| Metro | <status> |
-| iOS Simulators | <count> |
-| Android Emulators | <count> |
-| legacy agent-device | <"not installed" expected> |
-| maestro-runner | <version> |
-
-## Recent Tool Activity
-
-<ONLY if recent_telemetry_lines is non-empty: table of last 5 tool calls with result and latency. Otherwise render the telemetry_status value verbatim on one line (e.g. "Telemetry: none" or the stale explanation) — never present old events as recent (GH #266).>
-
-## CDP State at Time of Report
-
-<status summary or "not connected">
-
-## CDP Bridge Log (last 30 lines)
-
-<if cdp_bridge_log_tail present in collected data, format as code block. Omit section if no log file exists.>
-
-## Steps to Reproduce
-
-<numbered steps from user, or "Not provided">
-
-## Workaround
-
-<workaround from user, or omit section if not provided>
-
-## Suggested Fix
-
-<user's suggested fix, or omit section if not provided>
-
-## Related Issues
-
-<#N, #M links, or omit section if not provided>
-
----
-*Submitted via `/rn-dev-agent:send-feedback` — data sanitized automatically*
-```
-
-## Step 5: Confirm submission
-
-Report the issue URL to the user.
-
-If `gh` is not installed or not authenticated:
-1. Tell the user to install: `brew install gh && gh auth login`
-2. The body file at `/tmp/rn-dev-agent-feedback.md` (written in Step 4) remains
-   available so the user can paste it manually into GitHub.
-
-## Privacy Guarantees
-
-The following data is NEVER included:
-- Absolute file paths (replaced with `~` or relative)
-- API keys, tokens, secrets (pattern-matched and redacted)
-- Email addresses, phone numbers, SSNs (PII patterns redacted)
-- IP addresses (except localhost)
-- Company names and bundle IDs (com.company.app → [BUNDLE_REDACTED])
-- App name and slug from app.json ([APP_NAME_REDACTED])
-- Tool call parameters (only tool name + result + latency)
-- Store state values
-- Component tree contents
-- Network request/response bodies
-- Console log contents
-- Error stack traces (error field excluded from telemetry)
-
-The following IS included (safe):
-- Plugin and tool versions
-- OS type and version (not hostname)
-- Node.js version
-- Simulator/emulator count (not names or UDIDs)
-- Metro running status
-- Tool call names, pass/fail results, and latency
-- CDP connection status (connected/disconnected)
-- Error count (not error contents)
+The body includes description, sanitized environment, fresh telemetry status
+(if any), high-level CDP state, reproduction, workaround, suggested fix, and
+related issues. Omit empty optional sections and never present stale telemetry
+as recent.

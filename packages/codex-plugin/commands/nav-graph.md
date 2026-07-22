@@ -6,14 +6,18 @@ argument-hint: "[scan|read|find <screen-name>]"
 
 # Navigation Graph
 
-You are mapping the navigation topology of a React Native app. Follow the subcommand below.
+You are mapping the navigation topology of a React Native app. Treat the text
+after `$rn-dev-agent:nav-graph` as a conceptual request; it is not a shell
+variable. Require the relevant `cdp` tools in the active task and stop for
+read-only discovery diagnosis when they are absent.
 
-## Parsing Arguments
+## Parsing the request
 
-- If `$ARGUMENTS` is empty or `scan` → run **Scan**
-- If `$ARGUMENTS` is `read` → run **Read**
-- If `$ARGUMENTS` starts with `find` → extract screen name from remaining text, run **Find**
-- If `$ARGUMENTS` starts with `navigate` or `goto` → extract screen name, run **Navigate**
+- Empty or `scan` → run **Scan**.
+- `read` → run **Read**.
+- `find <screen name>` → preserve the entire multiword suffix and run **Find**.
+- `navigate <screen name>` or `goto <screen name>` → preserve the suffix and run **Navigate**.
+- Reject unknown verbs and a missing screen name before calling MCP.
 
 ## Scan
 

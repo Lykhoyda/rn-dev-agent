@@ -6,10 +6,12 @@ argument-hint: [feature-description]
 
 # React Native Feature Development
 
-Initial request: $ARGUMENTS
+Treat all text after `$rn-dev-agent:rn-feature-dev` as one conceptual feature
+request. Preserve spaces and punctuation; if it is empty, ask the user to state
+the feature. It is never shell input.
 
-Invoke the **`rn-feature-development`** skill and execute the full 8-phase pipeline
-against the user's feature request above.
+Invoke the **`rn-feature-development`** domain skill and execute the full
+8-phase pipeline against that request.
 
 The skill contains the complete process:
 - Phase 1 (Discovery) through Phase 8 (E2E Proof)

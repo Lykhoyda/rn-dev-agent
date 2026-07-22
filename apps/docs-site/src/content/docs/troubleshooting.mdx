@@ -73,10 +73,47 @@ Use `storeType: 'react-query'` explicitly. React Query state is read from the Qu
 
 ### Plugin not detected
 
-In Claude Code, run `/plugin install rn-dev-agent@rn-dev-agent` then
-`/reload-plugins`. For local development, Claude Code uses
-`claude --plugin-dir /path/to/rn-dev-agent`; Codex uses the plugin package path
-`/path/to/rn-dev-agent/packages/codex-plugin`.
+**Claude:** run `/plugin install rn-dev-agent@rn-dev-agent`, then
+`/reload-plugins`. Local development uses
+`claude --plugin-dir /path/to/rn-dev-agent`.
+
+**Codex:** inspect `codex plugin list --json` and `/mcp verbose`. The latter is
+inventory only, never reconnect. Local development uses
+`/path/to/rn-dev-agent/packages/codex-plugin`. If materialization is absent,
+user-confirm:
+
+```bash
+codex plugin marketplace upgrade rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent --json
+```
+
+Codex 0.145.0 is the live-refresh floor. A change made through the same running
+app can affect a subsequent turn; external CLI/manual changes and older hosts
+require exiting and relaunching Codex. Never kill a bridge owned by another
+Claude/Codex process.
+
+If the plugin is materialized but this task has no rn-dev-agent skills, invoke
+the package health program by the exact configured cache version:
+
+```bash
+VERSION="$(codex plugin list --json | jq -er \
+  '[.[] | select(.pluginId == "rn-dev-agent@rn-dev-agent" and .enabled != false)] | \
+   if length == 1 then .[0].version else error("expected one enabled rn-dev-agent row") end')"
+case "$VERSION" in (*[!0-9A-Za-z._+-]*|'') echo "invalid plugin version" >&2; exit 2;; esac
+PLUGIN_ROOT="${CODEX_HOME:-$HOME/.codex}/plugins/cache/rn-dev-agent/rn-dev-agent/$VERSION"
+test "$(jq -r '.name + "@" + .version' "$PLUGIN_ROOT/.codex-plugin/plugin.json")" = \
+  "rn-dev-agent@$VERSION" || exit 2
+node "$PLUGIN_ROOT/bin/plugin-health.js" --json
+```
+
+This fails closed on zero/multiple rows or a manifest mismatch and never runs
+`plugin add` just to discover a path. If the cache root is absent, the plugin is
+not materialized: review `codex plugin list --json` and user-confirm the install
+sequence instead.
+
+Health reports independent install/materialization/registration/contract/schema
+axes; unknown task facts are never called stale. It is read-only and does not
+attach to the app or change plugin/process state.
 
 ### /plugin command not found
 
@@ -84,7 +121,10 @@ Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code`
 
 ### Plugin skills not appearing
 
-Run `/reload-plugins` or clear cache: `rm -rf ~/.claude/plugins/cache`
+Claude: run `/reload-plugins` or clear its plugin cache. Codex: a supported
+same-app mutation should appear on a later turn; otherwise relaunch. A supported
+Codex install exposes exactly 25 rn-dev-agent skills and no
+`source-command-*` skills.
 
 ### Plugin update fails with ENOTEMPTY
 

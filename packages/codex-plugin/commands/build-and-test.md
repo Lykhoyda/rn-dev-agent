@@ -1,75 +1,71 @@
 ---
 command: build-and-test
-description: Build the Expo/React Native app (local or EAS), install on simulator/emulator, start Metro, then test the specified feature end-to-end.
+description: Build the Expo/React Native app (local or EAS), install it, start Metro, then test a requested feature end-to-end.
 argument-hint: "[--eas profile] [feature-description]"
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 ---
 
-Build the app and test this feature: $ARGUMENTS
+# Build and test
 
-## Run the build + test protocol INLINE (parent session)
+Treat all text after `$rn-dev-agent:build-and-test` as the conceptual **request**.
+Parse an optional leading `--eas <profile>` and preserve the remaining text as
+one feature description. Reject an unknown flag-position token or a missing EAS
+profile. If the description is empty, ask which flow to verify.
 
-> **Important (GH #31):** Do NOT spawn the `rn-tester` agent via the Task tool.
-> MCP tools (`cdp_*`, `device_*`) are not available in spawned subagents.
-> Execute the build + test protocol directly in this parent session.
+Resolve `<package-root>` from this workflow skill's exact `SKILL.md` path
+(`../..` from the skill directory). Never search Codex caches or use a
+plugin-root environment variable. Execute helpers by separately quoted argv;
+never interpolate the raw request into a shell command.
 
-Phase A — Build pre-flight (run in this session):
+## Run inline in the current task
 
-1. **Detect platform** — check booted devices via `device_list` or `xcrun simctl
-   list devices booted` / `adb devices`. Record the result as `<platform>` =
-   `ios` or `android` — every script below needs it as argument 1.
-2. **Check if app is already running** — call `cdp_status`. If `cdp.connected
-   == true` AND `app.dev == true`, skip to Phase B.
-3. **Build / install** (substitute `<platform>` with `ios` or `android`):
-   - **No `--eas` flag:** run the app's own build command from the target
-     workspace, usually `npx expo run:ios`, `npx expo run:android`, `yarn ios`,
-     or `yarn android`.
-   - **With `--eas` flag:** resolve the requested EAS artifact with the app's
-     configured EAS workflow, install it on the selected simulator/emulator, and
-     then continue with the same `cdp_status` verification below.
-   - **Source checkout only:** maintainers may use
-     `scripts/expo_ensure_running.sh` and `scripts/eas_resolve_artifact.sh`
-     from the rn-dev-agent repository root. Do not reference Claude-only
-     plugin-root variables from Codex workflows.
-4. **Start Metro** if not running (`npx expo start` in background, or instruct
-   user to start it).
-5. **Confirm CDP** — call `cdp_status` again, must return `ok:true`.
+MCP tools are not inherited by spawned subagents. Use `rn-device-control` and
+`rn-testing` as references and execute this protocol in the current task.
 
-Phase B — Run the rn-tester protocol (load `rn-testing` skill):
+### Phase A — build/install preflight
 
-Follow the same protocol as `/rn-dev-agent:test-feature`, INCLUDING its
-mandatory Step 0 — scan saved actions (`/rn-dev-agent:list-learned-actions`)
-and replay a matching flow BEFORE composing any `device_*` primitives — then
-environment check, understand the feature, plan, navigate, execute+verify,
-edge cases, generate persistent test.
+1. Require active `device_list` and `cdp_status` tools. If they are absent, stop
+   and route to the read-only discovery diagnosis.
+2. Select exactly one target platform/device. Stop on ambiguity.
+3. If `cdp_status` already reports the intended development app connected,
+   skip the build and continue to Phase B.
+4. Local mode: invoke the package helper with an argv array equivalent to:
+   `bash <package-root>/scripts/expo_ensure_running.sh <ios|android>`.
+5. EAS mode:
+   - validate profile with `[A-Za-z0-9_-]+`;
+   - invoke `bash <package-root>/scripts/eas_resolve_artifact.sh <platform> <profile>`;
+   - parse its JSON and require `status: ok` plus an absolute artifact path;
+   - invoke `bash <package-root>/scripts/expo_ensure_running.sh <platform> --artifact <path>`.
+6. Parse helper JSON and surface stable errors. Do not silently fall back from a
+   requested EAS build to local build.
+7. Call `cdp_status`; require `ok:true` and the intended app/device.
 
-## Verification (mandatory before declaring complete)
+The helpers own local Expo build, artifact install, app launch, and Metro
+startup behavior. They are packaged in both host plugins; installed behavior
+must never be narrowed to "use the app's own workflow".
 
-- [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` after Phase A
-- [ ] Every test assertion has concrete Evidence
-- [ ] At least one `device_screenshot` saved
-- [ ] `<test-app>/.rn-agent/actions/<feature>.yaml` written (auto-emitted on pass)
-- [ ] `cdp_error_log` shows 0 new errors at end
+### Phase B — test
+
+Follow the package-local `test-feature` workflow and `rn-testing` skill:
+
+1. Inventory reusable actions before any manual device primitive.
+2. Replay a full/partial matching action where applicable.
+3. Plan the novel test steps and expected results.
+4. Execute and verify UI, route/store/network state, screenshots, and errors.
+5. Persist or refresh a reusable action for the verified flow.
+
+## Completion gate
+
+- [ ] Intended app/device and platform are unambiguous.
+- [ ] `cdp_status` reports the intended app connected after Phase A.
+- [ ] Every assertion has concrete evidence.
+- [ ] At least one screenshot is saved.
+- [ ] A reusable action covers the tested feature.
+- [ ] No new app errors are present.
 
 ## Examples
 
+```text
+$rn-dev-agent:build-and-test shopping cart -- add item and verify badge
+$rn-dev-agent:build-and-test --eas development login screen
+$rn-dev-agent:build-and-test --eas preview payment flow
 ```
-/rn-dev-agent:build-and-test shopping cart -- local build, then test add-to-cart flow
-/rn-dev-agent:build-and-test --eas development login screen -- install EAS build, test auth
-/rn-dev-agent:build-and-test --eas preview payment flow -- test a specific EAS profile
-```
-
-## Build Modes
-
-| Mode | When | Command |
-|------|------|---------|
-| Local dev build | Default, no `--eas` flag | `npx expo run:ios` / `npx expo run:android` |
-| EAS artifact | `--eas` flag provided | Downloads from EAS, installs on simulator |
-| Skip build | App already running | Proceeds directly to testing |
-
-## Prerequisites
-
-- iOS Simulator or Android Emulator **booted** (not necessarily with app installed)
-- Expo project with `app.json` or `app.config.js/ts`
-- For EAS builds: `eas-cli` installed and logged in (`eas whoami`)
-- For local builds: native build tools (Xcode for iOS, Android SDK for Android)

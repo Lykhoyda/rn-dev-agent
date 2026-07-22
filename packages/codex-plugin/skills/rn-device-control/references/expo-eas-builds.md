@@ -17,12 +17,12 @@ Resolves an EAS build artifact through three tiers: local cache â†’ EAS server â
 
 ```bash
 # Auto-select profile, download artifact
-bash scripts/eas_resolve_artifact.sh ios
-bash scripts/eas_resolve_artifact.sh android
+bash <package-root>/scripts/eas_resolve_artifact.sh ios
+bash <package-root>/scripts/eas_resolve_artifact.sh android
 
 # Specify profile explicitly
-bash scripts/eas_resolve_artifact.sh ios development
-bash scripts/eas_resolve_artifact.sh android preview
+bash <package-root>/scripts/eas_resolve_artifact.sh ios development
+bash <package-root>/scripts/eas_resolve_artifact.sh android preview
 ```
 
 ### Exit codes
@@ -55,15 +55,15 @@ Ensures the app is installed, launched, and Metro is running.
 
 ```bash
 # Local dev build (builds from source, starts Metro)
-bash scripts/expo_ensure_running.sh ios
-bash scripts/expo_ensure_running.sh android
+bash <package-root>/scripts/expo_ensure_running.sh ios
+bash <package-root>/scripts/expo_ensure_running.sh android
 
 # Install EAS artifact
-bash scripts/expo_ensure_running.sh ios --artifact /tmp/rn-eas-builds/dev-ios.tar.gz
-bash scripts/expo_ensure_running.sh android --artifact /tmp/rn-eas-builds/dev-android.apk
+bash <package-root>/scripts/expo_ensure_running.sh ios --artifact /tmp/rn-eas-builds/dev-ios.tar.gz
+bash <package-root>/scripts/expo_ensure_running.sh android --artifact /tmp/rn-eas-builds/dev-android.apk
 
 # With explicit bundle ID and Metro port
-bash scripts/expo_ensure_running.sh ios --bundle-id com.example.app --metro-port 8081
+bash <package-root>/scripts/expo_ensure_running.sh ios --bundle-id com.example.app --metro-port 8081
 ```
 
 ### Exit codes
@@ -93,12 +93,12 @@ bash scripts/expo_ensure_running.sh ios --bundle-id com.example.app --metro-port
 
 ```bash
 # Full EAS workflow: resolve artifact, then install and run
-RESULT=$(bash scripts/eas_resolve_artifact.sh ios development)
+RESULT=$(bash <package-root>/scripts/eas_resolve_artifact.sh ios development)
 ARTIFACT=$(echo "$RESULT" | jq -r '.path')
-bash scripts/expo_ensure_running.sh ios --artifact "$ARTIFACT"
+bash <package-root>/scripts/expo_ensure_running.sh ios --artifact "$ARTIFACT"
 
 # Simple local build: just build and run
-bash scripts/expo_ensure_running.sh android
+bash <package-root>/scripts/expo_ensure_running.sh android
 ```
 
 ## Metro Start Behavior

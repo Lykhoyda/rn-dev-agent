@@ -15,7 +15,7 @@ import { Steps } from '@astrojs/starlight/components';
 | iOS Simulator or Android Emulator | At least one platform |
 | Metro dev server running | `npx expo start` or `npx react-native start` |
 
-**maestro-runner** is auto-installed on first plugin load in Claude Code (via the SessionStart hook); on Codex, run `/rn-dev-agent:setup` once to install and verify it. Device control ships in-tree — the `rn-fast-runner` (iOS) and `rn-android-runner` (Android) runners build/install on first use; no external CLI is required. If anything is missing, run `/rn-dev-agent:setup` for guided diagnostics with manual fallback instructions.
+**maestro-runner** is auto-installed on first plugin load in Claude Code (via its SessionStart hook). In Codex, invoke `$rn-dev-agent:setup`; its diagnosis phase is strictly read-only and later project changes are previewed for consent. Device control ships in-tree through the iOS/Android runners. Use the matching host setup workflow for guided remediation.
 
 ## Installation
 
@@ -64,12 +64,12 @@ Install from the marketplace (recommended):
 
 ```bash
 codex plugin marketplace add Lykhoyda/rn-dev-agent
-codex plugin add rn-dev-agent@rn-dev-agent
+codex plugin add rn-dev-agent@rn-dev-agent --json
 ```
 
 The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
 `packages/codex-plugin/`, and the installed plugin is fully self-contained
-(bundled MCP runtime, native runner sources, runner manifest).
+(bundled MCP runtime, native runner sources, workflow helpers, health program, and runner manifest).
 
 For a local checkout instead, Codex uses a separate package directory:
 
@@ -83,27 +83,33 @@ When installing locally through Codex, select or register
 `.mcp.json`, the package-local skills, and the bundled MCP runtime at
 `rn-dev-agent-core/dist/supervisor.js`.
 
-Codex does not load Claude Code hooks. If the Codex plugin detail screen says
-`No plugin hooks`, that is expected; the active Codex surfaces are skills plus
-the `cdp` MCP server.
+Codex does not load Claude Code hooks. If the detail screen says `No plugin
+hooks`, that is expected. Codex exposes the `cdp` MCP server, ten domain skills,
+and fifteen explicit workflow skills (25 total):
 
-After installing, navigate to your React Native project and run the setup check:
-
-```
-/rn-dev-agent:setup
+```text
+$rn-dev-agent:setup
 ```
 
-This walks all 16 prerequisite checks, retries failed installations, and gives manual instructions for anything it can't fix automatically.
+Codex 0.145.0 is the live-refresh floor. Older hosts are restart-only. A
+same-app install/enable can update a subsequent turn; external CLI/manual
+changes require exiting and relaunching Codex. `/mcp verbose` inspects inventory
+only.
+
+Codex setup first runs multi-axis read-only health, then manages a sentinel-
+bounded `AGENTS.md` block and other project wiring only after preview/consent.
+Claude setup continues to manage `CLAUDE.md`.
 
 ### Keeping up to date
 
-Enable auto-update in the plugin manager (Marketplaces tab). With auto-update enabled, Claude Code checks for new versions at startup.
+Enable auto-update in the host plugin manager. Manual update:
 
-Manual update:
-
-```bash
-/plugin update rn-dev-agent@rn-dev-agent
-/reload-plugins
+```text
+Claude: /plugin update rn-dev-agent@rn-dev-agent
+        /reload-plugins
+Codex:  codex plugin marketplace upgrade rn-dev-agent
+        codex plugin add rn-dev-agent@rn-dev-agent --json
+        # relaunch after this external mutation
 ```
 
 ## What happens after install

@@ -7,8 +7,9 @@ Run the [Vercel Labs agent-skills](https://github.com/vercel-labs/agent-skills) 
 
 ## Usage
 
-```
-/rn-dev-agent:check-vercel-rules [--all | --changed [files...] | --ci | --baseline-snapshot] [--format hook|json|sarif]
+```text
+Claude: /rn-dev-agent:check-vercel-rules [options]
+Codex:  $rn-dev-agent:check-vercel-rules [options]
 ```
 
 ## Modes
@@ -26,11 +27,13 @@ Run the [Vercel Labs agent-skills](https://github.com/vercel-labs/agent-skills) 
 
 The same underlying checker runs in three places:
 
-1. **PostToolUse hook** — automatic, per edited file, during agent sessions.
-2. **This command** — manual, project- or changed-files-scoped.
+1. **Claude PostToolUse hook** — automatic and per edited file; Codex does not consume it.
+2. **This host workflow** — manual, project- or changed-files-scoped.
 3. **CI / pre-ship gating** — `--ci` blocks on violations.
 
-Each reported violation cites a rule ID and points at the upstream rule file for the explanation and fix. Retrofitting an existing codebase? Take a `--baseline-snapshot` first so only new violations surface.
+The checker and rules index ship inside both host packages, so installed Codex
+workflows do not depend on an rn-dev-agent source checkout. Each violation cites
+packaged rule metadata and upstream provenance. Retrofitting an existing codebase? Take a `--baseline-snapshot` first so only new violations surface.
 
 ## See also
 

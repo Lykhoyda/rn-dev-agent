@@ -35,6 +35,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // === Rule definitions (v1.0 — 3 grep checkers per spec §5 Layer 4) ===
 //
@@ -44,6 +45,30 @@ import path from 'node:path';
 
 function lineOf(content, idx) {
   return content.slice(0, idx).split('\n').length;
+}
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const packagedIndexCandidates = [
+  path.join(scriptDir, '..', 'skills', 'rn-best-practices', 'rules.index.json'),
+  path.join(
+    scriptDir,
+    '..',
+    'packages',
+    'shared-agent-knowledge',
+    'skills',
+    'rn-best-practices',
+    'rules.index.json',
+  ),
+];
+let packagedRuleIndex = new Map();
+for (const candidate of packagedIndexCandidates) {
+  try {
+    const entries = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+    packagedRuleIndex = new Map(entries.map((entry) => [entry.id, entry]));
+    break;
+  } catch {
+    // Try the next installed/source-checkout layout.
+  }
 }
 
 const RULES = [
@@ -273,6 +298,7 @@ function checkFile(filePath, baseline) {
         upstream_path: rule.upstream_path,
         severity: rule.severity,
         message: v.message,
+        rule_metadata: packagedRuleIndex.get(rule.upstream_id) ?? null,
       });
     }
   }
@@ -288,10 +314,13 @@ function formatHook(violations) {
   for (const v of violations.slice(0, 8)) {
     const rel = path.relative(cwd, v.file);
     out += `  - [${v.rule_id}] ${rel}:${v.line} — ${v.message}\n`;
-    out += `      see: ${v.upstream_path}\n`;
+    const metadata = v.rule_metadata;
+    out += metadata
+      ? `      rule: ${metadata.id} — ${metadata.title} (${metadata.applicable_when})\n`
+      : `      rule provenance: ${v.upstream_id}\n`;
   }
   if (violations.length > 8) {
-    out += `  ... and ${violations.length - 8} more (run /check-vercel-rules for full audit)\n`;
+    out += `  ... and ${violations.length - 8} more (run the check-vercel-rules workflow for a full audit)\n`;
   }
   return out;
 }
