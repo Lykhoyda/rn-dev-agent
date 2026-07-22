@@ -15,17 +15,25 @@ Build the app and test this feature: $ARGUMENTS
 
 Phase A — Build pre-flight (run in this session):
 
-1. **Detect platform** — check booted devices via `device_list` or `xcrun simctl
-   list devices booted` / `adb devices`. Record the result as `<platform>` =
-   `ios` or `android` — every script below needs it as argument 1.
+1. **Detect platform and exact device** — check booted devices via `device_list`
+   first, or `xcrun simctl list devices booted` / `adb devices` only when the MCP
+   tool is unavailable. Select exactly one target, then retain `<platform>` and
+   its exact iOS UDID or Android serial as `<device-id>`. Stop on ambiguity.
 2. **Check if app is already running** — call `cdp_status`. If `cdp.connected
    == true` AND `app.dev == true`, skip to Phase B.
 3. **Build / install** (substitute `<platform>` with `ios` or `android`):
-   - **No `--eas` flag:** run `bash $CLAUDE_PLUGIN_ROOT/../../scripts/expo_ensure_running.sh <platform>`
+   - **No `--eas` flag:** run
+     `bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>"`
      which triggers `npx expo run:ios` or `npx expo run:android` (local build).
-   - **With `--eas` flag:** run `bash $CLAUDE_PLUGIN_ROOT/../../scripts/eas_resolve_artifact.sh <platform> <profile>`
-     to find the artifact, then `bash $CLAUDE_PLUGIN_ROOT/../../scripts/expo_ensure_running.sh <platform> --artifact <path>`
-     to install.
+   - **With `--eas` flag:** enter one shell scope, create `<artifact-dir>` with
+     `artifact_dir=$(mktemp -d)`, and immediately register
+     `trap 'rm -rf -- "$artifact_dir"' EXIT` in that same scope. Then run
+     `bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" "<platform>" "<profile>" "<artifact-dir>"`,
+     parse a successful absolute artifact path, and run
+     `bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>" --artifact "<path>"`.
+     Keep resolution and installation inside the trapped scope so every success
+     or failure path cleans only that exact caller-owned directory after the
+     install attempt.
 4. **Start Metro** if not running (`npx expo start` in background, or instruct
    user to start it).
 5. **Confirm CDP** — call `cdp_status` again, must return `ok:true`.

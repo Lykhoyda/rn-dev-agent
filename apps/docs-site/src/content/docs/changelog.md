@@ -5,6 +5,42 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.70.9
+
+#### Patch Changes
+
+- 0e36a39: Classify WDA bootstrap failures from full structured replay evidence without adding preparation side effects.
+- 0e36a39: Close final issue #588 validation gaps by failing closed when iOS runner authority is lost after typing, reaching Bridgeless keyboard blur, honoring exact active-session lifecycle identity, accepting the packaged Codex supervisor as candidate authority, and exposing per-call blind-probe compatibility control.
+- 0e36a39: Close issue #588 live-validation gaps with exactly-once keyboard recovery, propagated iOS fault controls, non-rewriting action telemetry, explicit replay evidence, and device/app-scoped native logs.
+- 0e36a39: Bind Maestro replays to the exact active device, reject mismatched direct runner or WDA provenance, and persist RunRecord device identity from execution evidence instead of requested metadata.
+- 0e36a39: Guard taps with versioned fresh keyboard geometry and dismiss visible keyboards before unknown-geometry interactions.
+- 0e36a39: Let each iOS XCTest runner request an OS-assigned listener port so parallel simulators cannot collide on port 22088, and make listener startup failures fail XCTest instead of producing a misleading passing result.
+- 0e36a39: Launch exact Android sessions on keyless AVDs and report app-launch failures separately from runner startup failures.
+- 0e36a39: Allow successful action replays to append runtime telemetry when only the tracked YAML mtime baseline is stale, while retaining sidecar CAS conflict detection and strict guards for every YAML-mutating promotion or repair.
+- 0e36a39: Prove Bridgeless app identity from canonical Metro metadata and prevent agent prompt text from impersonating foreign iOS runners.
+- 0e36a39: Accept exact, unambiguous maestro-runner device identity from its pinned-device log and structured report, and scope Android app lifecycle to the active session's exact adb serial, while continuing to reject missing, contradictory, shared, or multi-device evidence.
+- 0e36a39: Refuse explicit and session-derived CDP platform mismatches while retaining warned best-available filterless discovery.
+- 0e36a39: Restore actionable component-state truncation and tree scan-budget diagnostics without expanding tool schemas.
+- 0e36a39: Scope iOS attach-only app liveness checks to the resolved simulator UDID instead of the ambiguous `booted` alias, and refuse when exact device identity is unavailable.
+- 0e36a39: Bind strict cross-repository proof receipts to both the app fixture and the exact packaged plugin runtime.
+- 0e36a39: Require exact independent readback for iOS type-timeout recovery and poison and reap the wedged runner.
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+- Updated dependencies [0e36a39]
+  - rn-dev-agent-core@0.65.7
+
 ### 0.70.8
 
 #### Patch Changes
@@ -1160,6 +1196,26 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.65.7
+
+#### Patch Changes
+
+- 0e36a39: Classify WDA bootstrap failures from full structured replay evidence without adding preparation side effects.
+- 0e36a39: Close final issue #588 validation gaps by failing closed when iOS runner authority is lost after typing, reaching Bridgeless keyboard blur, honoring exact active-session lifecycle identity, accepting the packaged Codex supervisor as candidate authority, and exposing per-call blind-probe compatibility control.
+- 0e36a39: Close issue #588 live-validation gaps with exactly-once keyboard recovery, propagated iOS fault controls, non-rewriting action telemetry, explicit replay evidence, and device/app-scoped native logs.
+- 0e36a39: Bind Maestro replays to the exact active device, reject mismatched direct runner or WDA provenance, and persist RunRecord device identity from execution evidence instead of requested metadata.
+- 0e36a39: Guard taps with versioned fresh keyboard geometry and dismiss visible keyboards before unknown-geometry interactions.
+- 0e36a39: Let each iOS XCTest runner request an OS-assigned listener port so parallel simulators cannot collide on port 22088, and make listener startup failures fail XCTest instead of producing a misleading passing result.
+- 0e36a39: Launch exact Android sessions on keyless AVDs and report app-launch failures separately from runner startup failures.
+- 0e36a39: Allow successful action replays to append runtime telemetry when only the tracked YAML mtime baseline is stale, while retaining sidecar CAS conflict detection and strict guards for every YAML-mutating promotion or repair.
+- 0e36a39: Prove Bridgeless app identity from canonical Metro metadata and prevent agent prompt text from impersonating foreign iOS runners.
+- 0e36a39: Accept exact, unambiguous maestro-runner device identity from its pinned-device log and structured report, and scope Android app lifecycle to the active session's exact adb serial, while continuing to reject missing, contradictory, shared, or multi-device evidence.
+- 0e36a39: Refuse explicit and session-derived CDP platform mismatches while retaining warned best-available filterless discovery.
+- 0e36a39: Restore actionable component-state truncation and tree scan-budget diagnostics without expanding tool schemas.
+- 0e36a39: Scope iOS attach-only app liveness checks to the resolved simulator UDID instead of the ambiguous `booted` alias, and refuse when exact device identity is unavailable.
+- 0e36a39: Bind strict cross-repository proof receipts to both the app fixture and the exact packaged plugin runtime.
+- 0e36a39: Require exact independent readback for iOS type-timeout recovery and poison and reap the wedged runner.
 
 ### 0.65.6
 

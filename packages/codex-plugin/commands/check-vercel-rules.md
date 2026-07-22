@@ -1,68 +1,52 @@
 ---
 command: check-vercel-rules
-description: Run the Vercel Labs agent-skills rule audit on the current project. Default scans changed files; pass --all for full project, --ci for CI-mode (exits 1 on violations).
+description: Run the packaged Vercel Labs agent-skills rule audit on the current project.
 argument-hint: "[--all | --ci | --baseline-snapshot] [--format hook|json|sarif]"
-allowed-tools: Bash, Read
 ---
 
-Run the Vercel rule audit: $ARGUMENTS
+# Check Vercel rules
 
-## Why this command exists
+Treat the text after `$rn-dev-agent:check-vercel-rules` as a conceptual request
+and parse it into an argv array. Never pass the raw request through a shell.
 
-The PostToolUse audit hook (`hooks/vercel-rules-audit.sh`) checks rules on
-single-file edits during a session. This command runs the same checker
-across a broader scope — the whole project, just changed files, or for
-CI/pre-ship gating — and emits the chosen output format.
+Resolve `<package-root>` from the invoking skill's exact `SKILL.md` path and run:
 
-It wraps `scripts/check-vercel-rules.mjs`. Same checker, three call sites:
-- PostToolUse hook (per edit, automatic)
-- This slash command (manual, project-scoped)
-- pre-ship-checker integration (CI, blocks on violations)
-
-## Modes
-
-| Argument | Behavior |
-|---|---|
-| (none) | `--all` walk of cwd; reports violations; exit 0 |
-| `--changed [files...]` | Check only specified files (or stdin one-per-line) |
-| `--all` | Walk cwd for `.tsx/.jsx/.ts/.js`; max 200 files |
-| `--ci` | Same as `--all` but exits 1 on any violation (use in pre-commit/CI) |
-| `--baseline-snapshot` | Write current violations to baseline path; exit 0 |
-| `--format hook\|json\|sarif` | Output shape (default `hook`) |
-
-## Run
-
-```bash
-# Default: --all on cwd, hook-format output
-if [[ -z "$ARGUMENTS" ]]; then
-  node scripts/check-vercel-rules.mjs --all
-else
-  node scripts/check-vercel-rules.mjs $ARGUMENTS
-fi
+```text
+node <package-root>/scripts/check-vercel-rules.mjs <validated argv...>
 ```
 
-This command is source-checkout only. Installed Codex plugins do not carry the
-repository maintenance scripts; skip it unless the current workspace is the
-rn-dev-agent repository.
+The checker is packaged and works in consumer projects. Do not require an
+rn-dev-agent source checkout or cite missing `third_party/` files as the only
+rule documentation; packaged rule metadata lives at
+`<package-root>/skills/rn-best-practices/rules.index.json`.
 
-## After the run
+## Accepted grammar
 
-- **No violations** → no output. The repo is clean against the v1.0
-  grep-checker subset.
-- **Violations reported** → each line cites a rule ID and points to the
-  upstream rule file under `third_party/vercel-labs/agent-skills/skills/...`
-  for the full explanation + fix.
-- **Want to suppress legacy violations?** Run
-  `/rn-dev-agent:check-vercel-rules --baseline-snapshot` to snapshot the
-  current set; subsequent runs (and the PostToolUse hook) will only report
-  NEW violations. Critical for retrofit on existing codebases.
-- **Want SARIF for GitHub code-scanning?** Use `--format sarif`; the output
-  conforms to SARIF 2.1.0 and uploads cleanly to the Code Scanning API.
+- Empty request: pass `--all` explicitly (never wait on stdin).
+- One mode: `--changed [files...]`, `--all`, or `--ci`.
+- `--baseline-snapshot`.
+- `--format hook|json|sarif`.
+- `--baseline <path>`, `--no-baseline`, `--max <positive integer>`, `--quiet`.
+- `--` ends flags and makes following values changed-file paths.
 
-## Reference
+Reject unknown flags, missing values, conflicting modes, invalid formats, and
+non-positive `--max`. Preserve each changed path as one argv element, including
+paths with spaces. Baseline snapshot is the workflow's deliberate project write;
+show the destination before running it.
 
-- Spec: `docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md`
-- v1.0 checker scope (3 grep rules): `skills/rn-best-practices/SKILL.md` §
-  Verification surface
-- Full rule corpus: `skills/rn-best-practices/rules.index.json` (118 rules)
-- Upstream content: `third_party/vercel-labs/agent-skills/`
+## Results
+
+- No violations: report clean scope and mode.
+- Violations: report rule ID, file/line, severity, and packaged rule metadata.
+- `--ci`: preserve checker exit 1 on violations.
+- Other valid modes: preserve their documented exit behavior.
+- Exit 2 means invalid arguments; exit 3 means checker failure.
+
+## Examples
+
+```text
+$rn-dev-agent:check-vercel-rules
+$rn-dev-agent:check-vercel-rules --ci --format sarif
+$rn-dev-agent:check-vercel-rules --changed "src/My Screen.tsx"
+$rn-dev-agent:check-vercel-rules --baseline-snapshot
+```

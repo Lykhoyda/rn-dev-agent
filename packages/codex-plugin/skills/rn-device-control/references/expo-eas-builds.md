@@ -1,6 +1,6 @@
 # Expo/EAS Build Integration
 
-Two scripts handle building, installing, and launching Expo apps automatically.
+Two package-local scripts handle building, installing, and launching Expo apps automatically.
 
 ## Decision Table
 
@@ -16,13 +16,15 @@ Two scripts handle building, installing, and launching Expo apps automatically.
 Resolves an EAS build artifact through three tiers: local cache → EAS server → manual.
 
 ```bash
-# Auto-select profile, download artifact
-bash scripts/eas_resolve_artifact.sh ios
-bash scripts/eas_resolve_artifact.sh android
+# Auto-select profile, download artifact into a private caller-owned directory
+ARTIFACT_DIR=$(mktemp -d)
+trap 'rm -rf -- "$ARTIFACT_DIR"' EXIT
+bash "<package-root>/scripts/eas_resolve_artifact.sh" ios "" "$ARTIFACT_DIR"
+bash "<package-root>/scripts/eas_resolve_artifact.sh" android "" "$ARTIFACT_DIR"
 
 # Specify profile explicitly
-bash scripts/eas_resolve_artifact.sh ios development
-bash scripts/eas_resolve_artifact.sh android preview
+bash "<package-root>/scripts/eas_resolve_artifact.sh" ios development "$ARTIFACT_DIR"
+bash "<package-root>/scripts/eas_resolve_artifact.sh" android preview "$ARTIFACT_DIR"
 ```
 
 ### Exit codes
@@ -38,8 +40,28 @@ bash scripts/eas_resolve_artifact.sh android preview
 ### Stdout (exit 0)
 
 ```json
-{"status":"ok","path":"/tmp/rn-eas-builds/development-ios.tar.gz","source":"cache"}
+{"status":"ok","path":"/private/path/development-ios-A1b2C3.tar.gz","source":"cache"}
 ```
+
+### Private cache contract
+
+Each successful EAS download is published once as an immutable tokenized file:
+
+```text
+ARTIFACT_DIR/
+├── .eas-cache-<project-id>-development-ios-A1b2C3.json
+└── development-ios-A1b2C3.tar.gz
+```
+
+The owner-only `0600` sidecar records the exact Expo/EAS project ID, profile,
+platform, EAS build ID, remote completion or creation timestamp, and paired
+artifact name. Cache reuse is enabled only when the project ID is statically
+provable from Expo JSON metadata; dynamic or missing project identity skips the
+cache and performs a fresh EAS lookup. The resolver validates every immutable
+sidecar and paired fresh, nonempty, owner-controlled regular file, then chooses
+the newest remote build timestamp and ID deterministically. Both files remain
+immediate children of the private `0700` artifact directory, and previously
+returned paths are never replaced or modified.
 
 ### EAS profile auto-selection rules
 
@@ -55,15 +77,15 @@ Ensures the app is installed, launched, and Metro is running.
 
 ```bash
 # Local dev build (builds from source, starts Metro)
-bash scripts/expo_ensure_running.sh ios
-bash scripts/expo_ensure_running.sh android
+bash "<package-root>/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID"
+bash "<package-root>/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL"
 
 # Install EAS artifact
-bash scripts/expo_ensure_running.sh ios --artifact /tmp/rn-eas-builds/dev-ios.tar.gz
-bash scripts/expo_ensure_running.sh android --artifact /tmp/rn-eas-builds/dev-android.apk
+bash "<package-root>/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --artifact "$ARTIFACT"
+bash "<package-root>/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL" --artifact "$ARTIFACT"
 
 # With explicit bundle ID and Metro port
-bash scripts/expo_ensure_running.sh ios --bundle-id com.example.app --metro-port 8081
+bash "<package-root>/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --bundle-id com.example.app --metro-port 8081
 ```
 
 ### Exit codes
@@ -79,26 +101,28 @@ bash scripts/expo_ensure_running.sh ios --bundle-id com.example.app --metro-port
 ### Stdout (exit 0)
 
 ```json
-{"status":"ok","metro_port":8081,"platform":"ios","installed_fresh":true}
+{"status":"ok","metro_port":8081,"platform":"ios","device_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","installed_fresh":true}
 ```
 
 ### Artifact handling
 
-- iOS `.tar.gz`: extracts, finds `.app` directory inside, `xcrun simctl install booted`
+- iOS `.tar.gz`: extracts, finds `.app` directory inside, and installs on the selected UDID
 - iOS `.app`: copies and installs directly
-- Android `.apk`: `adb install -r`
+- Android `.apk`: installs through `adb -s <serial>`
 - Android `.aab`: rejected (cannot sideload, exit 3)
 
 ## Combined Workflow Example
 
 ```bash
 # Full EAS workflow: resolve artifact, then install and run
-RESULT=$(bash scripts/eas_resolve_artifact.sh ios development)
+ARTIFACT_DIR=$(mktemp -d)
+trap 'rm -rf -- "$ARTIFACT_DIR"' EXIT
+RESULT=$(bash "<package-root>/scripts/eas_resolve_artifact.sh" ios development "$ARTIFACT_DIR")
 ARTIFACT=$(echo "$RESULT" | jq -r '.path')
-bash scripts/expo_ensure_running.sh ios --artifact "$ARTIFACT"
+bash "<package-root>/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --artifact "$ARTIFACT"
 
 # Simple local build: just build and run
-bash scripts/expo_ensure_running.sh android
+bash "<package-root>/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL"
 ```
 
 ## Metro Start Behavior

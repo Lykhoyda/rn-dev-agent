@@ -59,16 +59,16 @@ test('Codex ships a discoverable feedback skill and package-local collector', as
       text('packages/codex-plugin/commands/send-feedback.md'),
     ]);
 
-  assert.equal(codexSkill, canonicalSkill);
+  assert.notEqual(codexSkill, canonicalSkill, 'Codex skill is an intentional host adaptation');
   assert.equal(codexCollector, canonicalCollector);
   assert.equal(claudeCollector, canonicalCollector);
   assert.match(codexSkill, /^name: sending-feedback$/m);
-  assert.match(
+  assert.match(codexSkill, /\.\.\/\.\.\/scripts\/collect-feedback\.sh/);
+  assert.match(command, /<package-root>\/scripts\/collect-feedback\.sh/);
+  assert.doesNotMatch(
     command,
-    /\$\{RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-\$\{CODEX_PLUGIN_ROOT:-\$\{CLAUDE_PLUGIN_ROOT:-\}\}\}/,
+    /RN_DEV_AGENT_CODEX_PLUGIN_ROOT|CODEX_PLUGIN_ROOT|CLAUDE_PLUGIN_ROOT/,
   );
-  assert.match(command, /plugins\/cache/);
-  assert.match(command, /\| sort -V \| tail -n 1/);
-  assert.doesNotMatch(command, /-print -quit/);
-  assert.match(command, /scripts\/collect-feedback\.sh/);
+  assert.doesNotMatch(command, /plugins\/cache|sort -V|-print -quit/);
+  assert.match(command, /collision-safe private temporary body file/);
 });

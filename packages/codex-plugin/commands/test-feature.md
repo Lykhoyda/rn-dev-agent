@@ -2,10 +2,12 @@
 command: test-feature
 description: Test a React Native feature on the running simulator/emulator. Verifies UI, user flows, and internal state. Generates a persistent Maestro test file.
 argument-hint: [feature-description]
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 ---
 
-Test this React Native feature: $ARGUMENTS
+Treat all text after `$rn-dev-agent:test-feature` as one conceptual feature
+request. Preserve spaces/punctuation; ask for a missing description. It is
+never shell input. Require the active `cdp`/device canaries and stop for
+read-only discovery diagnosis when they are absent.
 
 ## Run the rn-tester protocol INLINE (parent session)
 
@@ -22,8 +24,8 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    `../rn-dev-agent-workspace/test-app/.rn-agent/actions/`. For each candidate,
    read the file header / appId and decide if it matches the requested
    feature by:
-   - filename keyword overlap with `$ARGUMENTS`
-   - first-comment-block intent overlap with `$ARGUMENTS`
+   - filename keyword overlap with the conceptual feature request
+   - first-comment-block intent overlap with the conceptual feature request
    - **`produces:` overlap with the goal state** (D1209) — an action whose
      `produces` includes the state your task requires (e.g.
      `authenticated: true` when the task needs an authenticated session)
@@ -31,7 +33,7 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
      task. See "Hybrid composition" in CLAUDE-MD-TEMPLATE for the loop.
    If a **full match** exists, **REPLAY IT FIRST** — but call `cdp_status`
    once before any replay (the environment gate applies to replays too, not
-   just manual walks; if it fails, route to `/rn-dev-agent:setup` instead of
+   just manual walks; if it fails, route to `$rn-dev-agent:setup` instead of
    running a doomed flow). Then:
    ```bash
    maestro-runner --platform <ios|android> test -e KEY=VAL "<flow-path>"
@@ -54,11 +56,11 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
    Falling back to `device_*` walks WITHOUT having tried existing flows
    (full or partial) is a captured anti-pattern (see
    `feedback_execute_artifacts_before_manual.md` in auto-memory). Run
-   `/rn-dev-agent:list-learned-actions` if you want to inspect the
+   `$rn-dev-agent:list-learned-actions` if you want to inspect the
    inventory — the `Produces` column shows what state each action
    establishes.
 1. **Environment check** — call `cdp_status`. If it fails, stop and tell the
-   user to run `/rn-dev-agent:setup`.
+   user to run `$rn-dev-agent:setup`.
 2. **Understand the feature** — read implementation files, find testIDs, routes,
    store slices.
 3. **Plan the test** — write test steps and expected outcomes BEFORE executing.
@@ -105,9 +107,9 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
 ## Examples
 
 ```
-/rn-dev-agent:test-feature shopping cart -- add items, see badge, checkout
-/rn-dev-agent:test-feature user authentication -- login, persist session, logout
-/rn-dev-agent:test-feature profile screen -- edit name, upload photo, save
+$rn-dev-agent:test-feature shopping cart -- add items, see badge, checkout
+$rn-dev-agent:test-feature user authentication -- login, persist session, logout
+$rn-dev-agent:test-feature profile screen -- edit name, upload photo, save
 ```
 
 ## Prerequisites

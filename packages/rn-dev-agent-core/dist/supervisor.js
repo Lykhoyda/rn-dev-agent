@@ -56,7 +56,7 @@ else {
         }
     }
     function spawnWorker() {
-        const child = spawn(process.execPath, workerSpawnArgs(workerPath), {
+        const child = spawn(process.execPath, workerSpawnArgs(workerPath, undefined, process.argv.slice(2)), {
             stdio: ['pipe', 'pipe', 'inherit'],
             env: {
                 ...process.env,

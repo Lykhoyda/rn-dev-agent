@@ -1,10 +1,12 @@
 ---
 command: check-env
 description: Check that the React Native development environment is ready for testing -- Metro running, app loaded, CDP connected, no active errors.
-allowed-tools: Bash, Read, Grep, mcp__*cdp__*
 ---
 
-Run `cdp_status` and report environment readiness.
+This is an explicitly active readiness workflow, not the passive recovery
+doctor. Require `cdp_status` and `device_list` in the active task; when absent,
+stop for read-only discovery diagnosis. Call `cdp_status` and report environment
+readiness for the intended app/device.
 
 Check each subsystem and report status as a table:
 
@@ -24,7 +26,7 @@ If issues are found, suggest the appropriate fix:
 | Metro not found | `npx expo start` or `npx react-native start` |
 | No Hermes target | Open the app on the simulator |
 | CDP code 1006 | Close React Native DevTools, Flipper, Chrome DevTools |
-| hasRedBox: true | Run `/rn-dev-agent:debug-screen` |
+| hasRedBox: true | Run `$rn-dev-agent:debug-screen` |
 | isPaused: true | Remove `debugger;` statements or use `cdp_reload` |
 | fiberTree: false | Only works in `__DEV__` builds with Hermes |
 | No devices in device_list | Boot a simulator: `xcrun simctl boot "iPhone 16"` or start an emulator |

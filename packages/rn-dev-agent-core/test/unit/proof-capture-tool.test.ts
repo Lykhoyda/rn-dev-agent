@@ -16,6 +16,7 @@ import {
 import {
   createProofCaptureHandler,
   proofCaptureInputSchema,
+  proofCapturePublishedInputSchema,
   writeProofReceiptAtomic,
   type ProofCaptureArgs,
   type ProofCaptureDeps,
@@ -614,7 +615,35 @@ test('strict action schemas reject unknown and cross-action fields', () => {
   assert.equal(proofCaptureInputSchema.safeParse(beginArgs()).success, true);
 });
 
-test('trackedTool preserves raw-shape registration and uses full-schema registration for proof', async () => {
+test('published proof schema is an object superset while handler schema stays branch-strict', () => {
+  const published = proofCapturePublishedInputSchema.safeParse({
+    action: 'status',
+    projectRoot: '/tmp/publication-superset',
+  });
+  assert.equal(published.success, true);
+  assert.equal(
+    proofCaptureInputSchema.safeParse({
+      action: 'status',
+      projectRoot: '/tmp/publication-superset',
+    }).success,
+    false,
+  );
+  const actions = proofCapturePublishedInputSchema.shape.action.options;
+  assert.deepEqual(actions, [
+    'begin_rehearsal',
+    'finish_rehearsal',
+    'arm',
+    'start_recording',
+    'stop_recording',
+    'validate',
+    'finalize',
+    'status',
+    'discard',
+    'contract',
+  ]);
+});
+
+test('trackedTool preserves raw-shape registration and uses published object schema for proof', async () => {
   const source = await readFile(resolve(CORE_ROOT, 'src/index.ts'), 'utf8');
   const start = source.indexOf('function trackedTool(');
   const end = source.indexOf('\n}\n\ntrackedTool(', start) + 2;
@@ -622,7 +651,7 @@ test('trackedTool preserves raw-shape registration and uses full-schema registra
   assert.match(trackedToolSource, /schema instanceof z\.ZodType/);
   assert.match(trackedToolSource, /server\.tool\(/);
   assert.match(trackedToolSource, /server\.registerTool\(/);
-  assert.match(source, /proofCaptureInputSchema,\s*proofCaptureHandler/);
+  assert.match(source, /proofCapturePublishedInputSchema,\s*proofCaptureHandler/);
 });
 
 test('begin rejects root and artifact path attacks before monitor, recording, or file IO', async (t) => {

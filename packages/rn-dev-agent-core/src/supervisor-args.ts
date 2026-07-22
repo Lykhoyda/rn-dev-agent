@@ -37,6 +37,13 @@ export function sqliteFlagForNode(version?: string): string[] {
  * Node VM flags come first (so they are interpreted by Node, not the script),
  * then the worker script path, then `--no-lock` (worker-level flag).
  */
-export function workerSpawnArgs(workerPath: string, version?: string): string[] {
-  return [...sqliteFlagForNode(version), workerPath, '--no-lock'];
+export function workerSpawnArgs(
+  workerPath: string,
+  version?: string,
+  forwardedArgs: readonly string[] = [],
+): string[] {
+  const diagnosticArgs = forwardedArgs.includes('--diagnostic-contract-probe')
+    ? ['--diagnostic-contract-probe']
+    : [];
+  return [...sqliteFlagForNode(version), workerPath, '--no-lock', ...diagnosticArgs];
 }

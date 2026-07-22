@@ -15,6 +15,10 @@
 #   packages/codex-plugin/bin/cdp-supervisor.js — shipped launcher; must be
 #     plain .js so `node <file>` works on every supported Node 22.x (a .ts
 #     extension hard-fails before 22.18 regardless of content)
+#   packages/codex-plugin/bin/plugin-health.js — esbuild output owned by
+#     build-host-runtimes.ts; source is packages/codex-plugin/src/plugin-health.ts
+#   packages/codex-plugin/scripts/check-vercel-rules.mjs — generated copy of
+#     the grandfathered root checker, byte-checked by package sync
 #   **/web-dist/               — vite bundle output
 #   .yarn/releases/            — pinned Yarn binary selected by yarnPath
 #   third_party/               — vendored upstream
@@ -37,7 +41,7 @@ if [ ! -f "$BASELINE" ]; then
 fi
 
 current="$(git -C "$ROOT" ls-files '*.js' '*.mjs' '*.cjs' |
-  grep -v -E '^packages/rn-dev-agent-core/dist/|^packages/(codex|claude)-plugin/rn-dev-agent-core/dist/|^packages/claude-plugin/scripts/|^packages/codex-plugin/bin/cdp-supervisor\.js$|/web-dist/|^\.yarn/releases/|^third_party/|(^|/)node_modules/' || true)"
+  grep -v -E '^packages/rn-dev-agent-core/dist/|^packages/(codex|claude)-plugin/rn-dev-agent-core/dist/|^packages/claude-plugin/scripts/|^packages/codex-plugin/bin/(cdp-supervisor|plugin-health)\.js$|^packages/codex-plugin/scripts/check-vercel-rules\.mjs$|/web-dist/|^\.yarn/releases/|^third_party/|(^|/)node_modules/' || true)"
 
 violations="$(comm -23 <(printf '%s\n' "$current" | sort) <(sort "$BASELINE"))"
 

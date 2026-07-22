@@ -72,4 +72,14 @@ describe('workerSpawnArgs', () => {
       '--no-lock',
     ]);
   });
+
+  test('forwards only the read-only diagnostic contract mode to the worker', () => {
+    assert.deepEqual(
+      workerSpawnArgs('/abs/dist/index.js', '24.0.0', [
+        '--diagnostic-contract-probe',
+        '--untrusted-worker-flag',
+      ]),
+      ['/abs/dist/index.js', '--no-lock', '--diagnostic-contract-probe'],
+    );
+  });
 });

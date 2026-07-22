@@ -221,6 +221,7 @@ export interface EvaluateResult {
 }
 
 export type ToolErrorCode =
+  | 'DIAGNOSTIC_MODE_READ_ONLY'
   | 'TARGET_SESSION_MISMATCH'
   | 'PLATFORM_TARGET_NOT_FOUND'
   | 'TARGET_PLATFORM_CONFLICT'

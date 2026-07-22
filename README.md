@@ -6,7 +6,7 @@
 
 A coding-agent plugin for **Claude Code** and **Codex** that turns an AI agent into a React Native development partner. It explores your codebase, designs architecture, implements features — then **proves everything works live on the simulator** by reading the component tree, store state, and navigation stack through the Chrome DevTools Protocol, driving the app like a user, and recording the evidence.
 
-**79 MCP tools** · **5 agents** · **15 commands** · **10 skills** · **118 best-practice rules** · **2,976 unit tests** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**79 MCP tools** · **Claude: 15 slash commands + 10 skills** · **Codex: 15 explicit workflow skills + 10 domain skills (25 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -18,7 +18,7 @@ Coding agents are good at writing React Native code and bad at knowing whether i
 - **Replayable actions.** Every verified flow is saved as a parameterised Maestro action in `.rn-agent/actions/`. A 3-step wizard that took ~14 minutes as an interactive walk replays in **~4 seconds** (~210× faster). Actions self-repair when `testID`s drift.
 - **Native device control on both platforms.** In-tree XCTest (iOS) and UiAutomator (Android) runners give the agent real taps, typing, scrolling, and screenshots — with prebuilt artifacts so first use skips the multi-minute cold build.
 - **Curated best practices.** 118 indexed rules (48 React Native + 70 React/web, integrated from [Vercel's agent skills](https://github.com/vercel-labs/agent-skills)) applied during architecture and review — crash prevention, list performance, animations, state management.
-- **Watch it work.** [`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/) serves a local web UI with a live tool-call timeline, device mirror, and route/store/component-tree panels — plus Actions and E2E tabs to replay saved flows straight from the browser.
+- **Watch it work.** The [Observe workflow](https://lykhoyda.github.io/rn-dev-agent/commands/observe/) serves a local web UI with a live tool-call timeline, device mirror, and route/store/component-tree panels — plus Actions and E2E tabs to replay saved flows straight from the browser.
 
 ![The observe UI live: inspecting a failed flow, checking store state, replaying a saved action, and running the locked E2E suite — all from the browser](apps/docs-site/public/observe/observe-demo.gif)
 
@@ -49,7 +49,7 @@ codex plugin marketplace add Lykhoyda/rn-dev-agent
 codex plugin add rn-dev-agent@rn-dev-agent
 ```
 
-Local checkout: register the package directory `/path/to/rn-dev-agent/packages/codex-plugin` — not the repository root. The Codex package is self-contained (bundled MCP runtime, native runner sources, runner manifest) and loads the same `cdp` MCP server from its `.mcp.json`. Codex does not load Claude Code hooks — `No plugin hooks` in the Codex plugin detail screen is expected.
+Local checkout: register the package directory `/path/to/rn-dev-agent/packages/codex-plugin` — not the repository root. The Codex package is self-contained (bundled MCP runtime, native runner sources, helpers, and runner manifest) and loads the same `cdp` MCP server from its `.mcp.json`. Codex does not load Claude Code hooks — `No plugin hooks` is expected. Codex 0.145.0 is the live-refresh floor; older hosts are restart-only. An external CLI/manual plugin change always requires exiting and relaunching Codex.
 
 ### 2. Set up your project
 
@@ -57,13 +57,22 @@ Local checkout: register the package directory `/path/to/rn-dev-agent/packages/c
 cd /path/to/your-rn-app
 ```
 
-```
-/rn-dev-agent:setup
+Invoke setup for your host:
+
+```text
+Claude: /rn-dev-agent:setup
+Codex:  $rn-dev-agent:setup
 ```
 
-Setup checks the full toolchain and fixes what it can automatically:
+Claude setup manages `CLAUDE.md`; Codex setup manages an idempotent sentinel-
+bounded `AGENTS.md` block. Codex runs strictly read-only package/recovery
+diagnostics first and previews every later project write for consent.
 
-| Check | Required | Auto-install |
+Setup checks the full toolchain. Claude hooks and normal runtime use can perform
+the automatic handling shown below; Codex setup keeps recovery diagnosis
+read-only and prints the exact commands for the user to confirm and run.
+
+| Check | Required | Automatic handling |
 |-------|----------|--------------|
 | Node.js ≥ 22.18 LTS | Yes | No |
 | CDP bridge deps | Yes | Yes |
@@ -76,14 +85,16 @@ Setup checks the full toolchain and fixes what it can automatically:
 | ffmpeg | Optional (proof videos) | Yes |
 | idb + idb-companion | Optional (smooth observe-UI mirroring) | Yes |
 
-If auto-install fails, setup gives step-by-step manual instructions. [Full setup guide](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
+Claude automation failures and Codex missing prerequisites are reported with
+step-by-step manual instructions. [Full setup guide](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
 
-**Prebuilt runners:** on a released version, the device runners install from a verified prebuilt artifact (SHA-256-checked local cache, then the GitHub Release asset for your exact plugin version), so the first `device_snapshot action=open` skips the cold build. Resolution is fail-open — offline, a checksum mismatch, or a dev checkout falls back transparently to the on-machine build (`/rn-dev-agent:doctor` shows which one you got). Force local builds with `RN_RUNNER_BUILD=local`.
+**Prebuilt runners:** on a released version, the device runners install from a verified prebuilt artifact (SHA-256-checked local cache, then the GitHub Release asset for your exact plugin version), so the first `device_snapshot action=open` skips the cold build. Resolution is fail-open — offline, a checksum mismatch, or a dev checkout falls back transparently to the on-machine build (the host's `doctor` workflow reports which one you got). Force local builds with `RN_RUNNER_BUILD=local`.
 
 ### 3. Build something
 
-```
-/rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
+```text
+Claude: /rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
+Codex:  $rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
 ```
 
 ## The pipeline
@@ -101,7 +112,12 @@ If auto-install fails, setup gives step-by-step manual instructions. [Full setup
 | 6. Review | Parallel review agents check correctness and RN conventions |
 | 7. Proof | **Rehearse off camera**, persist a Maestro action, then record a deterministic replay — discovery never appears in the video |
 
-## Commands
+## Workflows
+
+The tables use Claude spelling. Codex provides native explicit parity for every
+row: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. Codex exposes
+exactly these 15 workflow skills plus 10 domain skills; install-time
+`source-command-*` migration is deliberately disabled.
 
 **Develop & test:**
 
@@ -126,8 +142,8 @@ If auto-install fails, setup gives step-by-step manual instructions. [Full setup
 
 | Command | Purpose |
 |---------|---------|
-| `/rn-dev-agent:setup` | Onboard a project — prerequisites + CLAUDE.md tool-routing rules + nav-ref + Zustand exposure (refreshes stale template blocks in place) |
-| `/rn-dev-agent:doctor` | Full diagnostic table — Node, CDP, device runners, maestro-runner engine pin, simulators, Metro, helpers freshness, plugin version |
+| `/rn-dev-agent:setup` | Onboard a project — Claude manages `CLAUDE.md`; Codex manages `AGENTS.md`; nav/store/scaffold writes are previewed |
+| `/rn-dev-agent:doctor` | Strictly read-only multi-axis plugin/MCP/schema/task/environment diagnosis; recommends but never executes recovery |
 | `/rn-dev-agent:check-env` | Quick environment-readiness check |
 | `/rn-dev-agent:nav-graph` | Extract and inspect the app navigation graph |
 | `/rn-dev-agent:check-vercel-rules` | Report drift between bundled best-practice rules and upstream |
@@ -204,7 +220,8 @@ if (__DEV__) {
 
 ```
 Claude Code / Codex
-  ├── Skills (knowledge) + Agents (protocols) + Commands (entry points)
+  ├── Host workflows + shared domain knowledge
+  │   Claude: commands/agents · Codex: explicit workflow/domain skills
   │
   ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
   │   79 tools: component tree, store state, profiling, network,
@@ -243,8 +260,9 @@ Claude Code / Codex
 | "No Hermes target" | Open the app on the simulator, ensure Hermes is enabled |
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)) |
-| Plugin not detected | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
-| Tools fail after upgrade | Restart Claude Code ([why](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/)) |
+| Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
+| Plugin not detected (Codex) | Inspect with `codex plugin list --json` and `/mcp verbose`; user-confirm `codex plugin add rn-dev-agent@rn-dev-agent --json`, then relaunch after external changes |
+| Codex tools fail after upgrade | `/mcp verbose` inspects only. Relaunch Codex for external/manual changes or legacy hosts; never kill another host's bridge |
 | Subagent says "MCP tools unavailable" | Never spawn `rn-tester`/`rn-debugger` via the Task tool — use `/rn-dev-agent:test-feature` or `/rn-dev-agent:debug-screen` instead (GH #31) |
 | Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles — kill and restart Metro, relaunch the app |
 
@@ -280,11 +298,14 @@ The **observability UI** ([`/rn-dev-agent:observe`](https://lykhoyda.github.io/r
 
 ## Keeping up to date
 
-Enable auto-update in the plugin manager (Marketplaces tab), or update manually:
+Enable auto-update in the host plugin manager, or update manually:
 
-```bash
-/plugin update rn-dev-agent@rn-dev-agent
-/reload-plugins
+```text
+Claude: /plugin update rn-dev-agent@rn-dev-agent
+        /reload-plugins
+Codex:  codex plugin marketplace upgrade rn-dev-agent
+        codex plugin add rn-dev-agent@rn-dev-agent --json
+        # relaunch after this external mutation
 ```
 
 Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/rn-dev-agent-core/CHANGELOG.md)

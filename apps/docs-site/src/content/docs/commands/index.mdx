@@ -1,11 +1,21 @@
 ---
-title: Commands
-description: 15 slash commands for React Native development, testing, and maintenance.
+title: Workflows
+description: 15 Claude slash commands with native explicit Codex skill parity.
 ---
 
-## Core commands
+## Host invocation
 
-The primary workflow starts with `/rn-feature-dev`. Other commands are useful on their own or alongside it.
+All fifteen workflows are first-class on both hosts:
+
+```text
+Claude: /rn-dev-agent:<workflow> [arguments]
+Codex:  $rn-dev-agent:<workflow> [request text]
+```
+
+Codex also has ten domain skills, for exactly 25 native skills. Its workflow
+skills are explicit-only and best-effort `source-command-*` migration is
+disabled. The primary workflow is `rn-feature-dev`; the same names below apply
+to both hosts.
 
 | Command | When to use |
 |---------|-------------|
@@ -34,8 +44,8 @@ The primary workflow starts with `/rn-feature-dev`. Other commands are useful on
 
 | Command | When to use |
 |---------|-------------|
-| [`setup`](/rn-dev-agent/commands/setup/) | Onboard a project — prerequisites, CLAUDE.md rules, bridge scaffolding |
-| [`doctor`](/rn-dev-agent/commands/doctor/) | Full diagnostic table — Node, CDP, runners, Metro, plugin version |
+| [`setup`](/rn-dev-agent/commands/setup/) | Onboard a project — Claude manages CLAUDE.md; Codex manages AGENTS.md; writes are previewed |
+| [`doctor`](/rn-dev-agent/commands/doctor/) | Strictly read-only host/package/MCP/schema/task/environment diagnosis |
 | [`check-env`](/rn-dev-agent/commands/check-env/) | Verify Metro, CDP, and simulator are ready |
 | [`check-vercel-rules`](/rn-dev-agent/commands/check-vercel-rules/) | Audit the project against the bundled best-practice rules |
 

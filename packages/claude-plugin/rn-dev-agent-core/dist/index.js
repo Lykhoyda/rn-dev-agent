@@ -10680,6 +10680,8 @@ import { createWriteStream, mkdirSync, existsSync as existsSync2 } from "node:fs
 import { join as join2 } from "node:path";
 import { tmpdir, homedir } from "node:os";
 function resolveLogPath() {
+  if (process.argv.includes("--diagnostic-contract-probe"))
+    return null;
   if (configuredLevel !== "debug" && configuredLevel !== "info")
     return null;
   const pluginData = process.env.CLAUDE_PLUGIN_DATA;
@@ -57858,6 +57860,35 @@ var finalizeSchema = external_exports.object({
   action: external_exports.literal("finalize"),
   evidenceReview: evidenceReviewSchema
 }).strict();
+var proofCapturePublishedInputSchema = external_exports.object({
+  action: external_exports.enum([
+    "begin_rehearsal",
+    "finish_rehearsal",
+    "arm",
+    "start_recording",
+    "stop_recording",
+    "validate",
+    "finalize",
+    "status",
+    "discard",
+    "contract"
+  ]).describe("Proof transition. begin_rehearsal and finalize require their action-specific fields."),
+  projectRoot: absolutePathSchema.optional().describe("begin_rehearsal: absolute app worktree root."),
+  candidateRoot: absolutePathSchema.optional().describe("begin_rehearsal: absolute candidate plugin worktree root for cross-repo proof."),
+  receiptPath: absolutePathSchema.optional().describe("begin_rehearsal: fresh absolute receipt destination."),
+  videoPath: absolutePathSchema.optional().describe("begin_rehearsal: fresh absolute MP4 destination."),
+  contactSheetPath: absolutePathSchema.optional().describe("begin_rehearsal: fresh absolute contact-sheet destination."),
+  writerProvider: external_exports.string().min(1).optional().describe("begin_rehearsal: provider producing the implementation/proof run."),
+  runId: external_exports.string().min(1).optional().describe("begin_rehearsal: unique lowercase proof run identifier."),
+  issue: proofIssueSchema.optional().describe("begin_rehearsal: bound issue identity."),
+  pullRequest: proofPullRequestSchema.optional().describe("begin_rehearsal: bound pull request and head."),
+  proofClass: proofClassSchema.optional().describe("begin_rehearsal: proof class."),
+  acceptanceMappings: external_exports.array(acceptanceMappingSchema).min(1).optional().describe("begin_rehearsal: acceptance criteria mapped to evidence."),
+  fixture: proofFixtureSchema.optional().describe("begin_rehearsal: tested fixture identity."),
+  proofAction: proofActionSchema.optional().describe("begin_rehearsal: pinned learned-action identity."),
+  storyboard: storyboardSchema.optional().describe("begin_rehearsal: typed result-bound storyboard."),
+  evidenceReview: evidenceReviewSchema.optional().describe("finalize: independent evidence review.")
+}).strict();
 var proofCaptureInputSchema = external_exports.discriminatedUnion("action", [
   beginRehearsalSchema,
   sessionActionSchema("finish_rehearsal"),
@@ -64090,7 +64121,8 @@ async function listActions(projectRoot) {
 var pkgPath = join46(dirname17(fileURLToPath4(import.meta.url)), "..", "package.json");
 var pkgVersion = JSON.parse(readFileSync31(pkgPath, "utf8")).version;
 var lockfile = null;
-var noLock = process.argv.includes("--no-lock");
+var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
+var noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
 if (!noLock) {
   lockfile = new Lockfile({ version: pkgVersion });
   const lockResult = lockfile.acquire();
@@ -64100,13 +64132,15 @@ if (!noLock) {
   }
   process.on("exit", () => lockfile?.release());
 }
-process.on("exit", () => {
-  try {
-    releaseDeviceLockForSession();
-  } catch {
-  }
-});
-if (process.env.RN_DEVICE_KILL_LEGACY !== "0") {
+if (!diagnosticContractProbe) {
+  process.on("exit", () => {
+    try {
+      releaseDeviceLockForSession();
+    } catch {
+    }
+  });
+}
+if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== "0") {
   void ensureSingleRunner().then((r) => {
     if (r.removedFiles.length) {
       logger.info("rn-device", `ensureSingleRunner(boot): removed ${r.removedFiles.join(", ")}`);
@@ -64186,7 +64220,7 @@ var blindProbeContext = async () => {
     return null;
   return { deviceId: udid, iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid) };
 };
-var mirrorCfg = resolveMirrorConfig();
+var mirrorCfg = diagnosticContractProbe ? { enabled: false, fps: 0 } : resolveMirrorConfig();
 var mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
   resolveTarget: buildMirrorTargetResolver({
     getPlatform: () => {
@@ -64215,7 +64249,7 @@ var mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
 }) : void 0;
 if (mirrorManager2)
   setObserveMirror(mirrorManager2);
-var liveEnabled = process.env.RN_OBSERVE_LIVE !== "0";
+var liveEnabled = !diagnosticContractProbe && process.env.RN_OBSERVE_LIVE !== "0";
 var liveDeps = buildLiveDeps({
   recorder,
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
@@ -64241,6 +64275,9 @@ function trackedTool(name, desc, schema, handler) {
   const base = instrumentTool(name, arbiterWrap(name, handler));
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a) => {
+    if (diagnosticContractProbe) {
+      return failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
+    }
     const args = a[0];
     let result;
     try {
@@ -64758,7 +64795,7 @@ var proofCaptureHandler = createProofCaptureHandler({
   writeReceipt: writeProofReceiptAtomic,
   removeArtifact: (path) => rmSync7(path, { force: true })
 });
-trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCaptureInputSchema, proofCaptureHandler);
+trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCapturePublishedInputSchema, proofCaptureHandler);
 trackedTool("device_record", 'Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path + the deviceId actually used); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. GH #173: when more than one simulator is booted (or more than one Android device connected), start refuses to auto-pick to avoid recording the wrong device \u2014 pass deviceId=<UDID|serial> to disambiguate; the response echoes the deviceId actually used so you can verify. Session-less.', {
   action: external_exports.enum(["start", "stop", "status"]).describe("start: begin recording. stop: finalize and save (all active recordings). status: list active recordings."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("(start only) Force platform. Auto-detected from booted devices if omitted."),
@@ -65107,7 +65144,7 @@ setObserveStateDeps({
     }
   })
 });
-var shutdown = buildGracefulShutdown({
+var shutdown = diagnosticContractProbe ? async (exitCode) => process.exit(exitCode) : buildGracefulShutdown({
   getClient,
   stopFastRunnerFn: stopFastRunner,
   stopMirrorFn: () => mirrorManager2?.shutdown()
@@ -65140,7 +65177,8 @@ process.stdin.on("end", () => {
   logger.info("MCP", "stdin closed \u2014 host disconnected");
   void shutdown(0);
 });
-var stopParentWatch = startParentDeathWatch({
+var stopParentWatch = diagnosticContractProbe ? () => {
+} : startParentDeathWatch({
   onOrphaned: () => {
     logger.info("MCP", "parent host gone (PPID changed) \u2014 exiting");
     void shutdown(0);
@@ -65156,14 +65194,17 @@ var stopParentWatch = startParentDeathWatch({
   }
 });
 process.on("exit", () => stopParentWatch());
-process.on("exit", () => removeObserveState());
-process.on("exit", () => {
-  try {
-    mirrorManager2?.shutdown();
-  } catch (err) {
-    logger.warn("MCP", `exit: mirror shutdown failed: ${err instanceof Error ? err.message : err}`);
-  }
-});
+if (!diagnosticContractProbe)
+  process.on("exit", () => removeObserveState());
+if (!diagnosticContractProbe) {
+  process.on("exit", () => {
+    try {
+      mirrorManager2?.shutdown();
+    } catch (err) {
+      logger.warn("MCP", `exit: mirror shutdown failed: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+}
 async function main() {
   logger.info("MCP", `Starting rn-dev-agent-cdp v0.9.1 (log level: ${logger.level})`);
   if (logger.logFilePath) {
@@ -65175,7 +65216,7 @@ async function main() {
   logger.info("MCP", "StdioServerTransport created, connecting...");
   await server2.connect(transport);
   logger.info("MCP", "MCP server connected and ready");
-  {
+  if (!diagnosticContractProbe) {
     const root = findProjectRoot();
     if (root) {
       const recovered = recoverInterruptedRequests(root, (pid) => {
@@ -65190,21 +65231,24 @@ async function main() {
         console.error(`[e2e] marked interrupted runs: ${recovered.join(", ")}`);
     }
   }
-  void autostartObserve({
-    findRoot: findProjectRoot,
-    resolveEnabled: resolveObserveAutostart,
-    start: startObserveServer,
-    warn: (m) => logger.warn("OBSERVE", m),
-    info: (m) => logger.info("OBSERVE", m)
-  }).catch(() => {
-  });
+  if (!diagnosticContractProbe) {
+    void autostartObserve({
+      findRoot: findProjectRoot,
+      resolveEnabled: resolveObserveAutostart,
+      start: startObserveServer,
+      warn: (m) => logger.warn("OBSERVE", m),
+      info: (m) => logger.info("OBSERVE", m)
+    }).catch(() => {
+    });
+  }
 }
 main().catch((err) => {
   logger.error("MCP", `Fatal error: ${err instanceof Error ? err.message : err}`);
   if (logger.logFilePath) {
     console.error(`CDP bridge log: ${logger.logFilePath}`);
   }
-  stopFastRunner(getActiveSession()?.deviceId);
+  if (!diagnosticContractProbe)
+    stopFastRunner(getActiveSession()?.deviceId);
   process.exit(1);
 });
 export {

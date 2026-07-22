@@ -68,7 +68,7 @@ import { createDeviceRecordHandler } from './tools/device-record.js';
 import {
   createProofCaptureHandler,
   proofRootHasTrackedEntries,
-  proofCaptureInputSchema,
+  proofCapturePublishedInputSchema,
   readProofActionIdentity,
   readProofGitInfo,
   resolveProofIdentity,
@@ -177,7 +177,8 @@ const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: stri
 // GH #182: module-scoped so the parent-death watch can touch() it (heartbeat) and
 // release() it on orphan-exit. null when --no-lock (touch/release become no-ops).
 let lockfile: Lockfile | null = null;
-const noLock = process.argv.includes('--no-lock');
+const diagnosticContractProbe = process.argv.includes('--diagnostic-contract-probe');
+const noLock = diagnosticContractProbe || process.argv.includes('--no-lock');
 if (!noLock) {
   lockfile = new Lockfile({ version: pkgVersion });
   const lockResult = lockfile.acquire();
@@ -187,19 +188,21 @@ if (!noLock) {
   }
   process.on('exit', () => lockfile?.release());
 }
-process.on('exit', () => {
-  try {
-    releaseDeviceLockForSession();
-  } catch {
-    /* never fail exit */
-  }
-});
+if (!diagnosticContractProbe) {
+  process.on('exit', () => {
+    try {
+      releaseDeviceLockForSession();
+    } catch {
+      /* never fail exit */
+    }
+  });
+}
 
 // GH#202 Phase 1: at boot the simulator UDID is unknown, so only the
 // files-only pass runs — remove orphaned ~/.agent-device/daemon.{json,lock}
 // when their daemon PID is dead. Never touches a live process at startup.
 // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
-if (process.env.RN_DEVICE_KILL_LEGACY !== '0') {
+if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== '0') {
   void ensureSingleRunner()
     .then((r) => {
       if (r.removedFiles.length) {
@@ -317,7 +320,9 @@ const blindProbeContext = async () => {
 // Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
 // closes over `mirrorManager`, so this must exist first (TDZ safety) even
 // though the arrow body only runs later.
-const mirrorCfg = resolveMirrorConfig();
+const mirrorCfg = diagnosticContractProbe
+  ? { enabled: false as const, fps: 0 }
+  : resolveMirrorConfig();
 const mirrorManager = mirrorCfg.enabled
   ? new MirrorManager({
       resolveTarget: buildMirrorTargetResolver({
@@ -350,7 +355,7 @@ const mirrorManager = mirrorCfg.enabled
   : undefined;
 if (mirrorManager) setObserveMirror(mirrorManager);
 
-const liveEnabled = process.env.RN_OBSERVE_LIVE !== '0';
+const liveEnabled = !diagnosticContractProbe && process.env.RN_OBSERVE_LIVE !== '0';
 const liveDeps = buildLiveDeps({
   recorder,
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
@@ -400,6 +405,12 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
   // here and runs regardless of liveEnabled. GH #206 live capture layers on top.
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a: unknown[]): Promise<unknown> => {
+    if (diagnosticContractProbe) {
+      return failResult(
+        'Tool calls are disabled in the read-only MCP contract probe.',
+        'DIAGNOSTIC_MODE_READ_ONLY',
+      );
+    }
     const args = a[0] as Record<string, unknown> | undefined;
     let result: unknown;
     try {
@@ -1802,7 +1813,7 @@ const proofCaptureHandler = createProofCaptureHandler({
 trackedTool(
   'proof_capture',
   'Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.',
-  proofCaptureInputSchema,
+  proofCapturePublishedInputSchema,
   proofCaptureHandler,
 );
 
@@ -2782,11 +2793,13 @@ setObserveStateDeps({
 // GH #182 (mirror subsystem): stopMirrorFn reaps idb/ffmpeg/simctl capture children
 // via MirrorManager.shutdown() — synchronous + idempotent, safe to call from here
 // and again from the process.on('exit') net below.
-const shutdown = buildGracefulShutdown({
-  getClient,
-  stopFastRunnerFn: stopFastRunner,
-  stopMirrorFn: () => mirrorManager?.shutdown(),
-});
+const shutdown = diagnosticContractProbe
+  ? async (exitCode: number): Promise<void> => process.exit(exitCode)
+  : buildGracefulShutdown({
+      getClient,
+      stopFastRunnerFn: stopFastRunner,
+      stopMirrorFn: () => mirrorManager?.shutdown(),
+    });
 
 process.on('uncaughtException', (err: Error) => {
   logger.error('MCP', `Uncaught exception: ${err.message}`);
@@ -2840,35 +2853,42 @@ process.stdin.on('end', () => {
 // and if touch() reports we were usurped (a contender reclaimed our slot while the
 // laptop slept, then we woke), self-terminate so we don't run as a second bridge on
 // the same device. Unref'd timer — never keeps a should-be-dead process alive.
-const stopParentWatch = startParentDeathWatch({
-  onOrphaned: () => {
-    logger.info('MCP', 'parent host gone (PPID changed) — exiting');
-    void shutdown(0);
-  },
-  onHeartbeat: () => {
-    try {
-      if (lockfile && !lockfile.touch()) {
-        logger.info('MCP', 'single-instance lock was reclaimed by another bridge — exiting');
+const stopParentWatch = diagnosticContractProbe
+  ? () => {}
+  : startParentDeathWatch({
+      onOrphaned: () => {
+        logger.info('MCP', 'parent host gone (PPID changed) — exiting');
         void shutdown(0);
-      }
-    } catch {
-      /* best-effort heartbeat */
-    }
-  },
-});
+      },
+      onHeartbeat: () => {
+        try {
+          if (lockfile && !lockfile.touch()) {
+            logger.info('MCP', 'single-instance lock was reclaimed by another bridge — exiting');
+            void shutdown(0);
+          }
+        } catch {
+          /* best-effort heartbeat */
+        }
+      },
+    });
 process.on('exit', () => stopParentWatch());
-process.on('exit', () => removeObserveState());
+if (!diagnosticContractProbe) process.on('exit', () => removeObserveState());
 // GH #182 zombie class for observe-mirror: catch-all net alongside the shutdown()
 // path above. Covers cases that never call shutdown() at all — e.g. the fatal
 // main().catch() handler below (process.exit(1) direct) and any other exit — so
 // idb/ffmpeg/simctl capture children are always reaped. Synchronous + idempotent.
-process.on('exit', () => {
-  try {
-    mirrorManager?.shutdown();
-  } catch (err) {
-    logger.warn('MCP', `exit: mirror shutdown failed: ${err instanceof Error ? err.message : err}`);
-  }
-});
+if (!diagnosticContractProbe) {
+  process.on('exit', () => {
+    try {
+      mirrorManager?.shutdown();
+    } catch (err) {
+      logger.warn(
+        'MCP',
+        `exit: mirror shutdown failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  });
+}
 
 async function main() {
   logger.info('MCP', `Starting rn-dev-agent-cdp v0.9.1 (log level: ${logger.level})`);
@@ -2889,7 +2909,7 @@ async function main() {
   await server.connect(transport);
   logger.info('MCP', 'MCP server connected and ready');
 
-  {
+  if (!diagnosticContractProbe) {
     const root = findProjectRoot();
     if (root) {
       const recovered = recoverInterruptedRequests(
@@ -2911,13 +2931,15 @@ async function main() {
   // Autostart is fire-and-forget: nothing downstream depends on its result,
   // and even a throwing logger in its catch must not reject main() after MCP
   // is already connected.
-  void autostartObserve({
-    findRoot: findProjectRoot,
-    resolveEnabled: resolveObserveAutostart,
-    start: startObserveServer,
-    warn: (m) => logger.warn('OBSERVE', m),
-    info: (m) => logger.info('OBSERVE', m),
-  }).catch(() => {});
+  if (!diagnosticContractProbe) {
+    void autostartObserve({
+      findRoot: findProjectRoot,
+      resolveEnabled: resolveObserveAutostart,
+      start: startObserveServer,
+      warn: (m) => logger.warn('OBSERVE', m),
+      info: (m) => logger.info('OBSERVE', m),
+    }).catch(() => {});
+  }
 }
 
 main().catch((err) => {
@@ -2925,6 +2947,6 @@ main().catch((err) => {
   if (logger.logFilePath) {
     console.error(`CDP bridge log: ${logger.logFilePath}`);
   }
-  stopFastRunner(getActiveSession()?.deviceId);
+  if (!diagnosticContractProbe) stopFastRunner(getActiveSession()?.deviceId);
   process.exit(1);
 });

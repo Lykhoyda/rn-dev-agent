@@ -17,11 +17,12 @@ Here it is in motion — inspecting a failed flow, checking store state, replayi
 
 ## Usage
 
-```
-/rn-dev-agent:observe [stop|restart]
+```text
+Claude: /rn-dev-agent:observe [stop|restart]
+Codex:  $rn-dev-agent:observe [stop|restart]
 ```
 
-The UI **autostarts with the session** in a React Native project — you normally don't need to start anything. Run `/rn-dev-agent:observe` with no argument to print the URL (default port `7333`); open it in a browser.
+The UI **autostarts with the session** in a React Native project — you normally don't need to start anything. Invoke the host's Observe workflow with no argument to print the URL (default port `7333`); open it in a browser.
 
 - `stop` — shut the UI down for the rest of the session.
 - `restart` — restart the server and print the (possibly new) URL. The event timeline is preserved across restarts.

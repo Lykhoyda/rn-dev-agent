@@ -238,8 +238,18 @@ test('CDPMultiplexer: start throws if already running', async () => {
 });
 
 test('CDPMultiplexer: start rejects if Hermes is unreachable', async () => {
-  // Point at a port where nothing is listening
-  const proxy = new CDPMultiplexer({ hermesUrl: 'ws://127.0.0.1:59999/nonexistent' });
+  // Ask the OS for a currently free port, then close the reservation. A fixed
+  // high port can belong to another concurrent agent lane and return an HTTP
+  // parse error instead of proving the unreachable path.
+  const reservation = createServer();
+  await new Promise((resolve) => reservation.listen(0, '127.0.0.1', resolve));
+  const address = reservation.address();
+  assert.ok(address && typeof address === 'object');
+  const port = address.port;
+  await new Promise((resolve, reject) =>
+    reservation.close((error) => (error ? reject(error) : resolve())),
+  );
+  const proxy = new CDPMultiplexer({ hermesUrl: `ws://127.0.0.1:${port}/nonexistent` });
   await assert.rejects(() => proxy.start(), /ECONNREFUSED|connect/);
   assert.equal(proxy.isRunning, false);
 });
