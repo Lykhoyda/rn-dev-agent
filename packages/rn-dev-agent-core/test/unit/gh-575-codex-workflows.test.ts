@@ -56,7 +56,7 @@ test('GH-575 build workflow retains artifact and exact-device ownership through 
   const workflow = readFileSync(join(codex, 'commands/build-and-test.md'), 'utf8');
   assert.match(workflow, /--device-id "<device-id>"/);
   assert.match(workflow, /eas_resolve_artifact\.sh" "<platform>" "<profile>" "<artifact-dir>"/);
-  assert.match(workflow, /trap 'rm -rf -- \"\$artifact_dir\"' EXIT/);
+  assert.match(workflow, /trap 'rm -rf -- "\$artifact_dir"' EXIT/);
   assert.match(workflow, /every success\n\s+or failure path/);
 });
 
@@ -72,7 +72,7 @@ test('GH-575 Claude build workflow uses package-local helpers and exact device i
   assert.equal(claude, shared);
   assert.match(shared, /\$CLAUDE_PLUGIN_ROOT\/scripts\/expo_ensure_running\.sh/);
   assert.match(shared, /--device-id "<device-id>"/);
-  assert.match(shared, /trap 'rm -rf -- \"\$artifact_dir\"' EXIT/);
+  assert.match(shared, /trap 'rm -rf -- "\$artifact_dir"' EXIT/);
   assert.doesNotMatch(shared, /\$CLAUDE_PLUGIN_ROOT\/\.\.\/\.\.\/scripts/);
 });
 

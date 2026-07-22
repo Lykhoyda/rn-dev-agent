@@ -628,10 +628,7 @@ printf 'artifact\n' > "$2"
     );
     assert.deepEqual(await readdir(cache), []);
 
-    await executable(
-      join(bin, 'ln'),
-      '#!/bin/sh\nexec /bin/ln "$@"\n',
-    );
+    await executable(join(bin, 'ln'), '#!/bin/sh\nexec /bin/ln "$@"\n');
     await executable(join(bin, 'mv'), '#!/bin/sh\nexit 1\n');
     const unrelated = join(cache, 'preview-ios-Unrelated.tar.gz');
     await writeFile(unrelated, 'other run\n');

@@ -233,9 +233,13 @@ exit 1
   );
   try {
     await assert.rejects(
-      pexecFile('bash', [snapshotHelper, 'android', '--device-id', serial, '--output-dir', output], {
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
-      }),
+      pexecFile(
+        'bash',
+        [snapshotHelper, 'android', '--device-id', serial, '--output-dir', output],
+        {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
+        },
+      ),
       /requires both screenshot and UI hierarchy artifacts/,
     );
     assert.deepEqual(await readdir(output), []);
@@ -368,5 +372,8 @@ test('GH-575 published snapshot docs describe exact sequential private capture',
   assert.match(docs, /owner-only private directory/);
   assert.match(docs, /fails closed.*identity/s);
   assert.match(docs, /atomically published as its own immutable.*result directory/s);
-  assert.doesNotMatch(docs, /Concurrent State Snapshot|simultaneously, cutting state-check time by ~40%/);
+  assert.doesNotMatch(
+    docs,
+    /Concurrent State Snapshot|simultaneously, cutting state-check time by ~40%/,
+  );
 });
