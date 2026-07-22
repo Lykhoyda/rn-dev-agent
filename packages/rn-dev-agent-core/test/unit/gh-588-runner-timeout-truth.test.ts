@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { _setActiveSessionForTest, runNative } from '../../dist/agent-device-wrapper.js';
-import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
+import { getPluginVersion, REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
 import {
   _setFastRunnerStateForTest,
   _setFetchForTest,
@@ -217,6 +217,8 @@ test('GH-588 V6: a replacement runner is preserved when prior type authority is 
 });
 
 test('GH-588 V6: success-shaped fill fails closed when settle observes runner authority loss', async (t) => {
+  const pluginVersion = getPluginVersion();
+  assert.ok(pluginVersion, 'source-checkout tests resolve the current plugin version');
   const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
   });
@@ -249,7 +251,7 @@ test('GH-588 V6: success-shaped fill fails closed when settle observes runner au
         JSON.stringify({
           ok: true,
           protocolVersion: 2,
-          runnerVersion: '0.70.8',
+          runnerVersion: pluginVersion,
           capabilities: ['SCREEN_STATIC', 'HONEST_HITTABLE'],
           commands: REQUIRED_IOS_COMMANDS,
         }),
