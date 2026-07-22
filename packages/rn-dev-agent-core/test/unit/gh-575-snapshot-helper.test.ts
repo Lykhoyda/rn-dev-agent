@@ -13,12 +13,15 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const pexecFile = promisify(execFile);
-const snapshotHelper = resolve('scripts/snapshot_state.sh');
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+const repositoryPath = (path: string): string => resolve(repositoryRoot, path);
+const snapshotHelper = repositoryPath('scripts/snapshot_state.sh');
 
 async function executable(path: string, contents: string): Promise<void> {
   await writeFile(path, contents);
@@ -27,15 +30,15 @@ async function executable(path: string, contents: string): Promise<void> {
 
 test('GH-575 snapshot guidance uses package-local exact-device invocations', async () => {
   const shared = await readFile(
-    resolve('packages/shared-agent-knowledge/skills/rn-device-control/SKILL.md'),
+    repositoryPath('packages/shared-agent-knowledge/skills/rn-device-control/SKILL.md'),
     'utf8',
   );
   const claude = await readFile(
-    resolve('packages/claude-plugin/skills/rn-device-control/SKILL.md'),
+    repositoryPath('packages/claude-plugin/skills/rn-device-control/SKILL.md'),
     'utf8',
   );
   const codex = await readFile(
-    resolve('packages/codex-plugin/skills/rn-device-control/SKILL.md'),
+    repositoryPath('packages/codex-plugin/skills/rn-device-control/SKILL.md'),
     'utf8',
   );
   assert.equal(claude, shared);
@@ -161,11 +164,11 @@ fi
     );
     const source = await readFile(snapshotHelper, 'utf8');
     assert.equal(
-      await readFile(resolve('packages/claude-plugin/scripts/snapshot_state.sh'), 'utf8'),
+      await readFile(repositoryPath('packages/claude-plugin/scripts/snapshot_state.sh'), 'utf8'),
       source,
     );
     assert.equal(
-      await readFile(resolve('packages/codex-plugin/scripts/snapshot_state.sh'), 'utf8'),
+      await readFile(repositoryPath('packages/codex-plugin/scripts/snapshot_state.sh'), 'utf8'),
       source,
     );
     assert.doesNotMatch(source, /\bkill\b/);
@@ -364,7 +367,7 @@ fi
 
 test('GH-575 published snapshot docs describe exact sequential private capture', async () => {
   const docs = await readFile(
-    resolve('apps/docs-site/src/content/docs/skills/rn-device-control.mdx'),
+    repositoryPath('apps/docs-site/src/content/docs/skills/rn-device-control.mdx'),
     'utf8',
   );
   assert.match(docs, /snapshot_state\.sh" ios --device-id/);

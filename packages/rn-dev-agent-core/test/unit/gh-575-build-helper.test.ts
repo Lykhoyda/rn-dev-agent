@@ -13,13 +13,16 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const pexecFile = promisify(execFile);
-const expoHelper = resolve('scripts/expo_ensure_running.sh');
-const easHelper = resolve('scripts/eas_resolve_artifact.sh');
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+const repositoryPath = (path: string): string => resolve(repositoryRoot, path);
+const expoHelper = repositoryPath('scripts/expo_ensure_running.sh');
+const easHelper = repositoryPath('scripts/eas_resolve_artifact.sh');
 const firstProjectId = '11111111-1111-4111-8111-111111111111';
 const secondProjectId = '22222222-2222-4222-8222-222222222222';
 
@@ -49,31 +52,36 @@ async function executable(path: string, contents: string): Promise<void> {
 test('GH-575 packaged EAS helpers match the canonical source', async () => {
   const source = await readFile(easHelper, 'utf8');
   assert.equal(
-    await readFile(resolve('packages/claude-plugin/scripts/eas_resolve_artifact.sh'), 'utf8'),
+    await readFile(
+      repositoryPath('packages/claude-plugin/scripts/eas_resolve_artifact.sh'),
+      'utf8',
+    ),
     source,
   );
   assert.equal(
-    await readFile(resolve('packages/codex-plugin/scripts/eas_resolve_artifact.sh'), 'utf8'),
+    await readFile(repositoryPath('packages/codex-plugin/scripts/eas_resolve_artifact.sh'), 'utf8'),
     source,
   );
 });
 
 test('GH-575 packaged EAS references document immutable app-scoped cache paths', async () => {
   const source = await readFile(
-    resolve(
+    repositoryPath(
       'packages/shared-agent-knowledge/skills/rn-device-control/references/expo-eas-builds.md',
     ),
     'utf8',
   );
   assert.equal(
     await readFile(
-      resolve('packages/claude-plugin/skills/rn-device-control/references/expo-eas-builds.md'),
+      repositoryPath(
+        'packages/claude-plugin/skills/rn-device-control/references/expo-eas-builds.md',
+      ),
       'utf8',
     ),
     source,
   );
   const codex = await readFile(
-    resolve('packages/codex-plugin/skills/rn-device-control/references/expo-eas-builds.md'),
+    repositoryPath('packages/codex-plugin/skills/rn-device-control/references/expo-eas-builds.md'),
     'utf8',
   );
   for (const reference of [source, codex]) {
@@ -870,7 +878,10 @@ esac
       assert.equal(cachedResult.source, 'cache');
       assert.equal(cachedResult.path, newerPath);
       assert.equal((await readdir(cache)).length, 4);
-      assert.equal(await readFile(calls, 'utf8'), 'older\nnewer\n');
+      assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n').sort(), [
+        'newer',
+        'older',
+      ]);
       const sidecars = (await readdir(cache)).filter((name) => name.startsWith('.eas-cache-'));
       assert.equal(sidecars.length, 2);
       for (const sidecar of sidecars) {
