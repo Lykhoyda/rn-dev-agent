@@ -13,7 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
@@ -176,25 +176,70 @@ test('GH-575 Android device discovery failure still returns valid JSON', async (
   }
 });
 
-test('GH-575 caller-owned EAS cache survives resolver exit', async () => {
+test('GH-575 caller-owned EAS cache reuses its private immutable manifest target', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-helper-'));
   const project = join(root, 'project');
   const cache = join(root, 'artifacts');
-  const artifact = join(cache, 'development-ios.tar.gz');
+  const bin = join(root, 'bin');
+  const easCalls = join(root, 'eas.calls');
+  const foreign = join(root, 'foreign');
   await mkdir(project);
   await mkdir(cache);
   await chmod(cache, 0o700);
+  await mkdir(bin);
   await writeFile(join(project, 'eas.json'), '{"build":{"development":{}}}\n');
-  await writeFile(artifact, 'artifact');
+  await executable(
+    join(bin, 'eas'),
+    `#!/bin/sh
+printf 'call\n' >> "$MOCK_EAS_CALLS"
+printf '[{"artifacts":{"buildUrl":"https://example.invalid/development"}}]\n'
+`,
+  );
+  await executable(
+    join(bin, 'curl'),
+    `#!/bin/sh
+cat >/dev/null
+while [ "$1" != "-o" ]; do shift; done
+printf 'artifact\n' > "$2"
+`,
+  );
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    MOCK_EAS_CALLS: easCalls,
+    TMPDIR: root,
+  };
   try {
-    const { stdout } = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+    const first = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
       cwd: project,
-      env: { ...process.env, TMPDIR: root },
+      env,
     });
-    const result = JSON.parse(stdout) as { status: string; path: string };
-    assert.equal(result.status, 'ok');
-    assert.equal(result.path, await realpath(artifact));
-    assert.equal(await readFile(artifact, 'utf8'), 'artifact');
+    const second = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+      cwd: project,
+      env,
+    });
+    const firstResult = JSON.parse(first.stdout) as { path: string; source: string };
+    const secondResult = JSON.parse(second.stdout) as { path: string; source: string };
+    assert.equal(firstResult.source, 'eas');
+    assert.equal(secondResult.source, 'cache');
+    assert.equal(secondResult.path, firstResult.path);
+    assert.equal(await readFile(firstResult.path, 'utf8'), 'artifact\n');
+    assert.equal(await readFile(easCalls, 'utf8'), 'call\n');
+
+    const manifestName = (await readdir(cache)).find((name) => name.startsWith('.eas-latest-'));
+    assert.ok(manifestName);
+    const manifest = join(cache, manifestName);
+    assert.equal((await stat(manifest)).mode & 0o777, 0o600);
+    assert.equal(await readFile(manifest, 'utf8'), `${basename(firstResult.path)}\n`);
+
+    await writeFile(foreign, 'foreign\n');
+    await rm(manifest);
+    await symlink(foreign, manifest);
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project, env }),
+      /Artifact manifest must be a regular file/,
+    );
+    assert.equal(await readFile(foreign, 'utf8'), 'foreign\n');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -233,6 +278,73 @@ printf 'dev artifact\n' > "$2"
     assert.equal(resolve(result.path, '..'), await realpath(cache));
     assert.equal(result.source, 'eas');
     assert.equal(await readFile(result.path, 'utf8'), 'dev artifact\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 EAS manifests isolate applications sharing one private cache', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-app-key-'));
+  const firstProject = join(root, 'first-app');
+  const secondProject = join(root, 'second-app');
+  const cache = join(root, 'artifacts');
+  const bin = join(root, 'bin');
+  const calls = join(root, 'eas.calls');
+  for (const directory of [firstProject, secondProject, cache, bin]) {
+    await mkdir(directory);
+  }
+  await chmod(cache, 0o700);
+  await writeFile(join(firstProject, 'eas.json'), '{"build":{}}\n');
+  await writeFile(join(secondProject, 'eas.json'), '{"build":{}}\n');
+  await executable(
+    join(bin, 'eas'),
+    `#!/bin/sh
+app=$(basename "$PWD")
+printf '%s\n' "$app" >> "$MOCK_EAS_CALLS"
+printf '[{"artifacts":{"buildUrl":"https://example.invalid/%s"}}]\n' "$app"
+`,
+  );
+  await executable(
+    join(bin, 'curl'),
+    `#!/bin/sh
+config=$(cat)
+while [ "$1" != "-o" ]; do shift; done
+printf '%s\n' "$config" > "$2"
+`,
+  );
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    MOCK_EAS_CALLS: calls,
+  };
+  try {
+    const first = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+      cwd: firstProject,
+      env,
+    });
+    const second = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+      cwd: secondProject,
+      env,
+    });
+    const firstAgain = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+      cwd: firstProject,
+      env,
+    });
+    const firstResult = JSON.parse(first.stdout) as { path: string; source: string };
+    const secondResult = JSON.parse(second.stdout) as { path: string; source: string };
+    const cachedResult = JSON.parse(firstAgain.stdout) as { path: string; source: string };
+    assert.equal(firstResult.source, 'eas');
+    assert.equal(secondResult.source, 'eas');
+    assert.equal(cachedResult.source, 'cache');
+    assert.equal(cachedResult.path, firstResult.path);
+    assert.notEqual(firstResult.path, secondResult.path);
+    assert.match(await readFile(firstResult.path, 'utf8'), /first-app/);
+    assert.match(await readFile(secondResult.path, 'utf8'), /second-app/);
+    assert.equal(
+      (await readdir(cache)).filter((name) => name.startsWith('.eas-latest-')).length,
+      2,
+    );
+    assert.equal(await readFile(calls, 'utf8'), 'first-app\nsecond-app\n');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -362,31 +474,17 @@ test('GH-575 auto-selected EAS profiles cannot escape the output directory', asy
   }
 });
 
-test('GH-575 EAS publication rejects unsafe destinations and reports publication failures', async () => {
+test('GH-575 EAS publication reports immutable artifact publication failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-publish-'));
   const project = join(root, 'project');
   const cache = join(root, 'artifacts');
   const bin = join(root, 'bin');
-  const destination = join(cache, 'development-ios.tar.gz');
   await mkdir(project);
   await mkdir(cache);
   await chmod(cache, 0o700);
   await mkdir(bin);
-  await mkdir(destination);
   await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
   try {
-    await assert.rejects(
-      pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project }),
-      (error: unknown) => {
-        const result = JSON.parse((error as { stdout?: string }).stdout ?? '') as {
-          message: string;
-        };
-        assert.match(result.message, /regular file path/);
-        return true;
-      },
-    );
-
-    await rm(destination, { recursive: true });
     await executable(
       join(bin, 'eas'),
       '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/build"}}]\\n\'\n',
@@ -500,7 +598,7 @@ printf '%s\n' "$url" > "$output"
       assert.equal(await readFile(betaResult.path, 'utf8'), 'https://example.invalid/beta\n');
       assert.match(alphaResult.path, /\/alpha-ios-[A-Za-z0-9]+\.tar\.gz$/);
       assert.match(betaResult.path, /\/beta-ios-[A-Za-z0-9]+\.tar\.gz$/);
-      assert.equal((await readdir(cache)).length, 2);
+      assert.equal((await readdir(cache)).length, 4);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -553,7 +651,16 @@ printf 'artifact-%s\n' "$$" > "$output"
       assert.notEqual(firstContents, secondContents);
       assert.equal(await readFile(firstResult.path, 'utf8'), firstContents);
       assert.equal(await readFile(secondResult.path, 'utf8'), secondContents);
-      assert.equal((await readdir(cache)).length, 2);
+      assert.equal((await readdir(cache)).length, 3);
+
+      const cached = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+        cwd: project,
+        env,
+      });
+      const cachedResult = JSON.parse(cached.stdout) as { path: string; source: string };
+      assert.equal(cachedResult.source, 'cache');
+      assert.equal([firstResult.path, secondResult.path].includes(cachedResult.path), true);
+      assert.equal((await readdir(cache)).length, 3);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

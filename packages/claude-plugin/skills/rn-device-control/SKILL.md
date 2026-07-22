@@ -253,20 +253,21 @@ The package-local `snapshot_state.sh` captures a screenshot and Android UI
 hierarchy sequentially on one validated device.
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" ios --device-id "$IOS_UDID" --output-dir "$SNAPSHOT_DIR"
-bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" android --device-id "$ANDROID_SERIAL" --output-dir "$SNAPSHOT_DIR"
+IOS_SNAPSHOT_RESULT=$(bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" ios --device-id "$IOS_UDID" --output-dir "$SNAPSHOT_DIR")
+ANDROID_SNAPSHOT_RESULT=$(bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" android --device-id "$ANDROID_SERIAL" --output-dir "$SNAPSHOT_DIR")
 
-# iOS output: screenshot.jpg
-# Android output: screenshot.png + ui_elements.json
+# Read "$IOS_SNAPSHOT_RESULT/screenshot.jpg"
+# Read "$ANDROID_SNAPSHOT_RESULT/screenshot.png" and "$ANDROID_SNAPSHOT_RESULT/ui_elements.json"
 ```
 
 `--device-id` is required, and the helper fails closed when the identity is
 missing, unavailable, or ambiguous. If `--output-dir` is omitted, the helper
 creates an owner-only private directory, removes it when no artifact succeeds,
-and reports the retained path after capture; a supplied directory must be owned
-by the current user with mode `0700` and must not be a symlink. Concurrent
-captures targeting the same output directory fail closed while its owned lock
-is held.
+and reports the retained result path after capture; a supplied directory must
+be owned by the current user with mode `0700` and must not be a symlink. Every
+successful capture is published as a separate immutable result directory only
+after all required artifacts are complete, so concurrent captures cannot mix
+or overwrite evidence.
 
 ---
 

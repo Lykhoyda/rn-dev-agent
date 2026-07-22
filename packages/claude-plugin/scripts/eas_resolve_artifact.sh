@@ -199,35 +199,104 @@ if [ "$PLATFORM" = "ios" ]; then
 else
   ARTIFACT_SUFFIX=".apk"
 fi
-ARTIFACT_NAME="${PROFILE}-${PLATFORM}${ARTIFACT_SUFFIX}"
-CACHE_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
-if [ "$(dirname "$CACHE_PATH")" != "$OUTPUT_DIR" ] || \
-  [ "$(basename "$CACHE_PATH")" != "$ARTIFACT_NAME" ]; then
-  json_error 1 "Artifact destination must be one immediate file child of the output directory."
+
+PROJECT_ROOT=$(pwd -P)
+if command -v shasum &>/dev/null; then
+  APP_CACHE_KEY=$(printf '%s' "$PROJECT_ROOT" | shasum -a 256 | awk '{print substr($1, 1, 24)}')
+elif command -v sha256sum &>/dev/null; then
+  APP_CACHE_KEY=$(printf '%s' "$PROJECT_ROOT" | sha256sum | awk '{print substr($1, 1, 24)}')
+elif command -v node &>/dev/null; then
+  APP_CACHE_KEY=$(node -e "const c=require('node:crypto');process.stdout.write(c.createHash('sha256').update(process.argv[1]).digest('hex').slice(0,24))" "$PROJECT_ROOT")
+else
+  json_error 1 "Unable to derive a stable application cache key."
 fi
-if [ -L "$CACHE_PATH" ] || { [ -e "$CACHE_PATH" ] && [ ! -f "$CACHE_PATH" ]; }; then
-  json_error 1 "Artifact destination must be a regular file path: $CACHE_PATH"
+if ! [[ "$APP_CACHE_KEY" =~ ^[a-fA-F0-9]{24}$ ]]; then
+  json_error 1 "Unable to derive a safe application cache key."
+fi
+
+MANIFEST_NAME=".eas-latest-${APP_CACHE_KEY}-${PROFILE}-${PLATFORM}.manifest"
+MANIFEST_PATH="${OUTPUT_DIR}/${MANIFEST_NAME}"
+if [ "$(dirname "$MANIFEST_PATH")" != "$OUTPUT_DIR" ] || \
+  [ "$(basename "$MANIFEST_PATH")" != "$MANIFEST_NAME" ]; then
+  json_error 1 "Artifact manifest must be one immediate file child of the output directory."
 fi
 
 # --- Tier 1: Local cache ---
 
-check_cache() {
-  local cached
-  cached=$(find "$CACHE_PATH" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print 2>/dev/null || true)
-
-  if [ -n "$cached" ]; then
-    echo "$cached"
-    return 0
+private_file_metadata() {
+  local path="$1"
+  if [ "$(uname)" = "Darwin" ]; then
+    FILE_OWNER=$(stat -f '%u' "$path" 2>/dev/null || true)
+    FILE_MODE=$(stat -f '%Lp' "$path" 2>/dev/null || true)
+  else
+    FILE_OWNER=$(stat -c '%u' "$path" 2>/dev/null || true)
+    FILE_MODE=$(stat -c '%a' "$path" 2>/dev/null || true)
   fi
-
-  return 1
 }
 
-cached_path=$(check_cache) && {
-  echo "Using cached artifact: $cached_path" >&2
-  json_ok "$cached_path" "cache"
+validate_private_manifest() {
+  if [ -L "$MANIFEST_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
+    json_error 1 "Artifact manifest must be a regular file: $MANIFEST_PATH"
+  fi
+  private_file_metadata "$MANIFEST_PATH"
+  if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
+    json_error 1 "Artifact manifest must be owned by the current user with mode 0600."
+  fi
+}
+
+check_cache() {
+  CACHED_PATH=""
+  if [ ! -e "$MANIFEST_PATH" ] && [ ! -L "$MANIFEST_PATH" ]; then
+    return 1
+  fi
+
+  validate_private_manifest
+  local manifest_size manifest_lines cached_name expected_prefix cached_token cached_path
+  manifest_size=$(wc -c < "$MANIFEST_PATH" | tr -d '[:space:]')
+  manifest_lines=$(wc -l < "$MANIFEST_PATH" | tr -d '[:space:]')
+  if [ -z "$manifest_size" ] || [ "$manifest_size" -gt 256 ] || [ "$manifest_lines" != "1" ]; then
+    json_error 1 "Artifact manifest has invalid content."
+  fi
+  IFS= read -r cached_name < "$MANIFEST_PATH" || json_error 1 "Artifact manifest has invalid content."
+  expected_prefix="${PROFILE}-${PLATFORM}-"
+  if [[ "$cached_name" != "$expected_prefix"*"$ARTIFACT_SUFFIX" ]]; then
+    json_error 1 "Artifact manifest does not match the selected application, profile, and platform."
+  fi
+  cached_token="${cached_name#"$expected_prefix"}"
+  cached_token="${cached_token%"$ARTIFACT_SUFFIX"}"
+  if [ -z "$cached_token" ] || ! [[ "$cached_token" =~ ^[a-zA-Z0-9]+$ ]] || \
+    [ "$cached_name" != "${expected_prefix}${cached_token}${ARTIFACT_SUFFIX}" ]; then
+    json_error 1 "Artifact manifest contains an unsafe artifact name."
+  fi
+
+  cached_path="${OUTPUT_DIR}/${cached_name}"
+  if [ "$(dirname "$cached_path")" != "$OUTPUT_DIR" ] || \
+    [ "$(basename "$cached_path")" != "$cached_name" ]; then
+    json_error 1 "Cached artifact must be one immediate file child of the output directory."
+  fi
+  if [ -L "$cached_path" ] || { [ -e "$cached_path" ] && [ ! -f "$cached_path" ]; }; then
+    json_error 1 "Cached artifact must be a regular file: $cached_path"
+  fi
+  if [ ! -f "$cached_path" ]; then
+    return 1
+  fi
+  private_file_metadata "$cached_path"
+  if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
+    json_error 1 "Cached artifact must be owned by the current user with mode 0600."
+  fi
+  if [ -z "$(find "$cached_path" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print 2>/dev/null || true)" ]; then
+    return 1
+  fi
+
+  CACHED_PATH="$cached_path"
+  return 0
+}
+
+if check_cache; then
+  echo "Using cached artifact: $CACHED_PATH" >&2
+  json_ok "$CACHED_PATH" "cache"
   exit 0
-} || true
+fi
 
 # --- Tier 2: EAS server download ---
 
@@ -307,6 +376,20 @@ if "${EAS_CMD[@]}" build:list \
         rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
         json_error 1 "Published artifact is not a regular file: $PUBLISHED_PATH"
       fi
+      private_file_metadata "$PUBLISHED_PATH"
+      if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
+        rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
+        json_error 1 "Published artifact must be owned by the current user with mode 0600."
+      fi
+      MANIFEST_TMP="${RUN_DIR}/latest.manifest"
+      printf '%s\n' "$PUBLISHED_NAME" > "$MANIFEST_TMP"
+      chmod 600 "$MANIFEST_TMP"
+      if [ -e "$MANIFEST_PATH" ] || [ -L "$MANIFEST_PATH" ]; then
+        validate_private_manifest
+      fi
+      if ! mv -f -- "$MANIFEST_TMP" "$MANIFEST_PATH"; then
+        json_error 1 "Failed to publish artifact manifest."
+      fi
       echo "Downloaded to: $PUBLISHED_PATH" >&2
       json_ok "$PUBLISHED_PATH" "eas"
       exit 0
@@ -324,9 +407,6 @@ fi
 # --- Tier 3: No artifact found ---
 
 FAILURE_MESSAGE="No artifact found. Build with: eas build --platform $PLATFORM --profile $PROFILE"
-if [ "$OWN_OUTPUT_DIR" -eq 0 ]; then
-  FAILURE_MESSAGE="$FAILURE_MESSAGE, or place artifact at ${OUTPUT_DIR}/${ARTIFACT_NAME}"
-fi
 if [ -n "$EAS_DIAGNOSTIC" ]; then
   FAILURE_MESSAGE="$FAILURE_MESSAGE EAS diagnostic: $EAS_DIAGNOSTIC"
 fi

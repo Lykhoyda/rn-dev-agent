@@ -11,9 +11,9 @@ OUTPUT_DIR=""
 OWN_OUTPUT_DIR=0
 CAPTURE_SUCCEEDED=0
 TMP_XML=""
-LOCK_DIR=""
-LOCK_OWNED=0
 STAGE_DIR=""
+RESULT_DIR=""
+RESULT_OWNED=0
 
 cleanup() {
   if [ -n "$TMP_XML" ] && [ -n "$DEVICE_ID" ]; then
@@ -22,8 +22,8 @@ cleanup() {
   if [ -n "$STAGE_DIR" ]; then
     rm -rf -- "$STAGE_DIR" 2>/dev/null || true
   fi
-  if [ "$LOCK_OWNED" -eq 1 ] && [ -n "$LOCK_DIR" ]; then
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+  if [ "$RESULT_OWNED" -eq 1 ] && [ "$CAPTURE_SUCCEEDED" -ne 1 ] && [ -n "$RESULT_DIR" ]; then
+    rm -rf -- "$RESULT_DIR" 2>/dev/null || true
   fi
   if [ "$OWN_OUTPUT_DIR" -eq 1 ] && [ "$CAPTURE_SUCCEEDED" -ne 1 ] && [ -n "$OUTPUT_DIR" ]; then
     rm -rf -- "$OUTPUT_DIR" 2>/dev/null || true
@@ -144,65 +144,62 @@ if [ "$OUTPUT_OWNER" != "$(id -u)" ] || [ "$OUTPUT_MODE" != "700" ]; then
 fi
 
 OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd -P)
-LOCK_DIR="$OUTPUT_DIR/.snapshot.lock"
-if ! mkdir -m 700 -- "$LOCK_DIR" 2>/dev/null; then
-  echo "Error: Snapshot capture is already in progress for this output directory." >&2
-  exit 1
-fi
-LOCK_OWNED=1
-if [ -L "$LOCK_DIR" ] || [ ! -d "$LOCK_DIR" ]; then
-  echo "Error: Snapshot lock must be a real directory, not a symlink." >&2
-  exit 1
-fi
-if [ "$(uname)" = "Darwin" ]; then
-  LOCK_OWNER=$(stat -f '%u' "$LOCK_DIR" 2>/dev/null || true)
-  LOCK_MODE=$(stat -f '%Lp' "$LOCK_DIR" 2>/dev/null || true)
-else
-  LOCK_OWNER=$(stat -c '%u' "$LOCK_DIR" 2>/dev/null || true)
-  LOCK_MODE=$(stat -c '%a' "$LOCK_DIR" 2>/dev/null || true)
-fi
-if [ "$LOCK_OWNER" != "$(id -u)" ] || [ "$LOCK_MODE" != "700" ]; then
-  echo "Error: Snapshot lock must be owned by the current user with mode 0700." >&2
-  exit 1
-fi
 STAGE_DIR=$(mktemp -d "${OUTPUT_DIR}/.snapshot-stage.XXXXXX") || {
   echo "Error: Unable to create a private snapshot staging directory." >&2
   exit 1
 }
+STAGE_TOKEN="${STAGE_DIR##*/}"
+STAGE_TOKEN="${STAGE_TOKEN#.snapshot-stage.}"
+if [ -z "$STAGE_TOKEN" ] || ! [[ "$STAGE_TOKEN" =~ ^[a-zA-Z0-9]+$ ]]; then
+  echo "Error: Unable to derive a safe snapshot result identity." >&2
+  exit 1
+fi
+RESULT_NAME="snapshot-${PLATFORM}-${STAGE_TOKEN}"
+RESULT_DIR="${OUTPUT_DIR}/${RESULT_NAME}"
+if [ "$(dirname "$RESULT_DIR")" != "$OUTPUT_DIR" ] || \
+  [ "$(basename "$RESULT_DIR")" != "$RESULT_NAME" ]; then
+  echo "Error: Snapshot result must be one immediate directory child of the output directory." >&2
+  exit 1
+fi
 
-validate_output_target() {
+validate_staged_artifact() {
   local target="$1"
-  if [ -L "$target" ] || { [ -e "$target" ] && [ ! -f "$target" ]; }; then
-    echo "Error: Snapshot target must be a regular file path: $target" >&2
+  if [ -L "$target" ] || [ ! -s "$target" ] || [ ! -f "$target" ]; then
+    echo "Error: Snapshot capture did not produce a regular artifact: $target" >&2
     exit 1
   fi
 }
 
+publish_result() {
+  if [ -e "$RESULT_DIR" ] || [ -L "$RESULT_DIR" ]; then
+    echo "Error: Refusing to replace an existing snapshot result." >&2
+    exit 1
+  fi
+  if ! mv -n -- "$STAGE_DIR" "$RESULT_DIR" || [ -e "$STAGE_DIR" ]; then
+    echo "Error: Unable to publish snapshot result." >&2
+    exit 1
+  fi
+  STAGE_DIR=""
+  RESULT_OWNED=1
+  CAPTURE_SUCCEEDED=1
+  printf '%s\n' "$RESULT_DIR"
+}
+
 case "$PLATFORM" in
   ios)
-    SCREENSHOT_PATH="$OUTPUT_DIR/screenshot.jpg"
     STAGED_SCREENSHOT="$STAGE_DIR/screenshot.jpg"
-    validate_output_target "$SCREENSHOT_PATH"
     if ! xcrun simctl io "$DEVICE_ID" screenshot --type=jpeg "$STAGED_SCREENSHOT"; then
       echo "Error: iOS screenshot capture failed." >&2
       exit 1
     fi
-    validate_output_target "$SCREENSHOT_PATH"
-    if ! mv -f -- "$STAGED_SCREENSHOT" "$SCREENSHOT_PATH"; then
-      echo "Error: Unable to publish iOS screenshot." >&2
-      exit 1
-    fi
-    CAPTURE_SUCCEEDED=1
-    echo "iOS snapshot saved to $SCREENSHOT_PATH"
+    validate_staged_artifact "$STAGED_SCREENSHOT"
+    publish_result
+    echo "iOS snapshot saved to $RESULT_DIR" >&2
     ;;
 
   android)
-    SCREENSHOT_PATH="$OUTPUT_DIR/screenshot.png"
-    HIERARCHY_PATH="$OUTPUT_DIR/ui_elements.json"
     STAGED_SCREENSHOT="$STAGE_DIR/screenshot.png"
     STAGED_HIERARCHY="$STAGE_DIR/ui_elements.json"
-    validate_output_target "$SCREENSHOT_PATH"
-    validate_output_target "$HIERARCHY_PATH"
     TMP_XML="/data/local/tmp/rn-dev-agent-uidump-$$.xml"
 
     SCREENSHOT_OK=0
@@ -239,21 +236,13 @@ except Exception as e:
 
     adb -s "$DEVICE_ID" shell rm -f "$TMP_XML" >/dev/null 2>&1 || true
     TMP_XML=""
-    if [ "$SCREENSHOT_OK" -ne 0 ] && [ "$HIERARCHY_OK" -ne 0 ]; then
+    if [ "$SCREENSHOT_OK" -ne 0 ] || [ "$HIERARCHY_OK" -ne 0 ]; then
+      echo "Error: Android snapshot requires both screenshot and UI hierarchy artifacts." >&2
       exit 1
     fi
-    validate_output_target "$SCREENSHOT_PATH"
-    validate_output_target "$HIERARCHY_PATH"
-    rm -f -- "$SCREENSHOT_PATH" "$HIERARCHY_PATH"
-    if [ "$SCREENSHOT_OK" -eq 0 ] && ! mv -- "$STAGED_SCREENSHOT" "$SCREENSHOT_PATH"; then
-      echo "Error: Unable to publish Android screenshot." >&2
-      exit 1
-    fi
-    if [ "$HIERARCHY_OK" -eq 0 ] && ! mv -- "$STAGED_HIERARCHY" "$HIERARCHY_PATH"; then
-      echo "Error: Unable to publish Android UI hierarchy." >&2
-      exit 1
-    fi
-    CAPTURE_SUCCEEDED=1
-    echo "Android snapshot saved to $OUTPUT_DIR/"
+    validate_staged_artifact "$STAGED_SCREENSHOT"
+    validate_staged_artifact "$STAGED_HIERARCHY"
+    publish_result
+    echo "Android snapshot saved to $RESULT_DIR" >&2
     ;;
 esac
