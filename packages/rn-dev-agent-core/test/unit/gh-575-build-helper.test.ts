@@ -236,7 +236,7 @@ printf 'dev artifact\n' > "$2"
   }
 });
 
-test('GH-575 default EAS output is private and retained', async () => {
+test('GH-575 default EAS output is private, retained, and does not log signed URLs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-private-'));
   const project = join(root, 'project');
   const bin = join(root, 'bin');
@@ -245,7 +245,7 @@ test('GH-575 default EAS output is private and retained', async () => {
   await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
   await executable(
     join(bin, 'eas'),
-    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/private"}}]\\n\'\n',
+    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/private?X-Amz-Signature=signed-secret"}}]\\n\'\n',
   );
   await executable(
     join(bin, 'curl'),
@@ -255,7 +255,7 @@ printf 'artifact\n' > "$2"
 `,
   );
   try {
-    const { stdout } = await pexecFile('bash', [easHelper, 'ios', 'development'], {
+    const { stdout, stderr } = await pexecFile('bash', [easHelper, 'ios', 'development'], {
       cwd: project,
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
     });
@@ -264,23 +264,25 @@ printf 'artifact\n' > "$2"
     assert.equal(output.startsWith(join(await realpath(root), 'rn-eas-builds.')), true);
     assert.equal((await stat(output)).mode & 0o777, 0o700);
     assert.equal(await readFile(result.path, 'utf8'), 'artifact\n');
+    assert.doesNotMatch(stderr, /X-Amz-Signature|signed-secret|https:\/\//);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test('GH-575 failed EAS resolution removes private output and sanitizes diagnostics', async () => {
+test('GH-575 failed EAS resolution removes private output and classifies diagnostics', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-failure-'));
   const project = join(root, 'project');
   const bin = join(root, 'bin');
   const secret = 'secret-value-123456789';
+  const signedUrl = 'https://example.invalid/build?credential=quoted-secret';
   await mkdir(project);
   await mkdir(bin);
   await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
   await executable(
     join(bin, 'eas'),
     `#!/bin/sh
-printf 'Authentication failed EXPO_TOKEN=%s\n' '${secret}' >&2
+printf 'Authentication failed {"unknownCredential":"%s","url":"%s"}\n' '${secret}' '${signedUrl}' >&2
 exit 1
 `,
   );
@@ -294,13 +296,46 @@ exit 1
         const output = error as { stdout?: string; stderr?: string };
         const stdout = output.stdout ?? '';
         const result = JSON.parse(stdout) as { message: string };
-        assert.match(result.message, /Authentication failed/);
+        assert.match(result.message, /authentication failed; run eas whoami and authenticate\./);
         assert.doesNotMatch(stdout, new RegExp(secret));
         assert.doesNotMatch(output.stderr ?? '', new RegExp(secret));
-        assert.match(result.message, /\[REDACTED\]/);
+        assert.doesNotMatch(stdout, /quoted-secret|https:\/\//);
+        assert.doesNotMatch(output.stderr ?? '', /quoted-secret|https:\/\//);
         return true;
       },
     );
+    assert.equal(
+      (await readdir(root)).some((name) => name.startsWith('rn-eas-builds.')),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 auto-selected EAS profiles cannot escape the output directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-profile-'));
+  const project = join(root, 'project');
+  const escaped = join(root, 'target-ios.tar.gz');
+  await mkdir(project);
+  await writeFile(
+    join(project, 'eas.json'),
+    '{"build":{"../../target":{"ios":{"simulator":true}}}}\n',
+  );
+  try {
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios'], {
+        cwd: project,
+        env: { ...process.env, TMPDIR: root },
+      }),
+      (error: unknown) => {
+        const output = error as { stdout?: string };
+        const result = JSON.parse(output.stdout ?? '') as { message: string };
+        assert.match(result.message, /Invalid profile name/);
+        return true;
+      },
+    );
+    await assert.rejects(readFile(escaped));
     assert.equal(
       (await readdir(root)).some((name) => name.startsWith('rn-eas-builds.')),
       false,

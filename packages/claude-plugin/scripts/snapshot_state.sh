@@ -8,6 +8,19 @@ umask 077
 PLATFORM="auto"
 DEVICE_ID=""
 OUTPUT_DIR=""
+OWN_OUTPUT_DIR=0
+CAPTURE_SUCCEEDED=0
+TMP_XML=""
+
+cleanup() {
+  if [ -n "$TMP_XML" ] && [ -n "$DEVICE_ID" ]; then
+    adb -s "$DEVICE_ID" shell rm -f "$TMP_XML" >/dev/null 2>&1 || true
+  fi
+  if [ "$OWN_OUTPUT_DIR" -eq 1 ] && [ "$CAPTURE_SUCCEEDED" -ne 1 ] && [ -n "$OUTPUT_DIR" ]; then
+    rm -rf -- "$OUTPUT_DIR" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 if [ "$#" -gt 0 ] && { [ "$1" = "ios" ] || [ "$1" = "android" ] || [ "$1" = "auto" ]; }; then
   PLATFORM="$1"
@@ -96,6 +109,7 @@ if [ -z "$OUTPUT_DIR" ]; then
     echo "Error: Unable to create a private snapshot directory." >&2
     exit 1
   }
+  OWN_OUTPUT_DIR=1
 elif [ ! -e "$OUTPUT_DIR" ]; then
   mkdir -m 700 -- "$OUTPUT_DIR" || {
     echo "Error: Unable to create snapshot directory: $OUTPUT_DIR" >&2
@@ -139,6 +153,7 @@ case "$PLATFORM" in
       echo "Error: iOS screenshot capture failed." >&2
       exit 1
     fi
+    CAPTURE_SUCCEEDED=1
     echo "iOS snapshot saved to $SCREENSHOT_PATH"
     ;;
 
@@ -148,10 +163,6 @@ case "$PLATFORM" in
     validate_output_target "$SCREENSHOT_PATH"
     validate_output_target "$HIERARCHY_PATH"
     TMP_XML="/data/local/tmp/rn-dev-agent-uidump-$$.xml"
-    cleanup_device_xml() {
-      adb -s "$DEVICE_ID" shell rm -f "$TMP_XML" >/dev/null 2>&1 || true
-    }
-    trap cleanup_device_xml EXIT
 
     SCREENSHOT_OK=0
     if adb -s "$DEVICE_ID" exec-out screencap -p > "$SCREENSHOT_PATH"; then
@@ -185,11 +196,12 @@ except Exception as e:
       echo "Warning: UI hierarchy dump failed (exit $HIERARCHY_OK)." >&2
     fi
 
-    cleanup_device_xml
-    trap - EXIT
-    echo "Android snapshot saved to $OUTPUT_DIR/"
+    adb -s "$DEVICE_ID" shell rm -f "$TMP_XML" >/dev/null 2>&1 || true
+    TMP_XML=""
     if [ "$SCREENSHOT_OK" -ne 0 ] && [ "$HIERARCHY_OK" -ne 0 ]; then
       exit 1
     fi
+    CAPTURE_SUCCEEDED=1
+    echo "Android snapshot saved to $OUTPUT_DIR/"
     ;;
 esac

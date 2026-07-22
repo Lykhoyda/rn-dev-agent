@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -157,4 +167,80 @@ fi
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('GH-575 snapshot removes internally owned output when capture fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-snapshot-failure-'));
+  const bin = join(root, 'bin');
+  const udid = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
+  await mkdir(bin);
+  await executable(
+    join(bin, 'xcrun'),
+    `#!/bin/sh
+if [ "$1 $2 $3" = "simctl list devices" ]; then
+  printf '    iPhone One (%s) (Booted)\n' '${udid}'
+  exit 0
+fi
+exit 1
+`,
+  );
+  try {
+    await assert.rejects(
+      pexecFile('bash', [snapshotHelper, 'ios', '--device-id', udid], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
+      }),
+      /iOS screenshot capture failed/,
+    );
+    assert.equal(
+      (await readdir(root)).some((name) => name.startsWith('rn-snapshot.')),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 snapshot removes private Android output when both captures fail', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-snapshot-android-failure-'));
+  const bin = join(root, 'bin');
+  const serial = 'emulator-5556';
+  await mkdir(bin);
+  await executable(
+    join(bin, 'adb'),
+    `#!/bin/sh
+if [ "$1" = "devices" ]; then
+  printf 'List of devices attached\nemulator-5556\tdevice\n'
+  exit 0
+fi
+if [ "$3 $4 $5" = "shell rm -f" ]; then
+  exit 0
+fi
+exit 1
+`,
+  );
+  try {
+    await assert.rejects(
+      pexecFile('bash', [snapshotHelper, 'android', '--device-id', serial], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
+      }),
+    );
+    assert.equal(
+      (await readdir(root)).some((name) => name.startsWith('rn-snapshot.')),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 published snapshot docs describe exact sequential private capture', async () => {
+  const docs = await readFile(
+    resolve('apps/docs-site/src/content/docs/skills/rn-device-control.mdx'),
+    'utf8',
+  );
+  assert.match(docs, /snapshot_state\.sh" ios --device-id/);
+  assert.match(docs, /captures state sequentially/);
+  assert.match(docs, /owner-only private directory/);
+  assert.match(docs, /fails closed.*identity/s);
+  assert.doesNotMatch(docs, /Concurrent State Snapshot|simultaneously, cutting state-check time by ~40%/);
 });

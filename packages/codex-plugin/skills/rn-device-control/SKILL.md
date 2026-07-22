@@ -264,9 +264,11 @@ bash "<package-root>/scripts/snapshot_state.sh" android --device-id "$ANDROID_SE
 # Android output: screenshot.png + ui_elements.json
 ```
 
-`--device-id` is required. If `--output-dir` is omitted, the helper creates and
-reports a private retained directory; a supplied directory must be owned by the
-current user with mode `0700` and must not be a symlink.
+`--device-id` is required, and the helper fails closed when the identity is
+missing, unavailable, or ambiguous. If `--output-dir` is omitted, the helper
+creates an owner-only private directory, removes it when no artifact succeeds,
+and reports the retained path after capture; a supplied directory must be owned
+by the current user with mode `0700` and must not be a symlink.
 
 ---
 

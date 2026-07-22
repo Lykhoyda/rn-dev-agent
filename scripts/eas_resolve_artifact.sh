@@ -41,14 +41,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ -n "$PROFILE" ]; then
-  if ! [[ "$PROFILE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    printf '{"status":"error","code":1,"message":"Invalid profile name: must match ^[a-zA-Z0-9_-]+$"}\n' >&2
-    printf '{"status":"error","code":1,"message":"Invalid profile name: must match ^[a-zA-Z0-9_-]+$"}\n'
-    exit 1
-  fi
-fi
-
 json_escape() {
   local s="$1"
   s="${s//\\/\\\\}"
@@ -78,21 +70,36 @@ json_ambiguous() {
   exit 2
 }
 
-sanitized_diagnostic() {
+validate_profile() {
+  local profile="$1"
+  if [ -z "$profile" ] || ! [[ "$profile" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    json_error 1 "Invalid profile name: must match ^[a-zA-Z0-9_-]+$"
+  fi
+}
+
+classify_eas_failure() {
   local file="$1"
-  local sanitized
-  [ -s "$file" ] || return 0
-  sanitized=$(sed -E \
-    -e 's/(Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/gi' \
-    -e 's/((authorization|token|secret|password|api[_-]?key)[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/gi' \
-    -e 's#(https?://)[^/@[:space:]]+@#\1[REDACTED]@#g' \
-    -e 's/(sk|pk|ghp|xox[baprs])[-_][A-Za-z0-9_-]{16,}/[REDACTED]/g' \
-    "$file" 2>/dev/null | tr '\r\n\t' '   ' | LC_ALL=C tr -cd '[:print:]' | tail -c 1024) || sanitized='[diagnostic redaction failed]'
-  printf '%s' "$sanitized"
+  local sample
+  sample=$(LC_ALL=C head -c 16384 "$file" 2>/dev/null || true)
+  if printf '%s' "$sample" | grep -Eiq 'unauthorized|forbidden|not logged in|authentication|authorization'; then
+    printf '%s' 'authentication failed; run eas whoami and authenticate.'
+  elif printf '%s' "$sample" | grep -Eiq 'rate[ -]?limit|too many requests|HTTP[[:space:]]*429'; then
+    printf '%s' 'rate limit reached; retry later.'
+  elif printf '%s' "$sample" | grep -Eiq 'timed? out|timeout|ENOTFOUND|ECONNRESET|EAI_AGAIN|network|socket'; then
+    printf '%s' 'network request failed; check connectivity and retry.'
+  elif printf '%s' "$sample" | grep -Eiq 'project|build profile|profile.*(invalid|missing|not found|unknown)'; then
+    printf '%s' 'project or build profile was rejected; verify EAS configuration.'
+  else
+    printf '%s' 'build lookup failed; retry with EAS CLI diagnostics.'
+  fi
 }
 
 if [ -z "$PLATFORM" ] || { [ "$PLATFORM" != "ios" ] && [ "$PLATFORM" != "android" ]; }; then
   json_error 1 "Usage: eas_resolve_artifact.sh <ios|android> [profile] [output_dir]"
+fi
+
+if [ -n "$PROFILE" ]; then
+  validate_profile "$PROFILE"
 fi
 
 if [ ! -f "eas.json" ]; then
@@ -158,6 +165,7 @@ select_profile() {
 
 if [ -z "$PROFILE" ]; then
   select_profile "$PLATFORM"
+  validate_profile "$PROFILE"
   echo "Auto-selected EAS profile: $PROFILE" >&2
 fi
 
@@ -192,6 +200,10 @@ else
   ARTIFACT_NAME="${PROFILE}-${PLATFORM}.apk"
 fi
 ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
+if [ "$(dirname "$ARTIFACT_PATH")" != "$OUTPUT_DIR" ] || \
+  [ "$(basename "$ARTIFACT_PATH")" != "$ARTIFACT_NAME" ]; then
+  json_error 1 "Artifact destination must be one immediate file child of the output directory."
+fi
 if [ -L "$ARTIFACT_PATH" ] || { [ -e "$ARTIFACT_PATH" ] && [ ! -f "$ARTIFACT_PATH" ]; }; then
   json_error 1 "Artifact destination must be a regular file path: $ARTIFACT_PATH"
 fi
@@ -258,7 +270,7 @@ if "${EAS_CMD[@]}" build:list \
   fi
 
   if [ -n "$local_build_url" ]; then
-    echo "Downloading from: $local_build_url" >&2
+    echo "Downloading resolved EAS artifact..." >&2
     if curl -fSL --max-time 300 -o "$DOWNLOAD_PATH" "$local_build_url" 2>/dev/null; then
       if [ -L "$ARTIFACT_PATH" ] || { [ -e "$ARTIFACT_PATH" ] && [ ! -f "$ARTIFACT_PATH" ]; }; then
         json_error 1 "Artifact destination changed to a non-regular path: $ARTIFACT_PATH"
@@ -280,7 +292,7 @@ if "${EAS_CMD[@]}" build:list \
   fi
 else
   echo "EAS build:list failed or timed out" >&2
-  EAS_DIAGNOSTIC=$(sanitized_diagnostic "$BUILD_ERR")
+  EAS_DIAGNOSTIC=$(classify_eas_failure "$BUILD_ERR")
 fi
 
 # --- Tier 3: No artifact found ---

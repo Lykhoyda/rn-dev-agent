@@ -40,9 +40,21 @@ Cross-platform unified device interaction that eliminates platform-specific bran
 | Scroll/swipe | `device_swipe direction=up` |
 | System back | `device_back` |
 
-### Concurrent State Snapshot
+### Exact-device state snapshot
 
-`scripts/snapshot_state.sh` captures screenshot + UI hierarchy simultaneously, cutting state-check time by ~40%.
+The package-local helper captures state sequentially on one validated device:
+
+```bash
+bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" ios --device-id "$IOS_UDID" --output-dir "$SNAPSHOT_DIR"
+bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" android --device-id "$ANDROID_SERIAL" --output-dir "$SNAPSHOT_DIR"
+```
+
+`--device-id` is required. The helper fails closed if the identity is missing,
+not connected, or ambiguous across platforms. If `--output-dir` is omitted, it
+creates an owner-only private directory, removes it when capture produces no
+artifact, and reports the retained path after a successful capture. A supplied
+directory must be owned by the current user, use mode `0700`, and not be a
+symlink.
 
 ### Benchmark Reference
 
