@@ -9,6 +9,7 @@
 # In all modes, ensures Metro is running (starts it if not).
 #
 # Usage: bash scripts/expo_ensure_running.sh <platform> [OPTIONS]
+#   --device-id <id>      Exact iOS simulator UDID or Android adb serial
 #   --artifact <path>     Path to .tar.gz (iOS) or .apk (Android)
 #   --bundle-id <id>      App bundle ID (auto-read from app.json if omitted)
 #   --metro-port <port>   Metro port override (default: auto-detect)
@@ -29,13 +30,14 @@ PLATFORM="${1:-}"
 shift || true
 ARTIFACT_PATH=""
 BUNDLE_ID=""
+DEVICE_ID=""
 METRO_PORT=""
 START_METRO="true"
 
 METRO_PORTS=(8081 8082 19000 19006)
 METRO_TIMEOUT_S=30
 METRO_POLL_INTERVAL_S=2
-TMP_DIR=$(mktemp -d /tmp/rn-dev-agent.XXXXXX)
+TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rn-dev-agent.XXXXXX")
 # Keep the logs on failure — error messages point the user at
 # "$TMP_DIR/metro.log" etc., so deleting them unconditionally on exit removed
 # exactly what the user was told to read. Only clean up on success.
@@ -61,7 +63,7 @@ json_escape() {
 json_ok() {
   local port="${1:-0}"
   local installed="${2:-false}"
-  printf '{"status":"ok","metro_port":%d,"platform":"%s","installed_fresh":%s}\n' "$port" "$PLATFORM" "$installed"
+  printf '{"status":"ok","metro_port":%d,"platform":"%s","device_id":"%s","installed_fresh":%s}\n' "$port" "$PLATFORM" "$DEVICE_ID" "$installed"
 }
 
 json_error() {
@@ -75,11 +77,32 @@ json_error() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --artifact) ARTIFACT_PATH="$2"; shift 2 ;;
-    --bundle-id) BUNDLE_ID="$2"; shift 2 ;;
-    --metro-port) METRO_PORT="$2"; shift 2 ;;
-    --start-metro) START_METRO="$2"; shift 2 ;;
-    *) shift ;;
+    --device-id)
+      [ "$#" -ge 2 ] || json_error 1 "--device-id requires a value"
+      DEVICE_ID="$2"
+      shift 2
+      ;;
+    --artifact)
+      [ "$#" -ge 2 ] || json_error 1 "--artifact requires a value"
+      ARTIFACT_PATH="$2"
+      shift 2
+      ;;
+    --bundle-id)
+      [ "$#" -ge 2 ] || json_error 1 "--bundle-id requires a value"
+      BUNDLE_ID="$2"
+      shift 2
+      ;;
+    --metro-port)
+      [ "$#" -ge 2 ] || json_error 1 "--metro-port requires a value"
+      METRO_PORT="$2"
+      shift 2
+      ;;
+    --start-metro)
+      [ "$#" -ge 2 ] || json_error 1 "--start-metro requires a value"
+      START_METRO="$2"
+      shift 2
+      ;;
+    *) json_error 1 "Unknown option: $1" ;;
   esac
 done
 
@@ -87,6 +110,18 @@ if [ -n "$BUNDLE_ID" ]; then
   if ! [[ "$BUNDLE_ID" =~ ^[a-zA-Z][a-zA-Z0-9_.]*$ ]]; then
     json_error 1 "Invalid bundle ID '$BUNDLE_ID': must match ^[a-zA-Z][a-zA-Z0-9_.]*$"
   fi
+fi
+
+if [ -n "$DEVICE_ID" ] && ! [[ "$DEVICE_ID" =~ ^[a-zA-Z0-9._:-]+$ ]]; then
+  json_error 1 "Invalid device ID '$DEVICE_ID': must match ^[a-zA-Z0-9._:-]+$"
+fi
+
+if [ -n "$METRO_PORT" ] && ! [[ "$METRO_PORT" =~ ^[0-9]+$ ]]; then
+  json_error 1 "Invalid Metro port '$METRO_PORT': expected digits"
+fi
+
+if [ "$START_METRO" != "true" ] && [ "$START_METRO" != "false" ]; then
+  json_error 1 "Invalid --start-metro value '$START_METRO': expected true or false"
 fi
 
 if [ -z "$PLATFORM" ] || { [ "$PLATFORM" != "ios" ] && [ "$PLATFORM" != "android" ]; }; then
@@ -132,21 +167,36 @@ resolve_bundle_id() {
 
 detect_device() {
   if [ "$PLATFORM" = "ios" ]; then
-    if ! xcrun simctl list devices booted 2>/dev/null | grep -q "Booted"; then
-      json_error 1 "No booted iOS simulator found. Run: xcrun simctl boot 'iPhone 16 Pro'"
+    local devices device_count
+    devices=$(xcrun simctl list devices booted 2>/dev/null | grep -E '\([0-9A-Fa-f-]+\) \(Booted\)' || true)
+    device_count=$(printf '%s\n' "$devices" | grep -c . || true)
+    if [ -n "$DEVICE_ID" ]; then
+      if ! printf '%s\n' "$devices" | grep -Fq "($DEVICE_ID) (Booted)"; then
+        json_error 1 "Selected iOS simulator is not booted: $DEVICE_ID"
+      fi
+    elif [ "$device_count" -eq 1 ]; then
+      DEVICE_ID=$(printf '%s\n' "$devices" | sed -E 's/.*\(([0-9A-Fa-f-]+)\) \(Booted\).*/\1/')
+    elif [ "$device_count" -eq 0 ]; then
+      json_error 1 "No booted iOS simulator found."
+    else
+      json_error 1 "Multiple booted iOS simulators found; pass --device-id with the selected UDID."
     fi
   else
-    if ! adb devices 2>/dev/null | grep -q "device$"; then
-      json_error 1 "No connected Android emulator/device found. Start an emulator from Android Studio."
+    local devices device_count
+    devices=$(adb devices 2>/dev/null | awk '$2 == "device" { print $1 }')
+    device_count=$(printf '%s\n' "$devices" | grep -c . || true)
+    if [ -n "$DEVICE_ID" ]; then
+      if ! printf '%s\n' "$devices" | awk -v id="$DEVICE_ID" '$1 == id { found = 1 } END { exit !found }'; then
+        json_error 1 "Selected Android device is not connected: $DEVICE_ID"
+      fi
+    elif [ "$device_count" -eq 1 ]; then
+      DEVICE_ID="$devices"
+    elif [ "$device_count" -eq 0 ]; then
+      json_error 1 "No connected Android emulator/device found."
+    else
+      json_error 1 "Multiple connected Android devices found; pass --device-id with the selected serial."
     fi
-    # Handle multiple devices
-    local device_count
-    device_count=$(adb devices 2>/dev/null | grep -c "device$" || true)
-    if [ "$device_count" -gt 1 ] && [ -z "${ANDROID_SERIAL:-}" ]; then
-      export ANDROID_SERIAL
-      ANDROID_SERIAL=$(adb devices | grep -m1 "device$" | awk '{print $1}')
-      echo "Warning: Multiple Android devices ($device_count). Auto-selecting $ANDROID_SERIAL." >&2
-    fi
+    export ANDROID_SERIAL="$DEVICE_ID"
   fi
 }
 
@@ -242,11 +292,11 @@ install_ios_artifact() {
   fi
 
   echo "Installing $app_path on simulator..." >&2
-  xcrun simctl install booted "$app_path" || json_error 3 "simctl install failed for $app_path"
+  xcrun simctl install "$DEVICE_ID" "$app_path" || json_error 3 "simctl install failed for $app_path"
 
   if [ -n "$BUNDLE_ID" ]; then
     echo "Launching $BUNDLE_ID..." >&2
-    xcrun simctl launch booted "$BUNDLE_ID" 2>/dev/null || {
+    xcrun simctl launch "$DEVICE_ID" "$BUNDLE_ID" 2>/dev/null || {
       echo "Warning: simctl launch failed for $BUNDLE_ID. App may need manual launch." >&2
     }
   else
@@ -264,12 +314,12 @@ install_android_artifact() {
   fi
 
   echo "Installing $artifact on emulator..." >&2
-  adb install -r "$artifact" || json_error 3 "adb install failed for $artifact"
+  adb -s "$DEVICE_ID" install -r "$artifact" || json_error 3 "adb install failed for $artifact"
 
   if [ -n "$BUNDLE_ID" ]; then
     echo "Launching $BUNDLE_ID..." >&2
-    adb shell am start -n "${BUNDLE_ID}/.MainActivity" 2>/dev/null || \
-      adb shell monkey -p "$BUNDLE_ID" -c android.intent.category.LAUNCHER 1 2>/dev/null || {
+    adb -s "$DEVICE_ID" shell am start -n "${BUNDLE_ID}/.MainActivity" 2>/dev/null || \
+      adb -s "$DEVICE_ID" shell monkey -p "$BUNDLE_ID" -c android.intent.category.LAUNCHER 1 2>/dev/null || {
         echo "Warning: Failed to launch $BUNDLE_ID. App may need manual launch." >&2
       }
   else
@@ -283,13 +333,13 @@ local_dev_build() {
   echo "Running local dev build for $PLATFORM..." >&2
 
   if [ "$PLATFORM" = "ios" ]; then
-    npx expo run:ios 2>&1 | tee "$TMP_DIR/build-ios.log" >&2 || {
+    npx expo run:ios --device "$DEVICE_ID" 2>&1 | tee "$TMP_DIR/build-ios.log" >&2 || {
       echo "iOS build failed. Last 20 lines:" >&2
       tail -20 "$TMP_DIR/build-ios.log" >&2 2>/dev/null || true
       json_error 4 "Local iOS build failed. Check $TMP_DIR/build-ios.log"
     }
   else
-    npx expo run:android 2>&1 | tee "$TMP_DIR/build-android.log" >&2 || {
+    ANDROID_SERIAL="$DEVICE_ID" npx expo run:android --device "$DEVICE_ID" 2>&1 | tee "$TMP_DIR/build-android.log" >&2 || {
       echo "Android build failed. Last 20 lines:" >&2
       tail -20 "$TMP_DIR/build-android.log" >&2 2>/dev/null || true
       json_error 4 "Local Android build failed. Check $TMP_DIR/build-android.log"

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,6 +23,17 @@ test(
     const bin = join(home, 'bin');
     await mkdir(bin);
     const codex = join(bin, 'codex');
+    const poisonMarker = join(home, 'runtime-override-executed');
+    const poisonSupervisor = join(home, 'poison-supervisor.js');
+    const poisonWorker = join(home, 'poison-worker.js');
+    await writeFile(
+      poisonSupervisor,
+      `require('node:fs').writeFileSync(process.env.POISON_MARKER, 'supervisor')\n`,
+    );
+    await writeFile(
+      poisonWorker,
+      `require('node:fs').writeFileSync(process.env.POISON_MARKER, 'worker')\n`,
+    );
     await writeFile(
       codex,
       `#!/bin/sh
@@ -61,7 +73,17 @@ fi
       ];
       const { stdout } = await pexecFile(process.execPath, [health, ...args], {
         cwd: packageRoot,
-        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+        env: {
+          ...process.env,
+          HOME: home,
+          PATH: `${bin}:${process.env.PATH}`,
+          POISON_MARKER: poisonMarker,
+          RN_DEV_AGENT_CORE_SUPERVISOR: poisonSupervisor,
+          RN_DEV_AGENT_CORE_ROOT: home,
+          RN_BRIDGE_WORKER_PATH: poisonWorker,
+          RN_BRIDGE_SUPERVISOR: '0',
+          RN_DEV_AGENT_CODEX_PLUGIN_ROOT: join(home, 'foreign-plugin'),
+        },
         timeout: 25_000,
         maxBuffer: 2 * 1024 * 1024,
       });
@@ -79,6 +101,7 @@ fi
       assert.equal(report.mcpContractProbe.status, 'HEALTHY');
       assert.equal(report.mcpContractProbe.toolCount, 79);
       assert.equal(report.directProofSchema.status, 'USABLE');
+      assert.equal(existsSync(poisonMarker), false);
       assert.deepEqual(report.installation.matches, [
         {
           pluginId: 'rn-dev-agent@rn-dev-agent',

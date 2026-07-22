@@ -51,6 +51,13 @@ export const PROOF_ACTIONS = [
   'discard',
   'contract',
 ] as const;
+const CONTRACT_PROBE_RUNTIME_OVERRIDES = [
+  'RN_DEV_AGENT_CORE_SUPERVISOR',
+  'RN_DEV_AGENT_CORE_ROOT',
+  'RN_BRIDGE_WORKER_PATH',
+  'RN_BRIDGE_SUPERVISOR',
+  'RN_DEV_AGENT_CODEX_PLUGIN_ROOT',
+] as const;
 
 export interface ObservationInput {
   taskSkills: string[];
@@ -84,7 +91,7 @@ export interface HealthFacts {
     canaries: Record<string, boolean>;
     stderr?: string;
   };
-  directProofSchema: { status: string; actions: string[] };
+  directProofSchema: { status: 'USABLE' | 'UNUSABLE' | 'UNKNOWN'; actions: string[] };
   taskSkillInventory: { status: string; complete: boolean; observed: string[]; missing: string[] };
   taskMcpInventory: { status: string; complete: boolean; observed: string[]; missing: string[] };
   observedTransport: { status: string; provenance: 'caller' };
@@ -319,12 +326,14 @@ function redactValue(
 export function probeMcpContract(packageRoot: string, timeoutMs = 12_000): Promise<ProbeResult> {
   return new Promise((resolveProbe) => {
     const launcher = join(packageRoot, 'bin', 'cdp-supervisor.js');
+    const env = { ...process.env };
+    for (const name of CONTRACT_PROBE_RUNTIME_OVERRIDES) delete env[name];
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn(process.execPath, [launcher, '--diagnostic-contract-probe'], {
         cwd: packageRoot,
         env: {
-          ...process.env,
+          ...env,
           RN_DEV_AGENT_LOG_LEVEL: 'warn',
           LOG_LEVEL: 'warn',
           RN_AGENT_OBSERVE_AUTOSTART: '0',
@@ -338,18 +347,29 @@ export function probeMcpContract(packageRoot: string, timeoutMs = 12_000): Promi
 
     let stdout = '';
     let stderr = '';
-    let settled = false;
+    let resolved = false;
     let initialized = false;
-    const finish = (result: ProbeResult): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.stdin.end();
-      const reap = setTimeout(() => {
-        if (child.exitCode === null) child.kill('SIGTERM');
-      }, 1_000);
-      reap.unref();
+    let pendingResult: ProbeResult | null = null;
+    let shutdownTimer: NodeJS.Timeout | null = null;
+    const resolveResult = (result: ProbeResult): void => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(requestTimer);
+      if (shutdownTimer) clearTimeout(shutdownTimer);
       resolveProbe({ ...result, stderr: redactDiagnostic(cap(stderr), packageRoot) });
+    };
+    const signalOwnedChild = (): void => {
+      if (child.exitCode === null && child.pid !== undefined) child.kill('SIGTERM');
+    };
+    const finish = (result: ProbeResult, timedOut = false): void => {
+      if (pendingResult || resolved) return;
+      pendingResult = result;
+      clearTimeout(requestTimer);
+      if (!child.stdin.destroyed) child.stdin.end();
+      if (child.exitCode !== null) return resolveResult(result);
+      if (timedOut) return signalOwnedChild();
+      shutdownTimer = setTimeout(signalOwnedChild, 1_000);
+      shutdownTimer.unref();
     };
     const send = (message: unknown): void => child.stdin.write(`${JSON.stringify(message)}\n`);
     const consume = (): void => {
@@ -384,12 +404,23 @@ export function probeMcpContract(packageRoot: string, timeoutMs = 12_000): Promi
     child.stderr.on('data', (chunk: Buffer) => {
       stderr = cap(stderr + chunk.toString('utf8'));
     });
-    child.on('error', (error) => finish({ ok: false, tools: [], stderr, error: error.message }));
-    child.on('exit', (code) => {
-      if (!settled) finish({ ok: false, tools: [], stderr, error: `launcher exited ${code}` });
+    child.on('error', (error) => {
+      const result = { ok: false, tools: [], stderr, error: error.message };
+      if (child.pid === undefined) resolveResult(result);
+      else finish(result, true);
     });
-    const timer = setTimeout(
-      () => finish({ ok: false, tools: [], stderr, error: 'contract probe timed out' }),
+    child.on('exit', (code) => {
+      resolveResult(
+        pendingResult ?? {
+          ok: false,
+          tools: [],
+          stderr,
+          error: `launcher exited ${code}`,
+        },
+      );
+    });
+    const requestTimer = setTimeout(
+      () => finish({ ok: false, tools: [], stderr, error: 'contract probe timed out' }, true),
       timeoutMs,
     );
     send({
@@ -463,9 +494,11 @@ export function classifyHealth(
     );
 
   const directHealthy =
+    facts.installation.status === 'ENABLED' &&
     facts.materialization.status === 'EXACT_HEALTHY' &&
     facts.mcpRegistration.status === 'REGISTERED' &&
-    facts.mcpContractProbe.status === 'HEALTHY';
+    facts.mcpContractProbe.status === 'HEALTHY' &&
+    facts.directProofSchema.status === 'USABLE';
   const skillAbsent =
     facts.taskSkillInventory.complete && facts.taskSkillInventory.observed.length === 0;
   const mcpAbsent = facts.taskMcpInventory.complete && facts.taskMcpInventory.observed.length === 0;
@@ -555,13 +588,16 @@ export function classifyHealth(
   }
   if (
     [...codes].some((code) => code.startsWith('STALE_')) ||
-    codes.has('ACTIVE_TRANSPORT_CLOSED') ||
-    codes.has('LEGACY_HOST_RESTART_REQUIRED')
+    codes.has('ACTIVE_TRANSPORT_CLOSED')
   ) {
     nextActions.push(
-      'Exit and relaunch Codex; external mutations and legacy hosts cannot refresh this process.',
+      'After an external plugin change, exit and relaunch Codex; same-app changes on Codex >= 0.145.0 can refresh on a later turn.',
     );
   }
+  if (codes.has('LEGACY_HOST_RESTART_REQUIRED'))
+    nextActions.push(
+      'Upgrade Codex to >= 0.145.0 for same-app live refresh, or exit and relaunch this legacy host after plugin changes.',
+    );
   if (codes.has('SERVER_SCHEMA_EXPOSURE_FAILURE'))
     nextActions.push(
       'Install a plugin release containing the proof_capture publication fix, then relaunch Codex.',
@@ -714,10 +750,11 @@ export async function collectHealth(input: ObservationInput): Promise<HealthRepo
   const publishedProof = publishedProofContract(proofTool);
   const schemaActions = new Set(publishedProof.actions);
   const directProofSchema = {
-    status:
-      publishedProof.usableShape && PROOF_ACTIONS.every((action) => schemaActions.has(action))
-        ? 'USABLE'
-        : 'UNUSABLE',
+    status: !probe.ok
+      ? ('UNKNOWN' as const)
+      : publishedProof.usableShape && PROOF_ACTIONS.every((action) => schemaActions.has(action))
+        ? ('USABLE' as const)
+        : ('UNUSABLE' as const),
     actions: publishedProof.actions.sort(),
   };
 

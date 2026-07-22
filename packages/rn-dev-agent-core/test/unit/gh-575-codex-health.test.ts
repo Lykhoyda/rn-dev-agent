@@ -145,6 +145,48 @@ test('GH-575 complete explicit absence is stale and retains simultaneous finding
     ]),
   );
   assert.ok(result.nextActions.some((action) => action.includes('relaunch')));
+  assert.ok(result.nextActions.some((action) => action.includes('>= 0.145.0')));
+  assert.ok(result.nextActions.some((action) => action.includes('after plugin changes')));
+});
+
+test('GH-575 stale classification requires every direct-health prerequisite', () => {
+  const disabled = healthyFacts();
+  disabled.installation.status = 'DISABLED';
+  disabled.taskSkillInventory = {
+    status: 'ABSENT',
+    complete: true,
+    observed: [],
+    missing: [...EXPECTED_SKILLS],
+  };
+  disabled.taskMcpInventory = {
+    status: 'ABSENT',
+    complete: true,
+    observed: [],
+    missing: [...MCP_CANARIES],
+  };
+  const unusableSchema = structuredClone(disabled);
+  unusableSchema.installation.status = 'ENABLED';
+  unusableSchema.directProofSchema.status = 'UNUSABLE';
+
+  for (const facts of [disabled, unusableSchema]) {
+    const result = classifyHealth(facts);
+    assert.equal(
+      result.findings.some((finding) => finding.code.startsWith('STALE_')),
+      false,
+    );
+  }
+});
+
+test('GH-575 failed contract probe leaves direct proof schema unknown', () => {
+  const facts = healthyFacts();
+  facts.mcpContractProbe.status = 'FAILED';
+  facts.directProofSchema.status = 'UNKNOWN';
+  const result = classifyHealth(facts);
+  assert.equal(result.primaryFinding, 'MCP_CONTRACT_PROBE_FAILED');
+  assert.equal(
+    result.findings.some((finding) => finding.code === 'SERVER_SCHEMA_EXPOSURE_FAILURE'),
+    false,
+  );
 });
 
 test('GH-575 installation/materialization failures outrank task observations', () => {

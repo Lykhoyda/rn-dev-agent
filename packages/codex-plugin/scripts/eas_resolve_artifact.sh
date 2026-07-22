@@ -9,7 +9,7 @@
 # Usage: bash scripts/eas_resolve_artifact.sh <platform> [profile] [output_dir]
 #   platform:   ios | android
 #   profile:    EAS build profile name (optional, auto-selected if unambiguous)
-#   output_dir: where to store downloaded artifacts (default: /tmp/rn-eas-builds)
+#   output_dir: where to store downloaded artifacts (default: $TMPDIR/rn-eas-builds)
 #
 # Exit codes:
 #   0 — artifact resolved, JSON on stdout
@@ -24,11 +24,7 @@ set -euo pipefail
 
 PLATFORM="${1:-}"
 PROFILE="${2:-}"
-OUTPUT_DIR="${3:-}"
-if [ -z "$OUTPUT_DIR" ]; then
-  OUTPUT_DIR=$(mktemp -d /tmp/rn-eas-builds.XXXXXX)
-  trap 'rm -rf "$OUTPUT_DIR"' EXIT
-fi
+OUTPUT_DIR="${3:-${TMPDIR:-/tmp}/rn-eas-builds}"
 CACHE_MAX_AGE_HOURS=24
 
 if [ -n "$PROFILE" ]; then
@@ -76,6 +72,7 @@ if [ ! -f "eas.json" ]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd -P)
 
 # --- Profile auto-selection ---
 # Writes result to PROFILE global variable directly (not via subshell)
@@ -175,9 +172,9 @@ if ! command -v eas &>/dev/null && ! command -v npx &>/dev/null; then
   json_error 3 "EAS CLI not available. Install: npm install -g eas-cli"
 fi
 
-EAS_CMD="eas"
+EAS_CMD=(eas)
 if ! command -v eas &>/dev/null; then
-  EAS_CMD="npx eas-cli"
+  EAS_CMD=(npx eas-cli)
 fi
 
 echo "Downloading artifact from EAS (platform=$PLATFORM, profile=$PROFILE)..." >&2
@@ -192,7 +189,7 @@ fi
 ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
 
 # Query EAS for latest finished build
-if $EAS_CMD build:list \
+if "${EAS_CMD[@]}" build:list \
   --platform "$PLATFORM" \
   --buildProfile "$PROFILE" \
   --status finished \
@@ -206,10 +203,10 @@ if $EAS_CMD build:list \
     local_build_url=$(jq -r '.[0].artifacts.buildUrl // empty' "${OUTPUT_DIR}/build-info.json" 2>/dev/null || true)
   elif command -v node &>/dev/null; then
     local_build_url=$(node -e "
-      const d = require('${OUTPUT_DIR}/build-info.json');
+      const d = require(process.argv[1]);
       const url = d?.[0]?.artifacts?.buildUrl;
       if (url) console.log(url);
-    " 2>/dev/null || true)
+    " "${OUTPUT_DIR}/build-info.json" 2>/dev/null || true)
   fi
 
   if [ -n "$local_build_url" ]; then

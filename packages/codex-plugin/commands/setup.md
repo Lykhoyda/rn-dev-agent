@@ -42,7 +42,7 @@ runs from `<!-- rn-dev-agent:codex-template-start -->` through
 - Never create, append, replace, or symlink `CLAUDE.md` or `CLAUDE.local.md`.
   Existing Claude files are left byte-identical.
 - No `AGENTS.md`: preview a new file containing the managed body, then ask.
-- Existing file without the start marker: preview appending the complete block
+- Existing file containing neither marker: preview appending the complete block
   with safe separating newlines, then ask.
 - Both markers present once: extract only that range and compare it to the
   package body. If equal, skip. If different, show the block-only diff, warn

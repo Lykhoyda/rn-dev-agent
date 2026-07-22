@@ -25,16 +25,24 @@ MCP tools are not inherited by spawned subagents. Use `rn-device-control` and
 
 1. Require active `device_list` and `cdp_status` tools. If they are absent, stop
    and route to the read-only discovery diagnosis.
-2. Select exactly one target platform/device. Stop on ambiguity.
+2. Select exactly one target platform/device and retain its exact iOS UDID or
+   Android serial as `<device-id>`. Stop on ambiguity.
 3. If `cdp_status` already reports the intended development app connected,
    skip the build and continue to Phase B.
-4. Local mode: invoke the package helper with an argv array equivalent to:
-   `bash <package-root>/scripts/expo_ensure_running.sh <ios|android>`.
+4. Local mode: invoke the package helper with a separately quoted argv array
+   equivalent to:
+   `bash "<package-root>/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>"`.
 5. EAS mode:
    - validate profile with `[A-Za-z0-9_-]+`;
-   - invoke `bash <package-root>/scripts/eas_resolve_artifact.sh <platform> <profile>`;
+   - create one caller-owned artifact directory with `mktemp -d`, retain its
+     exact path, and invoke
+     `bash "<package-root>/scripts/eas_resolve_artifact.sh" "<platform>" "<profile>" "<artifact-dir>"`;
    - parse its JSON and require `status: ok` plus an absolute artifact path;
-   - invoke `bash <package-root>/scripts/expo_ensure_running.sh <platform> --artifact <path>`.
+   - invoke
+     `bash "<package-root>/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>" --artifact "<artifact-path>"`;
+   - after the install attempt completes, run cleanup equivalent to
+     `rm -rf -- "<artifact-dir>"` for only that exact caller-owned directory;
+     never clean it before the install helper returns.
 6. Parse helper JSON and surface stable errors. Do not silently fall back from a
    requested EAS build to local build.
 7. Call `cdp_status`; require `ok:true` and the intended app/device.
@@ -55,7 +63,8 @@ Follow the package-local `test-feature` workflow and `rn-testing` skill:
 
 ## Completion gate
 
-- [ ] Intended app/device and platform are unambiguous.
+- [ ] Intended app/device and platform are unambiguous and the helper received
+      the exact selected UDID/serial.
 - [ ] `cdp_status` reports the intended app connected after Phase A.
 - [ ] Every assertion has concrete evidence.
 - [ ] At least one screenshot is saved.
