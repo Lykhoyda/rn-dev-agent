@@ -49,15 +49,19 @@ Each successful EAS download is published once as an immutable tokenized file:
 
 ```text
 ARTIFACT_DIR/
-├── .eas-latest-<app-key>-development-ios.manifest
+├── .eas-cache-<project-id>-development-ios-A1b2C3.json
 └── development-ios-A1b2C3.tar.gz
 ```
 
-The owner-only `0600` manifest is scoped to the exact app, profile, and platform
-and atomically points to the newest successful immutable artifact. Cache reuse
-accepts only a fresh, nonempty, owner-controlled regular file that is an
-immediate child of the private `0700` artifact directory. Previously returned
-artifact paths are never replaced or modified.
+The owner-only `0600` sidecar records the exact Expo/EAS project ID, profile,
+platform, EAS build ID, remote completion or creation timestamp, and paired
+artifact name. Cache reuse is enabled only when the project ID is statically
+provable from Expo JSON metadata; dynamic or missing project identity skips the
+cache and performs a fresh EAS lookup. The resolver validates every immutable
+sidecar and paired fresh, nonempty, owner-controlled regular file, then chooses
+the newest remote build timestamp and ID deterministically. Both files remain
+immediate children of the private `0700` artifact directory, and previously
+returned paths are never replaced or modified.
 
 ### EAS profile auto-selection rules
 

@@ -20,6 +20,26 @@ import { promisify } from 'node:util';
 const pexecFile = promisify(execFile);
 const expoHelper = resolve('scripts/expo_ensure_running.sh');
 const easHelper = resolve('scripts/eas_resolve_artifact.sh');
+const firstProjectId = '11111111-1111-4111-8111-111111111111';
+const secondProjectId = '22222222-2222-4222-8222-222222222222';
+
+function expoAppJson(projectId: string): string {
+  return `${JSON.stringify({ expo: { extra: { eas: { projectId } } } })}\n`;
+}
+
+function easBuildJson(
+  url: string,
+  options: { projectId?: string; buildId?: string; completedAt?: string } = {},
+): string {
+  return JSON.stringify([
+    {
+      id: options.buildId ?? 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      project: { id: options.projectId ?? firstProjectId },
+      completedAt: options.completedAt ?? '2026-07-22T10:00:00.000Z',
+      artifacts: { buildUrl: url },
+    },
+  ]);
+}
 
 async function executable(path: string, contents: string): Promise<void> {
   await writeFile(path, contents);
@@ -57,9 +77,10 @@ test('GH-575 packaged EAS references document immutable app-scoped cache paths',
     'utf8',
   );
   for (const reference of [source, codex]) {
-    assert.match(reference, /\.eas-latest-<app-key>-development-ios\.manifest/);
+    assert.match(reference, /\.eas-cache-<project-id>-development-ios-A1b2C3\.json/);
     assert.match(reference, /development-ios-A1b2C3\.tar\.gz/);
-    assert.match(reference, /fresh, nonempty, owner-controlled regular file/);
+    assert.match(reference, /exact Expo\/EAS project ID/);
+    assert.match(reference, /newest remote build timestamp and ID deterministically/);
     assert.doesNotMatch(reference, /"path":"\/private\/path\/development-ios\.tar\.gz"/);
   }
 });
@@ -202,7 +223,7 @@ test('GH-575 Android device discovery failure still returns valid JSON', async (
   }
 });
 
-test('GH-575 caller-owned EAS cache reuses its private immutable manifest target', async () => {
+test('GH-575 caller-owned EAS cache reuses its validated immutable sidecar pair', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-helper-'));
   const project = join(root, 'project');
   const cache = join(root, 'artifacts');
@@ -214,11 +235,12 @@ test('GH-575 caller-owned EAS cache reuses its private immutable manifest target
   await chmod(cache, 0o700);
   await mkdir(bin);
   await writeFile(join(project, 'eas.json'), '{"build":{"development":{}}}\n');
+  await writeFile(join(project, 'app.json'), expoAppJson(firstProjectId));
   await executable(
     join(bin, 'eas'),
     `#!/bin/sh
 printf 'call\n' >> "$MOCK_EAS_CALLS"
-printf '[{"artifacts":{"buildUrl":"https://example.invalid/development"}}]\n'
+printf '%s\n' '${easBuildJson('https://example.invalid/development')}'
 `,
   );
   await executable(
@@ -252,11 +274,18 @@ printf 'artifact\n' > "$2"
     assert.equal(await readFile(firstResult.path, 'utf8'), 'artifact\n');
     assert.equal(await readFile(easCalls, 'utf8'), 'call\n');
 
-    const manifestName = (await readdir(cache)).find((name) => name.startsWith('.eas-latest-'));
-    assert.ok(manifestName);
-    const manifest = join(cache, manifestName);
-    assert.equal((await stat(manifest)).mode & 0o777, 0o600);
-    assert.equal(await readFile(manifest, 'utf8'), `${basename(firstResult.path)}\n`);
+    const sidecarName = (await readdir(cache)).find((name) => name.startsWith('.eas-cache-'));
+    assert.ok(sidecarName);
+    const sidecar = join(cache, sidecarName);
+    assert.equal((await stat(sidecar)).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(await readFile(sidecar, 'utf8')), {
+      projectId: firstProjectId,
+      platform: 'ios',
+      profile: 'development',
+      buildId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      buildTimestamp: '2026-07-22T10:00:00.000Z',
+      artifact: basename(firstResult.path),
+    });
 
     await writeFile(firstResult.path, '');
     await assert.rejects(
@@ -266,11 +295,11 @@ printf 'artifact\n' > "$2"
     await writeFile(firstResult.path, 'artifact\n');
 
     await writeFile(foreign, 'foreign\n');
-    await rm(manifest);
-    await symlink(foreign, manifest);
+    await rm(sidecar);
+    await symlink(foreign, sidecar);
     await assert.rejects(
       pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project, env }),
-      /Artifact manifest must be a regular file/,
+      /Artifact cache sidecar must be a regular file/,
     );
     assert.equal(await readFile(foreign, 'utf8'), 'foreign\n');
   } finally {
@@ -291,7 +320,9 @@ test('GH-575 EAS cache keys profiles by exact artifact name', async () => {
   await writeFile(join(cache, 'development-ios.tar.gz'), 'wrong profile');
   await executable(
     join(bin, 'eas'),
-    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/dev"}}]\\n\'\n',
+    `#!/bin/sh
+printf '%s\n' '${easBuildJson('https://example.invalid/dev')}'
+`,
   );
   await executable(
     join(bin, 'curl'),
@@ -316,25 +347,28 @@ printf 'dev artifact\n' > "$2"
   }
 });
 
-test('GH-575 EAS manifests isolate applications sharing one private cache', async () => {
+test('GH-575 EAS cache identity follows the exact project ID, not the checkout path', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-app-key-'));
-  const firstProject = join(root, 'first-app');
-  const secondProject = join(root, 'second-app');
+  const project = join(root, 'project');
   const cache = join(root, 'artifacts');
   const bin = join(root, 'bin');
   const calls = join(root, 'eas.calls');
-  for (const directory of [firstProject, secondProject, cache, bin]) {
+  for (const directory of [project, cache, bin]) {
     await mkdir(directory);
   }
   await chmod(cache, 0o700);
-  await writeFile(join(firstProject, 'eas.json'), '{"build":{}}\n');
-  await writeFile(join(secondProject, 'eas.json'), '{"build":{}}\n');
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  await writeFile(join(project, 'app.json'), expoAppJson(firstProjectId));
   await executable(
     join(bin, 'eas'),
     `#!/bin/sh
-app=$(basename "$PWD")
-printf '%s\n' "$app" >> "$MOCK_EAS_CALLS"
-printf '[{"artifacts":{"buildUrl":"https://example.invalid/%s"}}]\n' "$app"
+if grep -q '${firstProjectId}' app.json; then
+  printf 'first\n' >> "$MOCK_EAS_CALLS"
+  printf '%s\n' '${easBuildJson('https://example.invalid/first', { projectId: firstProjectId, buildId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' })}'
+else
+  printf 'second\n' >> "$MOCK_EAS_CALLS"
+  printf '%s\n' '${easBuildJson('https://example.invalid/second', { projectId: secondProjectId, buildId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })}'
+fi
 `,
   );
   await executable(
@@ -352,15 +386,17 @@ printf '%s\n' "$config" > "$2"
   };
   try {
     const first = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
-      cwd: firstProject,
+      cwd: project,
       env,
     });
+    await writeFile(join(project, 'app.json'), expoAppJson(secondProjectId));
     const second = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
-      cwd: secondProject,
+      cwd: project,
       env,
     });
+    await writeFile(join(project, 'app.json'), expoAppJson(firstProjectId));
     const firstAgain = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
-      cwd: firstProject,
+      cwd: project,
       env,
     });
     const firstResult = JSON.parse(first.stdout) as { path: string; source: string };
@@ -371,13 +407,55 @@ printf '%s\n' "$config" > "$2"
     assert.equal(cachedResult.source, 'cache');
     assert.equal(cachedResult.path, firstResult.path);
     assert.notEqual(firstResult.path, secondResult.path);
-    assert.match(await readFile(firstResult.path, 'utf8'), /first-app/);
-    assert.match(await readFile(secondResult.path, 'utf8'), /second-app/);
-    assert.equal(
-      (await readdir(cache)).filter((name) => name.startsWith('.eas-latest-')).length,
-      2,
-    );
-    assert.equal(await readFile(calls, 'utf8'), 'first-app\nsecond-app\n');
+    assert.match(await readFile(firstResult.path, 'utf8'), /\/first/);
+    assert.match(await readFile(secondResult.path, 'utf8'), /\/second/);
+    assert.equal((await readdir(cache)).filter((name) => name.startsWith('.eas-cache-')).length, 2);
+    assert.equal(await readFile(calls, 'utf8'), 'first\nsecond\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 EAS cache reuse is skipped when static project identity is unavailable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-no-project-id-'));
+  const project = join(root, 'project');
+  const cache = join(root, 'artifacts');
+  const bin = join(root, 'bin');
+  const calls = join(root, 'eas.calls');
+  for (const directory of [project, cache, bin]) await mkdir(directory);
+  await chmod(cache, 0o700);
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  await writeFile(join(project, 'app.config.js'), 'module.exports = { expo: {} };\n');
+  await executable(
+    join(bin, 'eas'),
+    `#!/bin/sh
+printf 'call\n' >> "$MOCK_EAS_CALLS"
+printf '%s\n' '${easBuildJson('https://example.invalid/fresh')}'
+`,
+  );
+  await executable(
+    join(bin, 'curl'),
+    `#!/bin/sh
+cat >/dev/null
+while [ "$1" != "-o" ]; do shift; done
+printf 'artifact\n' > "$2"
+`,
+  );
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, MOCK_EAS_CALLS: calls };
+  try {
+    const first = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+      cwd: project,
+      env,
+    });
+    const second = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+      cwd: project,
+      env,
+    });
+    assert.equal(JSON.parse(first.stdout).source, 'eas');
+    assert.equal(JSON.parse(second.stdout).source, 'eas');
+    assert.equal(await readFile(calls, 'utf8'), 'call\ncall\n');
+    assert.match(first.stderr, /exact Expo project ID is not statically provable/);
+    assert.match(second.stderr, /exact Expo project ID is not statically provable/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -393,7 +471,9 @@ test('GH-575 default EAS output is private, retained, and does not log signed UR
   await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
   await executable(
     join(bin, 'eas'),
-    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/private?X-Amz-Signature=signed-secret"}}]\\n\'\n',
+    `#!/bin/sh
+printf '%s\n' '${easBuildJson('https://example.invalid/private?X-Amz-Signature=signed-secret')}'
+`,
   );
   await executable(
     join(bin, 'curl'),
@@ -520,7 +600,9 @@ test('GH-575 EAS publication reports immutable artifact publication failures', a
   try {
     await executable(
       join(bin, 'eas'),
-      '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/build"}}]\\n\'\n',
+      `#!/bin/sh
+printf '%s\n' '${easBuildJson('https://example.invalid/build')}'
+`,
     );
     await executable(
       join(bin, 'curl'),
@@ -546,20 +628,30 @@ printf 'artifact\n' > "$2"
     );
     assert.deepEqual(await readdir(cache), []);
 
-    await rm(join(bin, 'ln'));
+    const lnCalls = join(root, 'ln.calls');
+    await executable(
+      join(bin, 'ln'),
+      `#!/bin/sh
+count=0
+[ ! -f "$MOCK_LN_CALLS" ] || count=$(cat "$MOCK_LN_CALLS")
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_LN_CALLS"
+[ "$count" -eq 1 ] || exit 1
+/bin/ln "$@"
+`,
+    );
     const unrelated = join(cache, 'preview-ios-Unrelated.tar.gz');
     await writeFile(unrelated, 'other run\n');
-    await executable(join(bin, 'mv'), '#!/bin/sh\nexit 1\n');
     await assert.rejects(
       pexecFile('bash', [easHelper, 'ios', 'development', cache], {
         cwd: project,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MOCK_LN_CALLS: lnCalls },
       }),
       (error: unknown) => {
         const result = JSON.parse((error as { stdout?: string }).stdout ?? '') as {
           message: string;
         };
-        assert.match(result.message, /Failed to publish artifact manifest/);
+        assert.match(result.message, /Failed to publish artifact cache sidecar/);
         return true;
       },
     );
@@ -582,7 +674,9 @@ test('GH-575 EAS resolver rejects empty downloads before publication', async () 
   await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
   await executable(
     join(bin, 'eas'),
-    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/empty"}}]\\n\'\n',
+    `#!/bin/sh
+printf '%s\n' '${easBuildJson('https://example.invalid/empty')}'
+`,
   );
   await executable(
     join(bin, 'curl'),
@@ -642,12 +736,12 @@ other=alpha
 [ "$profile" = "alpha" ] && other=beta
 wait_for_marker "$MOCK_SYNC/$other.ready"
 if [ "$profile" = "beta" ]; then
-  printf '[{"artifacts":{"buildUrl":"https://example.invalid/beta"}}]\n'
+  printf '%s\n' '${easBuildJson('https://example.invalid/beta', { buildId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })}'
   touch "$MOCK_SYNC/beta.wrote"
   wait_for_marker "$MOCK_SYNC/alpha.wrote"
 else
   wait_for_marker "$MOCK_SYNC/beta.wrote"
-  printf '[{"artifacts":{"buildUrl":"https://example.invalid/alpha"}}]\n'
+  printf '%s\n' '${easBuildJson('https://example.invalid/alpha', { buildId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' })}'
   touch "$MOCK_SYNC/alpha.wrote"
 fi
 `,
@@ -695,21 +789,33 @@ printf '%s\n' "$url" > "$output"
 );
 
 test(
-  'GH-575 concurrent same-profile EAS results keep immutable paths',
+  'GH-575 cache selection uses remote build order instead of completion order',
   { timeout: 10_000 },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-same-profile-'));
     const project = join(root, 'project');
     const cache = join(root, 'artifacts');
     const bin = join(root, 'bin');
+    const sync = join(root, 'sync');
+    const calls = join(root, 'eas.calls');
     await mkdir(project);
     await mkdir(cache);
     await chmod(cache, 0o700);
     await mkdir(bin);
+    await mkdir(sync);
     await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+    await writeFile(join(project, 'app.json'), expoAppJson(firstProjectId));
     await executable(
       join(bin, 'eas'),
-      '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/build?signed=credential"}}]\\n\'\n',
+      `#!/bin/sh
+if mkdir "$MOCK_SYNC/older-claimed" 2>/dev/null; then
+  printf 'older\n' >> "$MOCK_EAS_CALLS"
+  printf '%s\n' '${easBuildJson('https://example.invalid/older?signed=credential', { buildId: '11111111-aaaa-4aaa-8aaa-111111111111', completedAt: '2026-07-21T10:00:00.000Z' })}'
+else
+  printf 'newer\n' >> "$MOCK_EAS_CALLS"
+  printf '%s\n' '${easBuildJson('https://example.invalid/newer?signed=credential', { buildId: '22222222-bbbb-4bbb-8bbb-222222222222', completedAt: '2026-07-22T10:00:00.000Z' })}'
+fi
+`,
     );
     await executable(
       join(bin, 'curl'),
@@ -718,17 +824,42 @@ while [ "$1" != "-o" ]; do shift; done
 output="$2"
 config=$(cat)
 case "$config" in
-  *'https://example.invalid/build?signed=credential'*) ;;
+  *'https://example.invalid/newer?signed=credential'*)
+    printf 'newer\n' > "$output"
+    touch "$MOCK_SYNC/newer-downloaded"
+    ;;
+  *'https://example.invalid/older?signed=credential'*)
+    attempts=0
+    while [ ! -f "$MOCK_SYNC/newer-downloaded" ]; do
+      attempts=$((attempts + 1))
+      [ "$attempts" -lt 200 ] || exit 70
+      sleep 0.01
+    done
+    sleep 0.2
+    printf 'older\n' > "$output"
+    ;;
   *) exit 9 ;;
 esac
-printf 'artifact-%s\n' "$$" > "$output"
 `,
     );
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      MOCK_SYNC: sync,
+      MOCK_EAS_CALLS: calls,
+    };
     try {
       const [first, second] = await Promise.all([
-        pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project, env }),
-        pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project, env }),
+        pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+          cwd: project,
+          env,
+          timeout: 5_000,
+        }),
+        pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+          cwd: project,
+          env,
+          timeout: 5_000,
+        }),
       ]);
       const firstResult = JSON.parse(first.stdout) as { path: string };
       const secondResult = JSON.parse(second.stdout) as { path: string };
@@ -738,9 +869,8 @@ printf 'artifact-%s\n' "$$" > "$output"
       const firstContents = await readFile(firstResult.path, 'utf8');
       const secondContents = await readFile(secondResult.path, 'utf8');
       assert.notEqual(firstContents, secondContents);
-      assert.equal(await readFile(firstResult.path, 'utf8'), firstContents);
-      assert.equal(await readFile(secondResult.path, 'utf8'), secondContents);
-      assert.equal((await readdir(cache)).length, 3);
+      const newerPath = firstContents === 'newer\n' ? firstResult.path : secondResult.path;
+      assert.equal((await readdir(cache)).length, 4);
 
       const cached = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
         cwd: project,
@@ -748,8 +878,24 @@ printf 'artifact-%s\n' "$$" > "$output"
       });
       const cachedResult = JSON.parse(cached.stdout) as { path: string; source: string };
       assert.equal(cachedResult.source, 'cache');
-      assert.equal([firstResult.path, secondResult.path].includes(cachedResult.path), true);
-      assert.equal((await readdir(cache)).length, 3);
+      assert.equal(cachedResult.path, newerPath);
+      assert.equal((await readdir(cache)).length, 4);
+      assert.equal(await readFile(calls, 'utf8'), 'older\nnewer\n');
+      const sidecars = (await readdir(cache)).filter((name) => name.startsWith('.eas-cache-'));
+      assert.equal(sidecars.length, 2);
+      for (const sidecar of sidecars) {
+        assert.equal((await stat(join(cache, sidecar))).mode & 0o777, 0o600);
+        const metadata = JSON.parse(await readFile(join(cache, sidecar), 'utf8')) as {
+          projectId: string;
+          buildId: string;
+          buildTimestamp: string;
+          artifact: string;
+        };
+        assert.equal(metadata.projectId, firstProjectId);
+        assert.match(metadata.buildId, /^[12]{8}-/);
+        assert.match(metadata.buildTimestamp, /^2026-07-2[12]T/);
+        assert.equal(await readFile(join(cache, metadata.artifact), 'utf8').then(Boolean), true);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

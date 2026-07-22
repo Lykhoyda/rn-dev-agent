@@ -22,6 +22,7 @@
 
 set -euo pipefail
 umask 077
+export LC_ALL=C
 
 PLATFORM="${1:-}"
 PROFILE="${2:-}"
@@ -32,11 +33,16 @@ RESOLUTION_SUCCEEDED=0
 RUN_DIR=""
 PUBLISHED_PATH=""
 PUBLISHED_OWNED=0
+PUBLISHED_SIDECAR_PATH=""
+PUBLISHED_SIDECAR_OWNED=0
 PUBLISHED_RETURNED=0
 
 cleanup() {
   if [ -n "$RUN_DIR" ]; then
     rm -rf -- "$RUN_DIR" 2>/dev/null || true
+  fi
+  if [ "$PUBLISHED_SIDECAR_OWNED" -eq 1 ] && [ "$PUBLISHED_RETURNED" -ne 1 ] && [ -n "$PUBLISHED_SIDECAR_PATH" ]; then
+    rm -f -- "$PUBLISHED_SIDECAR_PATH" 2>/dev/null || true
   fi
   if [ "$PUBLISHED_OWNED" -eq 1 ] && [ "$PUBLISHED_RETURNED" -ne 1 ] && [ -n "$PUBLISHED_PATH" ]; then
     rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
@@ -209,27 +215,6 @@ else
   ARTIFACT_SUFFIX=".apk"
 fi
 
-PROJECT_ROOT=$(pwd -P)
-if command -v shasum &>/dev/null; then
-  APP_CACHE_KEY=$(printf '%s' "$PROJECT_ROOT" | shasum -a 256 | awk '{print substr($1, 1, 24)}')
-elif command -v sha256sum &>/dev/null; then
-  APP_CACHE_KEY=$(printf '%s' "$PROJECT_ROOT" | sha256sum | awk '{print substr($1, 1, 24)}')
-elif command -v node &>/dev/null; then
-  APP_CACHE_KEY=$(node -e "const c=require('node:crypto');process.stdout.write(c.createHash('sha256').update(process.argv[1]).digest('hex').slice(0,24))" "$PROJECT_ROOT")
-else
-  json_error 1 "Unable to derive a stable application cache key."
-fi
-if ! [[ "$APP_CACHE_KEY" =~ ^[a-fA-F0-9]{24}$ ]]; then
-  json_error 1 "Unable to derive a safe application cache key."
-fi
-
-MANIFEST_NAME=".eas-latest-${APP_CACHE_KEY}-${PROFILE}-${PLATFORM}.manifest"
-MANIFEST_PATH="${OUTPUT_DIR}/${MANIFEST_NAME}"
-if [ "$(dirname "$MANIFEST_PATH")" != "$OUTPUT_DIR" ] || \
-  [ "$(basename "$MANIFEST_PATH")" != "$MANIFEST_NAME" ]; then
-  json_error 1 "Artifact manifest must be one immediate file child of the output directory."
-fi
-
 # --- Tier 1: Local cache ---
 
 private_file_metadata() {
@@ -243,66 +228,158 @@ private_file_metadata() {
   fi
 }
 
-validate_private_manifest() {
-  if [ -L "$MANIFEST_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
-    json_error 1 "Artifact manifest must be a regular file: $MANIFEST_PATH"
+read_json_string() {
+  local path="$1"
+  local key="$2"
+  if command -v jq &>/dev/null; then
+    jq -er --arg key "$key" '.[$key] | select(type == "string")' "$path" 2>/dev/null
+  else
+    node -e '
+      const fs = require("node:fs");
+      const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))[process.argv[2]];
+      if (typeof value !== "string") process.exit(1);
+      process.stdout.write(value);
+    ' "$path" "$key" 2>/dev/null
   fi
-  private_file_metadata "$MANIFEST_PATH"
-  if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
-    json_error 1 "Artifact manifest must be owned by the current user with mode 0600."
+}
+
+read_static_project_id() {
+  local config id resolved=""
+  for config in app.config.js app.config.cjs app.config.mjs app.config.ts; do
+    if [ -e "$config" ] || [ -L "$config" ]; then
+      return 1
+    fi
+  done
+  for config in app.json app.config.json; do
+    [ -f "$config" ] || continue
+    if command -v jq &>/dev/null; then
+      jq -e . "$config" >/dev/null 2>&1 || return 1
+      id=$(jq -r '(.expo.extra.eas.projectId // .extra.eas.projectId // empty) | select(type == "string")' "$config" 2>/dev/null) || return 1
+    else
+      id=$(node -e '
+        const fs = require("node:fs");
+        const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const id = value?.expo?.extra?.eas?.projectId ?? value?.extra?.eas?.projectId;
+        if (id !== undefined && typeof id !== "string") process.exit(1);
+        if (id !== undefined) process.stdout.write(id);
+      ' "$config" 2>/dev/null) || return 1
+    fi
+    [ -n "$id" ] || continue
+    if ! [[ "$id" =~ ^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$ ]]; then
+      return 1
+    fi
+    id=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
+    if [ -n "$resolved" ] && [ "$resolved" != "$id" ]; then
+      return 1
+    fi
+    resolved="$id"
+  done
+  [ -n "$resolved" ] || return 1
+  printf '%s' "$resolved"
+}
+
+timestamp_sort_key() {
+  local timestamp="$1"
+  local fraction
+  if ! [[ "$timestamp" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.([0-9]{1,9}))?Z$ ]]; then
+    return 1
   fi
+  if [ $((10#${BASH_REMATCH[2]})) -lt 1 ] || [ $((10#${BASH_REMATCH[2]})) -gt 12 ] || \
+    [ $((10#${BASH_REMATCH[3]})) -lt 1 ] || [ $((10#${BASH_REMATCH[3]})) -gt 31 ] || \
+    [ $((10#${BASH_REMATCH[4]})) -gt 23 ] || [ $((10#${BASH_REMATCH[5]})) -gt 59 ] || \
+    [ $((10#${BASH_REMATCH[6]})) -gt 59 ]; then
+    return 1
+  fi
+  fraction="${BASH_REMATCH[8]:-}"
+  while [ "${#fraction}" -lt 9 ]; do fraction="${fraction}0"; done
+  printf '%s%s%s%s%s%s%s' \
+    "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+    "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]}" "$fraction"
 }
 
 check_cache() {
   CACHED_PATH=""
-  if [ ! -e "$MANIFEST_PATH" ] && [ ! -L "$MANIFEST_PATH" ]; then
+  [ "$CACHE_REUSE_ENABLED" -eq 1 ] || return 1
+
+  local sidecar sidecar_name token sidecar_size
+  local sidecar_project sidecar_platform sidecar_profile sidecar_build_id
+  local sidecar_timestamp sidecar_artifact timestamp_key candidate_key
+  local cached_path best_key=""
+  local sidecars=()
+  shopt -s nullglob
+  sidecars=("$OUTPUT_DIR"/".eas-cache-${PROJECT_ID}-${PROFILE}-${PLATFORM}-"*.json)
+  shopt -u nullglob
+  if [ "${#sidecars[@]}" -eq 0 ]; then
     return 1
   fi
 
-  validate_private_manifest
-  local manifest_size manifest_lines cached_name expected_prefix cached_token cached_path
-  manifest_size=$(wc -c < "$MANIFEST_PATH" | tr -d '[:space:]')
-  manifest_lines=$(wc -l < "$MANIFEST_PATH" | tr -d '[:space:]')
-  if [ -z "$manifest_size" ] || [ "$manifest_size" -gt 256 ] || [ "$manifest_lines" != "1" ]; then
-    json_error 1 "Artifact manifest has invalid content."
-  fi
-  IFS= read -r cached_name < "$MANIFEST_PATH" || json_error 1 "Artifact manifest has invalid content."
-  expected_prefix="${PROFILE}-${PLATFORM}-"
-  if [[ "$cached_name" != "$expected_prefix"*"$ARTIFACT_SUFFIX" ]]; then
-    json_error 1 "Artifact manifest does not match the selected application, profile, and platform."
-  fi
-  cached_token="${cached_name#"$expected_prefix"}"
-  cached_token="${cached_token%"$ARTIFACT_SUFFIX"}"
-  if [ -z "$cached_token" ] || ! [[ "$cached_token" =~ ^[a-zA-Z0-9]+$ ]] || \
-    [ "$cached_name" != "${expected_prefix}${cached_token}${ARTIFACT_SUFFIX}" ]; then
-    json_error 1 "Artifact manifest contains an unsafe artifact name."
-  fi
-
-  cached_path="${OUTPUT_DIR}/${cached_name}"
-  if [ "$(dirname "$cached_path")" != "$OUTPUT_DIR" ] || \
-    [ "$(basename "$cached_path")" != "$cached_name" ]; then
-    json_error 1 "Cached artifact must be one immediate file child of the output directory."
-  fi
-  if [ -L "$cached_path" ] || { [ -e "$cached_path" ] && [ ! -f "$cached_path" ]; }; then
-    json_error 1 "Cached artifact must be a regular file: $cached_path"
-  fi
-  if [ ! -f "$cached_path" ]; then
-    return 1
-  fi
-  if [ ! -s "$cached_path" ]; then
-    json_error 1 "Cached artifact must be nonempty: $cached_path"
-  fi
-  private_file_metadata "$cached_path"
-  if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
-    json_error 1 "Cached artifact must be owned by the current user with mode 0600."
-  fi
-  if [ -z "$(find "$cached_path" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print 2>/dev/null || true)" ]; then
-    return 1
-  fi
-
-  CACHED_PATH="$cached_path"
+  for sidecar in "${sidecars[@]}"; do
+    sidecar_name=$(basename "$sidecar")
+    token="${sidecar_name#".eas-cache-${PROJECT_ID}-${PROFILE}-${PLATFORM}-"}"
+    token="${token%.json}"
+    if [ -z "$token" ] || ! [[ "$token" =~ ^[a-zA-Z0-9]+$ ]] || \
+      [ "$sidecar_name" != ".eas-cache-${PROJECT_ID}-${PROFILE}-${PLATFORM}-${token}.json" ]; then
+      json_error 1 "Artifact cache sidecar has an unsafe name."
+    fi
+    if [ -L "$sidecar" ] || [ ! -f "$sidecar" ]; then
+      json_error 1 "Artifact cache sidecar must be a regular file: $sidecar"
+    fi
+    private_file_metadata "$sidecar"
+    if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
+      json_error 1 "Artifact cache sidecar must be owned by the current user with mode 0600."
+    fi
+    sidecar_size=$(wc -c < "$sidecar" | tr -d '[:space:]')
+    if [ -z "$sidecar_size" ] || [ "$sidecar_size" -gt 4096 ]; then
+      json_error 1 "Artifact cache sidecar has invalid content."
+    fi
+    sidecar_project=$(read_json_string "$sidecar" projectId) || json_error 1 "Artifact cache sidecar has invalid content."
+    sidecar_platform=$(read_json_string "$sidecar" platform) || json_error 1 "Artifact cache sidecar has invalid content."
+    sidecar_profile=$(read_json_string "$sidecar" profile) || json_error 1 "Artifact cache sidecar has invalid content."
+    sidecar_build_id=$(read_json_string "$sidecar" buildId) || json_error 1 "Artifact cache sidecar has invalid content."
+    sidecar_timestamp=$(read_json_string "$sidecar" buildTimestamp) || json_error 1 "Artifact cache sidecar has invalid content."
+    sidecar_artifact=$(read_json_string "$sidecar" artifact) || json_error 1 "Artifact cache sidecar has invalid content."
+    if [ "$sidecar_project" != "$PROJECT_ID" ] || [ "$sidecar_platform" != "$PLATFORM" ] || \
+      [ "$sidecar_profile" != "$PROFILE" ] || \
+      ! [[ "$sidecar_build_id" =~ ^[a-zA-Z0-9_-]{1,128}$ ]]; then
+      json_error 1 "Artifact cache sidecar does not match the selected project, profile, and platform."
+    fi
+    timestamp_key=$(timestamp_sort_key "$sidecar_timestamp") || json_error 1 "Artifact cache sidecar has an invalid build timestamp."
+    if [ "$sidecar_artifact" != "${PROFILE}-${PLATFORM}-${token}${ARTIFACT_SUFFIX}" ]; then
+      json_error 1 "Artifact cache sidecar names an unexpected artifact."
+    fi
+    cached_path="${OUTPUT_DIR}/${sidecar_artifact}"
+    if [ "$(dirname "$cached_path")" != "$OUTPUT_DIR" ] || [ "$(basename "$cached_path")" != "$sidecar_artifact" ]; then
+      json_error 1 "Cached artifact must be one immediate file child of the output directory."
+    fi
+    if [ -L "$cached_path" ] || { [ -e "$cached_path" ] && [ ! -f "$cached_path" ]; }; then
+      json_error 1 "Cached artifact must be a regular file: $cached_path"
+    fi
+    [ -f "$cached_path" ] || json_error 1 "Artifact cache sidecar references a missing artifact."
+    [ -s "$cached_path" ] || json_error 1 "Cached artifact must be nonempty: $cached_path"
+    private_file_metadata "$cached_path"
+    if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
+      json_error 1 "Cached artifact must be owned by the current user with mode 0600."
+    fi
+    if [ -z "$(find "$cached_path" -mmin "-$((CACHE_MAX_AGE_HOURS * 60))" -type f -print 2>/dev/null || true)" ]; then
+      continue
+    fi
+    candidate_key="${timestamp_key}|${sidecar_build_id}|${sidecar_artifact}"
+    if [ -z "$best_key" ] || [[ "$candidate_key" > "$best_key" ]]; then
+      best_key="$candidate_key"
+      CACHED_PATH="$cached_path"
+    fi
+  done
+  [ -n "$CACHED_PATH" ] || return 1
   return 0
 }
+
+PROJECT_ID=""
+CACHE_REUSE_ENABLED=0
+if PROJECT_ID=$(read_static_project_id); then
+  CACHE_REUSE_ENABLED=1
+else
+  echo "Skipping local EAS cache: exact Expo project ID is not statically provable." >&2
+fi
 
 if check_cache; then
   echo "Using cached artifact: $CACHED_PATH" >&2
@@ -353,19 +430,46 @@ if "${EAS_CMD[@]}" build:list \
   --non-interactive \
   --json > "$BUILD_INFO" 2>"$BUILD_ERR"; then
 
-  # Extract artifact URL and download
   local_build_url=""
+  remote_project_id=""
+  build_id=""
+  build_timestamp=""
   if command -v jq &>/dev/null; then
     local_build_url=$(jq -r '.[0].artifacts.buildUrl // empty' "$BUILD_INFO" 2>/dev/null || true)
+    remote_project_id=$(jq -r '.[0].project.id // .[0].projectId // empty' "$BUILD_INFO" 2>/dev/null || true)
+    build_id=$(jq -r '.[0].id // empty' "$BUILD_INFO" 2>/dev/null || true)
+    build_timestamp=$(jq -r '.[0].completedAt // .[0].finishedAt // .[0].createdAt // empty' "$BUILD_INFO" 2>/dev/null || true)
   elif command -v node &>/dev/null; then
-    local_build_url=$(node -e "
+    build_fields=$(node -e "
       const d = require(process.argv[1]);
-      const url = d?.[0]?.artifacts?.buildUrl;
-      if (url) console.log(url);
+      const build = d?.[0];
+      const fields = [
+        build?.artifacts?.buildUrl,
+        build?.project?.id ?? build?.projectId,
+        build?.id,
+        build?.completedAt ?? build?.finishedAt ?? build?.createdAt,
+      ];
+      if (!fields.every((value) => typeof value === 'string')) process.exit(1);
+      process.stdout.write(fields.join('\n'));
     " "$BUILD_INFO" 2>/dev/null || true)
+    if [ -n "$build_fields" ]; then
+      local_build_url=$(printf '%s\n' "$build_fields" | sed -n '1p')
+      remote_project_id=$(printf '%s\n' "$build_fields" | sed -n '2p')
+      build_id=$(printf '%s\n' "$build_fields" | sed -n '3p')
+      build_timestamp=$(printf '%s\n' "$build_fields" | sed -n '4p')
+    fi
   fi
 
   if [ -n "$local_build_url" ]; then
+    if ! [[ "$remote_project_id" =~ ^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$ ]] || \
+      ! [[ "$build_id" =~ ^[a-zA-Z0-9_-]{1,128}$ ]] || \
+      ! timestamp_sort_key "$build_timestamp" >/dev/null; then
+      json_error 1 "EAS returned incomplete or invalid build identity metadata."
+    fi
+    remote_project_id=$(printf '%s' "$remote_project_id" | tr '[:upper:]' '[:lower:]')
+    if [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != "$remote_project_id" ]; then
+      json_error 1 "EAS build project ID does not match the current Expo project."
+    fi
     if [[ ! "$local_build_url" =~ ^https?:// ]] || [[ "$local_build_url" =~ [[:cntrl:]] ]]; then
       json_error 1 "EAS returned an invalid artifact URL."
     fi
@@ -397,16 +501,31 @@ if "${EAS_CMD[@]}" build:list \
         rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
         json_error 1 "Published artifact must be owned by the current user with mode 0600."
       fi
-      MANIFEST_TMP="${RUN_DIR}/latest.manifest"
-      if ! printf '%s\n' "$PUBLISHED_NAME" > "$MANIFEST_TMP" || \
-        ! chmod 600 "$MANIFEST_TMP"; then
-        json_error 1 "Failed to create artifact manifest."
+      PUBLISHED_SIDECAR_NAME=".eas-cache-${remote_project_id}-${PROFILE}-${PLATFORM}-${RUN_TOKEN}.json"
+      PUBLISHED_SIDECAR_PATH="${OUTPUT_DIR}/${PUBLISHED_SIDECAR_NAME}"
+      if [ "$(dirname "$PUBLISHED_SIDECAR_PATH")" != "$OUTPUT_DIR" ] || \
+        [ "$(basename "$PUBLISHED_SIDECAR_PATH")" != "$PUBLISHED_SIDECAR_NAME" ]; then
+        json_error 1 "Artifact cache sidecar must be one immediate file child of the output directory."
       fi
-      if [ -e "$MANIFEST_PATH" ] || [ -L "$MANIFEST_PATH" ]; then
-        validate_private_manifest
+      if [ -e "$PUBLISHED_SIDECAR_PATH" ] || [ -L "$PUBLISHED_SIDECAR_PATH" ]; then
+        json_error 1 "Refusing to replace an existing artifact cache sidecar."
       fi
-      if ! mv -f -- "$MANIFEST_TMP" "$MANIFEST_PATH"; then
-        json_error 1 "Failed to publish artifact manifest."
+      SIDECAR_TMP="${RUN_DIR}/cache-sidecar.json"
+      if ! printf '{"projectId":"%s","platform":"%s","profile":"%s","buildId":"%s","buildTimestamp":"%s","artifact":"%s"}\n' \
+        "$remote_project_id" "$PLATFORM" "$PROFILE" "$build_id" "$build_timestamp" "$PUBLISHED_NAME" > "$SIDECAR_TMP" || \
+        ! chmod 600 "$SIDECAR_TMP"; then
+        json_error 1 "Failed to create artifact cache sidecar."
+      fi
+      if ! ln "$SIDECAR_TMP" "$PUBLISHED_SIDECAR_PATH"; then
+        json_error 1 "Failed to publish artifact cache sidecar."
+      fi
+      PUBLISHED_SIDECAR_OWNED=1
+      if [ -L "$PUBLISHED_SIDECAR_PATH" ] || [ ! -f "$PUBLISHED_SIDECAR_PATH" ]; then
+        json_error 1 "Published artifact cache sidecar must be a regular file."
+      fi
+      private_file_metadata "$PUBLISHED_SIDECAR_PATH"
+      if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
+        json_error 1 "Published artifact cache sidecar must be owned by the current user with mode 0600."
       fi
       echo "Downloaded to: $PUBLISHED_PATH" >&2
       json_ok "$PUBLISHED_PATH" "eas"
