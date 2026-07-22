@@ -89,7 +89,7 @@ export function lastObservedStep(steps) {
 // must not be re-embedded into the result (it would defeat the output slice).
 export function summarizeReason(output) {
     const f = parseMaestroFailure(output);
-    if (f.kind === 'UNKNOWN')
+    if (f.kind === 'UNKNOWN' || f.kind === 'WDA_BOOTSTRAP_FAILED')
         return null;
     const selector = 'selector' in f ? (f.selector ?? null) : null;
     return { kind: f.kind, selector: selector === null ? null : cap(selector) };
@@ -104,6 +104,43 @@ export function buildStepSummary(output, opts) {
         failedStep: opts.failed ? findFailedStep(steps) : null,
         reason: opts.failed ? summarizeReason(output) : null,
         lastStep: lastObservedStep(steps),
+    };
+}
+// Every healthy iOS run narrates WDA ("Building WebDriverAgent for the first
+// time...", "Starting WDA on device ..."), so a bare WDA mention proves nothing.
+// Bootstrap evidence must carry failure semantics, otherwise an unrelated
+// pre-step death (app not installed, locked device, simctl error) gets reported
+// as a WDA bootstrap failure and auto-repair is refused for the wrong reason.
+const WDA_TOKEN_RE = /\bWDA\b|WebDriverAgent/i;
+const WDA_FAILURE_RE = /\b(?:fail(?:ed|ure|s)?|error|unable|cannot|can't|could not|timed out|timeout|refused|denied|crash(?:ed)?|panic|aborted)\b/i;
+function isWdaFailureLine(line) {
+    return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
+}
+export function buildTerminalEvidence(output, opts = {}) {
+    const summary = buildStepSummary(output, { failed: true });
+    const bootstrapEvidence = stripAnsi(output)
+        .split('\n')
+        .filter((line) => isWdaFailureLine(line))
+        .join('\n')
+        .slice(0, 500);
+    const exitClass = opts.timedOut
+        ? 'timed-out'
+        : opts.spawnError
+            ? 'spawn-error'
+            : summary.steps.length === 0
+                ? 'before-first-step'
+                : 'step-failure';
+    return {
+        completedSteps: summary.steps.filter((step) => step.status === 'pass').length,
+        ...(summary.failedStep ? { failedStep: summary.failedStep.name } : {}),
+        exitClass,
+        ...(bootstrapEvidence ? { bootstrapEvidence } : {}),
+        ...(summary.reason
+            ? {
+                failureKind: summary.reason.kind,
+                failureSelector: summary.reason.selector,
+            }
+            : {}),
     };
 }
 // execFile timeout kills the child (killed===true, signal 'SIGTERM', code null).

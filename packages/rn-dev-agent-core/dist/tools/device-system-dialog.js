@@ -3,6 +3,7 @@ import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { detectPlatform } from './platform-utils.js';
 import { fetchSnapshotNodes, pressCandidate } from './device-interact.js';
 import { hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
+import { shouldRejectMaestroDeviceAuthority } from '../domain/maestro-device-authority.js';
 // iOS dialog button labels. Note: "Don't Allow" uses U+2019 typographic apostrophe,
 // not ASCII '. We emit both spellings so the first-matching Maestro step wins.
 const APOSTROPHE_ASCII = "'";
@@ -156,6 +157,11 @@ async function tapSystemDialog(labels, platform, totalTimeoutMs, slug) {
         const result = await runMaestroInline(yaml, { platform, timeoutMs: perLabelMs, slug });
         if (result.passed) {
             return okResult({ tapped: true, platform, matchedLabel: label, triedLabels: labels });
+        }
+        // A device-authority refusal is fail-closed: the flow never proved it ran on
+        // the requested device, so it must not be downgraded to "no dialog found".
+        if (result.deviceAuthority && shouldRejectMaestroDeviceAuthority(result.deviceAuthority)) {
+            return failResult(result.error ?? 'Maestro device authority refused during system dialog probe.', 'DEVICE_AUTHORITY_MISMATCH', { platform, label, triedLabels: labels, deviceAuthority: result.deviceAuthority });
         }
         attempts.push({
             label,

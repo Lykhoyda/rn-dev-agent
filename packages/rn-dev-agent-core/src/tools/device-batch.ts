@@ -8,6 +8,12 @@ import {
 } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
+import type { CDPClient } from '../cdp-client.js';
+import {
+  dismissKeyboardWithParity,
+  healKeyboardOccludedTap,
+  surfaceKeyboardGuard,
+} from '../runners/keyboard-guard.js';
 import { captureAndResizeScreenshot } from './device-list.js';
 
 export interface BatchStep {
@@ -24,6 +30,9 @@ export interface BatchStep {
     | 'screenshot';
   text?: string;
   ref?: string;
+  /** Raw coordinates for a press step. Both are required when ref/testID is omitted. */
+  x?: number;
+  y?: number;
   /**
    * D1206 Tier 2 / Phase 125: testID-keyed steps re-resolve via fiber-tree
    * snapshot at execution time — eliminates the stale-ref-across-step-
@@ -277,7 +286,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function executeStep(step: BatchStep): Promise<ToolResult> {
+async function guardedBatchPress(
+  cliArgs: string[],
+  opts: { settle: { enabled?: boolean; timeoutMs?: number } },
+  getClient?: () => CDPClient,
+): Promise<ToolResult> {
+  const tap = async () => surfaceKeyboardGuard(await runNative(cliArgs, opts));
+  const first = await tap();
+  if (!first.isError || !getClient) return first;
+  const client = getClient();
+  if (!client.isConnected || !client.helpersInjected) return first;
+  return healKeyboardOccludedTap(first, {
+    dismissViaJs: async () => {
+      const result = await client.evaluate('__RN_AGENT.dismissKeyboard()');
+      if (typeof result.value !== 'string') return false;
+      try {
+        return (JSON.parse(result.value) as { dismissed?: boolean }).dismissed === true;
+      } catch {
+        return false;
+      }
+    },
+    refreshSnapshot: () => runNative(['snapshot', '-i']),
+    retryTap: tap,
+  });
+}
+
+async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promise<ToolResult> {
   switch (step.action) {
     case 'find': {
       // Phase 125: testID-keyed find re-resolves via snapshot per call.
@@ -311,7 +345,8 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
             },
           );
         }
-        if (step.tap) return runNative(['press', `@${ref}`], stepSettleOpts(step));
+        if (step.tap)
+          return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
         return okResult({
           resolved: ref,
           testID: step.testID,
@@ -335,7 +370,7 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
           query: step.text,
         });
       }
-      if (step.tap) return pressCandidate(findResult.candidates[0], 'click');
+      if (step.tap) return pressCandidate(findResult.candidates[0], 'click', getClient);
       return okResult({
         ref: findResult.candidates[0].ref,
         label: findResult.candidates[0].label,
@@ -363,11 +398,20 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
             },
           );
         }
-        return runNative(['press', `@${ref}`], stepSettleOpts(step));
+        return guardedBatchPress(['press', `@${ref}`], stepSettleOpts(step), getClient);
       }
-      if (!step.ref) return failResult('press requires ref or testID');
-      const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-      return runNative(['press', ref], stepSettleOpts(step));
+      if (step.ref) {
+        const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
+        return guardedBatchPress(['press', ref], stepSettleOpts(step), getClient);
+      }
+      if (step.x !== undefined && step.y !== undefined) {
+        return guardedBatchPress(
+          ['press', String(step.x), String(step.y)],
+          stepSettleOpts(step),
+          getClient,
+        );
+      }
+      return failResult('press requires ref, testID, or both x and y coordinates');
     }
     case 'fill': {
       if (!step.text) return failResult('fill requires text');
@@ -414,7 +458,26 @@ async function executeStep(step: BatchStep): Promise<ToolResult> {
       return runNative(['back'], stepSettleOpts(step));
     }
     case 'hideKeyboard': {
-      return runNative(['keyboard', 'dismiss'], stepSettleOpts(step));
+      let dismissViaJs: (() => Promise<boolean>) | undefined;
+      if (getClient) {
+        try {
+          const client = getClient();
+          if (client.isConnected && client.helpersInjected) {
+            dismissViaJs = async () => {
+              const result = await client.evaluate('__RN_AGENT.dismissKeyboard()');
+              if (typeof result.value !== 'string') return false;
+              return (JSON.parse(result.value) as { dismissed?: boolean }).dismissed === true;
+            };
+          }
+        } catch {
+          // No connected helper: native tiers remain available.
+        }
+      }
+      return dismissKeyboardWithParity({
+        nativeDismiss: () => runNative(['keyboard', 'dismiss'], stepSettleOpts(step)),
+        ...(dismissViaJs ? { dismissViaJs } : {}),
+        refreshSnapshot: () => runNative(['snapshot', '-i']),
+      });
     }
     case 'snapshot': {
       return runNative(['snapshot', '-i']);
@@ -451,7 +514,9 @@ function extractData(result: ToolResult): unknown {
   }
 }
 
-export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolResult> {
+export function createDeviceBatchHandler(
+  getClient?: () => CDPClient,
+): (args: BatchArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
     const {
       steps,
@@ -483,7 +548,7 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
       let stepTimer: ReturnType<typeof setTimeout> | undefined;
       let stepTimedOut = false;
       const result = await Promise.race([
-        executeStep(step),
+        executeStep(step, getClient),
         new Promise<ToolResult>((resolve) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
@@ -517,12 +582,12 @@ export function createDeviceBatchHandler(): (args: BatchArgs) => Promise<ToolRes
 
       if (step.action === 'snapshot' && success) {
         finalSnapshot = extractData(result);
-      } else if (step.action === 'find' && success && step.testID !== undefined && !step.tap) {
-        // GH #386: expose the testID-find-without-tap payload — the only find
-        // variant whose ok payload carries the ambiguous/candidates info —
-        // otherwise it's computed but never reaches the batch caller.
-        // Text-based finds and find+tap keep their pre-existing shape
-        // (no per-step data).
+      } else if (
+        success &&
+        (step.action === 'press' || step.action === 'hideKeyboard' || step.action === 'find')
+      ) {
+        // Keyboard validation requires the exact tier/guard result per step;
+        // press/find parity likewise must not be inferred from batch success.
         stepResult.data = extractData(result);
       }
 

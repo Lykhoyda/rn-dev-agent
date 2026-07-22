@@ -126,7 +126,27 @@ Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 i
 
 ## Error codes
 
-Codes returned by `device_*`/flow tools, what they mean, and the fix.
+Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
+
+### PLATFORM_TARGET_NOT_FOUND / TARGET_PLATFORM_CONFLICT
+
+`cdp_status`/`cdp_connect` refused to connect (or disconnected right after
+connecting) because the requested platform or bundleId could not be
+**proven** for any live Metro target. A target only proves its identity
+through one internally consistent Metro field — `appId`, an exact bundle-id
+`description`, or the canonical `<bundleId> (<device>)` title; a defaulted
+or ambiguous platform guess never satisfies a platform filter. The refusal
+lists the candidate targets with their inference confidence. Run
+`cdp_targets`, relaunch the requested app, or pass a `targetId` from a
+proven target. With no filters at all, connection proceeds to the best
+available target with a warning instead of failing closed.
+
+### TARGET_SESSION_MISMATCH
+
+`cdp_status`/`cdp_connect` requested a platform or bundleId that conflicts
+with the active device session's binding. Close the device session or
+request the same platform/bundle — cross-platform fallback is refused
+rather than silently targeting a different device.
 
 ### RN_FAST_RUNNER_DOWN / RN_ANDROID_RUNNER_DOWN
 
@@ -135,6 +155,16 @@ is booted and (Android) the SDK is available. iOS self-builds on first use —
 a cold build takes several minutes; if it times out, pre-build once with
 `xcodebuild build-for-testing` (see Getting Started) and re-open the device
 session.
+
+### APP_LAUNCH_FAILED
+
+The native runner started, but launching the app itself failed
+(`device_snapshot action=open` on Android) — reported separately from
+`RN_ANDROID_RUNNER_DOWN` so a launcher problem isn't mistaken for a runner
+problem. Check that the exact `appId` is installed on the selected device
+(`adb -s <serial> shell pm list packages`). Keyless AVDs are handled
+automatically: the launcher runs `monkey` with `--pct-syskeys 0`, so
+missing physical system keys no longer abort the launch with exit 251.
 
 ### BUSY_FOREIGN_FLOW
 
@@ -148,6 +178,29 @@ guard with `RN_IOS_FOREIGN_GUARD=0`.
 Your own Maestro flow holds the device (L3 is exclusive). Reads
 (`cdp_component_tree`, `cdp_store_state`) still work mid-flow; taps are
 refused on purpose until the flow ends.
+
+### DEVICE_AUTHORITY_MISMATCH
+
+`maestro_run`/`maestro_test_all`/`cdp_run_action` forwarded the active
+session's exact device ID (`--device`/`--udid`) but maestro-runner's own
+report/log did not prove it ran there: the selected device was missing,
+ambiguous, different from the request, carried only a weak identity, or an
+iOS WDA build/start line named another device. The replay is refused even
+when the runner exited 0, because requested metadata is never execution
+proof — `meta.deviceAuthority` carries the observed IDs and the exact reason.
+Re-open the device session on the intended simulator/emulator
+(`device_snapshot action=open`), shut down stray devices, and retry; pass
+`deviceId` explicitly to `maestro_run` or `maestro_test_all` to pin the
+target.
+
+`reason: 'reported-device-weak-identity'` is the one case where stray devices
+are **not** the cause. Your maestro-runner build's report writer emitted only
+a last-resort identifier — a bare model name such as `iPhone-16-Pro`, or an
+`id` field naming the run rather than the device — so nothing was proven
+either way and the replay fails closed. Shutting down simulators will not
+clear it; upgrade maestro-runner to a build whose report carries a real
+`udid`/`deviceId`/`deviceSerial` (`~/.maestro-runner/bin/maestro-runner`,
+reinstalled via `scripts/ensure-maestro-runner.sh`).
 
 ### RUNNER_PROTOCOL_MISMATCH
 
@@ -164,13 +217,27 @@ The runner build predates a newer command verb. Re-open the device session
 automatically (one multi-minute build on iOS). If a cold build still
 reports missing commands, update the plugin checkout.
 
-### KEYBOARD_OCCLUDED
+### RUNNER_TIMEOUT
 
-A tap target sits under the software keyboard and the safe dismiss control
-isn't available (iPhone standard QWERTY). Dismiss the keyboard first (e.g.
-`cdp_evaluate` → `Keyboard.dismiss()`) or fill via `device_fill`, which is
-JS-first and needs no keyboard. Opt the guard off with
-`RN_KEYBOARD_GUARD=0`.
+The iOS runner didn't answer within the command budget. On a
+non-cancellable `type`/`fill` main-thread timeout the runner is poisoned
+and reaped, and the call succeeds only when an independent exact CDP
+readback proves the requested value landed
+(`meta.runnerTimeoutRecovery.verification: "exact-readback"`); otherwise it
+fails closed. Further commands are refused before dispatch while the
+poisoned runner is being reaped. Reconnect CDP, re-open the device session,
+and retry from a fresh snapshot — don't re-type blindly.
+
+### KEYBOARD_DISMISS_FAILED
+
+A visible software keyboard could not be proven dismissed — the native
+dismiss control, then a native swipe, then (when CDP is connected) injected
+`Keyboard.dismiss()` all failed — so the guarded tap was refused before
+touching the screen. Older protocol-v1 runners surfaced this as
+`KEYBOARD_OCCLUDED`. Dismiss the keyboard yourself (e.g. `cdp_evaluate` →
+`Keyboard.dismiss()`) or fill via `device_fill`, which is JS-first and
+needs no keyboard, then retry from a fresh snapshot/ref. Opt the guard off
+with `RN_KEYBOARD_GUARD=0`.
 
 ### DEVICE_BUSY
 
@@ -194,6 +261,15 @@ The plugin attempts to self-repair small UI drift: it looks at the live UI, find
 Self-repair refuses if the file has been hand-edited (mtime check), or after 3 repairs in 24h. If repair is refused or fails, the plugin asks before forcing. If the underlying flow has changed structurally (extra step, removed screen), re-record with `/rn-dev-agent:test-feature`.
 
 See the [Actions guide](/rn-dev-agent/actions/) for full details.
+
+### Action replay refused with WDA_BOOTSTRAP_FAILED
+
+The iOS Maestro driver (WebDriverAgent) failed to bootstrap before the
+first replay step ran, so the flow was refused — no self-repair, cache
+mutation, or preparation was attempted, because nothing about the flow
+itself was proven wrong. Re-run the replay (bootstrap retries itself),
+check network access, and inspect the maestro-runner WDA installation
+(`~/.maestro-runner/bin/maestro-runner`).
 
 ### `/setup` skipped a step
 

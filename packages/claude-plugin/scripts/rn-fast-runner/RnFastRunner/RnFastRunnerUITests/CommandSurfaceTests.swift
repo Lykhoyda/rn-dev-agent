@@ -32,4 +32,21 @@ final class CommandSurfaceTests: XCTestCase {
     }
     XCTAssertTrue(isRunnerLifecycleCommand(verb))
   }
+
+  func testListenerFailureCannotPassViaCompletedExpectation() {
+    let failure = runnerListenerWaitFailure(
+      listenerError: "Address already in use",
+      waitResult: .completed
+    )
+    XCTAssertEqual(failure, "runner listener failed to start: Address already in use")
+  }
+
+  func testHealthyListenerWaitHasNoFailure() {
+    XCTAssertNil(runnerListenerWaitFailure(listenerError: nil, waitResult: .completed))
+  }
+
+  func testListenerWaitTimeoutStillFails() {
+    let failure = runnerListenerWaitFailure(listenerError: nil, waitResult: .timedOut)
+    XCTAssertEqual(failure, "runner wait ended with \(XCTWaiter.Result.timedOut)")
+  }
 }

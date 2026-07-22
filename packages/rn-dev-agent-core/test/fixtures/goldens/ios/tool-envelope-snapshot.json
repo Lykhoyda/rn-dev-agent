@@ -1,15 +1,15 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T18:21:07.694Z",
+    "capturedAt": "2026-07-20T22:27:46.905Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=ios node test/contract/capture-goldens.ts)",
     "platform": "ios",
-    "device": "iPhone 17 (3C6085C0-2F72-4C82-87AF-5F2807AC55F1)",
-    "os": "iOS-26-5",
+    "device": "iPhone 17 Pro (7A6033C8-9291-4B0B-80B9-46024EEDF7D7)",
+    "os": "iOS-26-2",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.1",
-    "protocolVersion": 1,
+    "runnerVersion": "0.70.8",
+    "protocolVersion": 2,
     "runnerPort": 22088,
     "note": "bridge device_snapshot envelope (post-mapping FlatNode layer)"
   },
@@ -22,9 +22,9 @@
           "type": "Application",
           "rect": {
             "y": 0,
-            "height": 874,
+            "x": 0,
             "width": 402,
-            "x": 0
+            "height": 874
           },
           "label": "Fixture",
           "enabled": true,
@@ -35,9 +35,9 @@
           "type": "Other",
           "rect": {
             "y": 0,
-            "height": 874,
+            "x": 0,
             "width": 402,
-            "x": 0
+            "height": 874
           },
           "label": "Increment",
           "enabled": true,
@@ -48,9 +48,9 @@
           "type": "Button",
           "rect": {
             "y": 78,
-            "height": 20.33333333333333,
+            "x": 162.66666666666666,
             "width": 76.66666666666666,
-            "x": 162.66666666666666
+            "height": 20.33333333333333
           },
           "label": "Increment",
           "identifier": "fixture_button",
@@ -62,9 +62,9 @@
           "type": "StaticText",
           "rect": {
             "y": 106.33333333333339,
-            "height": 20.33333333333333,
+            "x": 169.66666666666666,
             "width": 62.66666666666666,
-            "x": 169.66666666666666
+            "height": 20.33333333333333
           },
           "label": "count: 0",
           "identifier": "fixture_count",
@@ -76,9 +76,9 @@
           "type": "TextField",
           "rect": {
             "y": 134.66666666666666,
-            "height": 34,
+            "x": 16,
             "width": 370,
-            "x": 16
+            "height": 34
           },
           "identifier": "fixture_input",
           "enabled": true,
@@ -89,9 +89,9 @@
           "type": "CollectionView",
           "rect": {
             "y": 176.66666666666666,
-            "height": 577,
+            "x": 0,
             "width": 402,
-            "x": 0
+            "height": 577
           },
           "label": "Vertical scroll bar, 10 pages",
           "identifier": "fixture_list",
@@ -103,9 +103,9 @@
           "type": "Cell",
           "rect": {
             "y": 211.66666666666666,
-            "height": 51.99999999999997,
+            "x": 16,
             "width": 370,
-            "x": 16
+            "height": 51.99999999999997
           },
           "label": "row 1",
           "enabled": true,
@@ -116,9 +116,9 @@
           "type": "Other",
           "rect": {
             "y": 211.66666666666666,
-            "height": 51.99999999999997,
+            "x": 16,
             "width": 370,
-            "x": 16
+            "height": 51.99999999999997
           },
           "label": "row 1",
           "enabled": true,
@@ -129,9 +129,9 @@
           "type": "StaticText",
           "rect": {
             "y": 211.66666666666666,
-            "height": 51.99999999999997,
+            "x": 16,
             "width": 370,
-            "x": 16
+            "height": 51.99999999999997
           },
           "label": "row 1",
           "identifier": "fixture_row_1",
@@ -143,9 +143,9 @@
           "type": "Cell",
           "rect": {
             "y": 263.66666666666663,
-            "height": 52,
+            "x": 16,
             "width": 370,
-            "x": 16
+            "height": 52
           },
           "label": "row 2",
           "enabled": true,
@@ -155,8 +155,8 @@
           "ref": "@e10",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 263.66666666666663,
+            "x": 16,
             "width": 370,
             "height": 52
           },
@@ -168,10 +168,10 @@
           "ref": "@e11",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 263.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 2",
           "identifier": "fixture_row_2",
@@ -182,10 +182,10 @@
           "ref": "@e12",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 315.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 3",
           "enabled": true,
@@ -195,10 +195,10 @@
           "ref": "@e13",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 315.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 3",
           "enabled": true,
@@ -208,10 +208,10 @@
           "ref": "@e14",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 315.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 3",
           "identifier": "fixture_row_3",
@@ -222,10 +222,10 @@
           "ref": "@e15",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 367.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 4",
           "enabled": true,
@@ -235,10 +235,10 @@
           "ref": "@e16",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 367.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 4",
           "enabled": true,
@@ -248,10 +248,10 @@
           "ref": "@e17",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 367.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 4",
           "identifier": "fixture_row_4",
@@ -262,10 +262,10 @@
           "ref": "@e18",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 419.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 5",
           "enabled": true,
@@ -275,10 +275,10 @@
           "ref": "@e19",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 419.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 5",
           "enabled": true,
@@ -288,10 +288,10 @@
           "ref": "@e20",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 419.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 5",
           "identifier": "fixture_row_5",
@@ -302,10 +302,10 @@
           "ref": "@e21",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 471.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 6",
           "enabled": true,
@@ -315,10 +315,10 @@
           "ref": "@e22",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 471.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 6",
           "enabled": true,
@@ -328,10 +328,10 @@
           "ref": "@e23",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 471.66666666666663,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 6",
           "identifier": "fixture_row_6",
@@ -342,10 +342,10 @@
           "ref": "@e24",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 523.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 7",
           "enabled": true,
@@ -355,10 +355,10 @@
           "ref": "@e25",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 523.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 7",
           "enabled": true,
@@ -368,10 +368,10 @@
           "ref": "@e26",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 523.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 7",
           "identifier": "fixture_row_7",
@@ -382,10 +382,10 @@
           "ref": "@e27",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 575.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 8",
           "enabled": true,
@@ -395,10 +395,10 @@
           "ref": "@e28",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 575.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 8",
           "enabled": true,
@@ -408,10 +408,10 @@
           "ref": "@e29",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 575.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 8",
           "identifier": "fixture_row_8",
@@ -422,10 +422,10 @@
           "ref": "@e30",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 627.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 9",
           "enabled": true,
@@ -435,10 +435,10 @@
           "ref": "@e31",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 627.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 9",
           "enabled": true,
@@ -448,10 +448,10 @@
           "ref": "@e32",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 627.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 9",
           "identifier": "fixture_row_9",
@@ -462,10 +462,10 @@
           "ref": "@e33",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 679.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 10",
           "enabled": true,
@@ -475,10 +475,10 @@
           "ref": "@e34",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 679.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 10",
           "enabled": true,
@@ -488,10 +488,10 @@
           "ref": "@e35",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 679.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 10",
           "identifier": "fixture_row_10",
@@ -502,10 +502,10 @@
           "ref": "@e36",
           "type": "Cell",
           "rect": {
-            "x": 16,
             "y": 731.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 11",
           "enabled": true,
@@ -515,10 +515,10 @@
           "ref": "@e37",
           "type": "Other",
           "rect": {
-            "x": 16,
             "y": 731.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 11",
           "enabled": true,
@@ -528,10 +528,10 @@
           "ref": "@e38",
           "type": "StaticText",
           "rect": {
-            "x": 16,
             "y": 731.6666666666666,
-            "width": 370,
-            "height": 52
+            "x": 16,
+            "height": 52,
+            "width": 370
           },
           "label": "row 11",
           "identifier": "fixture_row_11",
@@ -542,10 +542,10 @@
           "ref": "@e39",
           "type": "Other",
           "rect": {
-            "x": 369,
             "y": 176.66666666666666,
-            "width": 30,
-            "height": 577
+            "x": 369,
+            "height": 577,
+            "width": 30
           },
           "label": "Vertical scroll bar, 10 pages",
           "enabled": true,
@@ -555,10 +555,10 @@
           "ref": "@e40",
           "type": "TextField",
           "rect": {
-            "x": 16,
             "y": 761.6666666666666,
-            "width": 334.3333333333333,
-            "height": 34
+            "x": 16,
+            "height": 34,
+            "width": 334.3333333333333
           },
           "identifier": "fixture_bottom_input",
           "enabled": true,
@@ -568,10 +568,10 @@
           "ref": "@e41",
           "type": "Button",
           "rect": {
-            "x": 358.3333333333333,
             "y": 768.6666666666666,
-            "width": 27.666666666666686,
-            "height": 20.33333333333337
+            "x": 358.3333333333333,
+            "height": 20.33333333333337,
+            "width": 27.666666666666686
           },
           "label": "Tap",
           "identifier": "fixture_bottom_button",
@@ -582,17 +582,19 @@
           "ref": "@e42",
           "type": "StaticText",
           "rect": {
-            "x": 145.16666666666669,
             "y": 803.6666666666666,
-            "width": 111.66666666666669,
-            "height": 20.33333333333337
+            "x": 145.16666666666669,
+            "height": 20.33333333333337,
+            "width": 111.66666666666669
           },
           "label": "bottom taps: 0",
           "identifier": "fixture_bottom_count",
           "enabled": true,
           "hittable": true
         }
-      ]
+      ],
+      "keyboardVisible": false,
+      "snapshotGeneration": 1
     },
     "meta": {
       "quiescenceBypass": "active",

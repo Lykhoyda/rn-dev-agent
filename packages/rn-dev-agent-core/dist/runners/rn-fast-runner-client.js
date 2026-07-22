@@ -2,16 +2,14 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { existsSync, readdirSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync, } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
-import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, } from '../fast-runner-ref-map.js';
-import { isPortFree } from './free-port.js';
+import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, getFreshRefTarget, } from '../fast-runner-ref-map.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, REQUIRED_IOS_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 import { buildRunnerQuiescenceEnv } from './quiescence.js';
 import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
-const DEFAULT_PORT = 22088;
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
 // + attach the XCUITest runner (device-proven on GitHub macos runners).
@@ -89,6 +87,24 @@ export function createReadySignalParser() {
 // --- Singleton state ---
 let runnerProcess = null;
 let runnerState = null;
+let runnerPoisoned = false;
+let poisonReap = null;
+// Concurrent containments share one poison flag. Clearing it on the first
+// completion would reopen mutating commands while a second containment is
+// still awaiting its own reap — exactly the window the poison exists to close.
+let poisonHolders = 0;
+let runnerOutputTail = '';
+let lastRunnerCommand = null;
+let lastRunnerPostMortem = null;
+function appendRunnerOutput(stream, chunk) {
+    runnerOutputTail = `${runnerOutputTail}${stream}: ${chunk}`.slice(-8_000);
+}
+export function getRunnerPostMortem() {
+    return (lastRunnerPostMortem ?? {
+        available: false,
+        provenance: runnerProcess ? 'spawned' : 'adopted',
+    });
+}
 // Story 04 (#385): capabilities from the last successful /health probe. Warm
 // before any mutating verb — ensureRunnerForCommand probes /health ahead of
 // every non-screenshot iOS command. Consumed by the settle engine.
@@ -101,6 +117,8 @@ export function _resetCapabilitiesForTest() {
 }
 export function _setFastRunnerStateForTest(state) {
     runnerState = state;
+    runnerProcess = null;
+    lastRunnerPostMortem = null;
 }
 // GH #384: announce the runner's quiescence-bypass status on the FIRST
 // successful /command after a state acquisition (fresh spawn or adoption),
@@ -203,6 +221,17 @@ export function adoptPersistedFastRunnerState(deviceId) {
 }
 export function getFastRunnerState() {
     return runnerState;
+}
+export function captureFastRunnerCommandAuthority() {
+    if (!runnerState)
+        return null;
+    return {
+        pid: runnerState.pid,
+        port: runnerState.port,
+        deviceId: runnerState.deviceId,
+        statePath: iosStatePath(runnerState.deviceId),
+        provenance: runnerProcess?.pid === runnerState.pid ? 'spawned' : 'adopted',
+    };
 }
 /**
  * Test-only seam: inject a fake runner state so callers (e.g. runIOS)
@@ -399,6 +428,21 @@ export function buildRunnerPortEnv(port) {
     };
 }
 /**
+ * xcodebuild strips TEST_RUNNER_ while forwarding values to XCUITest. Mirror
+ * the compile-gated deterministic fault onto that launch contract; released
+ * runner binaries contain no matching branch.
+ */
+export function buildRunnerTestFaultEnv(env) {
+    const value = env.TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT ?? env.RN_FAST_RUNNER_TEST_FAULT;
+    if (!value)
+        return {};
+    return {
+        RN_FAST_RUNNER_TEST_FAULT: value,
+        TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT: value,
+    };
+}
+let runnerTestFaultForwarded = false;
+/**
  * GH #424: run a build-phase xcodebuild (build-for-testing) to completion.
  * Unlike the launch invocation it exits on its own and emits no READY marker,
  * so success is exit code 0 — the .xctestrun it writes is what makes every
@@ -429,6 +473,14 @@ function runXcodebuildToExit(args, timeoutMs) {
         });
     });
 }
+export function resolveRunnerRequestedPort(explicitPort) {
+    // Simulator listeners bind in the host network namespace and may occupy an
+    // IPv6 wildcard while a 127.0.0.1 IPv4 probe still reports the same number
+    // free. Defaulting to NWListener's port 0 is the only race- and
+    // address-family-safe allocation when multiple simulators have live runners.
+    // The READY handshake reports the actual assigned port back to the client.
+    return explicitPort ?? 0;
+}
 export async function startFastRunner(deviceId, bundleId, port, 
 // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
 // by bypassing the prebuilt artifact tier.
@@ -436,7 +488,7 @@ opts = {}) {
     adoptPersistedFastRunnerState(deviceId);
     if (shouldReuseRunner(runnerState, deviceId))
         return runnerState;
-    const desired = port ?? ((await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : 0);
+    const desired = resolveRunnerRequestedPort(port);
     const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
     if (!existsSync(projectPath)) {
         throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
@@ -465,6 +517,7 @@ opts = {}) {
         }
     }
     const launch = plan[plan.length - 1];
+    const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
     return new Promise((resolve, reject) => {
         const child = spawn('xcodebuild', launch.args, {
             env: {
@@ -472,17 +525,22 @@ opts = {}) {
                 ...buildRunnerPortEnv(desired),
                 ...buildRunnerVersionEnv(getPluginVersion()),
                 ...buildRunnerQuiescenceEnv(process.env),
+                ...runnerTestFaultEnv,
             },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
         runnerProcess = child;
+        runnerOutputTail = '';
+        lastRunnerCommand = null;
+        lastRunnerPostMortem = null;
         const parser = createReadySignalParser();
         let resolved = false;
         const timer = setTimeout(() => {
             child.kill('SIGTERM');
             reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
         }, READY_TIMEOUT_MS);
-        const handleChunk = (chunk) => {
+        const handleChunk = (chunk, stream) => {
+            appendRunnerOutput(stream, chunk);
             if (resolved)
                 return;
             const result = parser.feed(chunk);
@@ -507,6 +565,8 @@ opts = {}) {
                 ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
             };
             runnerState = state;
+            if (Object.keys(runnerTestFaultEnv).length > 0)
+                runnerTestFaultForwarded = true;
             quiescenceAnnouncementPending = true;
             try {
                 writeJsonStateFileAtomic(iosStatePath(deviceId), state);
@@ -518,9 +578,9 @@ opts = {}) {
             resolve(state);
         };
         child.stdout.setEncoding('utf-8');
-        child.stdout.on('data', handleChunk);
+        child.stdout.on('data', (chunk) => handleChunk(chunk, 'stdout'));
         child.stderr.setEncoding('utf-8');
-        child.stderr.on('data', handleChunk);
+        child.stderr.on('data', (chunk) => handleChunk(chunk, 'stderr'));
         child.on('error', (err) => {
             clearTimeout(timer);
             if (runnerProcess === child) {
@@ -528,12 +588,20 @@ opts = {}) {
             }
             reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
         });
-        child.on('exit', (code) => {
+        child.on('exit', (code, signal) => {
+            lastRunnerPostMortem = {
+                available: true,
+                provenance: 'spawned',
+                lastCommand: lastRunnerCommand,
+                exitCode: code,
+                signal,
+                outputTail: runnerOutputTail,
+            };
             if (runnerProcess === child) {
                 clearStateFile();
             }
             clearTimeout(timer);
-            reject(new Error(`xcodebuild exited unexpectedly (code ${code})`));
+            reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? 'none'})`));
         });
     });
 }
@@ -694,6 +762,13 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
         }
         lastKnownCapabilities = res.capabilities ?? [];
         noteStaleHittableArtifact(res.capabilities);
+        // startFastRunner stamps the bridge's own RUNNER_PROTOCOL_VERSION optimistically;
+        // /health is the only place the artifact's real wire version is learned. Without
+        // writing it back, a compatible v1 runner reads as v2 and the client-side
+        // dismiss-first fallback that v1 requires is silently skipped.
+        if (typeof res.protocolVersion === 'number') {
+            state.protocolVersion = res.protocolVersion;
+        }
         return {
             liveness: 'alive',
             ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
@@ -719,6 +794,10 @@ export async function reapStaleFastRunner(deps = {}) {
     const state = getState();
     if (!state)
         return;
+    const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
+    const spawnedExit = spawnedChild
+        ? new Promise((resolve) => spawnedChild.once('exit', () => resolve()))
+        : null;
     try {
         sendSignal(state.pid, 'SIGTERM');
     }
@@ -733,6 +812,11 @@ export async function reapStaleFastRunner(deps = {}) {
         catch {
             /* race: died between checks */
         }
+    }
+    if (spawnedExit) {
+        // Let the registered child exit handler publish exit/signal/output-tail
+        // evidence before timeout containment snapshots the postmortem.
+        await Promise.race([spawnedExit, sleep(250)]);
     }
     clearState();
 }
@@ -771,8 +855,9 @@ async function sendCommandOnce(port, body, timeoutMs) {
         // GH #383: defense-in-depth — the liveness gate already reaps a
         // protocol-mismatched runner, but a runner that flipped protocol mid-session
         // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
-        if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
-            throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`);
+        if (typeof parsed.v === 'number' &&
+            (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
+            throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
         }
         return parsed;
     }
@@ -803,11 +888,15 @@ async function probeCommandStatus(port, commandId) {
 // Recovery info travels in the return value so callers that don't surface
 // meta (fastSwipe, settle probes) discard it with the response.
 async function postCommandWithRecovery(body) {
+    if (runnerPoisoned && body.command !== 'status') {
+        throw new Error('RUNNER_TIMEOUT: rn-fast-runner is poisoned after a non-cancellable main-thread timeout; command refused before dispatch while the runner is reaped');
+    }
     const state = runnerState;
     if (!state) {
         throw new Error('rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).');
     }
     const commandId = generateCommandId();
+    lastRunnerCommand = typeof body.command === 'string' ? body.command : String(body.command);
     const timeoutMs = commandTimeoutMs(body.command);
     try {
         return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
@@ -838,6 +927,150 @@ async function postCommand(body) {
  * for the ref-map. Each runner node gets a synthetic ref `@e<index>` so
  * downstream press/fill can target it.
  */
+async function containTypeTimeout(args, authorityBefore = captureFastRunnerCommandAuthority(), trigger = 'main-thread-timeout') {
+    // Poison before any asynchronous readback: concurrently queued mutators are
+    // refused at postCommandWithRecovery and cannot reach this XCTest instance.
+    const runnerBefore = authorityBefore;
+    runnerPoisoned = true;
+    poisonHolders++;
+    let verification = { matches: false };
+    try {
+        if (args._verifyExactReadback && typeof args.text === 'string') {
+            verification = await args._verifyExactReadback(args.text);
+        }
+    }
+    catch {
+        verification = { matches: false };
+    }
+    let reapDisposition;
+    try {
+        if (runnerBefore && runnerState?.pid === runnerBefore.pid) {
+            poisonReap ??= reapStaleFastRunner();
+            await poisonReap;
+            reapDisposition = 'reaped';
+        }
+        else {
+            // A concurrent health gate may already have reaped the triggering runner
+            // and even spawned its replacement. Never signal that replacement merely
+            // because the prior command's authority was lost.
+            reapDisposition = runnerState ? 'replacement-preserved' : 'already-absent';
+        }
+    }
+    finally {
+        poisonHolders--;
+        if (poisonHolders <= 0) {
+            poisonHolders = 0;
+            poisonReap = null;
+            runnerPoisoned = false;
+        }
+    }
+    const runnerTimeoutRecovery = {
+        trigger,
+        poisoned: true,
+        reaped: reapDisposition === 'reaped',
+        reapDisposition,
+        verification: verification.matches ? 'exact-readback' : 'unverified',
+        runner: {
+            before: runnerBefore,
+            afterReapPid: runnerState?.pid ?? null,
+            stateCleared: runnerState === null,
+            nextMutationRequiresRespawn: runnerState === null,
+        },
+        runnerPostMortem: getRunnerPostMortem(),
+        containmentOrder: ['poison', 'independent-readback', 'reap', 'result'],
+        lateMutationContainment: reapDisposition === 'reaped'
+            ? 'runner-process-reaped-before-next-mutation'
+            : reapDisposition === 'replacement-preserved'
+                ? 'replacement-preserved-no-signal-dispatched'
+                : 'triggering-runner-state-already-absent',
+        targetApp: {
+            wasRunningBeforeRecovery: 'unverified',
+            pidPreserved: 'unverified',
+            activateLaunchedApp: 'unverified',
+            semantics: 'runner host is lazily relaunched; target activation semantics are unchanged',
+        },
+        ...(verification.actual !== undefined ? { actual: verification.actual } : {}),
+    };
+    if (verification.matches) {
+        return okResult({
+            typed: true,
+            text: args.text,
+            recovered: true,
+            verification: 'exact-readback',
+        }, { meta: { runnerTimeoutRecovery } });
+    }
+    return failResult(trigger === 'main-thread-timeout'
+        ? 'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation.'
+        : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.', 'RUNNER_TIMEOUT', { runnerTimeoutRecovery });
+}
+function hasRunnerTimeoutRecovery(result) {
+    try {
+        const envelope = JSON.parse(result.content[0]?.text ?? '{}');
+        return envelope.meta?.runnerTimeoutRecovery !== undefined;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * A success-shaped native type reply is not authoritative if the XCTest runner
+ * wedges, disappears, or is replaced before post-mutation settling finishes.
+ * Re-check the exact dispatch authority and /health after settle; only exact
+ * independent readback may recover such a result to success.
+ */
+const POST_SETTLE_HEALTH_ATTEMPTS = 2;
+const POST_SETTLE_HEALTH_RETRY_MS = 250;
+export async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
+    if (args.command !== 'type' || result.isError || hasRunnerTimeoutRecovery(result))
+        return result;
+    const sameAuthority = authorityBefore !== null &&
+        runnerState?.pid === authorityBefore.pid &&
+        runnerState.port === authorityBefore.port &&
+        runnerState.deviceId === authorityBefore.deviceId;
+    if (sameAuthority) {
+        // A single probe right after a heavy type+settle can time out transiently;
+        // only a repeated non-alive verdict is evidence of lost authority.
+        for (let attempt = 0; attempt < POST_SETTLE_HEALTH_ATTEMPTS; attempt += 1) {
+            const health = await probeFastRunnerLivenessDetailed();
+            if (health.liveness === 'alive')
+                return result;
+            if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
+                await new Promise((resolve) => setTimeout(resolve, POST_SETTLE_HEALTH_RETRY_MS));
+            }
+        }
+    }
+    return containTypeTimeout(args, authorityBefore, 'post-settle-runner-authority-lost');
+}
+function sameRefIdentity(before, after) {
+    if (!before || !after)
+        return false;
+    if (before.identifier !== undefined || after.identifier !== undefined) {
+        return before.identifier === after.identifier && before.type === after.type;
+    }
+    if (before.label !== undefined || after.label !== undefined) {
+        return before.label === after.label && before.type === after.type;
+    }
+    // Type alone is not an identity: a positional id can rebind to a different
+    // element of the same type once the keyboard leaves the tree.
+    return false;
+}
+// Same rule refreshRef enforces: a positional ref may only be re-served when
+// its identity resolves to exactly ONE node in the new tree. Equality at the
+// same key is not enough — sibling rows sharing a testID satisfy it after the
+// index set shifts.
+function countIdentityMatches(before, nodes) {
+    let matches = 0;
+    for (const node of nodes) {
+        const candidate = {
+            type: node.type,
+            ...(node.label !== undefined ? { label: node.label } : {}),
+            ...(node.identifier !== undefined ? { identifier: node.identifier } : {}),
+        };
+        if (sameRefIdentity(before, candidate))
+            matches++;
+    }
+    return matches;
+}
 function mapRunnerNodesToFlat(nodes) {
     const out = [];
     let synthCounter = 0;
@@ -861,6 +1094,16 @@ function mapRunnerNodesToFlat(nodes) {
         out.push(flat);
     }
     return out;
+}
+function staleAfterKeyboardDismissal(ref) {
+    return failResult(`Element at ref ${ref ?? '?'} could not be re-resolved by identity after the keyboard was dismissed — no tap was performed`, 'STALE_REF', {
+        keyboardGuard: 'auto_dismissed',
+        reResolved: false,
+        cachedMetadata: ref ? getCachedMetadata(ref) : null,
+        reResolution: 'no-signature',
+        candidates: [],
+        hint: 'The keyboard was dismissed successfully; the ref no longer identifies the same element. Call device_snapshot action=snapshot and retry with the new ref.',
+    });
 }
 export async function runIOS(args) {
     // STALE_REF sentinel from buildRunIOSArgs(): the caller tried to press/type
@@ -905,43 +1148,134 @@ export async function runIOS(args) {
         body.depth = args.depth;
     if (args.scope !== undefined)
         body.scope = args.scope;
+    if (args.targetBounds !== undefined)
+        body.targetBounds = args.targetBounds;
+    if (args.snapshotGeneration !== undefined)
+        body.snapshotGeneration = args.snapshotGeneration;
+    if (args.keyboardStateAtSnapshot !== undefined)
+        body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+    // Transport-level refusals must surface as typed results from every runner
+    // round trip, not just the main dispatch — `withSession` does not catch, so a
+    // raw throw from the keyboard preamble becomes an MCP-level crash.
+    const mapRunnerDispatchError = (err) => {
+        const m = err instanceof Error ? err.message : String(err);
+        if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+            return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        if (m.startsWith('RUNNER_TIMEOUT') && runnerPoisoned) {
+            return failResult(m, 'RUNNER_TIMEOUT', { poisoned: true, dispatched: false });
+        }
+        return null;
+    };
+    let keyboardRelayoutRecovered = false;
+    // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
+    // policy client-side instead of silently downgrading to point containment.
+    if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true &&
+        runnerState?.protocolVersion === 1) {
+        try {
+            const legacyDismiss = await postCommand({
+                command: 'keyboardDismiss',
+                ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+            });
+            const data = (legacyDismiss.data ?? {});
+            if (data.wasVisible && (!data.dismissed || data.visible)) {
+                return failResult('KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.', 'KEYBOARD_DISMISS_FAILED', { attemptedTiers: ['native-control', 'native-swipe'], protocolVersion: 1 });
+            }
+            if (data.wasVisible && data.dismissed)
+                keyboardRelayoutRecovered = true;
+        }
+        catch (err) {
+            const mapped = mapRunnerDispatchError(err);
+            if (mapped)
+                return mapped;
+            throw err;
+        }
+    }
+    const refreshFailure = { result: null };
+    const refreshTargetAfterKeyboard = async () => {
+        if (!args._targetRef)
+            return true; // raw coordinates remain meaningful after dismissal
+        // Ref ids are positional: the keyboard leaving the tree shifts the index
+        // set, so the same id can denote a different element. Only an identity
+        // match may be re-served under the original ref.
+        const before = getCachedMetadata(args._targetRef);
+        let snapshot;
+        try {
+            snapshot = await postCommand({
+                command: 'snapshot',
+                interactiveOnly: true,
+                ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+            });
+        }
+        catch (err) {
+            refreshFailure.result = mapRunnerDispatchError(err);
+            if (refreshFailure.result)
+                return false;
+            throw err;
+        }
+        if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== 'object')
+            return false;
+        const data = snapshot.data;
+        if (!Array.isArray(data.nodes))
+            return false;
+        const flat = mapRunnerNodesToFlat(data.nodes);
+        updateRefMapFromFlat(flat, {
+            ...(typeof data.snapshotGeneration === 'number'
+                ? { snapshotGeneration: data.snapshotGeneration }
+                : {}),
+            ...(typeof data.keyboardVisible === 'boolean'
+                ? { keyboardVisible: data.keyboardVisible }
+                : {}),
+        });
+        if (!sameRefIdentity(before, getCachedMetadata(args._targetRef)))
+            return false;
+        if (!before || countIdentityMatches(before, flat) !== 1)
+            return false;
+        const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
+        if (!target)
+            return false;
+        body.x = Math.round(target.rect.x + target.rect.width / 2);
+        body.y = Math.round(target.rect.y + target.rect.height / 2);
+        body.targetBounds = target.rect;
+        body.snapshotGeneration = target.snapshotGeneration;
+        if (target.keyboardStateAtSnapshot !== null)
+            body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
+        return true;
+    };
+    if (keyboardRelayoutRecovered && !(await refreshTargetAfterKeyboard())) {
+        return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
+    }
     let resp;
     let recovery;
     try {
         ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
     }
     catch (err) {
+        const mapped = mapRunnerDispatchError(err);
+        if (mapped)
+            return mapped;
         const m = err instanceof Error ? err.message : String(err);
-        if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
-            return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
+        if (args.command === 'type' && m.startsWith('RUNNER_TIMEOUT')) {
+            return containTypeTimeout(args);
         }
         throw err;
+    }
+    if (!resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
+        if (!(await refreshTargetAfterKeyboard())) {
+            return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
+        }
+        ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+        keyboardRelayoutRecovered = true;
     }
     const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
     const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;
-        // GH #105 iOS-MVP follow-up: XCUIElement.typeText() runs its own internal
-        // snapshot/quiescence synchronization that bypasses skipPostEventQuiescence
-        // — even with both target resolution AND the typing call wrapped in
-        // withTemporaryScrollIdleTimeoutIfSupported, the post-action wait still
-        // hits XCTest's 30s mainThreadExecutionTimeout because RN's main thread
-        // never reports quiescence (Reanimated keeps it active). Live validation
-        // confirms the text DOES land in the field every time. Treat this specific
-        // timeout shape as success for the type command and surface a meta marker
-        // so callers can audit telemetry. Any other error remains a failure.
         if (args.command === 'type' &&
             typeof message === 'string' &&
             message.includes('main thread execution timed out')) {
-            return okResult({ typed: true, text: args.text }, {
-                meta: {
-                    sideEffectSucceeded: true,
-                    runnerTimeoutShim: true,
-                    ...announce,
-                    ...recoveryMeta,
-                },
-            });
+            return containTypeTimeout(args);
         }
         const failExtras = recovery ? { transportRecovery: recovery } : undefined;
         if (code) {
@@ -955,17 +1289,36 @@ export async function runIOS(args) {
         const data = resp.data;
         if (Array.isArray(data.nodes)) {
             const flat = mapRunnerNodesToFlat(data.nodes);
-            const outcome = updateRefMapFromFlat(flat);
+            const outcome = updateRefMapFromFlat(flat, {
+                ...(typeof data.snapshotGeneration === 'number'
+                    ? { snapshotGeneration: data.snapshotGeneration }
+                    : {}),
+                ...(typeof data.keyboardVisible === 'boolean'
+                    ? { keyboardVisible: data.keyboardVisible }
+                    : {}),
+            });
             // GH #409: verdict rendered from the same call that decided whether the
             // ref map was overwritten — an empty capture is reported as degraded and
             // leaves the last-known-good refs bound.
             const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
-            return okResult({ nodes: flat }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
+            return okResult({
+                nodes: flat,
+                ...(typeof data.keyboardVisible === 'boolean'
+                    ? { keyboardVisible: data.keyboardVisible }
+                    : {}),
+                ...(typeof data.snapshotGeneration === 'number'
+                    ? { snapshotGeneration: data.snapshotGeneration }
+                    : {}),
+            }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
         }
         // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
         const fallbackMeta = { ...announce, ...recoveryMeta };
         return okResult(resp.data, Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : undefined);
     }
-    const finalMeta = { ...announce, ...recoveryMeta };
+    const finalMeta = {
+        ...announce,
+        ...recoveryMeta,
+        ...(keyboardRelayoutRecovered ? { keyboardGuard: 'auto_dismissed' } : {}),
+    };
     return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : undefined);
 }

@@ -28,6 +28,7 @@ import {
 } from '../util/secure-state-file.js';
 import {
   RUNNER_PROTOCOL_VERSION,
+  MIN_SUPPORTED_RUNNER_PROTOCOL,
   REQUIRED_ANDROID_COMMANDS,
   getPluginVersion,
   classifyRunnerCompatibility,
@@ -923,9 +924,12 @@ async function sendCommandOnce(
   // GH #383: mirror the iOS /command v-stamp check — a runner hot-swapped to an
   // incompatible wire protocol mid-session is caught here (the reuse gate only
   // runs at start). runAndroid's catch maps this BEFORE isAndroidConnectionFailure.
-  if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
+  if (
+    typeof parsed.v === 'number' &&
+    (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)
+  ) {
     throw new Error(
-      `RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`,
+      `RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`,
     );
   }
   return parsed;

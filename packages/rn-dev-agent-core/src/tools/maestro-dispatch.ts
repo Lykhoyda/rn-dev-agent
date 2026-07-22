@@ -31,7 +31,12 @@ export interface MaestroDispatch {
    * built `.app`/`.ipa`; maestro-runner needs it to reinstall on iOS
    * `clearState`. The Maestro CLI fallback does not accept it and ignores it.
    */
-  buildArgs(platform: 'ios' | 'android', flowFile: string, appFile?: string): string[];
+  buildArgs(
+    platform: 'ios' | 'android',
+    flowFile: string,
+    appFile?: string,
+    deviceId?: string,
+  ): string[];
   /**
    * Present when a non-default runner was deliberately chosen — the B59 CLI
    * fallback (iOS-only, no adb) OR the B223 CLI preference (Android flow uses
@@ -159,7 +164,13 @@ export function chooseMaestroDispatch(
       return {
         runner: 'maestro',
         binPath: maestroPath,
-        buildArgs: (platform, flowFile, _appFile) => ['test', '--platform', platform, flowFile],
+        buildArgs: (platform, flowFile, _appFile, deviceId) => [
+          'test',
+          '--platform',
+          platform,
+          ...(deviceId ? ['--udid', deviceId] : []),
+          flowFile,
+        ],
         fallbackReason:
           'Android flow uses hideKeyboard; maestro-runner v1.0.9 no-ops it on Android (B223) — using the Maestro CLI so the keyboard is actually dismissed',
       };
@@ -176,10 +187,14 @@ export function chooseMaestroDispatch(
     return {
       runner: 'maestro-runner',
       binPath: runnerPath,
-      buildArgs: (platform, flowFile, appFile) =>
-        appFile
-          ? ['--app-file', appFile, '--platform', platform, 'test', flowFile]
-          : ['--platform', platform, 'test', flowFile],
+      buildArgs: (platform, flowFile, appFile, deviceId) => [
+        ...(appFile ? ['--app-file', appFile] : []),
+        '--platform',
+        platform,
+        ...(deviceId ? ['--device', deviceId] : []),
+        'test',
+        flowFile,
+      ],
       ...(needsOfficialForKeyboard
         ? {
             degradedReason:
@@ -209,7 +224,13 @@ export function chooseMaestroDispatch(
       // entire B59 fallback on its target machines.
       // The Maestro CLI handles clearState reinstall from the flow's appId
       // header and exposes no --app-file flag, so appFile is intentionally ignored here.
-      buildArgs: (platform, flowFile, _appFile) => ['test', '--platform', platform, flowFile],
+      buildArgs: (platform, flowFile, _appFile, deviceId) => [
+        'test',
+        '--platform',
+        platform,
+        ...(deviceId ? ['--udid', deviceId] : []),
+        flowFile,
+      ],
       fallbackReason: reason,
     };
   }

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { logger } from '../logger.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from './metro-cwd.js';
 /**
  * GH #208 (RC2): thrown by `discover()` when Metro IS reachable but advertises
@@ -127,7 +128,71 @@ export function parseSimctlListapps(stdout) {
     }
     return ids;
 }
-function readAndroidPackages() {
+/**
+ * Return the single, internally consistent bundle identity carried by Metro.
+ * Bridgeless targets use a generic description and put the app ID in `appId`
+ * or in the canonical `<bundleId> (<device>)` title. Conflicting valid IDs are
+ * unproven and therefore fail closed rather than choosing the best-looking one.
+ */
+export function targetBundleIdentity(target) {
+    const identities = new Map();
+    const add = (candidate) => {
+        if (!isValidBundleId(candidate))
+            return;
+        identities.set(candidate.toLowerCase(), candidate);
+    };
+    add(target.appId);
+    add(target.description);
+    const title = target.title?.trim() ?? '';
+    add(title);
+    const canonicalTitle = title.match(/^([^\s()]+)\s+\(.+\)$/);
+    if (canonicalTitle)
+        add(canonicalTitle[1]);
+    return identities.size === 1 ? [...identities.values()][0] : null;
+}
+export function targetMatchesBundleId(target, bundleId) {
+    return targetBundleIdentity(target)?.toLowerCase() === bundleId.toLowerCase();
+}
+// inferPlatforms runs on every connect/auto-connect, and each probe is a
+// synchronous subprocess (1 + one per booted simulator). Installed-package sets
+// change on the scale of installs, not connects, so a short TTL keeps the
+// multi-simulator host off the blocking path without going stale in practice.
+const PACKAGE_PROBE_TTL_MS = 15_000;
+// A failed probe leaves every target 'defaulted', which fail-closes any
+// platform-filtered connect. Keep a CHEAP failure barely long enough to absorb
+// a burst of connects so a transient adb/simctl blip still self-heals on retry.
+const PACKAGE_PROBE_FAILURE_TTL_MS = 1_500;
+// A failure that burned this long came from subprocess timeouts, not a fast
+// "tool absent" error. Re-paying it on every connect would block the event loop
+// far worse than the staleness the short TTL buys.
+const PACKAGE_PROBE_SLOW_FAILURE_MS = 1_000;
+const packageProbeCache = new Map();
+function packageProbeTtl(value, elapsedMs) {
+    if (value !== null)
+        return PACKAGE_PROBE_TTL_MS;
+    return elapsedMs >= PACKAGE_PROBE_SLOW_FAILURE_MS
+        ? PACKAGE_PROBE_TTL_MS
+        : PACKAGE_PROBE_FAILURE_TTL_MS;
+}
+export function cachedPackageProbe(key, probe, clock = Date.now) {
+    const hit = packageProbeCache.get(key);
+    const now = clock();
+    if (hit && now - hit.at < hit.ttl)
+        return hit.value;
+    const startedAt = clock();
+    const value = probe();
+    const finishedAt = clock();
+    packageProbeCache.set(key, {
+        at: finishedAt,
+        ttl: packageProbeTtl(value, finishedAt - startedAt),
+        value,
+    });
+    return value;
+}
+export function clearPackageProbeCache() {
+    packageProbeCache.clear();
+}
+function probeAndroidPackages() {
     try {
         const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
             timeout: 3000,
@@ -143,18 +208,55 @@ function readAndroidPackages() {
         return null;
     }
 }
-function readIOSPackages() {
+export function bootedSimulatorUdids() {
     try {
-        const out = execFileSync('xcrun', ['simctl', 'listapps', 'booted'], {
+        const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
             timeout: 5000,
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
         });
-        return parseSimctlListapps(out);
+        const parsed = JSON.parse(out);
+        return Object.values(parsed.devices ?? {})
+            .flat()
+            .map((device) => device.udid)
+            .filter((udid) => typeof udid === 'string' && udid.length > 0);
     }
     catch {
-        return null;
+        return [];
     }
+}
+// `simctl listapps booted` errors out as soon as more than one simulator is
+// booted — the exact case this inference must survive. Probe each booted UDID
+// exactly and union the results: platform inference asks "is this bundle an iOS
+// app", which no single device owns.
+function probeIOSPackages() {
+    const udids = bootedSimulatorUdids();
+    if (udids.length === 0)
+        return null;
+    const ids = new Set();
+    let probed = false;
+    for (const udid of udids) {
+        try {
+            const out = execFileSync('xcrun', ['simctl', 'listapps', udid], {
+                timeout: 5000,
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'ignore'],
+            });
+            probed = true;
+            for (const id of parseSimctlListapps(out))
+                ids.add(id);
+        }
+        catch {
+            // A single unreadable simulator must not blind the others.
+        }
+    }
+    return probed ? ids : null;
+}
+function readAndroidPackages() {
+    return cachedPackageProbe('android', probeAndroidPackages);
+}
+function readIOSPackages() {
+    return cachedPackageProbe('ios', probeIOSPackages);
 }
 /**
  * B116 (D639): look up each target's description against BOTH iOS simctl and
@@ -208,28 +310,47 @@ export function inferPlatforms(targets, readers = {}) {
         const fromDeviceName = inferPlatformFromDeviceName(t.deviceName);
         if (fromDeviceName) {
             t.platform = fromDeviceName;
+            t.platformInference = 'probed';
             continue;
         }
-        const desc = t.description ?? '';
-        const inAndroid = androidPackages?.has(desc) ?? false;
-        const inIOS = iosPackages?.has(desc) ?? false;
+        const bundleIdentity = targetBundleIdentity(t);
+        const inAndroid = bundleIdentity ? (androidPackages?.has(bundleIdentity) ?? false) : false;
+        const inIOS = bundleIdentity ? (iosPackages?.has(bundleIdentity) ?? false) : false;
         if (inAndroid && !inIOS) {
             t.platform = 'android';
+            t.platformInference = 'probed';
         }
         else if (inIOS && !inAndroid) {
             t.platform = 'ios';
+            t.platformInference = 'probed';
         }
         else if (inAndroid && inIOS) {
             // Ambiguous — same bundleId installed on both. Default to iOS but mark
             // for downstream so callers can notice and pass targetId/bundleId filter.
             t.platform = 'ios';
             t.ambiguousPlatform = true;
+            t.platformInference = 'ambiguous';
         }
         else {
             // No information (adb/simctl both failed, or target bundle unknown) —
             // default to iOS to preserve prior behavior for iOS-only setups.
             t.platform = 'ios';
+            t.platformInference = 'defaulted';
         }
+    }
+}
+function describeTarget(target) {
+    const confidence = target.platformInference ?? 'probed';
+    return `${target.id} title="${target.title || '?'}" appId="${target.appId ?? '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
+}
+export class TargetSelectionError extends Error {
+    code;
+    candidates;
+    constructor(code, message, candidates) {
+        super(message);
+        this.code = code;
+        this.candidates = candidates;
+        this.name = 'TargetSelectionError';
     }
 }
 export function classifyAndroidDeviceKind(deviceName) {
@@ -252,6 +373,42 @@ export function selectTarget(validTargets, filtersOrPlatform) {
         : (filtersOrPlatform ?? {});
     let filteredTargets = validTargets;
     const warnings = [];
+    let warnNoPlatformFilter = false;
+    // Selection precedence starts with an exact target id. It is exact identity,
+    // but it never overrides an explicit/session platform constraint.
+    if (filters.targetId) {
+        const idMatched = validTargets.filter((t) => t.id === filters.targetId);
+        if (idMatched.length === 0) {
+            return {
+                targets: [],
+                warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
+            };
+        }
+        filteredTargets = idMatched;
+    }
+    if (filters.platform) {
+        const platform = filters.platform.toLowerCase();
+        const platformMatched = filteredTargets.filter((target) => target.platform === platform &&
+            (target.platformInference === undefined || target.platformInference === 'probed'));
+        if (platformMatched.length === 0) {
+            const code = filters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND';
+            return {
+                targets: [],
+                errorCode: code,
+                warning: `${code}: requested platform "${filters.platform}" cannot be proven for the live target set. ` +
+                    `Candidates: ${validTargets.map(describeTarget).join('; ')}. ` +
+                    `Run cdp_targets, relaunch the requested app, or pass a targetId from a proven target.`,
+            };
+        }
+        filteredTargets = platformMatched;
+    }
+    else if (validTargets.length > 0 &&
+        !filters.targetId &&
+        !filters.bundleId &&
+        !filters.deviceKind &&
+        !filters.preferredBundleId) {
+        warnNoPlatformFilter = true;
+    }
     if (filters.deviceKind) {
         const kind = filters.deviceKind;
         const deviceMatched = filteredTargets.filter((target) => androidTargetMatchesKind(target.deviceName, kind));
@@ -272,53 +429,23 @@ export function selectTarget(validTargets, filtersOrPlatform) {
             warnings.push(`No CDP target was positively identified as an emulator for the active Android session (devices: ${availableDevices}). Connecting to best available target.`);
         }
     }
-    // B111 (D643): explicit targetId hard-fails on no match — silent fallthrough
-    // would silently connect the caller to a different target than requested.
-    if (filters.targetId) {
-        const idMatched = validTargets.filter((t) => t.id === filters.targetId);
-        if (idMatched.length === 0) {
-            return {
-                targets: [],
-                warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
-            };
-        }
-        filteredTargets = idMatched;
-    }
-    // B111 (D643): explicit bundleId hard-fails on no match (case-insensitive).
-    // Runs even with 1 target — single non-matching target is still wrong.
+    // bundleId is hard and platform-scoped whenever a platform authority exists.
     if (filters.bundleId) {
-        const bundleLower = filters.bundleId.toLowerCase();
-        const bundleMatched = filteredTargets.filter((t) => (t.description ?? '').toLowerCase() === bundleLower);
+        const bundleMatched = filteredTargets.filter((target) => targetMatchesBundleId(target, filters.bundleId));
         if (bundleMatched.length === 0) {
             return {
                 targets: [],
-                warning: `bundleId "${filters.bundleId}" not found. Available descriptions: ${filteredTargets.map((t) => t.description ?? '?').join(', ')}`,
+                warning: `bundleId "${filters.bundleId}" not found in proven live target metadata. Candidates: ${filteredTargets.map(describeTarget).join('; ')}`,
             };
         }
         filteredTargets = bundleMatched;
-    }
-    if (filters.platform && filteredTargets.length > 1) {
-        const pf = filters.platform.toLowerCase();
-        let platformMatched = filteredTargets.filter((t) => t.platform === pf);
-        if (platformMatched.length === 0) {
-            platformMatched = filteredTargets.filter((t) => {
-                const haystack = `${t.title ?? ''} ${t.description ?? ''} ${t.vm ?? ''}`.toLowerCase();
-                return haystack.includes(pf);
-            });
-        }
-        if (platformMatched.length > 0) {
-            filteredTargets = platformMatched;
-        }
-        else {
-            warnings.push(`Platform filter "${filters.platform}" matched no targets (available: ${filteredTargets.map((t) => `${t.description || t.id} [${t.platform ?? '?'}]`).join(', ')}). Connecting to best available target.`);
-        }
     }
     // B111 (D643): preferredBundleId is a SOFT filter — auto-selection hint
     // (case-insensitive). Only applied when it narrows without eliminating
     // all candidates. Auto-populated from project-config.ts in connect.ts.
     const prefLower = filters.preferredBundleId?.toLowerCase();
     if (prefLower && filteredTargets.length > 1) {
-        const preferred = filteredTargets.filter((t) => (t.description ?? '').toLowerCase() === prefLower);
+        const preferred = filteredTargets.filter((target) => targetMatchesBundleId(target, filters.preferredBundleId));
         if (preferred.length > 0 && preferred.length < filteredTargets.length) {
             logger.info('CDP', `Auto-selected target by preferredBundleId "${filters.preferredBundleId}" (${preferred.length} of ${filteredTargets.length})`);
             filteredTargets = preferred;
@@ -333,13 +460,16 @@ export function selectTarget(validTargets, filtersOrPlatform) {
         if (aPage !== bPage)
             return bPage - aPage;
         if (prefLower) {
-            const aPref = (a.description ?? '').toLowerCase() === prefLower ? 1 : 0;
-            const bPref = (b.description ?? '').toLowerCase() === prefLower ? 1 : 0;
+            const aPref = targetMatchesBundleId(a, prefLower) ? 1 : 0;
+            const bPref = targetMatchesBundleId(b, prefLower) ? 1 : 0;
             if (aPref !== bPref)
                 return bPref - aPref;
         }
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
+    if (warnNoPlatformFilter && sorted.length > 0) {
+        warnings.push(`No platform filter was supplied; connecting to the best available target without cross-platform affinity (${describeTarget(sorted[0])}). Pass platform to fail closed.`);
+    }
     return { targets: sorted, warning: warnings.length > 0 ? warnings.join(' | ') : undefined };
 }
 /**
@@ -369,7 +499,7 @@ export function selectMetroPort(attached, runningPorts, ctx) {
     // 2. preferredBundleId port-level tie-break (exactly one attached port serves it).
     if (ctx.preferredBundleId) {
         const pref = ctx.preferredBundleId.toLowerCase();
-        const prefPorts = attached.filter((a) => a.targets.some((t) => (t.description ?? '').toLowerCase() === pref));
+        const prefPorts = attached.filter((a) => a.targets.some((target) => targetMatchesBundleId(target, pref)));
         if (prefPorts.length === 1)
             return { port: prefPorts[0].port };
     }
@@ -442,10 +572,15 @@ export async function discover(currentPort, platformFilterOrFilters) {
     logger.info('CDP', `Metro selected on port ${metroPort} (running: ${runningPorts.join(', ')})`);
     const validTargets = attached.find((pp) => pp.port === metroPort).targets;
     inferPlatforms(validTargets);
-    const { targets: sorted, warning: selectWarning } = selectTarget(validTargets, filters);
+    const { targets: sorted, warning: selectWarning, errorCode, } = selectTarget(validTargets, filters);
     const warning = [portWarning, selectWarning].filter(Boolean).join(' | ') || undefined;
     logger.debug('CDP', `Found ${sorted.length} valid target(s): ${sorted.map((t) => `${t.id} (${t.title}, platform=${t.platform ?? '?'})`).join(', ')}`);
-    return { port: metroPort, targets: sorted, warning };
+    return {
+        port: metroPort,
+        targets: sorted,
+        warning,
+        ...(errorCode ? { errorCode, candidates: validTargets } : {}),
+    };
 }
 export async function discoverForList(currentPort, portHint) {
     const ports = [...new Set([portHint ?? currentPort, ...resolveDefaultPorts()])];

@@ -28,7 +28,7 @@
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
 import { okResult, failResult } from '../utils.js';
-import { acknowledgeExternalEdit, loadAction, saveActionWithCAS } from '../domain/action-store.js';
+import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { appendRunRecord, shouldAutoPromoteToActive, } from '../domain/reusable-action.js';
 import { parseMaestroFailure, isAutoRepairable, } from '../domain/maestro-error-parser.js';
@@ -54,6 +54,8 @@ function classifyFailure(failure) {
             return { actionCode: 'TIMEOUT', toolCode: undefined };
         case 'ASSERTION_FAILED':
             return { actionCode: 'STATE_MISMATCH', toolCode: 'ASSERTION_FAILED' };
+        case 'WDA_BOOTSTRAP_FAILED':
+            return { actionCode: 'WDA_BOOTSTRAP_FAILED', toolCode: 'WDA_BOOTSTRAP_FAILED' };
         case 'UNKNOWN':
         default:
             return { actionCode: 'UNKNOWN', toolCode: undefined };
@@ -67,6 +69,26 @@ function parseEnvelope(toolResult, toolName) {
         return { ok: false, error: `Unparseable ${toolName} envelope` };
     }
 }
+function replaySuccessEvidence(env) {
+    const reportedSteps = env.data?.steps ?? [];
+    const steps = reportedSteps.map(({ index, verb, status, durationMs }) => ({
+        index,
+        verb,
+        status,
+        durationMs,
+    }));
+    return {
+        transport: env.data?.transport ?? env.data?.runner ?? 'unproven',
+        transportVersion: env.data?.transportVersion ?? null,
+        fallback: env.data?.fallback ?? 'unproven',
+        ...(env.data?.deviceAuthority ? { deviceAuthority: env.data.deviceAuthority } : {}),
+        perStepReadback: {
+            source: 'maestro-runner-step-report',
+            complete: steps.length > 0 && steps.every((step) => step.status === 'pass'),
+            steps,
+        },
+    };
+}
 /**
  * Multi-LLM review of PR #115 (Codex C1, conf 95): when `maestro_run`
  * catches an execFile timeout, it surfaces the partial output through
@@ -74,6 +96,13 @@ function parseEnvelope(toolResult, toolName) {
  * parser still sees the underlying failure even when devices are slow
  * — that's the failure mode auto-repair is most valuable for.
  */
+function readMaestroTerminal(env) {
+    const fromData = env.data?.terminal;
+    if (fromData)
+        return fromData;
+    const fromMeta = env.meta?.terminal;
+    return fromMeta;
+}
 function readMaestroOutput(env) {
     if (typeof env.data?.output === 'string')
         return env.data.output;
@@ -81,6 +110,11 @@ function readMaestroOutput(env) {
     if (typeof metaOutput === 'string')
         return metaOutput;
     return env.error ?? '';
+}
+function readMaestroDeviceAuthority(env) {
+    if (env.data?.deviceAuthority)
+        return env.data.deviceAuthority;
+    return env.meta?.deviceAuthority;
 }
 /**
  * maestro_run builds its headline from the full runner stream before slicing
@@ -168,6 +202,7 @@ export function createRunActionHandler(deps = {}) {
         delayMs: Math.min(Math.max(0, probeRetryRaw.delayMs), 5000),
     };
     const blindProbeContext = deps.blindProbeContext ?? (async () => null);
+    const targetContext = deps.targetContext ?? (() => null);
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -196,15 +231,40 @@ export function createRunActionHandler(deps = {}) {
         const forceReload = proofReplay ? false : args.forceReload !== false;
         const action = forceReload ? acknowledgeExternalEdit(loaded) : loaded;
         const autoRepairEnabled = args.autoRepair !== false;
+        const blindProbeControl = args.blindProbeMode ? { blindProbeMode: args.blindProbeMode } : {};
         const trigger = args.trigger ?? 'agent';
         const timeoutMs = args.timeoutMs ?? 120_000;
         const t0 = Date.now();
+        const activeTarget = targetContext();
+        if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
+            return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, 'TARGET_SESSION_MISMATCH', { requestedPlatform: args.platform, activeSession: activeTarget });
+        }
+        const maestroDeviceId = (!args.platform || activeTarget?.platform === args.platform) && activeTarget?.deviceId
+            ? activeTarget.deviceId
+            : undefined;
         // GH #397: deviceId threading. Handler-scoped (not inside the try) because
         // the outer catch also persists a RunRecord and must carry the device too.
         let probeDeviceId = null;
+        // Directly observed transport device (CDP context, else the session target
+        // Maestro was pinned to). Used only when the dispatch produced no receipt,
+        // so a clean pass can still clear a device-matched blind-probe latch.
+        let observedDeviceId = maestroDeviceId ?? null;
         const persistRunWithDevice = (record) => proofReplay
-            ? Promise.resolve()
+            ? Promise.resolve({ promoted: false, promotionRefused: false })
             : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
+        const writeDisclosure = (actionYaml = 'none', outcome) => ({
+            actionYaml: actionYaml === 'none'
+                ? { written: false, reason: 'repair-not-applied' }
+                : actionYaml === 'lifecycle-promotion-refused'
+                    ? { written: false, reason: 'lifecycle-promotion-refused' }
+                    : { written: true, authorized: true, reason: actionYaml },
+            runtimeState: proofReplay
+                ? 'none'
+                : outcome?.runtimeStateRefused
+                    ? 'refused-external-write'
+                    : 'sidecar',
+            databaseMirror: proofReplay ? 'none' : 'best-effort',
+        });
         // Multi-LLM review of PR #115 (Gemini conf 95): wrap the orchestration
         // body so a thrown exception (maestroRun timeout, repairAction
         // throwing through withSession, etc.) is caught and surfaces as a
@@ -217,7 +277,9 @@ export function createRunActionHandler(deps = {}) {
             // directly. Every branch fails open to the maestro-first path below.
             // Opt out globally with RN_BLIND_PROBE=0.
             let atRisk = null;
-            const blindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
+            const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
+            const blindProbeDisabled = args.blindProbeMode === 'forbid' ||
+                (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
             if (args.platform !== 'android') {
                 // Resolve the device context even when the gate is opted out: a clean
                 // maestro pass recorded WITHOUT deviceId can never clear a prior
@@ -226,6 +288,7 @@ export function createRunActionHandler(deps = {}) {
                 const ctx = await blindProbeContext().catch(() => null);
                 if (ctx) {
                     probeDeviceId = ctx.deviceId;
+                    observedDeviceId = ctx.deviceId ?? observedDeviceId;
                     if (!blindProbeDisabled) {
                         atRisk = evaluateBlindProbeGate({
                             platform: args.platform,
@@ -255,7 +318,7 @@ export function createRunActionHandler(deps = {}) {
                                 // maestro was skipped by design.
                                 phases: { firstAttemptMs: Date.now() - tProbe },
                             };
-                            await persistRunWithDevice({
+                            const persisted = await persistRunWithDevice({
                                 timestamp: new Date().toISOString(),
                                 durationMs: Date.now() - t0,
                                 status: replay.passed ? 'pass' : 'fail',
@@ -271,7 +334,12 @@ export function createRunActionHandler(deps = {}) {
                                     passed: true,
                                     actionId: args.actionId,
                                     transport: 'cdp-js',
+                                    transportVersion: null,
+                                    fallback: 'none',
+                                    repair: autoRepair,
+                                    writes: writeDisclosure(promotionDisclosure(persisted), persisted),
                                     blindProbe,
+                                    ...blindProbeControl,
                                     timings_ms,
                                     autoRepair,
                                     durationMs: Date.now() - t0,
@@ -286,6 +354,7 @@ export function createRunActionHandler(deps = {}) {
                                 actionId: args.actionId,
                                 transport: 'cdp-js',
                                 blindProbe,
+                                ...blindProbeControl,
                                 timings_ms,
                                 failedStepIndex: replay.failedStepIndex,
                             });
@@ -307,9 +376,13 @@ export function createRunActionHandler(deps = {}) {
             // / fast repair". Phase boundaries: t0 → tFirstDone → tRepairDone
             // → tRetryDone.
             const tBeforeFirst = Date.now();
+            // Requested/session metadata is not RunRecord authority. Clear it before
+            // dispatch; only direct maestro-runner evidence may repopulate it.
+            probeDeviceId = null;
             const firstResult = await maestroRun({
                 flowPath: action.filePath,
                 platform: args.platform,
+                deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
             });
@@ -318,6 +391,32 @@ export function createRunActionHandler(deps = {}) {
             const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
             const firstOutput = readMaestroOutput(firstEnv);
             const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
+            const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
+            probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
+            if (firstEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
+                const autoRepair = {
+                    attempted: false,
+                    outcome: args.autoRepair === false ? 'refused' : 'skipped',
+                    refusedReason: args.autoRepair === false ? 'USER_DISABLED' : 'NOT_REPAIRABLE_KIND',
+                    phases: { firstAttemptMs },
+                };
+                const persisted = await persistRunWithDevice({
+                    timestamp: new Date().toISOString(),
+                    durationMs: Date.now() - t0,
+                    status: 'fail',
+                    failureCode: 'DEVICE_AUTHORITY_MISMATCH',
+                    failureDetail: firstFailureDetail.slice(0, 1000),
+                    trigger,
+                    autoRepair,
+                });
+                return failResult(`cdp_run_action: ${args.actionId} refused replay authority: ${firstFailureDetail}`, 'DEVICE_AUTHORITY_MISMATCH', {
+                    actionId: args.actionId,
+                    failureKind: 'DEVICE_AUTHORITY_MISMATCH',
+                    deviceAuthority: firstDeviceAuthority,
+                    autoRepair,
+                    writes: writeDisclosure('none', persisted),
+                });
+            }
             if (firstPassed) {
                 // Happy path — append RunRecord with no auto-repair.
                 const autoRepair = {
@@ -325,7 +424,7 @@ export function createRunActionHandler(deps = {}) {
                     outcome: 'skipped',
                     phases: { firstAttemptMs },
                 };
-                await persistRunWithDevice({
+                const persisted = await persistRunWithDevice({
                     timestamp: new Date().toISOString(),
                     durationMs: Date.now() - t0,
                     status: 'pass',
@@ -336,14 +435,17 @@ export function createRunActionHandler(deps = {}) {
                     passed: true,
                     actionId: args.actionId,
                     ...(proofReplay ? { proofReplay: true } : {}),
+                    ...replaySuccessEvidence(firstEnv),
+                    repair: autoRepair,
                     autoRepair,
+                    writes: writeDisclosure(promotionDisclosure(persisted), persisted),
                     durationMs: Date.now() - t0,
                     flowFile: action.filePath,
                     firstAttemptOutput: firstOutput.slice(0, 500),
                 });
             }
             // ─── First attempt failed — classify ─────────────────────────────
-            const failure = parseMaestroFailure(firstOutput);
+            const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
             // GH #186: structural route-drift takes precedence over selector repair.
             // If the action recorded an expected route sequence and the LIVE route is
             // off it, an unexpected screen appeared (e.g. an inserted CouponCode) — a
@@ -419,7 +521,11 @@ export function createRunActionHandler(deps = {}) {
                                 outcome: 'skipped',
                                 phases: { firstAttemptMs },
                             };
-                            await persistRunWithDevice({
+                            // The fallback is a different transport. Its existing active-session
+                            // context remains the affinity input; never carry Maestro's device
+                            // report across transports.
+                            probeDeviceId = maestroDeviceId ?? observedDeviceId;
+                            const persisted = await persistRunWithDevice({
                                 timestamp: new Date().toISOString(),
                                 durationMs: Date.now() - t0,
                                 status,
@@ -434,7 +540,11 @@ export function createRunActionHandler(deps = {}) {
                                     passed: true,
                                     actionId: args.actionId,
                                     transport: 'cdp-js',
+                                    transportVersion: null,
+                                    fallback: 'cdp-js',
+                                    repair: autoRepair,
                                     autoRepair,
+                                    writes: writeDisclosure(promotionDisclosure(persisted), persisted),
                                     durationMs: Date.now() - t0,
                                     flowFile: action.filePath,
                                 });
@@ -462,8 +572,8 @@ export function createRunActionHandler(deps = {}) {
                 const autoRepair = autoRepairEnabled
                     ? {
                         attempted: false,
-                        outcome: 'skipped',
-                        refusedReason: 'NOT_REPAIRABLE_KIND',
+                        outcome: failure.kind === 'WDA_BOOTSTRAP_FAILED' ? 'refused' : 'skipped',
+                        refusedReason: failure.kind === 'WDA_BOOTSTRAP_FAILED' ? 'WDA_BOOTSTRAP' : 'NOT_REPAIRABLE_KIND',
                         phases: { firstAttemptMs },
                     }
                     : {
@@ -488,9 +598,13 @@ export function createRunActionHandler(deps = {}) {
                     underlyingFailure: firstFailureDetail,
                     autoRepair,
                     firstAttemptOutput: firstOutput.slice(0, 500),
+                    terminal: readMaestroTerminal(firstEnv),
+                    runnerResume: firstEnv.meta?.runnerResume,
                     ...(cdpJsFallback ? { cdpJsFallback } : {}),
                 };
-                let message = `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
+                let message = failure.kind === 'WDA_BOOTSTRAP_FAILED'
+                    ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; inspect ~/.maestro-runner/bin/maestro-runner wda version. No preparation or cache mutation was attempted.`
+                    : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
                 // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an
                 // opaque dead end in the field — say why and what to do next.
                 if (cdpJsFallback?.reason === 'cdp-unreachable') {
@@ -568,9 +682,11 @@ export function createRunActionHandler(deps = {}) {
                 return failResult(`cdp_run_action: action disappeared between repair and retry — investigate filesystem`, 'NO_PROJECT_ROOT');
             }
             const tBeforeRetry = Date.now();
+            probeDeviceId = null;
             const retryResult = await maestroRun({
                 flowPath: reloadedAction.filePath,
                 platform: args.platform,
+                deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
             });
@@ -579,6 +695,25 @@ export function createRunActionHandler(deps = {}) {
             const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
             const retryOutput = readMaestroOutput(retryEnv);
             const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
+            const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
+            probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
+            if (retryEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
+                const autoRepair = {
+                    attempted: true,
+                    outcome: 'failed',
+                    phases: { firstAttemptMs, repairMs, retryMs },
+                };
+                await persistRunWithDevice({
+                    timestamp: new Date().toISOString(),
+                    durationMs: Date.now() - t0,
+                    status: 'fail',
+                    failureCode: 'DEVICE_AUTHORITY_MISMATCH',
+                    failureDetail: retryFailureDetail.slice(0, 1000),
+                    trigger,
+                    autoRepair,
+                });
+                return failResult(`cdp_run_action: ${args.actionId} refused retry authority: ${retryFailureDetail}`, 'DEVICE_AUTHORITY_MISMATCH', { actionId: args.actionId, deviceAuthority: retryDeviceAuthority, autoRepair });
+            }
             // Issue #120: pull the repair-engine's similarity score and the
             // RepairRecord's timestamp into the AutoRepairOutcome so MTTR can
             // both rank patches by confidence and cross-reference to the
@@ -597,7 +732,7 @@ export function createRunActionHandler(deps = {}) {
             let nextFailedSelector;
             if (!retryPassed) {
                 try {
-                    const retryFailure = parseMaestroFailure(retryOutput);
+                    const retryFailure = parseMaestroFailure(retryOutput, readMaestroTerminal(retryEnv));
                     if (retryFailure.kind === 'SELECTOR_NOT_FOUND' &&
                         retryFailure.selector &&
                         retryFailure.selector !== repairData.newSelector) {
@@ -622,7 +757,7 @@ export function createRunActionHandler(deps = {}) {
                 repairTimestamp,
                 ...(nextFailedSelector ? { nextFailedSelector } : {}),
             };
-            await persistRunWithDevice({
+            const persisted = await persistRunWithDevice({
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status: retryPassed ? 'pass' : 'fail',
@@ -635,7 +770,10 @@ export function createRunActionHandler(deps = {}) {
                 return okResult({
                     passed: true,
                     actionId: args.actionId,
+                    ...replaySuccessEvidence(retryEnv),
+                    repair: autoRepair,
                     autoRepair,
+                    writes: writeDisclosure('auto-repair', persisted),
                     durationMs: Date.now() - t0,
                     flowFile: reloadedAction.filePath,
                     retriedAfterRepair: true,
@@ -645,6 +783,7 @@ export function createRunActionHandler(deps = {}) {
             return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`, 'TESTID_NOT_FOUND', {
                 actionId: args.actionId,
                 autoRepair,
+                writes: writeDisclosure('auto-repair', persisted),
                 firstAttemptOutput: firstOutput.slice(0, 500),
                 retryOutput: retryOutput.slice(0, 500),
                 underlyingFailure: retryFailureDetail,
@@ -683,74 +822,61 @@ export function createRunActionHandler(deps = {}) {
     };
 }
 /**
- * Append a RunRecord to the action's sidecar via the atomic pair-writer.
- *
- * Multi-LLM review of PR #115:
- *   - Codex I6 (conf 80): `actionId` is now passed explicitly rather
- *     than derived from `action.filePath`. The previous regex-based
- *     derivation broke for non-canonical paths (inline-yaml synthetic
- *     paths, symlinks) and silently dropped the RunRecord on a derive
- *     failure.
- *   - Codex C2 / Gemini C2 (conf 92): if `loadAction` returns null we
- *     log the dropped record to stderr instead of swallowing silently
- *     so the operator can see telemetry loss in their MCP logs.
+ * A refused promotion must not read like a run that had nothing to promote —
+ * the action stays `experimental` and the operator needs to see why.
  */
+function promotionDisclosure(outcome) {
+    if (outcome.promoted)
+        return 'lifecycle-promotion';
+    return outcome.promotionRefused ? 'lifecycle-promotion-refused' : 'none';
+}
 async function persistRun(actionId, projectRoot, record) {
     // Re-load to get the freshest state — repair-action may have just
-    // bumped revision/repairHistory between our two saveAction calls.
-    // Issue #117: lost-update guard via CAS + bounded retry. Two
-    // concurrent `cdp_run_action` calls against the same actionId would
-    // otherwise interleave their read-modify-write and lose one
-    // RunRecord. saveActionWithCAS detects an in-flight conflict by
-    // comparing on-disk lastSeenMtimeMs to the snapshot we loaded; on
-    // conflict, reload + retry. Bounded at 5 attempts so persistent
-    // contention surfaces as a console.error instead of a hang.
+    // bumped revision/repairHistory. Issue #117's bounded CAS retry remains,
+    // but only the ignored runtime sidecar is written on ordinary replay.
     const MAX_ATTEMPTS = 5;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const fresh = loadAction(projectRoot, actionId);
         if (!fresh) {
             console.error(`cdp_run_action: persistRun could not reload action "${actionId}" — RunRecord dropped (status=${record.status}, autoRepair.outcome=${record.autoRepair?.outcome ?? 'n/a'})`);
-            return;
+            return { promoted: false, promotionRefused: false };
         }
-        // H5: promote experimental → active on a clean replay. This is the
-        // documented lifecycle ("first clean /run-action replay auto-promotes to
-        // active") that was defined + unit-tested but never wired into a call site.
-        // persistRun is the single chokepoint both success paths reach, so the
-        // promotion rides the same atomic CAS write as the RunRecord append.
-        const promotedMetadata = shouldAutoPromoteToActive(fresh.metadata, record)
-            ? { ...fresh.metadata, status: 'active' }
-            : fresh.metadata;
-        const next = {
-            ...fresh,
-            metadata: promotedMetadata,
-            state: appendRunRecord(fresh.state, record),
-        };
-        const result = saveActionWithCAS(next);
-        if (result.ok) {
-            // Task 5 (A2/C): append the RunRecord ROW to the DB mirror. This runs
-            // ONLY on ok:true — never on the CAS-conflict path below, so the mirror
-            // can't append a row for a write that the authoritative layer refused.
-            // `saveAction` (inside saveActionWithCAS) already upserted the index row
-            // idempotently; the row append is the point here. Best-effort, never
-            // throws — `next.state` carries the just-appended run in its history.
+        const nextState = appendRunRecord(fresh.state, record);
+        const promotes = shouldAutoPromoteToActive(fresh.metadata, record);
+        // Runtime telemetry is sidecar-only. A replay that did not apply repair
+        // must preserve tracked YAML bytes (including documentation comments).
+        const commit = (promoted, promotionRefused) => {
             mirrorToDb({
-                yamlFilePath: next.filePath,
-                state: next.state,
+                yamlFilePath: fresh.filePath,
+                state: fresh.state,
                 newRunRecord: record,
                 meta: {
-                    appId: next.metadata.appId,
-                    status: next.metadata.status,
-                    path: next.filePath,
+                    appId: fresh.metadata.appId,
+                    status: promoted ? 'active' : fresh.metadata.status,
+                    path: fresh.filePath,
                 },
             });
-            return;
-        }
-        // CAS conflict — another writer raced us. Reload and retry.
+            return { promoted, promotionRefused };
+        };
+        // A promotion refusal is deterministic (externally edited YAML, or a missing
+        // `# status: experimental` marker) — retrying cannot clear it, so degrade to
+        // the sidecar-only append instead of failing an otherwise successful replay.
+        const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
+        if (promotes && !promotionRefused)
+            return commit(true, false);
+        if (saveActionRuntimeWithCAS(fresh, nextState).ok)
+            return commit(false, promotionRefused);
+        // Sidecar CAS conflict — another writer raced us. Reload and retry.
+        // Exhausting the retries is NOT necessarily a race: a truncated or foreign
+        // sidecar is refused deterministically while loadOrInitSidecar keeps
+        // handing back a fresh state, so reload+retry can never converge. Degrade
+        // with disclosure like the promotion path rather than converting an
+        // otherwise-successful replay into an orchestration exception.
         if (attempt === MAX_ATTEMPTS) {
-            console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} consecutive CAS conflicts; ` +
-                `disk mtime=${result.diskMtimeMs}, expected=${result.expectedMtimeMs}. ` +
-                `RunRecord dropped — investigate concurrent writers.`);
-            return;
+            console.error(`cdp_run_action: persistRun for "${actionId}" hit ${MAX_ATTEMPTS} sidecar CAS conflicts; ` +
+                `runtime state was not written (status=${record.status}).`);
+            return { promoted: false, promotionRefused, runtimeStateRefused: true };
         }
     }
+    return { promoted: false, promotionRefused: false };
 }

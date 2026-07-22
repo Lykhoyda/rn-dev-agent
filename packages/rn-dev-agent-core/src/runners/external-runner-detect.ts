@@ -55,13 +55,51 @@ export interface IosExternalRunnerWarning {
   processLines: string[];
 }
 
-// Validated against live `ps` (2026-06-04): maestro's iOS driver is
-// `maestro-driver-iosUITests-Runner` — the `maestro` token catches it, the
-// `.xctestrun`, and the java CLI. `WebDriverAgent` is a harmless secondary for
-// Appium/WDA-style foreign tools. `XCTRunner` is intentionally NOT matched (too
-// generic). The UDID filter is the real defense: the idle maestro-mcp server
-// (`java … maestro.cli.AppKt mcp`) carries NO UDID, so scoping excludes it.
-const IOS_FOREIGN_RE = /maestro|WebDriverAgent/i;
+// Validated against live `ps` (2026-06-04): identify the executable/process
+// structure, not arbitrary prompt text elsewhere in argv. Long-running coding
+// agents commonly carry words such as Maestro/WebDriverAgent and a simulator
+// UDID in their prompt; token-scanning their complete command line self-matches.
+// XCTRunner remains intentionally too generic.
+function executableBasename(command: string): string {
+  const executable = command.trimStart().split(/\s+/, 1)[0] ?? '';
+  return executable.slice(executable.lastIndexOf('/') + 1);
+}
+
+const SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
+
+// `/bin/sh /usr/local/bin/maestro test flow.yaml` — the installed CLI is
+// routinely a shell wrapper, so the basename of argv[0] is the shell.
+function shellWrappedMaestro(command: string): boolean {
+  const tokens = command.trimStart().split(/\s+/);
+  if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? ''))) return false;
+  return tokens
+    .slice(1)
+    .some(
+      (token) => token.startsWith('/') && /^maestro(?:\.\w+)?$/i.test(executableBasename(token)),
+    );
+}
+
+export function isIosExternalRunnerProcessLine(line: string): boolean {
+  const match = line.match(/^\s*\d+\s+(.+)$/);
+  if (!match) return false;
+  const command = match[1];
+  const executable = executableBasename(command);
+
+  if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable)) return true;
+  if (shellWrappedMaestro(command)) return true;
+  if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable)) return true;
+  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
+    return true;
+  }
+  if (
+    /^xcodebuild$/i.test(executable) &&
+    /(?:maestro[^\s]*|WebDriverAgent[^\s]*)\.xctestrun(?:\s|$)/i.test(command)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 const RN_FAST_RUNNER_RE = /RnFastRunner/i;
 
 export async function detectIosExternalRunner(
@@ -84,7 +122,7 @@ export async function detectIosExternalRunner(
     const { stdout } = await run('ps', ['axww', '-o', 'pid=,command='], opts);
     const lines = stdout
       .split('\n')
-      .filter((line) => IOS_FOREIGN_RE.test(line))
+      .filter((line) => isIosExternalRunnerProcessLine(line))
       .filter((line) => !RN_FAST_RUNNER_RE.test(line))
       .filter((line) => (udid ? line.includes(udid) : true))
       .map((line) => line.trim())

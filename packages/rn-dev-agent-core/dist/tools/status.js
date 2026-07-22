@@ -8,7 +8,7 @@ import { recoverWedge } from '../cdp/recover-wedge.js';
 import { recoverDetached } from '../cdp/recover-detached.js';
 import { buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
-import { AppDetachedError, androidTargetMatchesKind, enumerateMetroCandidates, } from '../cdp/discovery.js';
+import { AppDetachedError, TargetSelectionError, androidTargetMatchesKind, enumerateMetroCandidates, targetBundleIdentity, targetMatchesBundleId, } from '../cdp/discovery.js';
 import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
@@ -30,12 +30,13 @@ export function sessionConnectFilters(session) {
 export function targetMatchesSession(target, filters) {
     if (!target)
         return false;
-    if (filters.platform && target.platform !== filters.platform)
+    if (filters.platform &&
+        (target.platform !== filters.platform ||
+            target.platformInference === 'defaulted' ||
+            target.platformInference === 'ambiguous'))
         return false;
-    if (filters.bundleId &&
-        (target.description ?? '').toLowerCase() !== filters.bundleId.toLowerCase()) {
+    if (filters.bundleId && !targetMatchesBundleId(target, filters.bundleId))
         return false;
-    }
     if (filters.deviceKind === 'physical' &&
         !androidTargetMatchesKind(target.deviceName, filters.deviceKind)) {
         return false;
@@ -144,7 +145,15 @@ async function buildStatusResult(client) {
             device: client.connectedTarget?.title ?? null,
             pageId: client.connectedTarget?.id ?? null,
             platform: client.connectedTarget?.platform ?? null,
-            bundleId: client.connectedTarget?.description ?? null,
+            bundleId: client.connectedTarget ? targetBundleIdentity(client.connectedTarget) : null,
+            affinityScope: (() => {
+                const active = getActiveSession();
+                if (!active)
+                    return 'best-available';
+                return active.platform === 'android'
+                    ? 'platform-bundle-device-kind'
+                    : 'platform-bundle-class';
+            })(),
         },
         app: {
             platform: appInfo?.platform ?? null,
@@ -209,9 +218,16 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
             if (args.platform &&
                 sessionFilters?.platform &&
                 args.platform.toLowerCase() !== sessionFilters.platform) {
-                return failResult(`cdp_status requested ${args.platform}, but the active device session is bound to ${sessionFilters.platform} ${session?.deviceId}. Close that session or request the same platform; refusing to target a different device silently.`, 'TARGET_SESSION_MISMATCH', { deviceSession: session });
+                return failResult(`cdp_status requested ${args.platform}, but the active device session is ${sessionFilters.platform} (${session?.deviceId}). Refusing a cross-platform target; this guarantees platform+bundle class only and does not claim iOS UDID identity because Metro does not expose it. Close the session or request the same platform.`, 'TARGET_SESSION_MISMATCH', { deviceSession: session });
             }
             const connectFilters = sessionFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
+            const validateConnectedTarget = async () => {
+                if (targetMatchesSession(client.connectedTarget, connectFilters))
+                    return;
+                const wrong = client.connectedTarget;
+                await client.disconnect();
+                throw new TargetSelectionError(connectFilters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND', `Connected target failed post-connect affinity validation for platform=${connectFilters.platform ?? 'unspecified'} bundleId=${connectFilters.bundleId ?? 'unspecified'}. The socket was disconnected; run cdp_targets and relaunch the requested app.`, wrong ? [wrong] : []);
+            };
             if (args.metroPort && args.metroPort !== client.metroPort) {
                 await client.disconnect();
                 client = createClient(args.metroPort);
@@ -252,6 +268,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                         setClient(client);
                     }
                     await client.autoConnect(args.metroPort, connectFilters, 'status');
+                    await validateConnectedTarget();
                 }
             }
             else if (!targetMatchesSession(client.connectedTarget, connectFilters)) {
@@ -262,6 +279,7 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 client = createClient(client.metroPort);
                 setClient(client);
                 await client.autoConnect(args.metroPort, connectFilters, 'status');
+                await validateConnectedTarget();
             }
             const status = await buildStatusResult(client);
             let autoRecoveredMessage;
@@ -290,7 +308,9 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                                     status.app.architecture = narrowArchitecture(retryProbe.appInfo?.architecture);
                                     status.cdp.device = client.connectedTarget?.title ?? null;
                                     status.cdp.pageId = client.connectedTarget?.id ?? null;
-                                    status.cdp.bundleId = client.connectedTarget?.description ?? null;
+                                    status.cdp.bundleId = client.connectedTarget
+                                        ? targetBundleIdentity(client.connectedTarget)
+                                        : null;
                                     status.capabilities.fiberTree = retryProbe.fiberTree;
                                     devRecovered = true;
                                     autoRecoveredMessage = 'Reconnected to correct JS context';
@@ -316,7 +336,9 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                     status.app.isPaused = client.isPaused;
                     status.cdp.device = client.connectedTarget?.title ?? null;
                     status.cdp.pageId = client.connectedTarget?.id ?? null;
-                    status.cdp.bundleId = client.connectedTarget?.description ?? null;
+                    status.cdp.bundleId = client.connectedTarget
+                        ? targetBundleIdentity(client.connectedTarget)
+                        : null;
                 }
                 catch {
                     // softReconnect failed — fall through to the wedge recovery below.
@@ -330,7 +352,9 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                         status.app.isPaused = client.isPaused; // resumed
                         status.cdp.device = client.connectedTarget?.title ?? null;
                         status.cdp.pageId = client.connectedTarget?.id ?? null;
-                        status.cdp.bundleId = client.connectedTarget?.description ?? null;
+                        status.cdp.bundleId = client.connectedTarget
+                            ? targetBundleIdentity(client.connectedTarget)
+                            : null;
                     }
                     else {
                         const hint = wedge.reason === 'flow-active'
@@ -369,6 +393,27 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
         }
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            // Affinity refusals never fall into picker auto-repair: a picker/device
+            // action could mask the wrong-platform causal boundary.
+            if (err instanceof TargetSelectionError) {
+                // Refusal must not wedge the session: disconnect() disposes the shared
+                // client, so recreate it or every later call fails "Client is disposed".
+                const stale = getClient();
+                const stalePort = stale.metroPort;
+                await stale.disconnect().catch(() => undefined);
+                setClient(createClient(stalePort));
+                return failResult(message, err.code, {
+                    candidates: err.candidates.map((target) => ({
+                        id: target.id,
+                        title: target.title,
+                        deviceName: target.deviceName ?? null,
+                        description: target.description ?? null,
+                        platform: target.platform ?? null,
+                        confidence: target.platformInference ?? 'probed',
+                    })),
+                    affinity: 'cross-platform-only; iOS UDID identity is unavailable from Metro',
+                });
+            }
             // GH #208 (RC3): Metro is up but the app detached (0 Hermes targets). Auto
             // cold-restart it (bounded, arbiter-aware, opt-out RN_AUTO_RELAUNCH_ON_DETACH=0),
             // then reconnect and return a fresh status. On failure, surface a legible
@@ -436,7 +481,16 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                     try {
                         let retryClient = getClient();
                         if (!retryClient.isConnected) {
-                            await retryClient.autoConnect(args.metroPort, args.platform);
+                            const activeFilters = sessionConnectFilters(getActiveSession());
+                            const retryFilters = activeFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
+                            await retryClient.autoConnect(args.metroPort, retryFilters, 'status');
+                            if (!targetMatchesSession(retryClient.connectedTarget, retryFilters)) {
+                                const wrong = retryClient.connectedTarget;
+                                const retryPort = retryClient.metroPort;
+                                await retryClient.disconnect();
+                                setClient(createClient(retryPort));
+                                return failResult('Picker dismissal connected a target that failed post-connect platform/session validation; the socket was disconnected.', retryFilters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND', { target: wrong, affinity: 'cross-platform-only; not iOS UDID identity' });
+                            }
                         }
                         // If retry succeeds, run the full status handler again
                         if (retryClient.isConnected) {

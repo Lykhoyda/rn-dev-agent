@@ -2,6 +2,20 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { resolveBundleId } from '../project-config.js';
 import { terminateApp, launchApp } from './app-lifecycle.js';
+/**
+ * The session's device is the device being driven regardless of which bundle
+ * the replay targets. A session pinned to a different platform is not that
+ * authority, and silently dropping it resolves to the ambiguous `booted` alias.
+ */
+export function resolveReplayLifecycleDevice(session, platform) {
+    if (session?.deviceId && session.platform !== platform) {
+        return {
+            ok: false,
+            error: `Refusing startup replay on ${platform}: the active session is bound to ${session.platform} device ${session.deviceId}. Close that session or replay on its platform so an exact device identity is used instead of an ambiguous target.`,
+        };
+    }
+    return { ok: true, deviceId: session?.platform === platform ? session.deviceId : undefined };
+}
 export async function waitForNavigationReady(client, timeoutMs = 12_000) {
     const checkExpr = `(function() {
     var ref = globalThis.__NAV_REF__;
@@ -57,13 +71,25 @@ export async function launchAndNavigate(client, screen, params, opts = {}) {
             error: 'Cannot determine app bundle ID. Provide bundleId or ensure app.json exists in the project.',
         };
     }
+    const lifecycleDevice = resolveReplayLifecycleDevice(session, platform);
+    if (!lifecycleDevice.ok) {
+        return {
+            arrived: false,
+            screen,
+            current_screen: null,
+            method: 'startup_replay_failed',
+            latency_ms: Date.now() - startTime,
+            error: lifecycleDevice.error,
+        };
+    }
+    const lifecycleDeviceId = lifecycleDevice.deviceId;
     let pickerDismissed = false;
     let reconnectAttempts = 0;
     try {
-        await terminateApp(bundleId, platform).catch(() => {
+        await terminateApp(bundleId, platform, lifecycleDeviceId).catch(() => {
             /* idempotent */
         });
-        await launchApp(bundleId, platform);
+        await launchApp(bundleId, platform, lifecycleDeviceId);
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

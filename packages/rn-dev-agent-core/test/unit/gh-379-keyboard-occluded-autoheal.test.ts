@@ -121,6 +121,7 @@ function healDeps(overrides = {}) {
     },
     refreshSnapshot: async () => {
       calls.snapshot++;
+      return toolResult({ ok: true, data: { keyboardVisible: false } });
     },
     retryTap: async () => {
       calls.retry++;
@@ -170,7 +171,7 @@ test('heal: happy path — dismiss, re-snapshot, retry once, tagged meta', async
   assert.equal(calls.snapshot, 1);
   assert.equal(calls.retry, 1);
   const envelope = JSON.parse(healed.content[0].text);
-  assert.equal(envelope.meta.keyboardGuard, 'js_dismissed');
+  assert.equal(envelope.meta.keyboardGuard, 'auto_dismissed');
   assert.equal(envelope.meta.keyboardAutoHeal.dismissed, true);
   assert.equal(typeof envelope.meta.keyboardAutoHeal.healMs, 'number');
 });
@@ -181,16 +182,16 @@ test('heal: message-only refusal (old runner artifact) also heals', async () => 
   assert.equal(calls.retry, 1);
 });
 
-test('heal: snapshot refresh failure does not abort the bounded retry', async () => {
+test('heal: snapshot refresh failure cannot prove hidden state, so no tap occurs', async () => {
+  const refusal = occludedRefusal();
   const { deps, calls } = healDeps({
     refreshSnapshot: async () => {
       throw new Error('snapshot infra down');
     },
   });
-  const healed = await healKeyboardOccludedTap(occludedRefusal(), deps);
-  assert.equal(calls.retry, 1);
-  const envelope = JSON.parse(healed.content[0].text);
-  assert.equal(envelope.meta.keyboardGuard, 'js_dismissed');
+  const healed = await healKeyboardOccludedTap(refusal, deps);
+  assert.equal(calls.retry, 0);
+  assert.equal(healed, refusal);
 });
 
 test('heal: retry that refuses again is returned as-is (bounded, keyboardGuard not overwritten)', async () => {
@@ -206,7 +207,7 @@ test('heal: retry that refuses again is returned as-is (bounded, keyboardGuard n
   assert.equal(healed.isError, true);
   const envelope = JSON.parse(healed.content[0].text);
   assert.equal(envelope.meta.keyboardAutoHeal.dismissed, true);
-  assert.notEqual(envelope.meta.keyboardGuard, 'js_dismissed');
+  assert.notEqual(envelope.meta.keyboardGuard, 'auto_dismissed');
 });
 
 test('heal: retried result with unparseable content is returned without throwing', async () => {
@@ -290,6 +291,66 @@ test('dismissKeyboard: unfocused inputs are not blurred → dismissed:false', ()
   const result = JSON.parse(sandbox.__RN_AGENT.dismissKeyboard());
   assert.equal(result.dismissed, false);
   assert.equal(idleInput.stateNode._blurred, 0);
+});
+
+test('dismissKeyboard: live Bridgeless Fabric wrapper reaches canonical.publicInstance', () => {
+  const publicInstance = {
+    _focused: true,
+    _blurred: 0,
+    isFocused() {
+      return this._focused;
+    },
+    blur() {
+      this._blurred++;
+      this._focused = false;
+    },
+  };
+  const fabricInput = {
+    type: 'RCTMultilineTextInputView',
+    stateNode: { node: {}, canonical: { publicInstance } },
+    child: null,
+    sibling: null,
+  };
+  const root = { type: 'View', stateNode: null, child: fabricInput, sibling: null };
+  const sandbox = createSandbox({ fiberRoot: root });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.dismissKeyboard());
+
+  assert.deepEqual(result, { dismissed: true, method: 'blur-focused-input' });
+  assert.equal(publicInstance._blurred, 1);
+});
+
+test('dismissKeyboard: text host without a focus oracle uses restricted idempotent blur', () => {
+  const fabricInput = {
+    type: 'RCTMultilineTextInputView',
+    stateNode: {
+      _blurred: 0,
+      blur() {
+        this._blurred++;
+      },
+    },
+    child: null,
+    sibling: null,
+  };
+  const inertView = {
+    type: 'RCTView',
+    stateNode: {
+      _blurred: 0,
+      blur() {
+        this._blurred++;
+      },
+    },
+    child: null,
+    sibling: fabricInput,
+  };
+  const root = { type: 'View', stateNode: null, child: inertView, sibling: null };
+  const sandbox = createSandbox({ fiberRoot: root });
+
+  const result = JSON.parse(sandbox.__RN_AGENT.dismissKeyboard());
+
+  assert.deepEqual(result, { dismissed: true, method: 'blur-text-input-hosts' });
+  assert.equal(fabricInput.stateNode._blurred, 1);
+  assert.equal(inertView.stateNode._blurred, 0, 'no-oracle blur is text-host restricted');
 });
 
 test('dismissKeyboard: prefers the RN Keyboard module when require resolves it', () => {

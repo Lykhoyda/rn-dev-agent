@@ -28,6 +28,7 @@ import { resolveBundleId } from '../project-config.js';
 import { isAgentDeviceRunnerSentinel, type RunnerLeakNode } from './runner-leak-recovery.js';
 import { detectPlatform } from './platform-utils.js';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { launchApp } from './app-lifecycle.js';
 
 const execFile = promisify(execFileCb);
 
@@ -83,29 +84,19 @@ async function resolveIOSDeviceIdForRepair(): Promise<string | undefined> {
 }
 
 async function bringTargetAppToForeground(platform: string, bundleId: string): Promise<void> {
+  const deviceId = getActiveSession()?.deviceId;
   // Kill the fast-runner FIRST so it can't re-grab focus the moment we
   // simctl-launch the test-app. Equivalent step exists in cdp_restart
   // hardReset (PR #161); this is its single-tool counterpart inside the
   // repair path so users don't have to call cdp_restart manually after
   // a SELECTOR_NOT_FOUND.
   try {
-    stopFastRunner(getActiveSession()?.deviceId);
+    stopFastRunner(deviceId);
   } catch {
     /* best-effort — fast-runner may already be dead */
   }
   try {
-    if (platform === 'android') {
-      await execFile(
-        'adb',
-        ['shell', 'monkey', '-p', bundleId, '-c', 'android.intent.category.LAUNCHER', '1'],
-        { timeout: 5000, encoding: 'utf8' },
-      );
-    } else {
-      await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], {
-        timeout: 5000,
-        encoding: 'utf8',
-      });
-    }
+    await launchApp(bundleId, platform === 'android' ? 'android' : 'ios', deviceId);
   } catch {
     /* best-effort — sentinel detection covers the failure case */
   }

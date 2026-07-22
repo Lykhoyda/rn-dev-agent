@@ -74,7 +74,18 @@ const FAIL_UNKNOWN_ENV = {
 
 const PASS_ENV = {
   ok: true,
-  data: { passed: true, output: 'Flow PASSED', flowFile: 'x', platform: 'ios' },
+  data: {
+    passed: true,
+    output: 'Flow PASSED',
+    flowFile: 'x',
+    platform: 'ios',
+    transport: 'maestro-runner',
+    transportVersion: '1.0.9',
+    fallback: 'none',
+    steps: [
+      { index: 0, name: 'tapOn: fab-create-task', verb: 'tapOn', status: 'pass', durationMs: 10 },
+    ],
+  },
 };
 
 function fakeMaestroRun(envelopes) {
@@ -246,10 +257,10 @@ test('GH #317: UNKNOWN failure + first testID present → CDP/JS fallback fires;
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 4: a normal Maestro PASS persists NO transport field (byte-for-byte healthy path)
+// Test 4: a normal Maestro PASS exposes transport/readback but keeps legacy sidecar encoding
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('GH #317: Maestro PASS persists NO transport field and never consults replayDeps', async () => {
+test('GH #317: Maestro PASS explicitly reports transport/fallback/readback and never consults replayDeps', async () => {
   project.seedAction('demo', replayFixtureYaml({ id: 'demo', selector: 'fab-create-task' }));
 
   const handler = createRunActionHandler({
@@ -264,7 +275,17 @@ test('GH #317: Maestro PASS persists NO transport field and never consults repla
   assert.equal(result.isError, undefined);
   const env = JSON.parse(result.content[0].text);
   assert.equal(env.data.passed, true);
-  assert.equal(env.data.transport, undefined, 'a Maestro pass must not set transport');
+  assert.equal(env.data.transport, 'maestro-runner');
+  assert.equal(env.data.transportVersion, '1.0.9');
+  assert.equal(env.data.fallback, 'none');
+  assert.equal(env.data.repair.attempted, false);
+  assert.equal(env.data.perStepReadback.complete, true);
+  assert.equal(env.data.perStepReadback.steps[0].status, 'pass');
+  assert.deepEqual(env.data.writes.actionYaml, {
+    written: true,
+    authorized: true,
+    reason: 'lifecycle-promotion',
+  });
   const sidecar = project.readSidecar('demo');
   assert.equal(sidecar.runHistory[0].status, 'pass');
   assert.equal(

@@ -1654,6 +1654,7 @@ test('rehearsal accepts exactly one clean pinned learned-action replay', async (
     'failed action',
     'extra activity',
     'extra replay',
+    'extra authority args',
   ] as const) {
     await t.test(scenario, async (st) => {
       const harness = createHarness(st);
@@ -1669,7 +1670,14 @@ test('rehearsal accepts exactly one clean pinned learned-action replay', async (
           ? { ...actionRunArgs(), actionId: 'unrelated-action' }
           : scenario === 'writable mode'
             ? { actionId: 'canonical-proof', autoRepair: false, forceReload: false }
-            : actionRunArgs(),
+            : scenario === 'extra authority args'
+              ? {
+                  ...actionRunArgs(),
+                  projectRoot: '/private/tmp/candidate',
+                  platform: 'ios',
+                  timeoutMs: 120_000,
+                }
+              : actionRunArgs(),
         scenario === 'failed action' ? 'FAIL' : 'PASS',
       );
       if (scenario === 'extra activity') {
@@ -1689,7 +1697,9 @@ test('rehearsal accepts exactly one clean pinned learned-action replay', async (
 
       assert.ok(
         reasons(result).includes(
-          scenario === 'wrong action' || scenario === 'writable mode'
+          scenario === 'wrong action' ||
+            scenario === 'writable mode' ||
+            scenario === 'extra authority args'
             ? 'ACTION_ARGUMENT_MISMATCH'
             : scenario === 'failed action'
               ? 'OBSERVED_TOOL_FAILED'
@@ -1818,7 +1828,7 @@ test('real canonical action proof replay is read-only while normal replay persis
     resolve(CORE_ROOT, 'test/fixtures/proof-actions/canonical.yaml'),
     'utf8',
   );
-  const replayActionBytes = canonicalBytes.replace('# status: active', '# status: experimental');
+  const replayActionBytes = canonicalBytes;
 
   const createProject = async (st: TestContext) => {
     const root = await mkdtemp(join(tmpdir(), 'strict-proof-real-action-'));
@@ -1839,12 +1849,24 @@ test('real canonical action proof replay is read-only while normal replay persis
   };
 
   const passingMaestro = async () =>
-    okResult({ passed: true, output: 'PASS', flowFile: 'canonical-proof.yaml', platform: 'ios' });
+    okResult({
+      passed: true,
+      output: 'PASS',
+      flowFile: 'canonical-proof.yaml',
+      platform: 'ios',
+      transport: 'maestro-runner',
+      transportVersion: '1.0.9',
+      fallback: 'none',
+      steps: [
+        { index: 0, name: 'tapOn: proof-continue', verb: 'tapOn', status: 'pass', durationMs: 20 },
+      ],
+    });
 
   await t.test(
-    'normal replay keeps its RunRecord, promotion, sidecar, and DB mirror',
+    'normal active replay keeps tracked YAML byte-identical and discloses sidecar-only writes',
     async (st) => {
-      const { root } = await createProject(st);
+      const { root, actionPath } = await createProject(st);
+      const before = await readFile(actionPath);
       const runAction = createRunActionHandler({ maestroRun: passingMaestro });
 
       const result = await runAction({
@@ -1854,13 +1876,15 @@ test('real canonical action proof replay is read-only while normal replay persis
         forceReload: false,
       });
 
-      assert.equal(envelope(result).ok, true, result.content[0]!.text);
+      const success = envelope(result);
+      assert.equal(success.ok, true, result.content[0]!.text);
+      assert.deepEqual((success.data as { writes: unknown }).writes, {
+        actionYaml: { written: false, reason: 'repair-not-applied' },
+        runtimeState: 'sidecar',
+        databaseMirror: 'best-effort',
+      });
+      assert.deepEqual(await readFile(actionPath), before, 'replay rewrote tracked action YAML');
       assert.deepEqual(proofModule.readProofGitInfo(root).changes, [
-        {
-          path: '.rn-agent/actions/canonical-proof.yaml',
-          indexStatus: ' ',
-          worktreeStatus: 'M',
-        },
         { path: '.rn-agent/state/actions.db', indexStatus: '?', worktreeStatus: '?' },
         { path: '.rn-agent/state/actions.db-shm', indexStatus: '?', worktreeStatus: '?' },
         { path: '.rn-agent/state/actions.db-wal', indexStatus: '?', worktreeStatus: '?' },

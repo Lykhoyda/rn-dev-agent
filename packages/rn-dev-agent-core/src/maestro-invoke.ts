@@ -13,6 +13,20 @@ import {
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
+import { assembleMaestroArgs } from './tools/maestro-run.js';
+import { getActiveSession } from './agent-device-wrapper.js';
+import {
+  maestroAuthorityRefusal,
+  sameDevice,
+  verifyMaestroDeviceAuthority,
+  type MaestroDeviceAuthority,
+} from './domain/maestro-device-authority.js';
+import {
+  collectDirectRunnerEvidence,
+  createRunnerReportDir,
+  disposeRunnerReportDir,
+  runnerReportArgs,
+} from './domain/maestro-runner-report.js';
 
 const execFile = promisify(execFileCb);
 
@@ -21,6 +35,8 @@ export interface MaestroInvokeOptions {
   appId?: string;
   timeoutMs?: number;
   slug?: string;
+  /** Exact UDID/serial. Defaults only from a matching active device session. */
+  deviceId?: string;
 }
 
 // Escape a user-supplied string for safe embedding inside a double-quoted YAML scalar.
@@ -41,6 +57,7 @@ export interface MaestroInvokeResult {
   output: string;
   flowFile: string;
   error?: string;
+  deviceAuthority?: MaestroDeviceAuthority;
 }
 
 export function getMaestroRunnerPath(): string | null {
@@ -114,6 +131,35 @@ export async function runMaestroInline(
   }
 
   const timeout = opts.timeoutMs ?? 30_000;
+  const session = getActiveSession();
+  const matchingSessionDeviceId =
+    session?.platform === opts.platform && session.deviceId ? session.deviceId : undefined;
+  if (
+    opts.deviceId &&
+    matchingSessionDeviceId &&
+    !sameDevice(opts.deviceId, matchingSessionDeviceId)
+  ) {
+    return {
+      passed: false,
+      output: '',
+      flowFile,
+      error: `Refusing Maestro target ${opts.deviceId}: active ${opts.platform} session is bound to ${matchingSessionDeviceId}.`,
+    };
+  }
+  const requestedDeviceId = opts.deviceId ?? matchingSessionDeviceId;
+  if (
+    requestedDeviceId !== undefined &&
+    (requestedDeviceId.length === 0 ||
+      requestedDeviceId.length > 256 ||
+      /\s/.test(requestedDeviceId))
+  ) {
+    return {
+      passed: false,
+      output: '',
+      flowFile,
+      error: 'Refusing Maestro: deviceId must be 1-256 non-whitespace characters.',
+    };
+  }
 
   // GH#201 parity with maestro_run: resolve --app-file so an iOS clearState flow
   // run through this inline path (device_fill/picker/dialog fallbacks) can
@@ -128,18 +174,43 @@ export async function runMaestroInline(
     return { passed: false, output: '', flowFile, error: appFileResolution.error };
   }
 
+  const runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-inline-report');
+  const baseArgs = dispatch.buildArgs(
+    opts.platform,
+    flowFile,
+    appFileResolution.appFile,
+    requestedDeviceId,
+  );
+  const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
+  const directRunnerEvidence = (output: string) =>
+    collectDirectRunnerEvidence(runnerReportDir, output);
+
   try {
-    const { stdout, stderr } = await execFile(
-      dispatch.binPath,
-      dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile),
-      { timeout, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-    );
+    const { stdout, stderr } = await execFile(dispatch.binPath, finalArgs, {
+      timeout,
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
     const output = (stdout + '\n' + stderr).trim();
     // Runner exited 0 → authoritative pass. The secondary scan keys on Maestro's
     // own status LINES (GH#249: a bare `FAILED` substring false-flagged passing
     // runs whose app logs contained the token; mirrors maestro_run).
     const passed = !outputIndicatesFlowFailure(output);
-    return { passed, output, flowFile };
+    const directEvidence = directRunnerEvidence(output);
+    const deviceAuthority = verifyMaestroDeviceAuthority({
+      runner: dispatch.runner,
+      platform: opts.platform,
+      requestedDeviceId,
+      output: directEvidence.output,
+      directReportDeviceIds: directEvidence.reportDeviceIds,
+      directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+      requireWdaProvenance: passed,
+    });
+    const authorityRefusal = maestroAuthorityRefusal(deviceAuthority);
+    if (authorityRefusal) {
+      return { passed: false, output, flowFile, error: authorityRefusal, deviceAuthority };
+    }
+    return { passed, output, flowFile, deviceAuthority };
   } catch (err) {
     // execFile errors carry stdout/stderr from the failed child process. When
     // Maestro exits non-zero because an assertion failed (e.g. "Element not found:
@@ -161,9 +232,27 @@ export async function runMaestroInline(
       };
     }
     if (capturedOutput) {
-      return { passed: false, output: capturedOutput, flowFile };
+      const directEvidence = directRunnerEvidence(capturedOutput);
+      const deviceAuthority = verifyMaestroDeviceAuthority({
+        runner: dispatch.runner,
+        platform: opts.platform,
+        requestedDeviceId,
+        output: directEvidence.output,
+        directReportDeviceIds: directEvidence.reportDeviceIds,
+        directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
+      });
+      const authorityRefusal = maestroAuthorityRefusal(deviceAuthority, errObj.message);
+      return {
+        passed: false,
+        output: capturedOutput,
+        flowFile,
+        ...(authorityRefusal ? { error: authorityRefusal } : {}),
+        deviceAuthority,
+      };
     }
     const msg = errObj.message ?? String(err);
     return { passed: false, output: '', flowFile, error: msg.slice(0, 500) };
+  } finally {
+    disposeRunnerReportDir(runnerReportDir);
   }
 }

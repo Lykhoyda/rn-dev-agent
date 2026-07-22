@@ -325,32 +325,36 @@ extension RnFastRunnerTests {
     return keyboard.exists && !keyboard.frame.isEmpty
   }
 
-  func dismissKeyboard(app: XCUIApplication) -> (wasVisible: Bool, dismissed: Bool, visible: Bool) {
+  func dismissKeyboard(app: XCUIApplication) -> (wasVisible: Bool, dismissed: Bool, visible: Bool, via: String?) {
     let wasVisible = isKeyboardVisible(app: app)
     guard wasVisible else {
-      return (wasVisible: false, dismissed: false, visible: false)
+      return (wasVisible: false, dismissed: false, visible: false, via: nil)
     }
 
 #if os(tvOS)
     _ = pressTvRemote(.menu)
     sleepFor(0.2)
     let visible = isKeyboardVisible(app: app)
-    return (wasVisible: true, dismissed: !visible, visible: visible)
+    return (wasVisible: true, dismissed: !visible, visible: visible, via: "native-control")
 #else
-    let keyboard = app.keyboards.firstMatch
-    keyboard.swipeDown()
-    sleepFor(0.2)
-    if !isKeyboardVisible(app: app) {
-      return (wasVisible: true, dismissed: true, visible: false)
-    }
-
+    // Control first: a swipe that starts on a letter key initiates QuickPath
+    // slide-typing and silently mutates the focused field (device-proven).
     if tapKeyboardDismissControl(app: app) {
       sleepFor(0.2)
-      let visible = isKeyboardVisible(app: app)
-      return (wasVisible: true, dismissed: !visible, visible: visible)
+      if !isKeyboardVisible(app: app) {
+        return (wasVisible: true, dismissed: true, visible: false, via: "native-control")
+      }
     }
 
-    return (wasVisible: true, dismissed: false, visible: isKeyboardVisible(app: app))
+    swipeKeyboardDownFromTopEdge(app: app)
+    sleepFor(0.2)
+    let visible = isKeyboardVisible(app: app)
+    return (
+      wasVisible: true,
+      dismissed: !visible,
+      visible: visible,
+      via: visible ? nil : "native-swipe"
+    )
 #endif
   }
 
@@ -361,20 +365,59 @@ extension RnFastRunnerTests {
     return frame.isEmpty ? nil : frame
   }
 
-  func applyKeyboardGuard(app: XCUIApplication, tapX: Double, tapY: Double, enabled: Bool) -> String {
+  func applyKeyboardGuard(
+    app: XCUIApplication,
+    tapX: Double,
+    tapY: Double,
+    command: Command,
+    enabled: Bool
+  ) -> String {
 #if os(tvOS)
     return "off"
 #else
     guard enabled else { return "off" }
-    guard let frame = keyboardFrameIfVisible(app: app) else { return "no_keyboard" }
-    guard KeyboardGuard.shouldDismiss(keyboardFrame: frame, tapPoint: CGPoint(x: tapX, y: tapY), minHeight: 120) else {
+    guard let keyboardFrame = keyboardFrameIfVisible(app: app) else { return "no_keyboard" }
+
+    let targetRect = command.targetBounds.map {
+      CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+    }
+    let targetOnScreen = targetRect.map {
+      KeyboardGuard.isProvenOnScreen(appFrame: app.frame, targetRect: $0)
+    } ?? false
+    let fresh = targetRect != nil
+      && targetOnScreen
+      && command.snapshotGeneration == currentSnapshotGeneration
+      && command.keyboardStateAtSnapshot == true
+    if fresh,
+       let targetRect,
+       !KeyboardGuard.shouldDismiss(
+         keyboardFrame: keyboardFrame,
+         targetRect: targetRect,
+         minHeight: 120
+       ) {
       return "not_occluded"
     }
-    if tapKeyboardDismissControl(app: app) {
-      sleepFor(0.2)
-      if !isKeyboardVisible(app: app) { return "dismissed" }
-    }
-    return "dismiss_failed"
+
+    // Captain-corrected policy: unknown geometry is never blind-tapped under
+    // a visible keyboard. Dismiss first; ref-based callers then re-snapshot
+    // and re-resolve before their one retry.
+    let dismissal = dismissKeyboard(app: app)
+    guard dismissal.dismissed && !dismissal.visible else { return "dismiss_failed" }
+    return targetRect == nil ? "auto_dismissed" : "auto_dismissed_requires_reresolve"
+#endif
+  }
+
+  private func swipeKeyboardDownFromTopEdge(app: XCUIApplication) {
+#if os(tvOS)
+    return
+#else
+    let keyboard = app.keyboards.firstMatch
+    guard keyboard.exists else { return }
+    // Anchor on the keyboard's very top edge (predictive/accessory band) rather
+    // than its centre, so the drag never begins on a letter key.
+    let start = keyboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+    let end = keyboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.5))
+    start.press(forDuration: 0.05, thenDragTo: end)
 #endif
   }
 

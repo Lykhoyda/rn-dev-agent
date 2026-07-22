@@ -31,6 +31,12 @@ function buildHarness(
   let autoConnectArgs = null;
   client.autoConnect = async (port, opts) => {
     autoConnectArgs = { port, opts };
+    client._connectedTarget = {
+      ...client._connectedTarget,
+      ...(opts.targetId ? { id: opts.targetId } : {}),
+      ...(opts.bundleId ? { description: opts.bundleId, title: `${opts.bundleId} (Hermes)` } : {}),
+      ...(opts.platform ? { platform: opts.platform, platformInference: 'probed' } : {}),
+    };
     client._isConnected = true;
     return 'connected';
   };
@@ -173,9 +179,9 @@ test('Phase 134.5: bundleId `com.old.app` does NOT match haystack containing `co
   assert.equal(h.counts().disconnects, 1);
 });
 
-test('Phase 134.5: bundleId match still works when surrounded by punctuation (positive parity)', async () => {
-  // Haystack with the bundleId as a standalone token bordered by
-  // whitespace + brackets. The word-boundary check still recognizes it.
+test('Phase 134.5: arbitrary punctuation-surrounded bundle token is not identity proof', async () => {
+  // A bundle-looking token in arbitrary title/description prose is not a
+  // Metro identity field. Reconnect and require canonical metadata instead.
   const h = buildHarness({
     id: 'page1',
     title: 'React Native [com.old.app] (Hermes)',
@@ -186,6 +192,6 @@ test('Phase 134.5: bundleId match still works when surrounded by punctuation (po
   });
   const result = await h.handler({ bundleId: 'com.old.app' });
   const data = JSON.parse(result.content[0].text);
-  assert.equal(data.data.alreadyConnected, true, 'whole-token match still recognized');
-  assert.equal(h.counts().disconnects, 0);
+  assert.notEqual(data.data?.alreadyConnected, true, 'arbitrary token must not be accepted');
+  assert.equal(h.counts().disconnects, 1);
 });

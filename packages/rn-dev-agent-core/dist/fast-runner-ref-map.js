@@ -4,6 +4,8 @@ let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
 let lastSnapshotHash = null;
+let snapshotGeneration = 0;
+let keyboardStateAtSnapshot = null;
 // #519 review: honest hittable (#395) guarantees only the CENTER is on-screen,
 // so a straddling card (x=250..550 on a 402pt viewport) is legitimately
 // hittable and would seed the union past the physical screen. iOS snapshots
@@ -135,6 +137,8 @@ export function clearRefMap() {
     screenRect = null;
     lastUpdated = 0;
     lastSnapshotHash = null;
+    snapshotGeneration = 0;
+    keyboardStateAtSnapshot = null;
 }
 export function hasRefMap() {
     return refMap.size > 0;
@@ -191,7 +195,7 @@ export function buildSnapshotVerdict(source, nodeCount, outcome) {
         reasons,
     };
 }
-export function updateRefMapFromFlat(nodes) {
+export function updateRefMapFromFlat(nodes, freshness = {}) {
     // GH #409: a zero-node capture is indistinguishable from a degraded walk
     // (AX failure, wedged runner, mid-transition screen). It must never wipe the
     // last-known-good map — refs stay bound to the last verified capture, and a
@@ -214,6 +218,8 @@ export function updateRefMapFromFlat(nodes) {
     // Colliding keys are overwritten by metadataMap.set below.
     refMap.clear();
     screenRect = null;
+    snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
+    keyboardStateAtSnapshot = freshness.keyboardVisible ?? null;
     const hashed = [];
     // Screen rect: hittable-first union with an all-nodes fallback — same
     // rationale as updateRefMap (off-screen mounted rows must not inflate the
@@ -225,7 +231,13 @@ export function updateRefMapFromFlat(nodes) {
             continue;
         const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
         refMap.set(key, node.rect);
-        const meta = { type: node.type, flatIndex: i, nodeCount: nodes.length };
+        const meta = {
+            type: node.type,
+            flatIndex: i,
+            nodeCount: nodes.length,
+            snapshotGeneration,
+            keyboardStateAtSnapshot,
+        };
         if (node.label !== undefined)
             meta.label = node.label;
         if (node.identifier !== undefined)
@@ -248,6 +260,23 @@ export function updateRefMapFromFlat(nodes) {
     }
     lastUpdated = Date.now();
     return { applied: true };
+}
+export function getFreshRefTarget(ref, opts = {}) {
+    if (!isRefMapFresh())
+        return null;
+    const key = ref.startsWith('@') ? ref.slice(1) : ref;
+    const rect = refMap.get(key);
+    const record = metadataMap.get(key);
+    if (!rect ||
+        !record ||
+        record.snapshotGeneration !== snapshotGeneration ||
+        (record.keyboardStateAtSnapshot === null && opts.allowUnknownKeyboardState !== true))
+        return null;
+    return {
+        rect,
+        snapshotGeneration: record.snapshotGeneration,
+        keyboardStateAtSnapshot: record.keyboardStateAtSnapshot,
+    };
 }
 export function getCachedMetadata(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;

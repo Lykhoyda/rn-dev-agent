@@ -47,9 +47,10 @@ xcodebuild test \
   -project RnFastRunner.xcodeproj \
   -scheme RnFastRunner \
   -destination "$DEST" \
-  -derivedDataPath ../build/DerivedData \
+  -derivedDataPath ../build/DerivedData-native-tests \
   -resultBundlePath "$RESULTS" \
   CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
   ONLY_ACTIVE_ARCH=YES \
+  "SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG RN_FAST_RUNNER_TEST_FAULTS" \
   -skip-testing:RnFastRunnerUITests/RnFastRunnerTests \
   -skip-testing:RnFastRunnerUITests/SnapshotForegroundRegressionTest

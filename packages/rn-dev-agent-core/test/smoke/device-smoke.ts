@@ -326,10 +326,10 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
     // Keyboard-guard scenario (#370 contract) — iOS ONLY on-device. The fill left
     // the keyboard up and the bottom bar occluded (fixture uses adjustNothing /
     // ignoresSafeArea). On iOS, XCUITest still reports the occluded button, so we
-    // re-snapshot for a fresh ref and press it → the guard must REFUSE
-    // (KEYBOARD_OCCLUDED / dismiss_failed): XCTest swipeDown on a QWERTY keyboard
-    // corrupts the focused field, so the verify-or-refuse contract is the stable,
-    // meaningful behavior to pin. Android is intentionally SKIPPED: UiAutomator
+    // re-snapshot for a fresh ref and press it → the guard must DISMISS first,
+    // re-resolve the ref and serve the tap; only a keyboard that survives every
+    // dismissal tier may refuse, and then with KEYBOARD_DISMISS_FAILED.
+    // Android is intentionally SKIPPED: UiAutomator
     // drops occluded views AND the IME-frame containment check is edge-sensitive,
     // so the on-device outcome (dismiss vs a swallowed tap at the frame edge)
     // varies run-to-run. Android's guard predicate is precisely unit-tested in
@@ -346,22 +346,26 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
         'iOS: fixture_bottom_button should remain in the post-fill snapshot (XCUITest reports occluded elements)',
       );
       const kb = record('keyboard-guard', await callTool(s, 'device_press', { ref: bottomRef }));
+      const guard = kb.envelope?.meta?.keyboardGuard;
       assert.notEqual(
-        kb.envelope?.ok,
-        true,
-        `iOS keyboard-guard scenario invalid: the tap went through (keyboardGuard=${kb.envelope?.meta?.keyboardGuard}). ` +
+        guard,
+        'no_keyboard',
+        'iOS keyboard-guard scenario invalid: the runner saw no keyboard. ' +
           'The software keyboard likely never appeared on this headless simulator — environment problem, not a contract pass.',
       );
-      assert.match(
-        kb.text,
-        /KEYBOARD_OCCLUDED/,
-        `expected KEYBOARD_OCCLUDED: ${kb.text.slice(0, 500)}`,
-      );
-      assert.match(
-        kb.text,
-        /dismiss_failed/,
-        `expected keyboardGuard=dismiss_failed: ${kb.text.slice(0, 500)}`,
-      );
+      if (kb.envelope?.ok === true) {
+        assert.match(
+          String(guard),
+          /^auto_dismissed/,
+          `expected the guard to dismiss before serving the tap, got keyboardGuard=${guard}: ${kb.text.slice(0, 500)}`,
+        );
+      } else {
+        assert.match(
+          kb.text,
+          /KEYBOARD_DISMISS_FAILED/,
+          `a refused guarded tap must report KEYBOARD_DISMISS_FAILED: ${kb.text.slice(0, 500)}`,
+        );
+      }
     } else {
       console.log(
         'step keyboard-guard: skipped on Android (iOS-only on-device; the guard predicate is unit-tested in KeyboardGuardTest.kt)',

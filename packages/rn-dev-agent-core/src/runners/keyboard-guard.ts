@@ -1,4 +1,4 @@
-import type { ToolResult } from '../utils.js';
+import { failResult, okResult, type ToolResult } from '../utils.js';
 
 export function resolveKeyboardGuard(env: NodeJS.ProcessEnv): boolean {
   const raw = (env.RN_KEYBOARD_GUARD ?? '').trim().toLowerCase();
@@ -69,8 +69,11 @@ export function isKeyboardOccludedRefusal(result: ToolResult): boolean {
   }
   if (envelope === null || typeof envelope !== 'object') return false;
   const { code, error } = envelope as { code?: unknown; error?: unknown };
-  if (code === 'KEYBOARD_OCCLUDED') return true;
-  return typeof error === 'string' && error.startsWith('KEYBOARD_OCCLUDED');
+  if (code === 'KEYBOARD_OCCLUDED' || code === 'KEYBOARD_DISMISS_FAILED') return true;
+  return (
+    typeof error === 'string' &&
+    (error.startsWith('KEYBOARD_OCCLUDED') || error.startsWith('KEYBOARD_DISMISS_FAILED'))
+  );
 }
 
 export interface KeyboardAutoHealDeps {
@@ -80,6 +83,137 @@ export interface KeyboardAutoHealDeps {
   refreshSnapshot: () => Promise<unknown>;
   /** Re-run the original tap exactly once. */
   retryTap: () => Promise<ToolResult>;
+}
+
+export function keyboardVisibility(result: unknown): boolean | null {
+  const text = (result as ToolResult | undefined)?.content?.[0]?.text;
+  if (typeof text !== 'string') return null;
+  try {
+    const envelope = JSON.parse(text) as {
+      ok?: boolean;
+      data?: { keyboardVisible?: unknown; visible?: unknown };
+    };
+    if (envelope.ok === false) return null;
+    if (typeof envelope.data?.keyboardVisible === 'boolean') {
+      return envelope.data.keyboardVisible;
+    }
+    return typeof envelope.data?.visible === 'boolean' ? envelope.data.visible : null;
+  } catch {
+    return null;
+  }
+}
+
+const KEYBOARD_POSTCHECK_ATTEMPTS = 5;
+const KEYBOARD_POSTCHECK_DELAY_MS = 100;
+
+/**
+ * `unknown` means the producer does not report keyboard visibility at all
+ * (Android runner, protocol-v1 iOS artifacts) — distinct from an observed
+ * still-visible keyboard, which is the only disconfirming observation.
+ */
+export type KeyboardHiddenObservation = 'hidden' | 'visible' | 'unknown';
+
+export async function waitForKeyboardHidden(
+  refreshSnapshot: () => Promise<unknown>,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<KeyboardHiddenObservation> {
+  let last: KeyboardHiddenObservation = 'unknown';
+  for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
+    const visible = keyboardVisibility(await refreshSnapshot());
+    if (visible === false) return 'hidden';
+    // A producer that never emits visibility will not start on a later poll.
+    if (visible === null) return 'unknown';
+    last = 'visible';
+    if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1) await sleep(KEYBOARD_POSTCHECK_DELAY_MS);
+  }
+  return last;
+}
+
+export interface KeyboardDismissDeps {
+  nativeDismiss: () => Promise<ToolResult>;
+  dismissViaJs?: () => Promise<boolean>;
+  refreshSnapshot: () => Promise<unknown>;
+}
+
+function nativeDismissTiers(via: string): string[] {
+  return via === 'native-control' ? ['native-control'] : ['native-control', via];
+}
+
+// The runner only answers KEYBOARD_DISMISS_FAILED after running its own native
+// tiers; any other error means the command never reached them.
+function nativeTiersAttempted(native: ToolResult): string[] {
+  if (!native.isError) return ['native-control', 'native-swipe'];
+  const text = native.content?.[0]?.text ?? '';
+  return text.includes('KEYBOARD_DISMISS_FAILED') ? ['native-control', 'native-swipe'] : [];
+}
+
+/** Shared standalone/batch dismissal chain with an independent hidden-state check. */
+export async function dismissKeyboardWithParity(deps: KeyboardDismissDeps): Promise<ToolResult> {
+  const native = await deps.nativeDismiss();
+  if (!native.isError) {
+    let data: { wasVisible?: unknown; dismissed?: unknown; visible?: unknown; via?: unknown } = {};
+    try {
+      data =
+        (
+          JSON.parse(native.content[0]?.text ?? '{}') as {
+            data?: typeof data;
+          }
+        ).data ?? {};
+    } catch {
+      // A malformed native success cannot prove that the keyboard is hidden.
+    }
+    if (data.wasVisible === false && data.visible !== true) {
+      return okResult({
+        dismissed: false,
+        keyboardGuard: 'no_keyboard',
+        via: 'no_keyboard',
+        attemptedTiers: [],
+      });
+    }
+    if (data.dismissed === true && data.visible !== true) {
+      const via = typeof data.via === 'string' ? data.via : 'native-control';
+      // Producers that do not report keyboard visibility (Android runner,
+      // protocol-v1 iOS) can only be corroborated by an independent probe;
+      // absence of a visibility field is not a disconfirmation.
+      const observed =
+        data.visible === false ? 'hidden' : await waitForKeyboardHidden(deps.refreshSnapshot);
+      if (observed !== 'visible') {
+        return okResult({
+          dismissed: true,
+          keyboardGuard: 'auto_dismissed',
+          via,
+          attemptedTiers: nativeDismissTiers(via),
+          visibilityProof: observed === 'hidden' ? 'observed-hidden' : 'unavailable',
+        });
+      }
+    }
+  }
+
+  const attemptedTiers = nativeTiersAttempted(native);
+  if (deps.dismissViaJs) {
+    attemptedTiers.push('js');
+    try {
+      if (await deps.dismissViaJs()) {
+        const observed = await waitForKeyboardHidden(deps.refreshSnapshot);
+        if (observed !== 'visible') {
+          return okResult({
+            dismissed: true,
+            keyboardGuard: 'auto_dismissed',
+            via: 'js',
+            attemptedTiers,
+            visibilityProof: observed === 'hidden' ? 'observed-hidden' : 'unavailable',
+          });
+        }
+      }
+    } catch {
+      // Fall through to the typed refusal; no hidden state was proven.
+    }
+  }
+  return failResult(
+    'KEYBOARD_DISMISS_FAILED: no dismissal tier proved the keyboard hidden; it was still visible or its state could not be established.',
+    'KEYBOARD_DISMISS_FAILED',
+    { attemptedTiers },
+  );
 }
 
 /**
@@ -103,10 +237,9 @@ export async function healKeyboardOccludedTap(
   }
   if (!dismissed) return first;
   try {
-    await deps.refreshSnapshot();
+    if ((await waitForKeyboardHidden(deps.refreshSnapshot)) === 'visible') return first;
   } catch {
-    // Stale coords are survivable: the retry either re-binds by identity
-    // (Story 05) or refuses again — never worse than skipping the retry.
+    return first;
   }
   const retried = await deps.retryTap();
   return tagKeyboardAutoHeal(retried, Date.now() - t0);
@@ -127,8 +260,8 @@ function tagKeyboardAutoHeal(result: ToolResult, healMs: number): ToolResult {
     ...meta,
     // A retry that refused again keeps its own guard status; only a served
     // tap is stamped as JS-dismissed.
-    ...(result.isError ? {} : { keyboardGuard: 'js_dismissed' }),
-    keyboardAutoHeal: { dismissed: true, healMs },
+    ...(result.isError ? {} : { keyboardGuard: 'auto_dismissed', via: 'js' }),
+    keyboardAutoHeal: { dismissed: true, via: 'js', healMs },
   };
   return {
     ...result,

@@ -1,17 +1,19 @@
 ---
 title: "device_press"
-description: "Tap a UI element by its @ref from device_snapshot"
+description: "Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates"
 sidebar:
   order: 23
 ---
 
-Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once (meta.tapRetried/noUiChange).
+Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. A guarded raw-coordinate tap dismisses any visible keyboard before the single tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once unless keyboard/transport recovery already consumed that retry budget.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `ref` | `string` | Yes |  |  | Element ref from device_snapshot (e.g. "e3" or "@e3") |
+| `ref` | `unknown` | No |  |  | Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y. |
+| `x` | `number` | No |  |  | Raw tap X coordinate; requires y and no ref |
+| `y` | `number` | No |  |  | Raw tap Y coordinate; requires x and no ref |
 | `doubleTap` | `boolean` | No |  |  | Use double-tap gesture |
 | `count` | `unknown` | No |  | min: 1, max: 50, integer | Repeat tap N times (for rapid-fire interactions) |
 | `holdMs` | `unknown` | No |  | min: 0, max: 10000, integer | Hold duration in ms (for long-press via ref) |
@@ -22,5 +24,5 @@ Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated
 ## Usage
 
 ```
-device_press(ref: <string>)
+device_press()
 ```

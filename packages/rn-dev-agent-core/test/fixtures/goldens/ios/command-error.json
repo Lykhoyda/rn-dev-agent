@@ -1,24 +1,24 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-11T18:21:07.518Z",
+    "capturedAt": "2026-07-20T22:27:46.632Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=ios node test/contract/capture-goldens.ts)",
     "platform": "ios",
-    "device": "iPhone 17 (3C6085C0-2F72-4C82-87AF-5F2807AC55F1)",
-    "os": "iOS-26-5",
+    "device": "iPhone 17 Pro (7A6033C8-9291-4B0B-80B9-46024EEDF7D7)",
+    "os": "iOS-26-2",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.67.1",
-    "protocolVersion": 1,
+    "runnerVersion": "0.70.8",
+    "protocolVersion": 2,
     "runnerPort": 22088,
     "note": "deliberately unknown verb — pins the error-envelope shape"
   },
   "payload": {
-    "ok": false,
-    "v": 1,
     "error": {
-      "message": "Unsupported iOS runner command: gh437-unknown-command-probe — the runner artifact predates it; re-open the device session (device_snapshot action=open) to rebuild.",
-      "code": "UNSUPPORTED_COMMAND"
-    }
+      "code": "UNSUPPORTED_COMMAND",
+      "message": "Unsupported iOS runner command: gh437-unknown-command-probe — the runner artifact predates it; re-open the device session (device_snapshot action=open) to rebuild."
+    },
+    "v": 2,
+    "ok": false
   }
 }

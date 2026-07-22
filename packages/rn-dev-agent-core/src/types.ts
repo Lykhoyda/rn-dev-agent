@@ -20,6 +20,8 @@ export interface HermesTarget {
   vm: string;
   webSocketDebuggerUrl: string;
   description?: string;
+  /** Metro may expose the exact application identifier separately from description. */
+  appId?: string;
   type?: string;
   platform?: 'ios' | 'android';
   /**
@@ -33,6 +35,8 @@ export interface HermesTarget {
    * should pass `targetId` or `bundleId + platform` for exact selection.
    */
   ambiguousPlatform?: boolean;
+  /** Internal discovery evidence; public platform remains the legacy union. */
+  platformInference?: 'probed' | 'defaulted' | 'ambiguous';
 }
 
 export interface ConsoleEntry {
@@ -103,6 +107,8 @@ export interface StatusResult {
     platform: string | null;
     /** B111 (D643): target.description (bundleId from Metro) — surfaces which app the MCP attached to. */
     bundleId: string | null;
+    /** iOS sessions bind only to platform+bundle class; Metro exposes no UDID. */
+    affinityScope?: 'best-available' | 'platform-bundle-class' | 'platform-bundle-device-kind';
   };
   app: {
     platform: string | null;
@@ -216,6 +222,8 @@ export interface EvaluateResult {
 
 export type ToolErrorCode =
   | 'TARGET_SESSION_MISMATCH'
+  | 'PLATFORM_TARGET_NOT_FOUND'
+  | 'TARGET_PLATFORM_CONFLICT'
   | 'STALE_TARGET'
   | 'HELPERS_STALE'
   | 'RECONNECT_TIMEOUT'
@@ -250,10 +258,13 @@ export type ToolErrorCode =
   // GH #386 (Story 05 Task 8): device_batch testID resolved to >1 element for
   // a mutating step (press / fill / find+tap) — refuse rather than guess-tap.
   | 'AMBIGUOUS_TESTID'
+  // GH #588: device_press argument refusal (exactly one of ref / x+y required).
+  | 'INVALID_ARGUMENT'
   | 'ASSERTION_FAILED' // expect_redux / expect_route / expect_text / expect_visible_by_testid
   | 'SNAPSHOT_FAILED' // agent-device snapshot returned ok:false (distinct from "not present")
   | 'RN_FAST_RUNNER_DOWN' // #210: iOS rn-fast-runner not running and could not be auto-spawned (not prebuilt / no device)
   | 'RN_ANDROID_RUNNER_DOWN' // #243: rn-android-runner not reachable (cold-start race / can't bind port)
+  | 'APP_LAUNCH_FAILED' // app launcher failed after the native runner was already ready
   | 'SCREENSHOT_FAILED' // rn-android-runner screenshot response missing pngBase64 payload
   | 'PATH_NOT_FOUND' // expect_redux when getStoreState surfaces __agent_error
   | 'STORE_TRUNCATED' // expect_redux when store payload exceeded safeStringify cap
@@ -290,6 +301,11 @@ export type ToolErrorCode =
   // under a keyboard with no dismiss control. The TS layer auto-heals via the
   // injected Keyboard.dismiss() when CDP is connected (#379).
   | 'KEYBOARD_OCCLUDED'
+  | 'KEYBOARD_DISMISS_FAILED'
+  | 'RUNNER_TIMEOUT'
+  | 'WDA_BOOTSTRAP_FAILED'
+  // Direct maestro-runner/WDA device evidence did not match the exact target.
+  | 'DEVICE_AUTHORITY_MISMATCH'
   // Audit B5: cross_platform_verify verdict FAIL (elements differ across
   // platforms) — distinct from the partial-coverage missing-snapshot warning.
   | 'CROSS_PLATFORM_MISMATCH'

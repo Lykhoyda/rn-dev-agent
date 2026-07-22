@@ -1,6 +1,10 @@
 import type { CDPClient } from '../cdp-client.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
+import { getActiveSession } from '../agent-device-wrapper.js';
+import { sessionConnectFilters, targetMatchesSession } from './status.js';
+import { TargetSelectionError } from '../cdp/discovery.js';
+import type { ConnectFilters } from '../cdp/connect.js';
 
 interface ConnectArgs {
   metroPort?: number;
@@ -25,6 +29,36 @@ export function createConnectHandler(
 ) {
   return async (args: ConnectArgs): Promise<ToolResult> => {
     let client = getClient();
+    const session = getActiveSession();
+    const sessionFilters = sessionConnectFilters(session);
+    if (
+      args.platform &&
+      sessionFilters?.platform &&
+      args.platform.toLowerCase() !== sessionFilters.platform
+    ) {
+      return failResult(
+        `cdp_connect requested ${args.platform}, but the active session is bound to ${sessionFilters.platform}; refusing cross-platform fallback. This is platform affinity, not iOS UDID identity.`,
+        'TARGET_SESSION_MISMATCH',
+        { deviceSession: session },
+      );
+    }
+    if (
+      args.bundleId &&
+      sessionFilters?.bundleId &&
+      args.bundleId.toLowerCase() !== sessionFilters.bundleId.toLowerCase()
+    ) {
+      return failResult(
+        `cdp_connect requested bundleId ${args.bundleId}, but the active session is bound to ${sessionFilters.bundleId}.`,
+        'TARGET_SESSION_MISMATCH',
+        { deviceSession: session },
+      );
+    }
+    const effectiveFilters: ConnectFilters = {
+      ...sessionFilters,
+      ...(args.platform ? { platform: args.platform.toLowerCase() } : {}),
+      ...(args.bundleId ? { bundleId: args.bundleId } : {}),
+      ...(args.targetId ? { targetId: args.targetId } : {}),
+    };
 
     // CDP-001 + GH #21: when already connected, compare ALL requested filter
     // dimensions before short-circuiting. Previous logic only checked platform
@@ -32,39 +66,18 @@ export function createConnectHandler(
     // changed, leaving callers attached to the wrong Hermes page.
     if (client.isConnected && !args.force) {
       const target = client.connectedTarget;
-      const haystack = `${target?.title ?? ''} ${target?.description ?? ''}`.toLowerCase();
-
       const portMismatch =
         typeof args.metroPort === 'number' && args.metroPort !== client.metroPort;
       const targetIdMismatch =
-        typeof args.targetId === 'string' &&
-        args.targetId.length > 0 &&
-        args.targetId !== target?.id;
-      // Phase 134.5 (deepsec BUG: other-logic-bug): the prior substring
-      // check would treat `com.example.app` as "already connected" when
-      // the actual target is `com.example.app-test` or `com.example.app2`
-      // — anything that contained the bundleId as a substring. Use a
-      // word-boundary check anchored on non-bundle-id characters so
-      // `com.example.app` matches `... com.example.app ...` but not
-      // `... com.example.app-test ...`. Bundle IDs use `[A-Za-z0-9._-]`,
-      // so the boundary must be anything outside that set.
-      const bundleIdLower = typeof args.bundleId === 'string' ? args.bundleId.toLowerCase() : '';
-      const bundleMatched =
-        bundleIdLower.length > 0 &&
-        new RegExp(
-          `(^|[^A-Za-z0-9._-])${bundleIdLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9._-]|$)`,
-        ).test(haystack);
-      const bundleMismatch =
-        typeof args.bundleId === 'string' && args.bundleId.length > 0 && !bundleMatched;
-      let platformMismatch = false;
-      if (typeof args.platform === 'string' && args.platform.length > 0) {
-        const requestedPlatform = args.platform.toLowerCase();
-        const currentPlatform = target?.platform?.toLowerCase();
-        const titleMatch = haystack.includes(requestedPlatform);
-        platformMismatch = currentPlatform !== requestedPlatform && !titleMatch;
-      }
+        typeof effectiveFilters.targetId === 'string' &&
+        effectiveFilters.targetId.length > 0 &&
+        effectiveFilters.targetId !== target?.id;
+      // Bundle authority is enforced inside targetMatchesSession, which must
+      // come from one internally consistent Metro identity field, never an
+      // arbitrary token elsewhere in title/argv-like prose.
+      const sessionMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
 
-      if (portMismatch || targetIdMismatch || bundleMismatch || platformMismatch) {
+      if (portMismatch || targetIdMismatch || sessionMismatch) {
         // Honour requested filters by reconnecting; fall through to autoConnect below.
         const port = args.metroPort ?? client.metroPort;
         await client.disconnect();
@@ -99,12 +112,16 @@ export function createConnectHandler(
     }
 
     try {
-      const msg = await client.autoConnect(args.metroPort, {
-        platform: args.platform,
-        targetId: args.targetId,
-        bundleId: args.bundleId,
-      });
+      const msg = await client.autoConnect(args.metroPort, effectiveFilters);
       const target = client.connectedTarget;
+      if (!targetMatchesSession(target, effectiveFilters)) {
+        await client.disconnect();
+        throw new TargetSelectionError(
+          effectiveFilters.targetId ? 'TARGET_PLATFORM_CONFLICT' : 'PLATFORM_TARGET_NOT_FOUND',
+          `Connected target failed post-connect affinity validation for platform=${effectiveFilters.platform ?? 'unspecified'} bundleId=${effectiveFilters.bundleId ?? 'unspecified'}. The socket was disconnected; run cdp_targets and relaunch the requested app.`,
+          target ? [target] : [],
+        );
+      }
       return okResult({
         connected: true,
         message: msg,
@@ -116,10 +133,31 @@ export function createConnectHandler(
               vm: target.vm,
               platform: target.platform ?? null,
               description: target.description ?? null,
+              appId: target.appId ?? null,
             }
           : null,
       });
     } catch (err) {
+      if (err instanceof TargetSelectionError) {
+        // Refusal must not wedge the session: disconnect() disposes the shared
+        // client, so recreate it (mirrors createDisconnectHandler) or every
+        // later cdp_connect/cdp_status fails with "Client is disposed".
+        const port = client.metroPort;
+        await client.disconnect().catch(() => undefined);
+        setClient(createClient(port));
+        return failResult(err.message, err.code, {
+          candidates: err.candidates.map((target) => ({
+            id: target.id,
+            title: target.title,
+            deviceName: target.deviceName ?? null,
+            description: target.description ?? null,
+            appId: target.appId ?? null,
+            platform: target.platform ?? null,
+            confidence: target.platformInference ?? 'probed',
+          })),
+          affinity: 'cross-platform-only; iOS UDID identity is unavailable from Metro',
+        });
+      }
       return failResult(err instanceof Error ? err.message : String(err));
     }
   };
@@ -160,6 +198,7 @@ export function createTargetsHandler(getClient: () => CDPClient) {
           title: t.title,
           vm: t.vm,
           description: t.description ?? null,
+          appId: t.appId ?? null,
           platform: t.platform ?? null,
           connected: t.id === connectedId,
         })),

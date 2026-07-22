@@ -78,7 +78,12 @@ extension RnFastRunnerTests {
     }
 
     guard let context = makeSnapshotTraversalContext(app: app, options: options) else {
-      return DataPayload(nodes: [], truncated: false)
+      return DataPayload(
+        nodes: [],
+        truncated: false,
+        keyboardVisible: isKeyboardVisible(app: app),
+        snapshotGeneration: currentSnapshotGeneration
+      )
     }
 
     var cachedDescendantElements: [XCUIElement]?
@@ -181,7 +186,12 @@ extension RnFastRunnerTests {
 
     }
 
-    return DataPayload(nodes: nodes, truncated: truncated)
+    return DataPayload(
+      nodes: nodes,
+      truncated: truncated,
+      keyboardVisible: isKeyboardVisible(app: app),
+      snapshotGeneration: currentSnapshotGeneration
+    )
   }
 
   func snapshotRaw(app: XCUIApplication, options: SnapshotOptions) -> DataPayload {
@@ -190,7 +200,12 @@ extension RnFastRunnerTests {
     }
 
     guard let context = makeSnapshotTraversalContext(app: app, options: options) else {
-      return DataPayload(nodes: [], truncated: false)
+      return DataPayload(
+        nodes: [],
+        truncated: false,
+        keyboardVisible: isKeyboardVisible(app: app),
+        snapshotGeneration: currentSnapshotGeneration
+      )
     }
 
     var nodes: [SnapshotNode] = []
@@ -233,7 +248,12 @@ extension RnFastRunnerTests {
     }
 
     walk(context.rootSnapshot, depth: 0, parentIndex: nil)
-    return DataPayload(nodes: nodes, truncated: truncated)
+    return DataPayload(
+      nodes: nodes,
+      truncated: truncated,
+      keyboardVisible: isKeyboardVisible(app: app),
+      snapshotGeneration: currentSnapshotGeneration
+    )
   }
 
   func snapshotRect(from frame: CGRect) -> SnapshotRect {

@@ -31,10 +31,12 @@ extension RnFastRunnerTests {
       // requires one) would loop forever and the liveness probe would always
       // time out to "stale". Answer it directly with 200 {ok:true}.
       if self.isHealthRequest(combined) {
+        let wedged = self.isRunnerWedged()
         let response = self.jsonResponse(
           status: 200,
           response: Response(
-            ok: true,
+            ok: !wedged,
+            reason: wedged ? "wedged" : nil,
             protocolVersion: RunnerProtocol.version,
             runnerVersion: RunnerEnv.pluginVersion(),
             capabilities: QuiescenceStatus.current().capabilities

@@ -126,7 +126,10 @@ diagram, pre-replay validation, replay-to-promote).
 next session, `list-learned-actions` surfaces it for the agent → `run-action`
 replays it in ~4 seconds → if a testID drifted, `cdp_run_action` auto-invokes
 `cdp_repair_action`, patches the YAML, retries once, and persists the result
-to the sidecar's `runHistory[]` with auto-repair telemetry.
+to the sidecar's `runHistory[]` with auto-repair telemetry. Successful replay
+envelopes explicitly report `transport`, `transportVersion`, `fallback`,
+`repair`, per-step engine readback, and authorized `writes`; ordinary replays
+preserve tracked action YAML bytes.
 
 **Status maturity.** New actions ship as `experimental`. The first clean
 replay auto-promotes them to `active`. Self-repair demotes back to
@@ -218,7 +221,7 @@ are documented exceptions, not defaults.
 |---|---|---|
 | Screenshot the screen | `device_screenshot` | `xcrun simctl io booted screenshot`, `adb shell screencap`, `screencapture` |
 | Read the UI / accessibility tree | `device_snapshot` (returns @ref handles) | parsing `xcrun simctl io ui`, `uiautomator dump`, ad-hoc tree dumps |
-| Tap an element | `device_press(ref=…)` or `device_find(text=…, action="click")` | `xcrun simctl io booted input tap`, `adb shell input tap`, coordinate guesses |
+| Tap an element | `device_press(ref=…)` or `device_find(text=…, action="click")`; use `device_press(x=…, y=…)` only for an intentional raw-coordinate tap | `xcrun simctl io booted input tap`, `adb shell input tap`, coordinate guesses |
 | Type into a field | `device_fill(ref=…, text=…)` | `xcrun simctl spawn booted … keyboard`, `adb shell input text` |
 | Open an in-app URL / deep link | `device_deeplink` / `cdp_navigate` / `cdp_nav_graph` | `xcrun simctl openurl`, `adb shell am start -a android.intent.action.VIEW` |
 | Read app state (Redux/Zustand/Jotai/RQ) | `cdp_store_state(path=…)` | `console.log` + log-tailing, dispatching probes via `cdp_evaluate` |
@@ -350,7 +353,7 @@ reset and re-test.
 - **JS errors:** `cdp_error_log` — buffered JS exceptions (last 50). Use `clear=true` to reset baseline before testing
 - **Console output:** `cdp_console_log` — buffered console.log/warn/error (last 200)
 - **Network requests:** `cdp_network_log` — buffered fetch/XHR history (last 100). Use `filter="/api/endpoint"` to narrow
-- **All logs at once:** `collect_logs` — parallel collection from JS console + native iOS/Android logs
+- **All logs at once:** `collect_logs` — parallel collection from JS console + native logs. Native Android collection is pinned to the open session's adb serial; native iOS collection is pinned to the open session's simulator and current target-app PID.
 - **If `cdp_error_log` is empty but app is broken** — the problem is native. Use `collect_logs` to check native crash logs
 
 #### "I need to run arbitrary JavaScript in the app"
@@ -421,7 +424,7 @@ What this means in practice:
 - **Zero manual setup on either platform.** Runners resolve from a **prebuilt artifact** first — a SHA-256-checked local cache, then a download of the release asset matching the exact plugin version — and only fall back to an on-machine build (`xcodebuild` / Gradle) when no artifact is available. Resolution is fail-open: offline, 404, or checksum mismatch degrades to the local build with a one-line `meta.note`, never a hard failure. A local iOS cold build persists a reusable `.xctestrun`, so even self-built runners pay the multi-minute build at most once. Force a source build with `RN_RUNNER_BUILD=local`. `cdp_status` / `/rn-dev-agent:doctor` report provenance (`prebuilt v<X>` vs `local-built`).
 - **Runner staleness self-heals.** Runners version their wire protocol and enumerate supported commands in `/health`; the bridge reaps + reinstalls a stale runner transparently (one restart, `meta.note: "runner upgraded"`). `device_snapshot action=open` auto-invalidates and rebuilds an artifact missing required verbs; mid-flow tools refuse fast with `RUNNER_COMMANDS_STALE` instead of silently building. Only a mismatch that survives reinstall surfaces `RUNNER_PROTOCOL_MISMATCH` with exact rebuild commands. Handshake visible at `cdp_status` → `deviceSession.runnerProtocol`.
 - **Legacy upstream `AgentDeviceRunner` apps** from an old install are detected and `simctl uninstall`ed at iOS device-open (an installed XCUITest runner relaunches itself into the foreground mid-flow, backgrounding your app and wedging CDP). Opt out with `RN_DEVICE_KILL_LEGACY=0`.
-- **XCTest's idle-wait (quiescence) is bypassed by default on iOS.** RN apps with looping animations/Reanimated worklets never report idle, which used to stall queries and snapshots. Opt out with `RN_QUIESCENCE_BYPASS=0`; audit via `meta.quiescenceBypass` and `cdp_status.deviceSession.runnerCapabilities`. `XCUIElement.typeText` runs its own internal sync, so `device_fill` may still report "main thread execution timed out" even though the text landed — the client treats that shape as success (`meta.runnerTimeoutShim: true`). If you see it, proceed; do not retry, a retry would double-type.
+- **XCTest's idle-wait (quiescence) is bypassed by default on iOS.** RN apps with looping animations/Reanimated worklets never report idle, which used to stall queries and snapshots. Opt out with `RN_QUIESCENCE_BYPASS=0`; audit via `meta.quiescenceBypass` and `cdp_status.deviceSession.runnerCapabilities`. `XCUIElement.typeText` runs its own internal sync, so `device_fill` may still hit a main-thread timeout. The client poisons and reaps that runner and succeeds only when an independent exact CDP readback proves the requested value (`meta.runnerTimeoutRecovery.verification: "exact-readback"`); otherwise it fails closed with `RUNNER_TIMEOUT`.
 - **Foreign automation is arbitrated, not collided with.** While a foreign Maestro/XCUITest session drives the target simulator, `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` (~50 ms) instead of cascading into a runner leak. CDP reads stay free; `device_screenshot` still serves pixels via simctl. Disable with `RN_IOS_FOREIGN_GUARD=0`.
 - **The bridge survives Metro restarts.** The MCP entry point is a supervisor holding zero network sockets; killing whatever listens on 8081 kills only the worker, which is respawned with the session intact (`cdp_status` → `bridge.workerRestarts`). Opt out with `RN_BRIDGE_SUPERVISOR=0`.
 
@@ -430,8 +433,8 @@ Built-in reliability layers on `device_*` interactions (all default-ON, each wit
 | Layer | What it does | Surfaced as | Opt out |
 |---|---|---|---|
 | **Settle engine** | Every mutating `device_*` verb waits for the UI to actually stabilize (window-update probe / screenshot-static compare, snapshot-hash fallback) instead of fixed sleeps. `device_batch` settles between steps by default. | `meta.settle: {method, settled}` | `RN_SETTLE=0` global, `settle: false` per batch step, `settleTimeoutMs` budget knob |
-| **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates); a tap that produced no UI change retries exactly once; `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.tapRetried`, `meta.noUiChange` | `RN_SELF_HEAL=0` global, `retryIfNoChange: false` per call |
-| **Keyboard guard** | Before a guarded tap, the runner detects a software keyboard occluding the tap point and auto-dismisses it. iOS is verify-or-refuse: when no safe dismiss control exists (iPhone standard QWERTY), the tap is REFUSED with `KEYBOARD_OCCLUDED` rather than corrupting the focused field — then auto-heals when CDP is connected: injected `Keyboard.dismiss()`, re-snapshot, one bounded re-tap. | `meta.keyboardGuard` (`js_dismissed` after an auto-heal), `meta.keyboardAutoHeal`, `meta.timings_ms.keyboardGuard` | `RN_KEYBOARD_GUARD=0` |
+| **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates); a tap that produced no UI change retries exactly once, unless keyboard-guard or transport recovery already consumed that single retry budget (then it reports `meta.noUiChange` without re-firing); `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.tapRetried`, `meta.noUiChange` | `RN_SELF_HEAL=0` global, `retryIfNoChange: false` per call |
+| **Keyboard guard** | Guarded iOS taps use fresh, on-screen target rectangles against the current keyboard frame. If target geometry is stale, off-screen, or unknown (including raw coordinates) while the keyboard is visible, the keyboard is always dismissed first; refs are refreshed/re-resolved and the intended tap is dispatched once. Dismissal tiers are native dismiss control, native swipe, then injected JS with a fresh hidden-state post-check; all tiers failing returns `KEYBOARD_DISMISS_FAILED` without tapping. | `meta.keyboardGuard` (`auto_dismissed` after a heal), `meta.keyboardAutoHeal`, `meta.via`, `meta.timings_ms.keyboardGuard` | `RN_KEYBOARD_GUARD=0` |
 
 Three consecutive no-change taps on distinct targets surface a wedged-runtime hint — reboot the simulator rather than blaming app code.
 
@@ -529,7 +532,7 @@ the runner's settle engine.
 | `cdp_reload` reports `reconnected: false` | Wait 5-10s | New Hermes target not yet registered | `cdp_connect force: true`; if ambiguous target, pass `targetId:` |
 | `BUSY_FOREIGN_FLOW` refusal | `cdp_status` | A foreign Maestro/XCUITest session is driving the simulator | Wait for it to finish or stop the foreign automation; CDP reads and `device_screenshot` still work |
 | `RUNNER_COMMANDS_STALE` / `RUNNER_PROTOCOL_MISMATCH` | `cdp_status` → `deviceSession.runnerProtocol` | Runner artifact predates the installed plugin | `device_snapshot action=open` auto-invalidates + rebuilds; only a surviving mismatch needs the rebuild commands in the error |
-| `KEYBOARD_OCCLUDED` refusal (iOS) | `device_snapshot` | Software keyboard covers the tap point and no safe dismiss control exists; the automatic JS-first heal (`Keyboard.dismiss()` + re-tap) needs CDP connected and didn't engage or didn't take | Connect CDP (`cdp_status`) so the auto-heal can run; or scroll the target into view (`device_scrollintoview`), or fill remaining fields first so the keyboard drops |
+| `KEYBOARD_DISMISS_FAILED` refusal (iOS) | `device_snapshot` | A visible keyboard could not be proven hidden after the native control/swipe tiers and the optional injected JS tier, so no tap was performed | Connect CDP (`cdp_status`) so the JS tier can run, dismiss the keyboard explicitly, then retry with a fresh snapshot/ref |
 | `maestro_run` fails with `RUNTIME_DEGRADED` hint | — | Simulator runtime is wedged (taps report success, `onPress` never fires) | `xcrun simctl shutdown/boot` the simulator, relaunch, retry — don't chase app code |
 | `APP_NOT_INSTALLED` | — | Relaunch/recovery target isn't installed (e.g. after clearState) | Follow the `simctl install` advice in the error, then reconnect |
 | Replay fails, `meta.cdpJsFallback` present | `cdp_status` | iOS 26.x WDA reads an empty a11y tree (TRANSPORT_BLIND) | The CDP/JS replay fallback engages automatically; a `cdp-unreachable` skip means fix the CDP connection first |

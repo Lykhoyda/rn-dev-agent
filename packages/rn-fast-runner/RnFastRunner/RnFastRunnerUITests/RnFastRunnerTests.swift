@@ -15,6 +15,19 @@ import AppKit
 typealias RunnerImage = NSImage
 #endif
 
+func runnerListenerWaitFailure(
+  listenerError: String?,
+  waitResult: XCTWaiter.Result
+) -> String? {
+  if let listenerError {
+    return "runner listener failed to start: \(listenerError)"
+  }
+  if waitResult != .completed {
+    return "runner wait ended with \(waitResult)"
+  }
+  return nil
+}
+
 class RnFastRunnerTests: XCTestCase {
   enum RunnerErrorDomain {
     static let general = "RnFastRunner"
@@ -36,6 +49,13 @@ class RnFastRunnerTests: XCTestCase {
   lazy var springboard = XCUIApplication(bundleIdentifier: Self.springboardBundleId)
   var currentApp: XCUIApplication?
   var currentBundleId: String?
+  private let wedgeLock = NSLock()
+  private var runnerWedged = false
+  private let listenerFailureLock = NSLock()
+  private var listenerStartupFailure: String?
+#if RN_FAST_RUNNER_TEST_FAULTS
+  var testFaultConsumed = false
+#endif
   let maxRequestBytes = 2 * 1024 * 1024
   let maxSnapshotElements = 600
   let fastSnapshotLimit = 300
@@ -46,6 +66,7 @@ class RnFastRunnerTests: XCTestCase {
   let firstInteractionAfterActivateDelay: TimeInterval = 0.25
   let scrollInteractionIdleTimeoutDefault: TimeInterval = 1.0
   var needsPostSnapshotInteractionDelay = false
+  var currentSnapshotGeneration = 0
   var needsFirstInteractionDelay = false
   let interactiveTypes: Set<XCUIElement.ElementType> = [
     .button,
@@ -74,6 +95,30 @@ class RnFastRunnerTests: XCTestCase {
     .checkBox,
     .switch
   ]
+
+  func markRunnerWedged() {
+    wedgeLock.lock()
+    runnerWedged = true
+    wedgeLock.unlock()
+  }
+
+  func isRunnerWedged() -> Bool {
+    wedgeLock.lock()
+    defer { wedgeLock.unlock() }
+    return runnerWedged
+  }
+
+  private func recordListenerStartupFailure(_ message: String) {
+    listenerFailureLock.lock()
+    listenerStartupFailure = message
+    listenerFailureLock.unlock()
+  }
+
+  private func currentListenerStartupFailure() -> String? {
+    listenerFailureLock.lock()
+    defer { listenerFailureLock.unlock() }
+    return listenerStartupFailure
+  }
 
   // MARK: - XCTest Entry
 
@@ -107,7 +152,9 @@ class RnFastRunnerTests: XCTestCase {
           NSLog("RN_FAST_RUNNER_PORT_NOT_SET")
         }
       case .failed(let error):
-        NSLog("RN_FAST_RUNNER_LISTENER_FAILED=%@", String(describing: error))
+        let detail = String(describing: error)
+        self?.recordListenerStartupFailure(detail)
+        NSLog("RN_FAST_RUNNER_LISTENER_FAILED=%@", detail)
         self?.doneExpectation?.fulfill()
       default:
         break
@@ -126,8 +173,11 @@ class RnFastRunnerTests: XCTestCase {
     NSLog("RN_FAST_RUNNER_WAITING")
     let result = XCTWaiter.wait(for: [expectation], timeout: 24 * 60 * 60)
     NSLog("RN_FAST_RUNNER_WAIT_RESULT=%@", String(describing: result))
-    if result != .completed {
-      XCTFail("runner wait ended with \(result)")
+    if let failure = runnerListenerWaitFailure(
+      listenerError: currentListenerStartupFailure(),
+      waitResult: result
+    ) {
+      XCTFail(failure)
     }
   }
 

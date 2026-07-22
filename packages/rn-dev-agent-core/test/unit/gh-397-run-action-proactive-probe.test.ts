@@ -38,7 +38,25 @@ function replayFixtureYaml({
 
 const PASS_ENV = {
   ok: true,
-  data: { passed: true, output: 'Flow PASSED', flowFile: 'x', platform: 'ios' },
+  data: {
+    passed: true,
+    output: 'Flow PASSED',
+    flowFile: 'x',
+    platform: 'ios',
+    transport: 'maestro-runner',
+    transportVersion: '1.0.9',
+    fallback: 'none',
+    deviceAuthority: {
+      requestedDeviceId: 'UDID-1',
+      reportedDeviceId: 'UDID-1',
+      observedDeviceIds: ['UDID-1'],
+      wdaDeviceIds: ['UDID-1'],
+      verified: true,
+      source: 'maestro-runner-log',
+      reason: 'exact-runner-and-wda-match',
+    },
+    steps: [{ index: 0, name: 'tapOn', verb: 'tapOn', status: 'pass', durationMs: 10 }],
+  },
 };
 
 function fakeMaestroRun(env: { ok: boolean }, counter: { calls: number }) {
@@ -130,7 +148,7 @@ test('gh-397: not at-risk (iOS 18, clean history) → maestro path exactly as to
   const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
   const env = readEnvelope(result);
   assert.equal(env.data.passed, true);
-  assert.equal(env.data.transport, undefined);
+  assert.equal(env.data.transport, 'maestro-runner');
   assert.equal(counter.calls, 1, 'maestro runs normally');
   assert.equal(lastRun('demo').deviceId, 'UDID-1');
 });
@@ -214,13 +232,41 @@ test('gh-397: RN_BLIND_PROBE=0 disables the gate even on at-risk runtimes', asyn
   process.env.RN_BLIND_PROBE = '0';
   try {
     const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
-    assert.equal(readEnvelope(result).data.transport, undefined);
+    assert.equal(readEnvelope(result).data.transport, 'maestro-runner');
     assert.equal(counter.calls, 1, 'maestro path with the gate disabled');
     assert.equal(
       lastRun('demo').deviceId,
       'UDID-1',
       'deviceId still threads while opted out — a clean pass must be able to clear the latch',
     );
+  } finally {
+    delete process.env.RN_BLIND_PROBE;
+  }
+});
+
+test('gh-588 V2b: per-call allow reaches normal fallback while binding env remains disabled', async () => {
+  project.seedAction('demo', replayFixtureYaml());
+  const counter = { calls: 0 };
+  const { deps: replay } = makeReplayDeps({ present: true });
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun(PASS_ENV, counter),
+    replayDeps: () => replay,
+    blindProbeContext: IOS26_CTX,
+    probeRetry: { attempts: 1, delayMs: 0 },
+  });
+  process.env.RN_BLIND_PROBE = '0';
+  try {
+    const result = await handler({
+      actionId: 'demo',
+      projectRoot: project.root,
+      platform: 'ios',
+      blindProbeMode: 'allow',
+    });
+    const env = readEnvelope(result);
+    assert.equal(env.data.transport, 'cdp-js');
+    assert.equal(env.data.blindProbeMode, 'allow');
+    assert.equal(counter.calls, 0, 'the explicit call override must not invoke maestro');
+    assert.equal(process.env.RN_BLIND_PROBE, '0', 'the sole MCP process policy is not mutated');
   } finally {
     delete process.env.RN_BLIND_PROBE;
   }
@@ -251,7 +297,7 @@ test('gh-397: prior TRANSPORT_BLIND history + anchor present → probe routes ev
   assert.equal(counter.calls, 0);
 });
 
-test('gh-397: orchestration exception still persists a RunRecord with deviceId', async () => {
+test('gh-397: orchestration exception never invents RunRecord deviceId from requested context', async () => {
   project.seedAction('demo', replayFixtureYaml());
   const handler = createRunActionHandler({
     maestroRun: async () => {
@@ -261,7 +307,7 @@ test('gh-397: orchestration exception still persists a RunRecord with deviceId',
   });
   const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
   assert.equal(readEnvelope(result).ok, false);
-  assert.equal(lastRun('demo').deviceId, 'UDID-1');
+  assert.equal(lastRun('demo').deviceId, undefined);
 });
 
 test('gh-397: probe-routed replay failure records FALLBACK_REPLAY_FAILED, maestro still skipped', async () => {

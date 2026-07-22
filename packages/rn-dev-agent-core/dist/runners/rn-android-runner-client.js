@@ -12,7 +12,7 @@ import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, REQUIRED_ANDROID_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_ANDROID_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
@@ -680,8 +680,9 @@ async function sendCommandOnce(hostPort, body, timeoutMs) {
     // GH #383: mirror the iOS /command v-stamp check — a runner hot-swapped to an
     // incompatible wire protocol mid-session is caught here (the reuse gate only
     // runs at start). runAndroid's catch maps this BEFORE isAndroidConnectionFailure.
-    if (typeof parsed.v === 'number' && parsed.v !== RUNNER_PROTOCOL_VERSION) {
-        throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge expects v${RUNNER_PROTOCOL_VERSION}`);
+    if (typeof parsed.v === 'number' &&
+        (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
+        throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
     }
     return parsed;
 }

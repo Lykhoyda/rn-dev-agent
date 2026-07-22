@@ -1,18 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { actionPathFor, loadAction } from '../domain/action-store.js';
 import { hashProofArgs, hashProofValue, validateTrace, } from '../domain/proof-capture.js';
-import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
+import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, proofCandidateRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
 import { failResult, okResult } from '../utils.js';
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, 'path must be absolute');
 const beginRehearsalSchema = z
     .object({
     action: z.literal('begin_rehearsal'),
     projectRoot: absolutePathSchema,
+    /** Plugin worktree whose packaged runtime is driving a cross-repo proof. */
+    candidateRoot: absolutePathSchema.optional(),
     receiptPath: absolutePathSchema,
     videoPath: absolutePathSchema,
     contactSheetPath: absolutePathSchema,
@@ -88,6 +90,157 @@ const readinessSchema = z
     .strict();
 function hashBytes(bytes) {
     return createHash('sha256').update(bytes).digest('hex');
+}
+/**
+ * Resolve only shipped MCP entry points beneath the immutable candidate. The
+ * Codex supervisor launcher is a valid process authority even though it then
+ * execs the packaged core worker; in that case the digest remains bound to the
+ * exact packaged core bundle that executes tool behavior. realpath closes the
+ * macOS /tmp -> /private/tmp spelling gap without accepting paths outside the
+ * candidate.
+ */
+function realpathOrSelf(path) {
+    try {
+        return realpathSync(path);
+    }
+    catch {
+        return path;
+    }
+}
+export function resolveProofCandidateEntrypoint(candidateRoot, argv) {
+    let root;
+    try {
+        root = realpathSync(candidateRoot);
+    }
+    catch {
+        return null;
+    }
+    // Only the executed script carries process authority. argv[1] is the entry
+    // module; argv[2] additionally covers the codex launcher, which execs the
+    // packaged core worker as its first argument. Scanning the full argv would
+    // let any unrelated process that merely PASSES the bundle path as an argument
+    // claim to be the plugin.
+    for (const authorityArg of argv.slice(1, 3)) {
+        if (typeof authorityArg !== 'string' || !isAbsolute(authorityArg))
+            continue;
+        let arg;
+        try {
+            arg = realpathSync(authorityArg);
+        }
+        catch {
+            continue;
+        }
+        for (const host of ['claude-plugin', 'codex-plugin']) {
+            const hostRoot = join(root, 'packages', host);
+            // Both sides are realpath-normalized: a symlinked dist/ must not read as
+            // a foreign process.
+            const coreIndex = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js'));
+            const coreSupervisor = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'));
+            if (arg === coreIndex) {
+                return {
+                    host,
+                    coreBundle: coreIndex,
+                    coreSupervisor,
+                    authorityArg,
+                    kind: 'core-index',
+                };
+            }
+            if (arg === coreSupervisor) {
+                return {
+                    host,
+                    coreBundle: coreIndex,
+                    coreSupervisor,
+                    authorityArg,
+                    kind: 'core-supervisor',
+                };
+            }
+            if (host === 'codex-plugin' &&
+                arg === realpathOrSelf(join(hostRoot, 'bin', 'cdp-supervisor.js'))) {
+                if (!existsSync(coreIndex) || !existsSync(coreSupervisor))
+                    return null;
+                return {
+                    host,
+                    coreBundle: coreIndex,
+                    coreSupervisor,
+                    authorityArg,
+                    kind: 'codex-launcher',
+                };
+            }
+        }
+    }
+    return null;
+}
+export function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
+    const normalizedOverride = (value) => {
+        if (!value || !isAbsolute(value))
+            return value ? null : '';
+        try {
+            return realpathSync(value);
+        }
+        catch {
+            return null;
+        }
+    };
+    const supervisorOverride = normalizedOverride(env.RN_DEV_AGENT_CORE_SUPERVISOR);
+    const coreRootOverride = normalizedOverride(env.RN_DEV_AGENT_CORE_ROOT);
+    const workerOverride = normalizedOverride(env.RN_BRIDGE_WORKER_PATH);
+    if (supervisorOverride === null || coreRootOverride === null || workerOverride === null) {
+        return false;
+    }
+    if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
+        return false;
+    if (coreRootOverride &&
+        join(coreRootOverride, 'dist', 'supervisor.js') !== entrypoint.coreSupervisor) {
+        return false;
+    }
+    if (workerOverride && workerOverride !== entrypoint.coreBundle)
+        return false;
+    return true;
+}
+/**
+ * Read dual proof authority from immutable candidate bytes. Nothing in this
+ * block is caller-authored prose: Git, package digests, and the live MCP
+ * process identity are captured at the strict-proof boundary.
+ */
+export function readProofCandidateRuntime(candidateRoot) {
+    const root = resolve(candidateRoot);
+    if (root !== candidateRoot)
+        throw new Error('CANDIDATE_ROOT_NOT_NORMALIZED');
+    const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+    }).trim();
+    const remote = execFileSync('git', ['-C', root, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf8',
+    }).trim();
+    if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
+        throw new Error('CANDIDATE_REPOSITORY_MISMATCH');
+    }
+    const argv = [...process.argv];
+    const entrypoint = resolveProofCandidateEntrypoint(root, argv);
+    if (!entrypoint || !proofCandidateEntrypointEnvironmentMatches(entrypoint, process.env)) {
+        throw new Error('CANDIDATE_MCP_PROCESS_MISMATCH');
+    }
+    const { host, coreBundle } = entrypoint;
+    const runnerManifest = join(root, 'packages', host, 'runner-manifest.json');
+    return proofCandidateRuntimeSchema.parse({
+        repo: 'Lykhoyda/rn-dev-agent',
+        sha,
+        coreBundleSha256: hashBytes(readFileSync(coreBundle)),
+        runnerManifestSha256: hashBytes(readFileSync(runnerManifest)),
+        mcp: { pid: process.pid, argv, cwd: process.cwd() },
+    });
+}
+function sameCandidateRuntime(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+export function candidateAuthorityReasons(expected, current, pullRequestHeadSha, crossRepository) {
+    return [
+        ...(!expected && crossRepository ? ['CANDIDATE_RUNTIME_REQUIRED'] : []),
+        ...(expected && expected.sha !== pullRequestHeadSha ? ['CANDIDATE_SHA_MISMATCH'] : []),
+        ...(expected && (!current || !sameCandidateRuntime(expected, current))
+            ? ['CANDIDATE_RUNTIME_MISMATCH']
+            : []),
+    ];
 }
 function sameProofAction(left, right) {
     return left.id === right.id && left.version === right.version && left.sha256 === right.sha256;
@@ -487,6 +640,17 @@ export function createProofCaptureHandler(deps) {
             return { ok: false, reasons: ['GIT_READ_FAILED'] };
         }
     };
+    const readCandidate = (active) => {
+        if (!active.context.candidateRoot)
+            return { ok: true, value: null };
+        try {
+            const reader = deps.readCandidateRuntime ?? readProofCandidateRuntime;
+            return { ok: true, value: reader(active.context.candidateRoot) };
+        }
+        catch {
+            return { ok: false, reasons: ['CANDIDATE_RUNTIME_READ_FAILED'] };
+        }
+    };
     const readCurrentActionIdentity = (active) => {
         try {
             const value = deps.readActionIdentity(active.context.proofAction.id);
@@ -543,13 +707,14 @@ export function createProofCaptureHandler(deps) {
         const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
         const missing = (phase === 'validation' || phase === 'finalized') &&
             [...requiredOutputs].some((path) => !changedPaths.has(path));
+        const candidate = readCandidate(active);
+        const authorityReasons = candidateAuthorityReasons(active.candidateRuntime, candidate.ok ? candidate.value : null, active.context.pullRequest.headSha, git.sha !== active.context.pullRequest.headSha);
         return [
             ...(invalidChange || unrelated || git.dirty !== git.changes.length > 0 ? ['GIT_DIRTY'] : []),
             ...(missing ? ['PROOF_OUTPUT_MISSING'] : []),
-            ...(git.sha !== active.context.storyboard.sourceTreeSha ||
-                git.sha !== active.context.pullRequest.headSha
-                ? ['SOURCE_SHA_MISMATCH']
-                : []),
+            ...(git.sha !== active.context.storyboard.sourceTreeSha ? ['SOURCE_SHA_MISMATCH'] : []),
+            ...authorityReasons,
+            ...(!candidate.ok ? candidate.reasons : []),
         ];
     };
     const readReadiness = async () => {
@@ -713,10 +878,24 @@ export function createProofCaptureHandler(deps) {
             if (proofRootExists(args)) {
                 return proofFailure(['PROOF_ROOT_NOT_FRESH'], 'idle');
             }
+            let candidateRuntime = null;
+            if (args.candidateRoot) {
+                try {
+                    const reader = deps.readCandidateRuntime ?? readProofCandidateRuntime;
+                    candidateRuntime = reader(args.candidateRoot);
+                }
+                catch {
+                    return proofFailure(['CANDIDATE_RUNTIME_READ_FAILED'], 'idle');
+                }
+                if (candidateRuntime.sha !== args.pullRequest.headSha) {
+                    return proofFailure(['CANDIDATE_SHA_MISMATCH'], 'idle');
+                }
+            }
             const startedAt = deps.now();
             session = {
                 context: args,
                 actionIdentity,
+                candidateRuntime,
                 stage: 'rehearsing',
                 invalidationReasons: [],
                 rehearsalStartedAt: startedAt,
@@ -1059,6 +1238,7 @@ export function createProofCaptureHandler(deps) {
                     },
                     device: ready.value.device,
                     runtime: ready.value.runtime,
+                    ...(active.candidateRuntime ? { candidateRuntime: active.candidateRuntime } : {}),
                     fixture: active.context.fixture,
                     action: active.context.proofAction,
                     storyboard: { id: active.context.storyboard.id, sha256: hashBytes(storyboardBytes) },

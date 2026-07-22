@@ -871,7 +871,7 @@ trackedTool('device_screenshot', 'Capture a screenshot of the active device scre
         .optional()
         .describe('JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.'),
 }, createDeviceScreenshotHandler(getClient));
-trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races).', {
+trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.', {
     action: z
         .enum(['open', 'close', 'snapshot'])
         .default('snapshot')
@@ -939,9 +939,14 @@ trackedTool('device_find', 'Find a UI element by visible text and optionally int
         .min(0)
         .optional()
         .describe('Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.'),
-}, createDeviceFindHandler());
-trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once (meta.tapRetried/noUiChange).', {
-    ref: z.string().describe('Element ref from device_snapshot (e.g. "e3" or "@e3")'),
+}, createDeviceFindHandler(getClient));
+trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. A guarded raw-coordinate tap dismisses any visible keyboard before the single tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once unless keyboard/transport recovery already consumed that retry budget.', {
+    ref: z
+        .string()
+        .optional()
+        .describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
+    x: z.number().optional().describe('Raw tap X coordinate; requires y and no ref'),
+    y: z.number().optional().describe('Raw tap Y coordinate; requires x and no ref'),
     doubleTap: z.boolean().optional().describe('Use double-tap gesture'),
     count: z
         .number()
@@ -1115,7 +1120,7 @@ trackedTool('device_reset_state', 'One-shot preflight: revoke/reset permissions,
         .boolean()
         .optional()
         .describe('After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.'),
-}, createDeviceResetStateHandler(getClient));
+}, createDeviceResetStateHandler(getClient, { getSession: getActiveSession }));
 trackedTool('device_deeplink', 'Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.', {
     url: z
         .string()
@@ -1383,6 +1388,14 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
             .string()
             .optional()
             .describe('(press/fill) Element ref from snapshot (e.g. "e5"). Beware: refs can go stale across step transitions; prefer testID for cross-step actions.'),
+        x: z
+            .number()
+            .optional()
+            .describe('(press) Raw X coordinate; requires y and no ref/testID'),
+        y: z
+            .number()
+            .optional()
+            .describe('(press) Raw Y coordinate; requires x and no ref/testID'),
         testID: z
             .string()
             .optional()
@@ -1423,7 +1436,7 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
         .enum(['salient', 'full', 'none'])
         .default('salient')
         .describe('Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.'),
-}, createDeviceBatchHandler());
+}, createDeviceBatchHandler(getClient));
 trackedTool('cdp_auto_login', 'Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns { loggedIn: true/false, reason, flow }. Call before proof capture or feature testing when app may be logged out.', {
     appId: z
         .string()
@@ -1473,7 +1486,7 @@ trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (opti
         .optional()
         .describe('Label for this proof step (e.g. "After adding item to cart")'),
 }, createProofStepHandler(getClient));
-trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. Does NOT require CDP — works even when app is crashed or on native screens.', {
+trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.', {
     flowPath: z.string().optional().describe('Path to a .yaml flow file to execute'),
     inlineYaml: z
         .string()
@@ -1488,6 +1501,12 @@ trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flow
         .string()
         .optional()
         .describe('iOS only — path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201).'),
+    deviceId: z
+        .string()
+        .min(1)
+        .max(256)
+        .optional()
+        .describe('Exact iOS UDID or Android serial. Defaults only from a matching active device session and is forwarded to the replay engine.'),
     timeoutMs: z
         .number()
         .int()
@@ -1536,6 +1555,12 @@ trackedTool('maestro_test_all', 'Discover and run all Maestro flows in .rn-agent
         .enum(['ios', 'android'])
         .optional()
         .describe('Target platform (auto-detected from session)'),
+    deviceId: z
+        .string()
+        .min(1)
+        .max(256)
+        .optional()
+        .describe('Exact simulator UDID / adb serial to run the suite on (defaults to the active session device).'),
     flowDir: z
         .string()
         .optional()
@@ -1790,7 +1815,7 @@ trackedTool('cdp_repair_action', 'Self-repair an L3 reusable action whose Maestr
 }, createRepairActionHandler());
 // Issue #104 — auto-repair-aware action replay. Wraps maestro_run with
 // stderr classification + cdp_repair_action retry on SELECTOR_NOT_FOUND.
-trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, runs the Maestro flow, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff). The repair attempt counts toward cdp_repair_action\'s 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent\'s last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule.', {
+trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict \"respect offline human edits\" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.", {
     actionId: z
         .string()
         .describe('Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml.'),
@@ -1819,6 +1844,10 @@ trackedTool('cdp_run_action', 'Replay a learned action by id with end-to-end aut
         .boolean()
         .optional()
         .describe('Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state.'),
+    blindProbeMode: z
+        .enum(['inherit', 'allow', 'forbid'])
+        .optional()
+        .describe('Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged.'),
     params: z
         .record(z.string(), z.string())
         .optional()
@@ -1832,6 +1861,7 @@ createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
     blindProbeContext,
+    targetContext: getActiveSession,
 }));
 trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.', {
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
@@ -1901,6 +1931,7 @@ const runActionHandler = createRunActionHandler({
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
     blindProbeContext,
+    targetContext: getActiveSession,
 });
 setObserveE2eDeps({
     token: e2eCsrfToken,

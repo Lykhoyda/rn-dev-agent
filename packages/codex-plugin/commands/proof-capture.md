@@ -52,6 +52,11 @@ Before beginning a session:
    arguments. Keep the first step at zero wait for start-state freshness. A
    short bounded wait for later animated transitions lets assertions capture
    stable destination states.
+7. When the driven app fixture lives outside this plugin repository, resolve the
+   absolute plugin worktree root and pass it as `candidateRoot`. The tool binds
+   that repository's `HEAD`, packaged core-bundle and runner-manifest digests,
+   and the live MCP process identity into the receipt, and refuses with
+   `CANDIDATE_SHA_MISMATCH` unless that SHA equals `pullRequest.headSha`.
 
 Use the rehearsal duration reported by `finish_rehearsal`; do not estimate
 video time or label ranges manually:
@@ -69,7 +74,7 @@ The five-second tolerance is not an independent bypass, and any clip above `hard
 ### 2. Execute every strict transition
 
 1. Start the session with the complete immutable context:
-   `proof_capture(action="begin_rehearsal", projectRoot=..., receiptPath=..., videoPath=..., contactSheetPath=..., writerProvider=..., runId=..., issue=..., pullRequest=..., proofClass=..., acceptanceMappings=..., fixture=..., proofAction=..., storyboard=...)`.
+   `proof_capture(action="begin_rehearsal", projectRoot=..., receiptPath=..., videoPath=..., contactSheetPath=..., writerProvider=..., runId=..., issue=..., pullRequest=..., proofClass=..., acceptanceMappings=..., fixture=..., proofAction=..., storyboard=..., candidateRoot=...)`.
 2. During rehearsal, call only
    `cdp_run_action(actionId=..., autoRepair=false, forceReload=false, proofReplay=true)`.
    Then immediately call `proof_capture(action="finish_rehearsal")`.

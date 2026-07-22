@@ -189,10 +189,14 @@ function runnerLeakFailResult(query, recoveryReason) {
         hint: 'Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context — re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35.',
     });
 }
-export async function pressCandidate(candidate, action) {
+export async function pressCandidate(candidate, action, getClient) {
     const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
     if (action === 'click') {
-        return surfaceKeyboardGuard(await runNative(['press', ref]));
+        const tap = async () => surfaceKeyboardGuard(await runNative(['press', ref]));
+        const first = await tap();
+        return first.isError && getClient
+            ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
+            : first;
     }
     return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
@@ -211,7 +215,7 @@ function tagPressIfRecovered(result, tier) {
         return result;
     }
 }
-export function createDeviceFindHandler() {
+export function createDeviceFindHandler(getClient) {
     return withSession(async (args) => {
         // Fast path when caller already knows they want exact or a specific index:
         // go straight to a snapshot-based client-side match so we never roll the dice
@@ -241,11 +245,11 @@ export function createDeviceFindHandler() {
                 if (args.index < 0 || args.index >= candidates.length) {
                     return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: 'INDEX_OUT_OF_RANGE', count: candidates.length, candidates });
                 }
-                return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action), recoveredTier);
+                return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient), recoveredTier);
             }
             // exact=true, no index: require single match
             if (candidates.length === 1) {
-                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
+                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient), recoveredTier);
             }
             return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
                 code: 'AMBIGUOUS_MATCH',
@@ -291,7 +295,7 @@ export function createDeviceFindHandler() {
                 });
             }
             if (candidates.length === 1) {
-                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action), recoveredTier);
+                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient), recoveredTier);
             }
             return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
                 code: 'AMBIGUOUS_MATCH',
@@ -388,8 +392,13 @@ function keyboardHealDeps(getClient, retryTap) {
 }
 export function createDevicePressHandler(getClient) {
     return withSession(async (args) => {
-        const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-        const cliArgs = ['press', ref];
+        const hasRef = typeof args.ref === 'string' && args.ref.length > 0;
+        const hasCoordinates = args.x !== undefined && args.y !== undefined;
+        if (hasRef === hasCoordinates) {
+            return failResult('Provide exactly one press target: ref, or both x and y coordinates', 'INVALID_ARGUMENT');
+        }
+        const target = hasRef ? (args.ref.startsWith('@') ? args.ref : `@${args.ref}`) : undefined;
+        const cliArgs = hasRef ? ['press', target] : ['press', String(args.x), String(args.y)];
         if (args.doubleTap)
             cliArgs.push('--double-tap');
         if (args.count && args.count > 1)
@@ -670,6 +679,23 @@ async function nativeSettle(client, testID, text, settleAnchor, stabilityPrior) 
         value: settled.value,
     };
 }
+function exactTypeReadback(client, testID) {
+    if (!client || !testID)
+        return undefined;
+    return async (expected) => {
+        const result = await client.evaluate(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`);
+        if (typeof result.value !== 'string')
+            return { matches: false };
+        try {
+            const parsed = JSON.parse(result.value);
+            const actual = typeof parsed.value === 'string' ? parsed.value : null;
+            return { matches: actual === expected, actual };
+        }
+        catch {
+            return { matches: false };
+        }
+    };
+}
 async function readValueBefore(client, testID) {
     if (!client || !testID)
         return null;
@@ -750,7 +776,10 @@ export function createDeviceFillHandler(getClient) {
             if (delay > 0)
                 await sleep(delay);
         }
-        const primary = await runNative(['fill', ref, args.text, ...pinArgs], settleOpts(args));
+        const primary = await runNative(['fill', ref, args.text, ...pinArgs], {
+            ...settleOpts(args),
+            verifyTypeReadback: exactTypeReadback(client, jsTestId),
+        });
         if (!primary.isError) {
             // #191 prong 2/3 — native read-back verification + corrective clear/retype.
             // iOS-only: the corrective retype needs the runner's --clear-first, which the
@@ -854,7 +883,10 @@ export function createDeviceFillHandler(getClient) {
                         const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
                         if (delay > 0)
                             await sleep(delay);
-                        const resolved = await runNative(['fill', resolvedRef, args.text, ...innerPinArgs], settleOpts(args));
+                        const resolved = await runNative(['fill', resolvedRef, args.text, ...innerPinArgs], {
+                            ...settleOpts(args),
+                            verifyTypeReadback: exactTypeReadback(client, resolveCachedIdentifier(resolvedRef) ?? null),
+                        });
                         if (!resolved.isError) {
                             try {
                                 const envelope = JSON.parse(resolved.content[0].text);
@@ -882,7 +914,9 @@ export function createDeviceFillHandler(getClient) {
             const retryTap = await runNative(['press', ref]);
             if (!retryTap.isError) {
                 await sleep(300);
-                const retry = await runNative(['fill', ref, args.text]);
+                const retry = await runNative(['fill', ref, args.text], {
+                    verifyTypeReadback: exactTypeReadback(client, jsTestId),
+                });
                 if (!retry.isError) {
                     // Re-wrap the okResult to attach the fallback marker.
                     try {

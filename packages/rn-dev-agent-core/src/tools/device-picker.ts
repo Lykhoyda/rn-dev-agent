@@ -2,6 +2,7 @@ import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { detectPlatform } from './platform-utils.js';
+import { shouldRejectMaestroDeviceAuthority } from '../domain/maestro-device-authority.js';
 
 const DEFAULT_PICKER_TIMEOUT_MS = 20_000;
 
@@ -131,7 +132,24 @@ export function createDevicePickDateHandler(): (args: PickDateArgs) => Promise<T
     // Open the picker first (optional — already-open pickers are a no-op).
     if (args.pickerTestId) {
       const openYaml = `- tapOn:\n    id: "${yamlEscape(args.pickerTestId)}"\n    optional: true`;
-      await runMaestroInline(openYaml, { platform, timeoutMs: 4_000, slug: 'pick-date-open' });
+      const openResult = await runMaestroInline(openYaml, {
+        platform,
+        timeoutMs: 4_000,
+        slug: 'pick-date-open',
+      });
+      // An optional tap may legitimately do nothing, but a device-authority
+      // refusal means the flow was never proven to run on the requested device.
+      // Discarding the result made that refusal completely invisible.
+      if (
+        openResult.deviceAuthority &&
+        shouldRejectMaestroDeviceAuthority(openResult.deviceAuthority)
+      ) {
+        return failResult(
+          openResult.error ?? 'Maestro device authority refused while opening the picker.',
+          'DEVICE_AUTHORITY_MISMATCH',
+          { platform, deviceAuthority: openResult.deviceAuthority },
+        );
+      }
     }
 
     for (const comp of components) {

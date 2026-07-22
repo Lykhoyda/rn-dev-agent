@@ -381,6 +381,100 @@ export function saveActionWithCAS(action: ReusableAction): SaveActionCASResult {
   return { ok: true, filePath, sidecarPath: writtenSidecarPath };
 }
 
+export type SaveActionRuntimeCASResult =
+  | { ok: true; sidecarPath: string }
+  | { ok: false; conflict: 'EXTERNAL_WRITE' };
+
+function canonicalRuntimeJson(state: unknown): string {
+  return JSON.stringify(state, (_key, value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(record)
+          .sort()
+          .map((k) => [k, record[k]]),
+      );
+    }
+    return value as unknown;
+  });
+}
+
+/**
+ * Compare the on-disk sidecar against the loaded baseline using the same
+ * normalization `loadOrInitSidecar` applies, so a legacy sidecar missing
+ * `lastSeenMtimeMs` (re-seeded on load) is not read as an external write.
+ */
+function runtimeSidecarMatches(sidecarPath: string, expected: ReusableAction['state']): boolean {
+  let onDisk: ReusableAction['state'];
+  try {
+    onDisk = JSON.parse(readFileSync(sidecarPath, 'utf8')) as ReusableAction['state'];
+  } catch {
+    return false;
+  }
+  const normalized =
+    typeof onDisk?.lastSeenMtimeMs === 'number'
+      ? onDisk
+      : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
+  return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
+}
+
+/**
+ * Persist run telemetry without reserializing the tracked action YAML. The
+ * synchronous compare+write is atomic with respect to this MCP process and
+ * preserves the bounded sidecar reload/retry contract used by persistRun.
+ *
+ * YAML mtime divergence is deliberately not a conflict here: this path writes
+ * only the runtime sidecar, so a stale lastSeenMtimeMs cannot cause a lost YAML
+ * update. The stale baseline remains unchanged, which means forceReload=false
+ * still blocks later YAML-mutating promotion/repair through their existing
+ * actionWasEditedExternally guards. The sidecar equality check below remains
+ * the CAS authority for telemetry lost-update protection.
+ */
+export function saveActionRuntimeWithCAS(
+  expected: ReusableAction,
+  nextState: ReusableAction['state'],
+): SaveActionRuntimeCASResult {
+  const sidecarPath = sidecarPathFor(expected.filePath);
+  if (existsSync(sidecarPath)) {
+    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+      return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
+  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
+    return { ok: false, conflict: 'EXTERNAL_WRITE' };
+  }
+
+  saveSidecar(expected.filePath, nextState);
+  expected.state = nextState;
+  return { ok: true, sidecarPath };
+}
+
+/** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
+export function promoteActionRuntimeWithCAS(
+  expected: ReusableAction,
+  nextState: ReusableAction['state'],
+): SaveActionRuntimeCASResult {
+  const sidecarPath = sidecarPathFor(expected.filePath);
+  if (existsSync(sidecarPath)) {
+    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+      return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
+  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
+    // Same refusal as saveActionRuntimeWithCAS: a sidecar that vanished under a
+    // state that has history is an external signal, and promoting would rewrite
+    // both YAML and sidecar over it.
+    return { ok: false, conflict: 'EXTERNAL_WRITE' };
+  }
+  if (actionWasEditedExternally(expected)) return { ok: false, conflict: 'EXTERNAL_WRITE' };
+
+  const yaml = readFileSync(expected.filePath, 'utf8');
+  const marker = /^# status: experimental[ \t]*$/gm;
+  if ((yaml.match(marker) ?? []).length !== 1) return { ok: false, conflict: 'EXTERNAL_WRITE' };
+  const promoted = yaml.replace(marker, '# status: active');
+  const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
+  expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
+  return { ok: true, sidecarPath };
+}
+
 /**
  * Update only the M7 metadata of an action without touching the body.
  * Used by lifecycle transitions (status: experimental → active).

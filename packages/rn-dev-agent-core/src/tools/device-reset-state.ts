@@ -50,6 +50,7 @@ type StepName =
 interface StepResult {
   step: StepName;
   target?: string;
+  deviceId?: string;
   action?: string;
   ok: boolean;
   durationMs: number;
@@ -176,15 +177,27 @@ async function runStorageSteps(
   return results;
 }
 
-async function runTerminateStep(appId: string, platform: 'ios' | 'android'): Promise<StepResult> {
+async function runTerminateStep(
+  appId: string,
+  platform: 'ios' | 'android',
+  deviceId: string | undefined,
+  terminate: typeof terminateApp,
+): Promise<StepResult> {
   const start = Date.now();
   try {
-    await terminateApp(appId, platform);
-    return { step: 'terminate', target: appId, ok: true, durationMs: Date.now() - start };
+    await terminate(appId, platform, deviceId);
+    return {
+      step: 'terminate',
+      target: appId,
+      ...(deviceId ? { deviceId } : {}),
+      ok: true,
+      durationMs: Date.now() - start,
+    };
   } catch (e: unknown) {
     return {
       step: 'terminate',
       target: appId,
+      ...(deviceId ? { deviceId } : {}),
       ok: false,
       durationMs: Date.now() - start,
       error: e instanceof Error ? e.message : String(e),
@@ -192,15 +205,27 @@ async function runTerminateStep(appId: string, platform: 'ios' | 'android'): Pro
   }
 }
 
-async function runLaunchStep(appId: string, platform: 'ios' | 'android'): Promise<StepResult> {
+async function runLaunchStep(
+  appId: string,
+  platform: 'ios' | 'android',
+  deviceId: string | undefined,
+  launch: typeof launchApp,
+): Promise<StepResult> {
   const start = Date.now();
   try {
-    await launchApp(appId, platform);
-    return { step: 'launch', target: appId, ok: true, durationMs: Date.now() - start };
+    await launch(appId, platform, deviceId);
+    return {
+      step: 'launch',
+      target: appId,
+      ...(deviceId ? { deviceId } : {}),
+      ok: true,
+      durationMs: Date.now() - start,
+    };
   } catch (e: unknown) {
     return {
       step: 'launch',
       target: appId,
+      ...(deviceId ? { deviceId } : {}),
       ok: false,
       durationMs: Date.now() - start,
       error: e instanceof Error ? e.message : String(e),
@@ -307,9 +332,22 @@ function safeParseError(r: ToolResult): { code?: string; error?: string } {
   }
 }
 
+export interface DeviceResetStateDeps {
+  getSession?: () => {
+    platform?: string;
+    deviceId?: string;
+    appId?: string;
+  } | null;
+  terminateApp?: typeof terminateApp;
+  launchApp?: typeof launchApp;
+}
+
 export function createDeviceResetStateHandler(
   getClient: () => CDPClient,
+  deps: DeviceResetStateDeps = {},
 ): (args: DeviceResetStateArgs) => Promise<ToolResult> {
+  const terminate = deps.terminateApp ?? terminateApp;
+  const launch = deps.launchApp ?? launchApp;
   return async (args) => {
     if (!args.appId || typeof args.appId !== 'string') {
       return failResult('appId is required.', 'DEVICE_RESET_INVALID_ARGS');
@@ -337,6 +375,26 @@ export function createDeviceResetStateHandler(
     const relaunch = args.relaunch ?? true;
     const waitForReady = args.waitForReady ?? true;
     const waitForNavReady = args.waitForNavReady ?? false;
+    const session = deps.getSession?.() ?? null;
+    const sessionDeviceId =
+      session?.platform === platform && typeof session.deviceId === 'string'
+        ? session.deviceId
+        : undefined;
+    // A session bound to a different bundle is not lifecycle authority for this
+    // one, but dropping its device silently resolved to the ambiguous `booted`
+    // alias — the #588 wrong-device bug. Refuse instead of guessing a target.
+    if (sessionDeviceId && session?.appId !== args.appId) {
+      return failResult(
+        `Refusing to reset ${args.appId}: the active ${platform} session is bound to ${session?.appId ?? 'another app'} on ${sessionDeviceId}. Close that session first so an exact device identity for ${args.appId} can be resolved.`,
+        'TARGET_SESSION_MISMATCH',
+        {
+          requestedAppId: args.appId,
+          activeSessionAppId: session?.appId,
+          activeSessionDeviceId: sessionDeviceId,
+        },
+      );
+    }
+    const lifecycleDeviceId = sessionDeviceId;
 
     const steps: StepResult[] = [];
     let reconnected = false;
@@ -389,11 +447,11 @@ export function createDeviceResetStateHandler(
     }
 
     // Step 3: terminate.
-    steps.push(await runTerminateStep(args.appId, platform));
+    steps.push(await runTerminateStep(args.appId, platform, lifecycleDeviceId, terminate));
 
     // Step 4: launch + reconnect (gated by relaunch / waitForReady).
     if (relaunch) {
-      const launchResult = await runLaunchStep(args.appId, platform);
+      const launchResult = await runLaunchStep(args.appId, platform, lifecycleDeviceId, launch);
       steps.push(launchResult);
       if (launchResult.ok && waitForReady) {
         // Re-fetch client AFTER launch in case anything swapped it. (No swap
@@ -429,6 +487,7 @@ export function createDeviceResetStateHandler(
     const data = {
       appId: args.appId,
       platform,
+      ...(lifecycleDeviceId ? { deviceId: lifecycleDeviceId } : {}),
       relaunch,
       waitForReady,
       summary,

@@ -5,7 +5,7 @@ import { candidatePluginManifestFiles, firstExistingFile } from './runtime-paths
 // sync test gh-383-protocol-sync.test.js enforces agreement. Bump when the
 // wire shape changes incompatibly; raise MIN_SUPPORTED when old runners can
 // no longer be driven.
-export const RUNNER_PROTOCOL_VERSION = 1;
+export const RUNNER_PROTOCOL_VERSION = 2;
 export const MIN_SUPPORTED_RUNNER_PROTOCOL = 1;
 // GH #418: every wire verb the bridge can POST to each runner's /command —
 // a curated subset of the client command unions (lifecycle/tvOS verbs are

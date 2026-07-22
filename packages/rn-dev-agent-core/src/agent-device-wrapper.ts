@@ -16,6 +16,7 @@ import {
   releaseRunnerRebuildLock,
   runnerRebuildBudget,
   consumePendingFastRunnerArtifactNote,
+  getRunnerPostMortem,
 } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import type {
@@ -33,6 +34,7 @@ import {
   MAX_REF_MAP_AGE_MS,
   getCachedSignature,
   getCachedMetadata,
+  getFreshRefTarget,
   refreshRef,
   getLastSnapshotHash,
   invalidateLastSnapshotHash,
@@ -303,7 +305,24 @@ export function buildRunIOSArgs(
         if (!center) {
           return { command: 'tap', _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
         }
-        return { command: 'tap', x: center.x, y: center.y, ...(bundleId ? { bundleId } : {}) };
+        const target = getFreshRefTarget(ref);
+        const built: import('./runners/rn-fast-runner-client.js').RunIOSArgs = {
+          command: 'tap',
+          x: center.x,
+          y: center.y,
+          ...(target
+            ? {
+                targetBounds: target.rect,
+                snapshotGeneration: target.snapshotGeneration,
+                keyboardStateAtSnapshot: target.keyboardStateAtSnapshot!,
+              }
+            : {}),
+          ...(bundleId ? { bundleId } : {}),
+        };
+        // Client-only identity must not leak onto the JSON wire or perturb the
+        // legacy argv-adapter shape inspected by callers.
+        Object.defineProperty(built, '_targetRef', { value: ref, enumerable: false });
+        return built;
       }
       const [xS, yS] = positionals;
       const x = Number(xS),
@@ -1096,12 +1115,17 @@ export function tapRetryPolicy(
 // Story 14 (#407): detect whether a raw runner ToolResult carries the
 // transport-recovery marker (runIOS/runAndroid attach it on the firstResult
 // when an ambiguous send was confirmed via the runner's outcome journal).
-function hasTransportRecovery(result: ToolResult): boolean {
+function hasConsumedTapRetryBudget(result: ToolResult): boolean {
   try {
     const env = JSON.parse(result.content[0].text) as {
-      meta?: { transportRecovery?: unknown };
+      data?: { keyboardGuard?: unknown };
+      meta?: { transportRecovery?: unknown; keyboardGuard?: unknown };
     };
-    return env.meta?.transportRecovery !== undefined;
+    return (
+      env.meta?.transportRecovery !== undefined ||
+      env.meta?.keyboardGuard === 'auto_dismissed' ||
+      env.data?.keyboardGuard === 'auto_dismissed'
+    );
   } catch {
     return false;
   }
@@ -1142,7 +1166,7 @@ export async function settleWithRetryIfNoChange(
   // budget — the runner journal confirmed the mutating gesture executed. The
   // heal layer must not re-fire it, or it would double-dispatch the very tap
   // that transport recovery just resolved. Report noUiChange honestly, no retry.
-  if (hasTransportRecovery(firstResult)) {
+  if (hasConsumedTapRetryBudget(firstResult)) {
     return flagNoUiChange(first.result, policy.targetKey);
   }
   const second = await dispatch();
@@ -1255,6 +1279,9 @@ export async function runNative(
     platform?: 'ios' | 'android' | null;
     settle?: SettlePerCallOpts;
     retryIfNoChange?: boolean;
+    verifyTypeReadback?: (
+      expected: string,
+    ) => Promise<{ matches: boolean; actual?: string | null }>;
   } = {},
 ): Promise<ToolResult> {
   if (_runAgentDeviceOverrideForTest) {
@@ -1293,12 +1320,18 @@ export async function runNative(
       if (!ready.ok) {
         // GH #382: discard any pending artifact note from a failed start.
         consumePendingFastRunnerArtifactNote();
-        return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN');
+        return failResult(ready.message, ready.code ?? 'RN_FAST_RUNNER_DOWN', {
+          runnerPostMortem: getRunnerPostMortem(),
+        });
       }
       upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
     }
-    const { runIOS } = await import('./runners/rn-fast-runner-client.js');
-    const ios = buildRunIOSArgs(cliArgs, appId);
+    const { runIOS, captureFastRunnerCommandAuthority, verifyTypeResultAfterSettle } =
+      await import('./runners/rn-fast-runner-client.js');
+    let ios = buildRunIOSArgs(cliArgs, appId);
+    if (ios.command === 'type' && opts.verifyTypeReadback) {
+      ios._verifyExactReadback = opts.verifyTypeReadback;
+    }
     let healMeta: Record<string, unknown> | null = null;
     if (ios._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(ios._staleRef, () =>
@@ -1309,15 +1342,22 @@ export async function runNative(
         }),
       );
       if (healed.kind === 'failed') return healed.result;
-      ios.x = healed.x;
-      ios.y = healed.y;
-      delete ios._staleRef;
+      const reboundArgs = [...cliArgs];
+      reboundArgs[1] = healed.newRef.startsWith('@') ? healed.newRef : `@${healed.newRef}`;
+      ios = buildRunIOSArgs(reboundArgs, appId);
+      if (ios.command === 'type' && opts.verifyTypeReadback) {
+        ios._verifyExactReadback = opts.verifyTypeReadback;
+      }
+      if (ios._staleRef) {
+        return staleRefFail(ios._staleRef, 'absent', getCachedMetadata(ios._staleRef));
+      }
       healMeta = {
         reResolved: true,
         reResolvedRef: healed.newRef,
         timings_ms: { reResolve: healed.ms },
       };
     }
+    const runnerAuthorityBefore = captureFastRunnerCommandAuthority();
     let result = await runIOS(ios);
     const iosPolicy = tapRetryPolicy(
       cliArgs,
@@ -1337,6 +1377,7 @@ export async function runNative(
       },
       iosPolicy,
     );
+    result = await verifyTypeResultAfterSettle(ios, result, runnerAuthorityBefore);
     if (healMeta) result = attachMeta(result, healMeta);
     return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
   }

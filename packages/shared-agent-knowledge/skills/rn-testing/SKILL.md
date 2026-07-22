@@ -310,8 +310,10 @@ grep -r 'testID=' src/ --include="*.tsx" --include="*.ts"
 maestro-runner --platform ios test flow.yaml              # iOS
 maestro-runner --platform android test flow.yaml          # Android
 
-# With explicit device ID
-maestro-runner --platform ios --device booted test flow.yaml
+# With explicit device ID -- iOS takes the exact simulator UDID
+# (`booted` is ambiguous as soon as a second simulator is up; the exact
+#  UDID is what replay authority is checked against)
+maestro-runner --platform ios --device A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D test flow.yaml
 maestro-runner --platform android --device emulator-5554 test flow.yaml
 
 # Sequential cross-platform
