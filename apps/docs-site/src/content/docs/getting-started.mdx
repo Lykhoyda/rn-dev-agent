@@ -124,7 +124,10 @@ The plugin connects to your running app via Metro's CDP endpoint and reads the R
 
 ### Zustand stores (one bridge call)
 
-`/rn-dev-agent:setup` scaffolds `.rn-agent/dev-bridge.ts` and `.rn-agent/globals.d.ts` into your project. Then add a single registration call alongside your store definitions:
+Run the matching setup workflow (`/rn-dev-agent:setup` in Claude or
+`$rn-dev-agent:setup` in Codex) to scaffold `.rn-agent/dev-bridge.ts` and
+`.rn-agent/globals.d.ts`. Then add a single registration call alongside your
+store definitions:
 
 ```typescript
 // App.tsx or app/_layout.tsx
@@ -138,7 +141,7 @@ getBridge()?.registerStores({
 
 No `__DEV__` guard at the call site — `getBridge()` returns `null` in production and the optional chain is a no-op. Zero production cost. The bridge handles the dev-only global assignment internally.
 
-`/rn-dev-agent:setup` proposes this edit automatically; you don't have to write it by hand.
+Both setup workflows preview this edit and ask before applying it.
 
 ### Redux
 
@@ -154,17 +157,25 @@ Add `testID` to interactive elements for reliable component queries:
 </Pressable>
 ```
 
-## Project instructions: let `/setup` do it
+## Project instructions: let setup manage the host-owned file
 
-`/rn-dev-agent:setup` injects the plugin's tool-routing rules into your project's `CLAUDE.md` automatically. It also scaffolds the bridge files and the `.rn-agent/` directory in one pass.
+- Claude `/rn-dev-agent:setup` manages the rn-dev-agent block in `CLAUDE.md`.
+- Codex `$rn-dev-agent:setup` manages only the sentinel-bounded rn-dev-agent
+  block in `AGENTS.md`; it never changes Claude instruction files.
 
-The injection is idempotent — re-running `/setup` skips already-applied blocks.
+Both paths preview changes for confirmation and are idempotent: re-running setup
+skips an in-sync managed block and existing scaffold files.
 
-If you want to inspect the rules first, see [the CLAUDE.md template](https://github.com/Lykhoyda/rn-dev-agent/blob/main/CLAUDE-MD-TEMPLATE.md) — the body after the `---` separator is what gets appended to your project's `CLAUDE.md`.
+Inspect the [Claude template](https://github.com/Lykhoyda/rn-dev-agent/blob/main/CLAUDE-MD-TEMPLATE.md)
+or the [Codex AGENTS.md template](https://github.com/Lykhoyda/rn-dev-agent/blob/main/packages/codex-plugin/AGENTS-MD-TEMPLATE.md)
+before running setup.
 
 ## Your agent's saved flows live in `.rn-agent/`
 
-The plugin's home in your project is `.rn-agent/`. Saved actions, the UI skeleton, navigation graph, and runtime state all live there. `/setup` scaffolds the directory; [`/doctor`](/rn-dev-agent/commands/doctor/) reports on its health.
+The plugin's home in your project is `.rn-agent/`. Saved actions, the UI skeleton,
+navigation graph, and runtime state all live there. The matching setup workflow
+scaffolds the directory; [`doctor`](/rn-dev-agent/commands/doctor/) reports on
+its health.
 
 See the [Actions guide](/rn-dev-agent/actions/) for what an action is, how to record one, and how the agent uses them.
 
@@ -174,24 +185,33 @@ Navigate to your React Native project and start building:
 
 ```bash
 cd /path/to/your-rn-app
-claude
+claude # or: codex
 ```
 
-On startup the plugin auto-detects your project and installs dependencies. If anything fails, run:
+Claude's SessionStart hook auto-detects the project and prepares supported
+dependencies. Codex has no plugin hooks. For either host, invoke its setup
+workflow when onboarding is incomplete:
 
-```
-/rn-dev-agent:setup
+```text
+Claude: /rn-dev-agent:setup
+Codex:  $rn-dev-agent:setup
 ```
 
-This walks all 16 prerequisite checks, retries failed installations, and gives manual instructions for anything it can't fix automatically. Once everything is green:
+Claude walks its prerequisite checks and retries supported installations. Codex
+runs passive multi-axis health and recommends user-confirmed recovery without
+executing it. Both preview project wiring before writing. Once setup is ready:
 
-```
-/rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
+```text
+Claude: /rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
+Codex:  $rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
 ```
 
 The plugin handles the rest — 8 phases from understanding to verified code with proof screenshots.
 
-Want to watch it work? The [observability web UI](/rn-dev-agent/commands/observe/) autostarts with the session — run `/rn-dev-agent:observe` to get the URL and follow the live tool-call timeline, device mirror, and app-state panels in your browser.
+Want to watch it work? The [observability web UI](/rn-dev-agent/commands/observe/)
+autostarts with the session. Invoke the matching `observe` workflow to get the
+URL and follow the live tool-call timeline, device mirror, and app-state panels
+in your browser.
 
 ## Install from source (development)
 

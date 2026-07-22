@@ -68,9 +68,11 @@ Claude setup manages `CLAUDE.md`; Codex setup manages an idempotent sentinel-
 bounded `AGENTS.md` block. Codex runs strictly read-only package/recovery
 diagnostics first and previews every later project write for consent.
 
-Setup checks the full toolchain and reports or applies separately approved remediation:
+Setup checks the full toolchain. Claude hooks and normal runtime use can perform
+the automatic handling shown below; Codex setup keeps recovery diagnosis
+read-only and prints the exact commands for the user to confirm and run.
 
-| Check | Required | Auto-install |
+| Check | Required | Automatic handling |
 |-------|----------|--------------|
 | Node.js ≥ 22.18 LTS | Yes | No |
 | CDP bridge deps | Yes | Yes |
@@ -83,7 +85,8 @@ Setup checks the full toolchain and reports or applies separately approved remed
 | ffmpeg | Optional (proof videos) | Yes |
 | idb + idb-companion | Optional (smooth observe-UI mirroring) | Yes |
 
-If auto-install fails, setup gives step-by-step manual instructions. [Full setup guide](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
+Claude automation failures and Codex missing prerequisites are reported with
+step-by-step manual instructions. [Full setup guide](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
 
 **Prebuilt runners:** on a released version, the device runners install from a verified prebuilt artifact (SHA-256-checked local cache, then the GitHub Release asset for your exact plugin version), so the first `device_snapshot action=open` skips the cold build. Resolution is fail-open — offline, a checksum mismatch, or a dev checkout falls back transparently to the on-machine build (the host's `doctor` workflow reports which one you got). Force local builds with `RN_RUNNER_BUILD=local`.
 
@@ -217,7 +220,8 @@ if (__DEV__) {
 
 ```
 Claude Code / Codex
-  ├── Skills (knowledge) + Agents (protocols) + Commands (entry points)
+  ├── Host workflows + shared domain knowledge
+  │   Claude: commands/agents · Codex: explicit workflow/domain skills
   │
   ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
   │   79 tools: component tree, store state, profiling, network,
