@@ -38,6 +38,32 @@ test('GH-575 packaged EAS helpers match the canonical source', async () => {
   );
 });
 
+test('GH-575 packaged EAS references document immutable app-scoped cache paths', async () => {
+  const source = await readFile(
+    resolve(
+      'packages/shared-agent-knowledge/skills/rn-device-control/references/expo-eas-builds.md',
+    ),
+    'utf8',
+  );
+  assert.equal(
+    await readFile(
+      resolve('packages/claude-plugin/skills/rn-device-control/references/expo-eas-builds.md'),
+      'utf8',
+    ),
+    source,
+  );
+  const codex = await readFile(
+    resolve('packages/codex-plugin/skills/rn-device-control/references/expo-eas-builds.md'),
+    'utf8',
+  );
+  for (const reference of [source, codex]) {
+    assert.match(reference, /\.eas-latest-<app-key>-development-ios\.manifest/);
+    assert.match(reference, /development-ios-A1b2C3\.tar\.gz/);
+    assert.match(reference, /fresh, nonempty, owner-controlled regular file/);
+    assert.doesNotMatch(reference, /"path":"\/private\/path\/development-ios\.tar\.gz"/);
+  }
+});
+
 test('GH-575 iOS artifact install uses the selected simulator for every operation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-ios-helper-'));
   const project = join(root, 'project');
@@ -231,6 +257,13 @@ printf 'artifact\n' > "$2"
     const manifest = join(cache, manifestName);
     assert.equal((await stat(manifest)).mode & 0o777, 0o600);
     assert.equal(await readFile(manifest, 'utf8'), `${basename(firstResult.path)}\n`);
+
+    await writeFile(firstResult.path, '');
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project, env }),
+      /Cached artifact must be nonempty/,
+    );
+    await writeFile(firstResult.path, 'artifact\n');
 
     await writeFile(foreign, 'foreign\n');
     await rm(manifest);
@@ -510,6 +543,62 @@ printf 'artifact\n' > "$2"
         assert.match(result.message, /Failed to publish downloaded artifact/);
         return true;
       },
+    );
+    assert.deepEqual(await readdir(cache), []);
+
+    await rm(join(bin, 'ln'));
+    const unrelated = join(cache, 'preview-ios-Unrelated.tar.gz');
+    await writeFile(unrelated, 'other run\n');
+    await executable(join(bin, 'mv'), '#!/bin/sh\nexit 1\n');
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+        cwd: project,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      }),
+      (error: unknown) => {
+        const result = JSON.parse((error as { stdout?: string }).stdout ?? '') as {
+          message: string;
+        };
+        assert.match(result.message, /Failed to publish artifact manifest/);
+        return true;
+      },
+    );
+    assert.deepEqual(await readdir(cache), ['preview-ios-Unrelated.tar.gz']);
+    assert.equal(await readFile(unrelated, 'utf8'), 'other run\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 EAS resolver rejects empty downloads before publication', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-empty-'));
+  const project = join(root, 'project');
+  const cache = join(root, 'artifacts');
+  const bin = join(root, 'bin');
+  await mkdir(project);
+  await mkdir(cache);
+  await chmod(cache, 0o700);
+  await mkdir(bin);
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  await executable(
+    join(bin, 'eas'),
+    '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/empty"}}]\\n\'\n',
+  );
+  await executable(
+    join(bin, 'curl'),
+    `#!/bin/sh
+cat >/dev/null
+while [ "$1" != "-o" ]; do shift; done
+: > "$2"
+`,
+  );
+  try {
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+        cwd: project,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      }),
+      /Downloaded artifact must be a nonempty regular file/,
     );
     assert.deepEqual(await readdir(cache), []);
   } finally {

@@ -40,8 +40,24 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" android preview "$ART
 ### Stdout (exit 0)
 
 ```json
-{"status":"ok","path":"/private/path/development-ios.tar.gz","source":"cache"}
+{"status":"ok","path":"/private/path/development-ios-A1b2C3.tar.gz","source":"cache"}
 ```
+
+### Private cache contract
+
+Each successful EAS download is published once as an immutable tokenized file:
+
+```text
+ARTIFACT_DIR/
+├── .eas-latest-<app-key>-development-ios.manifest
+└── development-ios-A1b2C3.tar.gz
+```
+
+The owner-only `0600` manifest is scoped to the exact app, profile, and platform
+and atomically points to the newest successful immutable artifact. Cache reuse
+accepts only a fresh, nonempty, owner-controlled regular file that is an
+immediate child of the private `0700` artifact directory. Previously returned
+artifact paths are never replaced or modified.
 
 ### EAS profile auto-selection rules
 

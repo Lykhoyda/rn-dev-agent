@@ -30,10 +30,16 @@ CACHE_MAX_AGE_HOURS=24
 OWN_OUTPUT_DIR=0
 RESOLUTION_SUCCEEDED=0
 RUN_DIR=""
+PUBLISHED_PATH=""
+PUBLISHED_OWNED=0
+PUBLISHED_RETURNED=0
 
 cleanup() {
   if [ -n "$RUN_DIR" ]; then
     rm -rf -- "$RUN_DIR" 2>/dev/null || true
+  fi
+  if [ "$PUBLISHED_OWNED" -eq 1 ] && [ "$PUBLISHED_RETURNED" -ne 1 ] && [ -n "$PUBLISHED_PATH" ]; then
+    rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
   fi
   if [ "$OWN_OUTPUT_DIR" -eq 1 ] && [ "$RESOLUTION_SUCCEEDED" -ne 1 ] && [ -n "$OUTPUT_DIR" ]; then
     rm -rf -- "$OUTPUT_DIR" 2>/dev/null || true
@@ -53,8 +59,11 @@ json_escape() {
 json_ok() {
   local path; path=$(json_escape "$1")
   local source; source=$(json_escape "$2")
-  RESOLUTION_SUCCEEDED=1
   printf '{"status":"ok","path":"%s","source":"%s"}\n' "$path" "$source"
+  RESOLUTION_SUCCEEDED=1
+  if [ "$PUBLISHED_OWNED" -eq 1 ] && [ "$1" = "$PUBLISHED_PATH" ]; then
+    PUBLISHED_RETURNED=1
+  fi
 }
 
 json_error() {
@@ -280,6 +289,9 @@ check_cache() {
   if [ ! -f "$cached_path" ]; then
     return 1
   fi
+  if [ ! -s "$cached_path" ]; then
+    json_error 1 "Cached artifact must be nonempty: $cached_path"
+  fi
   private_file_metadata "$cached_path"
   if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
     json_error 1 "Cached artifact must be owned by the current user with mode 0600."
@@ -362,19 +374,23 @@ if "${EAS_CMD[@]}" build:list \
     echo "Downloading resolved EAS artifact..." >&2
     if printf 'url = "%s"\n' "$curl_config_url" | \
       curl --config - -fSL --max-time 300 -o "$DOWNLOAD_PATH" 2>/dev/null; then
+      if [ -L "$DOWNLOAD_PATH" ] || [ ! -f "$DOWNLOAD_PATH" ] || [ ! -s "$DOWNLOAD_PATH" ]; then
+        json_error 1 "Downloaded artifact must be a nonempty regular file."
+      fi
       if [ -e "$PUBLISHED_PATH" ] || [ -L "$PUBLISHED_PATH" ]; then
         json_error 1 "Refusing to replace an existing artifact result."
       fi
       if ! ln "$DOWNLOAD_PATH" "$PUBLISHED_PATH"; then
         json_error 1 "Failed to publish downloaded artifact: $PUBLISHED_PATH"
       fi
+      PUBLISHED_OWNED=1
       if ! rm -f -- "$DOWNLOAD_PATH"; then
         rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
         json_error 1 "Failed to finalize downloaded artifact."
       fi
-      if [ -L "$PUBLISHED_PATH" ] || [ ! -f "$PUBLISHED_PATH" ]; then
+      if [ -L "$PUBLISHED_PATH" ] || [ ! -f "$PUBLISHED_PATH" ] || [ ! -s "$PUBLISHED_PATH" ]; then
         rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
-        json_error 1 "Published artifact is not a regular file: $PUBLISHED_PATH"
+        json_error 1 "Published artifact must be a nonempty regular file: $PUBLISHED_PATH"
       fi
       private_file_metadata "$PUBLISHED_PATH"
       if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
@@ -382,8 +398,10 @@ if "${EAS_CMD[@]}" build:list \
         json_error 1 "Published artifact must be owned by the current user with mode 0600."
       fi
       MANIFEST_TMP="${RUN_DIR}/latest.manifest"
-      printf '%s\n' "$PUBLISHED_NAME" > "$MANIFEST_TMP"
-      chmod 600 "$MANIFEST_TMP"
+      if ! printf '%s\n' "$PUBLISHED_NAME" > "$MANIFEST_TMP" || \
+        ! chmod 600 "$MANIFEST_TMP"; then
+        json_error 1 "Failed to create artifact manifest."
+      fi
       if [ -e "$MANIFEST_PATH" ] || [ -L "$MANIFEST_PATH" ]; then
         validate_private_manifest
       fi
