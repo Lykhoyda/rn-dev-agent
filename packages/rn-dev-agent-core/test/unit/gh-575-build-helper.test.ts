@@ -628,24 +628,17 @@ printf 'artifact\n' > "$2"
     );
     assert.deepEqual(await readdir(cache), []);
 
-    const lnCalls = join(root, 'ln.calls');
     await executable(
       join(bin, 'ln'),
-      `#!/bin/sh
-count=0
-[ ! -f "$MOCK_LN_CALLS" ] || count=$(cat "$MOCK_LN_CALLS")
-count=$((count + 1))
-printf '%s\n' "$count" > "$MOCK_LN_CALLS"
-[ "$count" -eq 1 ] || exit 1
-/bin/ln "$@"
-`,
+      '#!/bin/sh\nexec /bin/ln "$@"\n',
     );
+    await executable(join(bin, 'mv'), '#!/bin/sh\nexit 1\n');
     const unrelated = join(cache, 'preview-ios-Unrelated.tar.gz');
     await writeFile(unrelated, 'other run\n');
     await assert.rejects(
       pexecFile('bash', [easHelper, 'ios', 'development', cache], {
         cwd: project,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MOCK_LN_CALLS: lnCalls },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
       }),
       (error: unknown) => {
         const result = JSON.parse((error as { stdout?: string }).stdout ?? '') as {
@@ -903,7 +896,7 @@ esac
 );
 
 test(
-  'GH-575 committed sidecar survives publisher response failure after cache return',
+  'GH-575 reconciles a sidecar exposed by a failing atomic rename',
   { timeout: 10_000 },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-commit-point-'));
@@ -911,7 +904,6 @@ test(
     const cache = join(root, 'artifacts');
     const bin = join(root, 'bin');
     const sync = join(root, 'sync');
-    const lnCalls = join(root, 'ln.calls');
     const easCalls = join(root, 'eas.calls');
     const sidecarVisible = join(sync, 'sidecar-visible');
     const consumerDone = join(sync, 'consumer-done');
@@ -935,14 +927,9 @@ printf 'committed artifact\n' > "$2"
 `,
     );
     await executable(
-      join(bin, 'ln'),
+      join(bin, 'mv'),
       `#!/bin/sh
-count=0
-[ ! -f "$MOCK_LN_CALLS" ] || count=$(cat "$MOCK_LN_CALLS")
-count=$((count + 1))
-printf '%s\n' "$count" > "$MOCK_LN_CALLS"
-/bin/ln "$@" || exit 1
-[ "$count" -eq 2 ] || exit 0
+/bin/mv "$@" || exit 1
 touch "$MOCK_SYNC/sidecar-visible"
 attempts=0
 while [ ! -f "$MOCK_SYNC/consumer-done" ]; do
@@ -950,13 +937,13 @@ while [ ! -f "$MOCK_SYNC/consumer-done" ]; do
   [ "$attempts" -lt 300 ] || exit 70
   sleep 0.01
 done
+exit 73
 `,
     );
     const env = {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       MOCK_SYNC: sync,
-      MOCK_LN_CALLS: lnCalls,
       MOCK_EAS_CALLS: easCalls,
     };
     try {
@@ -1007,6 +994,12 @@ done
 
       const publisherResult = await publisher;
       assert.equal(publisherResult.failed, true);
+      if ('error' in publisherResult) {
+        assert.doesNotMatch(
+          (publisherResult.error as { stderr?: string }).stderr ?? '',
+          /Failed to publish artifact cache sidecar/,
+        );
+      }
       assert.equal(await readFile(consumerResult.path, 'utf8'), 'committed artifact\n');
       assert.equal(
         (await readdir(cache)).filter((name) => name.startsWith('.eas-cache-')).length,

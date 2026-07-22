@@ -36,13 +36,21 @@ PUBLISHED_OWNED=0
 PUBLISHED_SIDECAR_PATH=""
 PUBLISHED_SIDECAR_OWNED=0
 PAIR_COMMITTED=0
+SIDECAR_PUBLICATION_ATTEMPTED=0
+SIDECAR_TMP_DEVICE=""
+SIDECAR_TMP_INODE=""
 
 cleanup() {
+  if [ "$SIDECAR_PUBLICATION_ATTEMPTED" -eq 1 ] && [ "$PAIR_COMMITTED" -ne 1 ]; then
+    reconcile_published_pair >/dev/null 2>&1 || true
+  fi
   if [ -n "$RUN_DIR" ]; then
     rm -rf -- "$RUN_DIR" 2>/dev/null || true
   fi
-  if [ "$PUBLISHED_SIDECAR_OWNED" -eq 1 ] && [ "$PAIR_COMMITTED" -ne 1 ] && [ -n "$PUBLISHED_SIDECAR_PATH" ]; then
-    rm -f -- "$PUBLISHED_SIDECAR_PATH" 2>/dev/null || true
+  if [ "$PAIR_COMMITTED" -ne 1 ] && [ -n "$PUBLISHED_SIDECAR_PATH" ]; then
+    if [ "$PUBLISHED_SIDECAR_OWNED" -eq 1 ] || published_sidecar_is_owned >/dev/null 2>&1; then
+      rm -f -- "$PUBLISHED_SIDECAR_PATH" 2>/dev/null || true
+    fi
   fi
   if [ "$PUBLISHED_OWNED" -eq 1 ] && [ "$PAIR_COMMITTED" -ne 1 ] && [ -n "$PUBLISHED_PATH" ]; then
     rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
@@ -225,6 +233,17 @@ private_file_metadata() {
   fi
 }
 
+private_file_identity() {
+  local path="$1"
+  if [ "$(uname)" = "Darwin" ]; then
+    FILE_DEVICE=$(stat -f '%d' "$path" 2>/dev/null || true)
+    FILE_INODE=$(stat -f '%i' "$path" 2>/dev/null || true)
+  else
+    FILE_DEVICE=$(stat -c '%d' "$path" 2>/dev/null || true)
+    FILE_INODE=$(stat -c '%i' "$path" 2>/dev/null || true)
+  fi
+}
+
 read_json_string() {
   local path="$1"
   local key="$2"
@@ -292,6 +311,59 @@ timestamp_sort_key() {
   printf '%s%s%s%s%s%s%s' \
     "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
     "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]}" "$fraction"
+}
+
+published_sidecar_is_owned() {
+  [ "$SIDECAR_PUBLICATION_ATTEMPTED" -eq 1 ] || return 1
+  [ -n "$PUBLISHED_SIDECAR_PATH" ] || return 1
+  [ -n "$SIDECAR_TMP_DEVICE" ] || return 1
+  [ -n "$SIDECAR_TMP_INODE" ] || return 1
+  [ ! -L "$PUBLISHED_SIDECAR_PATH" ] || return 1
+  [ -f "$PUBLISHED_SIDECAR_PATH" ] || return 1
+  private_file_identity "$PUBLISHED_SIDECAR_PATH"
+  [ "$FILE_DEVICE" = "$SIDECAR_TMP_DEVICE" ] && [ "$FILE_INODE" = "$SIDECAR_TMP_INODE" ]
+}
+
+reconcile_published_pair() {
+  local sidecar_size sidecar_project sidecar_platform sidecar_profile
+  local sidecar_build_id sidecar_timestamp sidecar_artifact artifact_path
+
+  [ -n "$PUBLISHED_SIDECAR_PATH" ] || return 1
+  [ -n "$PUBLISHED_PATH" ] || return 1
+  [ -n "$PUBLISHED_NAME" ] || return 1
+  [ ! -L "$PUBLISHED_SIDECAR_PATH" ] || return 1
+  [ -f "$PUBLISHED_SIDECAR_PATH" ] || return 1
+  [ -s "$PUBLISHED_SIDECAR_PATH" ] || return 1
+  private_file_metadata "$PUBLISHED_SIDECAR_PATH"
+  [ "$FILE_OWNER" = "$(id -u)" ] && [ "$FILE_MODE" = "600" ] || return 1
+  sidecar_size=$(wc -c < "$PUBLISHED_SIDECAR_PATH" | tr -d '[:space:]')
+  [ -n "$sidecar_size" ] && [ "$sidecar_size" -le 4096 ] || return 1
+  sidecar_project=$(read_json_string "$PUBLISHED_SIDECAR_PATH" projectId) || return 1
+  sidecar_platform=$(read_json_string "$PUBLISHED_SIDECAR_PATH" platform) || return 1
+  sidecar_profile=$(read_json_string "$PUBLISHED_SIDECAR_PATH" profile) || return 1
+  sidecar_build_id=$(read_json_string "$PUBLISHED_SIDECAR_PATH" buildId) || return 1
+  sidecar_timestamp=$(read_json_string "$PUBLISHED_SIDECAR_PATH" buildTimestamp) || return 1
+  sidecar_artifact=$(read_json_string "$PUBLISHED_SIDECAR_PATH" artifact) || return 1
+  [ "$sidecar_project" = "$remote_project_id" ] || return 1
+  [ "$sidecar_platform" = "$PLATFORM" ] || return 1
+  [ "$sidecar_profile" = "$PROFILE" ] || return 1
+  [ "$sidecar_build_id" = "$build_id" ] || return 1
+  [ "$sidecar_timestamp" = "$build_timestamp" ] || return 1
+  [ "$sidecar_artifact" = "$PUBLISHED_NAME" ] || return 1
+  [[ "$sidecar_build_id" =~ ^[a-zA-Z0-9_-]{1,128}$ ]] || return 1
+  timestamp_sort_key "$sidecar_timestamp" >/dev/null || return 1
+  artifact_path="${OUTPUT_DIR}/${sidecar_artifact}"
+  [ "$artifact_path" = "$PUBLISHED_PATH" ] || return 1
+  [ "$(dirname "$artifact_path")" = "$OUTPUT_DIR" ] || return 1
+  [ "$(basename "$artifact_path")" = "$PUBLISHED_NAME" ] || return 1
+  [ ! -L "$artifact_path" ] || return 1
+  [ -f "$artifact_path" ] || return 1
+  [ -s "$artifact_path" ] || return 1
+  private_file_metadata "$artifact_path"
+  [ "$FILE_OWNER" = "$(id -u)" ] && [ "$FILE_MODE" = "600" ] || return 1
+  PUBLISHED_SIDECAR_OWNED=1
+  PAIR_COMMITTED=1
+  return 0
 }
 
 check_cache() {
@@ -520,11 +592,19 @@ if "${EAS_CMD[@]}" build:list \
       if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
         json_error 1 "Artifact cache sidecar must be owned by the current user with mode 0600 before publication."
       fi
-      if ! ln "$SIDECAR_TMP" "$PUBLISHED_SIDECAR_PATH"; then
+      private_file_identity "$SIDECAR_TMP"
+      SIDECAR_TMP_DEVICE="$FILE_DEVICE"
+      SIDECAR_TMP_INODE="$FILE_INODE"
+      if [ -z "$SIDECAR_TMP_DEVICE" ] || [ -z "$SIDECAR_TMP_INODE" ]; then
+        json_error 1 "Failed to identify artifact cache sidecar before publication."
+      fi
+      SIDECAR_PUBLICATION_ATTEMPTED=1
+      if mv -n -- "$SIDECAR_TMP" "$PUBLISHED_SIDECAR_PATH"; then
+        :
+      fi
+      if ! reconcile_published_pair; then
         json_error 1 "Failed to publish artifact cache sidecar."
       fi
-      PUBLISHED_SIDECAR_OWNED=1
-      PAIR_COMMITTED=1
       echo "Downloaded to: $PUBLISHED_PATH" >&2
       json_ok "$PUBLISHED_PATH" "eas"
       exit 0
