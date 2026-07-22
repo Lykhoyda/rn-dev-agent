@@ -26,6 +26,18 @@ async function executable(path: string, contents: string): Promise<void> {
   await chmod(path, 0o755);
 }
 
+test('GH-575 packaged EAS helpers match the canonical source', async () => {
+  const source = await readFile(easHelper, 'utf8');
+  assert.equal(
+    await readFile(resolve('packages/claude-plugin/scripts/eas_resolve_artifact.sh'), 'utf8'),
+    source,
+  );
+  assert.equal(
+    await readFile(resolve('packages/codex-plugin/scripts/eas_resolve_artifact.sh'), 'utf8'),
+    source,
+  );
+});
+
 test('GH-575 iOS artifact install uses the selected simulator for every operation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-ios-helper-'));
   const project = join(root, 'project');
@@ -257,43 +269,152 @@ printf 'artifact\n' > "$2"
   }
 });
 
-test('GH-575 concurrent EAS resolutions isolate metadata and publish complete artifacts', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-concurrency-'));
+test('GH-575 failed EAS resolution removes private output and sanitizes diagnostics', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-failure-'));
   const project = join(root, 'project');
-  const cache = join(root, 'artifacts');
   const bin = join(root, 'bin');
-  const sync = join(root, 'sync');
+  const secret = 'secret-value-123456789';
   await mkdir(project);
-  await mkdir(cache);
-  await chmod(cache, 0o700);
   await mkdir(bin);
-  await mkdir(sync);
   await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
   await executable(
     join(bin, 'eas'),
     `#!/bin/sh
+printf 'Authentication failed EXPO_TOKEN=%s\n' '${secret}' >&2
+exit 1
+`,
+  );
+  try {
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios', 'development'], {
+        cwd: project,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
+      }),
+      (error: unknown) => {
+        const output = error as { stdout?: string; stderr?: string };
+        const stdout = output.stdout ?? '';
+        const result = JSON.parse(stdout) as { message: string };
+        assert.match(result.message, /Authentication failed/);
+        assert.doesNotMatch(stdout, new RegExp(secret));
+        assert.doesNotMatch(output.stderr ?? '', new RegExp(secret));
+        assert.match(result.message, /\[REDACTED\]/);
+        return true;
+      },
+    );
+    assert.equal(
+      (await readdir(root)).some((name) => name.startsWith('rn-eas-builds.')),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 EAS publication rejects unsafe destinations and reports rename failures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-publish-'));
+  const project = join(root, 'project');
+  const cache = join(root, 'artifacts');
+  const bin = join(root, 'bin');
+  const destination = join(cache, 'development-ios.tar.gz');
+  await mkdir(project);
+  await mkdir(cache);
+  await chmod(cache, 0o700);
+  await mkdir(bin);
+  await mkdir(destination);
+  await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+  try {
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios', 'development', cache], { cwd: project }),
+      (error: unknown) => {
+        const result = JSON.parse((error as { stdout?: string }).stdout ?? '') as {
+          message: string;
+        };
+        assert.match(result.message, /regular file path/);
+        return true;
+      },
+    );
+
+    await rm(destination, { recursive: true });
+    await executable(
+      join(bin, 'eas'),
+      '#!/bin/sh\nprintf \'[{"artifacts":{"buildUrl":"https://example.invalid/build"}}]\\n\'\n',
+    );
+    await executable(
+      join(bin, 'curl'),
+      `#!/bin/sh
+while [ "$1" != "-o" ]; do shift; done
+printf 'artifact\n' > "$2"
+`,
+    );
+    await executable(join(bin, 'mv'), '#!/bin/sh\nexit 1\n');
+    await assert.rejects(
+      pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+        cwd: project,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      }),
+      (error: unknown) => {
+        const result = JSON.parse((error as { stdout?: string }).stdout ?? '') as {
+          message: string;
+        };
+        assert.match(result.message, /Failed to publish downloaded artifact/);
+        return true;
+      },
+    );
+    assert.deepEqual(await readdir(cache), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  'GH-575 concurrent EAS resolutions isolate metadata and publish complete artifacts',
+  { timeout: 10_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-concurrency-'));
+    const project = join(root, 'project');
+    const cache = join(root, 'artifacts');
+    const bin = join(root, 'bin');
+    const sync = join(root, 'sync');
+    await mkdir(project);
+    await mkdir(cache);
+    await chmod(cache, 0o700);
+    await mkdir(bin);
+    await mkdir(sync);
+    await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+    await executable(
+      join(bin, 'eas'),
+      `#!/bin/sh
 profile=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--buildProfile" ]; then profile="$2"; shift 2; else shift; fi
 done
+wait_for_marker() {
+  marker="$1"
+  attempts=0
+  while [ ! -f "$marker" ]; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 200 ] || exit 70
+    sleep 0.01
+  done
+}
 touch "$MOCK_SYNC/$profile.ready"
 other=alpha
 [ "$profile" = "alpha" ] && other=beta
-while [ ! -f "$MOCK_SYNC/$other.ready" ]; do :; done
+wait_for_marker "$MOCK_SYNC/$other.ready"
 if [ "$profile" = "beta" ]; then
   printf '[{"artifacts":{"buildUrl":"https://example.invalid/beta"}}]\n'
   touch "$MOCK_SYNC/beta.wrote"
-  while [ ! -f "$MOCK_SYNC/alpha.wrote" ]; do :; done
+  wait_for_marker "$MOCK_SYNC/alpha.wrote"
 else
-  while [ ! -f "$MOCK_SYNC/beta.wrote" ]; do :; done
+  wait_for_marker "$MOCK_SYNC/beta.wrote"
   printf '[{"artifacts":{"buildUrl":"https://example.invalid/alpha"}}]\n'
   touch "$MOCK_SYNC/alpha.wrote"
 fi
 `,
-  );
-  await executable(
-    join(bin, 'curl'),
-    `#!/bin/sh
+    );
+    await executable(
+      join(bin, 'curl'),
+      `#!/bin/sh
 output=""
 url=""
 while [ "$#" -gt 0 ]; do
@@ -304,27 +425,32 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\n' "$url" > "$output"
 `,
-  );
-  const env = {
-    ...process.env,
-    PATH: `${bin}:${process.env.PATH}`,
-    MOCK_SYNC: sync,
-  };
-  try {
-    const [alpha, beta] = await Promise.all(
-      ['alpha', 'beta'].map((profile) =>
-        pexecFile('bash', [easHelper, 'ios', profile, cache], { cwd: project, env }),
-      ),
     );
-    const alphaResult = JSON.parse(alpha.stdout) as { path: string };
-    const betaResult = JSON.parse(beta.stdout) as { path: string };
-    assert.equal(await readFile(alphaResult.path, 'utf8'), 'https://example.invalid/alpha\n');
-    assert.equal(await readFile(betaResult.path, 'utf8'), 'https://example.invalid/beta\n');
-    assert.deepEqual((await readdir(cache)).sort(), ['alpha-ios.tar.gz', 'beta-ios.tar.gz']);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      MOCK_SYNC: sync,
+    };
+    try {
+      const [alpha, beta] = await Promise.all(
+        ['alpha', 'beta'].map((profile) =>
+          pexecFile('bash', [easHelper, 'ios', profile, cache], {
+            cwd: project,
+            env,
+            timeout: 5_000,
+          }),
+        ),
+      );
+      const alphaResult = JSON.parse(alpha.stdout) as { path: string };
+      const betaResult = JSON.parse(beta.stdout) as { path: string };
+      assert.equal(await readFile(alphaResult.path, 'utf8'), 'https://example.invalid/alpha\n');
+      assert.equal(await readFile(betaResult.path, 'utf8'), 'https://example.invalid/beta\n');
+      assert.deepEqual((await readdir(cache)).sort(), ['alpha-ios.tar.gz', 'beta-ios.tar.gz']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test('GH-575 EAS resolver rejects permissive and symlinked output directories', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-safety-'));

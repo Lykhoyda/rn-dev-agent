@@ -247,21 +247,22 @@ adb shell settings put system locale fr_FR
 
 ---
 
-## Concurrent State Snapshot Script
+## Exact-Device State Snapshot Script
 
-`scripts/snapshot_state.sh` captures screenshot + UI hierarchy simultaneously,
-cutting state-check time by ~40%.
+The package-local `snapshot_state.sh` captures a screenshot and Android UI
+hierarchy sequentially on one validated device.
 
 ```bash
-# Usage
-bash scripts/snapshot_state.sh [ios|android] [output_dir]
+bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" ios --device-id "$IOS_UDID" --output-dir "$SNAPSHOT_DIR"
+bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" android --device-id "$ANDROID_SERIAL" --output-dir "$SNAPSHOT_DIR"
 
-# iOS output: /tmp/rn-dev-agent/screenshot.jpg
-# Android output: /tmp/rn-dev-agent/screenshot.png + ui_elements.json
+# iOS output: screenshot.jpg
+# Android output: screenshot.png + ui_elements.json
 ```
 
-On Android, both `screencap` and `uiautomator dump` run as background processes
-completing in parallel (~300ms total instead of ~800ms sequential).
+`--device-id` is required. If `--output-dir` is omitted, the helper creates and
+reports a private retained directory; a supplied directory must be owned by the
+current user with mode `0700` and must not be a symlink.
 
 ---
 
@@ -269,10 +270,10 @@ completing in parallel (~300ms total instead of ~800ms sequential).
 
 | Operation | Command | Time | Size |
 |-----------|---------|------|------|
-| iOS screenshot (JPEG) | `xcrun simctl io booted screenshot --type=jpeg` | 80ms | 200KB |
-| iOS screenshot (PNG) | `xcrun simctl io booted screenshot --type=png` | 150ms | 800KB |
-| Android screenshot (exec-out) | `adb exec-out screencap -p >` | 300ms | 800KB |
-| Android UI hierarchy | `adb shell uiautomator dump --compressed` | 300-500ms | 15-30KB XML |
+| iOS screenshot (JPEG) | `xcrun simctl io <udid> screenshot --type=jpeg` | 80ms | 200KB |
+| iOS screenshot (PNG) | `xcrun simctl io <udid> screenshot --type=png` | 150ms | 800KB |
+| Android screenshot (exec-out) | `adb -s <serial> exec-out screencap -p >` | 300ms | 800KB |
+| Android UI hierarchy | `adb -s <serial> shell uiautomator dump --compressed` | 300-500ms | 15-30KB XML |
 | Android UI hierarchy (parsed) | above + python3 filter | 350-550ms | 2-3KB JSON |
 
 ---

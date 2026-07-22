@@ -9,7 +9,7 @@
 # Usage: bash scripts/eas_resolve_artifact.sh <platform> [profile] [output_dir]
 #   platform:   ios | android
 #   profile:    EAS build profile name (optional, auto-selected if unambiguous)
-#   output_dir: private directory for completed artifacts (default: retained mktemp directory)
+#   output_dir: private directory for completed artifacts (default: mktemp retained on success)
 #
 # Exit codes:
 #   0 — artifact resolved, JSON on stdout
@@ -27,6 +27,19 @@ PLATFORM="${1:-}"
 PROFILE="${2:-}"
 OUTPUT_DIR="${3:-}"
 CACHE_MAX_AGE_HOURS=24
+OWN_OUTPUT_DIR=0
+RESOLUTION_SUCCEEDED=0
+RUN_DIR=""
+
+cleanup() {
+  if [ -n "$RUN_DIR" ]; then
+    rm -rf -- "$RUN_DIR" 2>/dev/null || true
+  fi
+  if [ "$OWN_OUTPUT_DIR" -eq 1 ] && [ "$RESOLUTION_SUCCEEDED" -ne 1 ] && [ -n "$OUTPUT_DIR" ]; then
+    rm -rf -- "$OUTPUT_DIR" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 if [ -n "$PROFILE" ]; then
   if ! [[ "$PROFILE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -48,6 +61,7 @@ json_escape() {
 json_ok() {
   local path; path=$(json_escape "$1")
   local source; source=$(json_escape "$2")
+  RESOLUTION_SUCCEEDED=1
   printf '{"status":"ok","path":"%s","source":"%s"}\n' "$path" "$source"
 }
 
@@ -62,6 +76,19 @@ json_ambiguous() {
   local profiles_json="$1"
   printf '{"status":"ambiguous","platform":"%s","profiles":%s}\n' "$PLATFORM" "$profiles_json"
   exit 2
+}
+
+sanitized_diagnostic() {
+  local file="$1"
+  local sanitized
+  [ -s "$file" ] || return 0
+  sanitized=$(sed -E \
+    -e 's/(Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/gi' \
+    -e 's/((authorization|token|secret|password|api[_-]?key)[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/gi' \
+    -e 's#(https?://)[^/@[:space:]]+@#\1[REDACTED]@#g' \
+    -e 's/(sk|pk|ghp|xox[baprs])[-_][A-Za-z0-9_-]{16,}/[REDACTED]/g' \
+    "$file" 2>/dev/null | tr '\r\n\t' '   ' | LC_ALL=C tr -cd '[:print:]' | tail -c 1024) || sanitized='[diagnostic redaction failed]'
+  printf '%s' "$sanitized"
 }
 
 if [ -z "$PLATFORM" ] || { [ "$PLATFORM" != "ios" ] && [ "$PLATFORM" != "android" ]; }; then
@@ -137,6 +164,7 @@ fi
 if [ -z "$OUTPUT_DIR" ]; then
   OUTPUT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rn-eas-builds.XXXXXX") || \
     json_error 1 "Unable to create a private artifact directory."
+  OWN_OUTPUT_DIR=1
 elif [ ! -e "$OUTPUT_DIR" ]; then
   mkdir -m 700 -- "$OUTPUT_DIR" || json_error 1 "Unable to create artifact directory: $OUTPUT_DIR"
 fi
@@ -164,6 +192,9 @@ else
   ARTIFACT_NAME="${PROFILE}-${PLATFORM}.apk"
 fi
 ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
+if [ -L "$ARTIFACT_PATH" ] || { [ -e "$ARTIFACT_PATH" ] && [ ! -f "$ARTIFACT_PATH" ]; }; then
+  json_error 1 "Artifact destination must be a regular file path: $ARTIFACT_PATH"
+fi
 
 # --- Tier 1: Local cache ---
 
@@ -203,10 +234,7 @@ RUN_DIR=$(mktemp -d "${OUTPUT_DIR}/.resolve.XXXXXX") || \
 BUILD_INFO="${RUN_DIR}/build-info.json"
 BUILD_ERR="${RUN_DIR}/build-err.log"
 DOWNLOAD_PATH="${RUN_DIR}/artifact.part"
-cleanup_run_dir() {
-  rm -rf -- "$RUN_DIR"
-}
-trap cleanup_run_dir EXIT
+EAS_DIAGNOSTIC=""
 
 # Query EAS for latest finished build
 if "${EAS_CMD[@]}" build:list \
@@ -232,7 +260,15 @@ if "${EAS_CMD[@]}" build:list \
   if [ -n "$local_build_url" ]; then
     echo "Downloading from: $local_build_url" >&2
     if curl -fSL --max-time 300 -o "$DOWNLOAD_PATH" "$local_build_url" 2>/dev/null; then
-      mv -f -- "$DOWNLOAD_PATH" "$ARTIFACT_PATH"
+      if [ -L "$ARTIFACT_PATH" ] || { [ -e "$ARTIFACT_PATH" ] && [ ! -f "$ARTIFACT_PATH" ]; }; then
+        json_error 1 "Artifact destination changed to a non-regular path: $ARTIFACT_PATH"
+      fi
+      if ! mv -f -- "$DOWNLOAD_PATH" "$ARTIFACT_PATH"; then
+        json_error 1 "Failed to publish downloaded artifact: $ARTIFACT_PATH"
+      fi
+      if [ -L "$ARTIFACT_PATH" ] || [ ! -f "$ARTIFACT_PATH" ]; then
+        json_error 1 "Published artifact is not a regular file: $ARTIFACT_PATH"
+      fi
       echo "Downloaded to: $ARTIFACT_PATH" >&2
       json_ok "$ARTIFACT_PATH" "eas"
       exit 0
@@ -244,8 +280,16 @@ if "${EAS_CMD[@]}" build:list \
   fi
 else
   echo "EAS build:list failed or timed out" >&2
+  EAS_DIAGNOSTIC=$(sanitized_diagnostic "$BUILD_ERR")
 fi
 
 # --- Tier 3: No artifact found ---
 
-json_error 1 "No artifact found. Build with: eas build --platform $PLATFORM --profile $PROFILE, or place artifact at ${OUTPUT_DIR}/<name>.$([ "$PLATFORM" = "ios" ] && echo "tar.gz" || echo "apk")"
+FAILURE_MESSAGE="No artifact found. Build with: eas build --platform $PLATFORM --profile $PROFILE"
+if [ "$OWN_OUTPUT_DIR" -eq 0 ]; then
+  FAILURE_MESSAGE="$FAILURE_MESSAGE, or place artifact at ${OUTPUT_DIR}/${ARTIFACT_NAME}"
+fi
+if [ -n "$EAS_DIAGNOSTIC" ]; then
+  FAILURE_MESSAGE="$FAILURE_MESSAGE EAS diagnostic: $EAS_DIAGNOSTIC"
+fi
+json_error 1 "$FAILURE_MESSAGE"
