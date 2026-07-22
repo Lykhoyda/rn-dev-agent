@@ -35,19 +35,19 @@ PUBLISHED_PATH=""
 PUBLISHED_OWNED=0
 PUBLISHED_SIDECAR_PATH=""
 PUBLISHED_SIDECAR_OWNED=0
-PUBLISHED_RETURNED=0
+PAIR_COMMITTED=0
 
 cleanup() {
   if [ -n "$RUN_DIR" ]; then
     rm -rf -- "$RUN_DIR" 2>/dev/null || true
   fi
-  if [ "$PUBLISHED_SIDECAR_OWNED" -eq 1 ] && [ "$PUBLISHED_RETURNED" -ne 1 ] && [ -n "$PUBLISHED_SIDECAR_PATH" ]; then
+  if [ "$PUBLISHED_SIDECAR_OWNED" -eq 1 ] && [ "$PAIR_COMMITTED" -ne 1 ] && [ -n "$PUBLISHED_SIDECAR_PATH" ]; then
     rm -f -- "$PUBLISHED_SIDECAR_PATH" 2>/dev/null || true
   fi
-  if [ "$PUBLISHED_OWNED" -eq 1 ] && [ "$PUBLISHED_RETURNED" -ne 1 ] && [ -n "$PUBLISHED_PATH" ]; then
+  if [ "$PUBLISHED_OWNED" -eq 1 ] && [ "$PAIR_COMMITTED" -ne 1 ] && [ -n "$PUBLISHED_PATH" ]; then
     rm -f -- "$PUBLISHED_PATH" 2>/dev/null || true
   fi
-  if [ "$OWN_OUTPUT_DIR" -eq 1 ] && [ "$RESOLUTION_SUCCEEDED" -ne 1 ] && [ -n "$OUTPUT_DIR" ]; then
+  if [ "$OWN_OUTPUT_DIR" -eq 1 ] && [ "$RESOLUTION_SUCCEEDED" -ne 1 ] && [ "$PAIR_COMMITTED" -ne 1 ] && [ -n "$OUTPUT_DIR" ]; then
     rm -rf -- "$OUTPUT_DIR" 2>/dev/null || true
   fi
 }
@@ -67,9 +67,6 @@ json_ok() {
   local source; source=$(json_escape "$2")
   printf '{"status":"ok","path":"%s","source":"%s"}\n' "$path" "$source"
   RESOLUTION_SUCCEEDED=1
-  if [ "$PUBLISHED_OWNED" -eq 1 ] && [ "$1" = "$PUBLISHED_PATH" ]; then
-    PUBLISHED_RETURNED=1
-  fi
 }
 
 json_error() {
@@ -516,17 +513,18 @@ if "${EAS_CMD[@]}" build:list \
         ! chmod 600 "$SIDECAR_TMP"; then
         json_error 1 "Failed to create artifact cache sidecar."
       fi
+      if [ -L "$SIDECAR_TMP" ] || [ ! -f "$SIDECAR_TMP" ] || [ ! -s "$SIDECAR_TMP" ]; then
+        json_error 1 "Artifact cache sidecar must be a nonempty regular file before publication."
+      fi
+      private_file_metadata "$SIDECAR_TMP"
+      if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
+        json_error 1 "Artifact cache sidecar must be owned by the current user with mode 0600 before publication."
+      fi
       if ! ln "$SIDECAR_TMP" "$PUBLISHED_SIDECAR_PATH"; then
         json_error 1 "Failed to publish artifact cache sidecar."
       fi
       PUBLISHED_SIDECAR_OWNED=1
-      if [ -L "$PUBLISHED_SIDECAR_PATH" ] || [ ! -f "$PUBLISHED_SIDECAR_PATH" ]; then
-        json_error 1 "Published artifact cache sidecar must be a regular file."
-      fi
-      private_file_metadata "$PUBLISHED_SIDECAR_PATH"
-      if [ "$FILE_OWNER" != "$(id -u)" ] || [ "$FILE_MODE" != "600" ]; then
-        json_error 1 "Published artifact cache sidecar must be owned by the current user with mode 0600."
-      fi
+      PAIR_COMMITTED=1
       echo "Downloaded to: $PUBLISHED_PATH" >&2
       json_ok "$PUBLISHED_PATH" "eas"
       exit 0

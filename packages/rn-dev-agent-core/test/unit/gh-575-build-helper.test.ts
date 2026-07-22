@@ -902,6 +902,123 @@ esac
   },
 );
 
+test(
+  'GH-575 committed sidecar survives publisher response failure after cache return',
+  { timeout: 10_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-commit-point-'));
+    const project = join(root, 'project');
+    const cache = join(root, 'artifacts');
+    const bin = join(root, 'bin');
+    const sync = join(root, 'sync');
+    const lnCalls = join(root, 'ln.calls');
+    const easCalls = join(root, 'eas.calls');
+    const sidecarVisible = join(sync, 'sidecar-visible');
+    const consumerDone = join(sync, 'consumer-done');
+    for (const directory of [project, cache, bin, sync]) await mkdir(directory);
+    await chmod(cache, 0o700);
+    await writeFile(join(project, 'eas.json'), '{"build":{}}\n');
+    await writeFile(join(project, 'app.json'), expoAppJson(firstProjectId));
+    await executable(
+      join(bin, 'eas'),
+      `#!/bin/sh
+printf 'call\n' >> "$MOCK_EAS_CALLS"
+printf '%s\n' '${easBuildJson('https://example.invalid/committed')}'
+`,
+    );
+    await executable(
+      join(bin, 'curl'),
+      `#!/bin/sh
+cat >/dev/null
+while [ "$1" != "-o" ]; do shift; done
+printf 'committed artifact\n' > "$2"
+`,
+    );
+    await executable(
+      join(bin, 'ln'),
+      `#!/bin/sh
+count=0
+[ ! -f "$MOCK_LN_CALLS" ] || count=$(cat "$MOCK_LN_CALLS")
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_LN_CALLS"
+/bin/ln "$@" || exit 1
+[ "$count" -eq 2 ] || exit 0
+touch "$MOCK_SYNC/sidecar-visible"
+attempts=0
+while [ ! -f "$MOCK_SYNC/consumer-done" ]; do
+  attempts=$((attempts + 1))
+  [ "$attempts" -lt 300 ] || exit 70
+  sleep 0.01
+done
+`,
+    );
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      MOCK_SYNC: sync,
+      MOCK_LN_CALLS: lnCalls,
+      MOCK_EAS_CALLS: easCalls,
+    };
+    try {
+      const publisher = pexecFile(
+        'bash',
+        [
+          '-o',
+          'pipefail',
+          '-c',
+          'bash "$1" "$2" "$3" "$4" | head -c 0',
+          'publisher',
+          easHelper,
+          'ios',
+          'development',
+          cache,
+        ],
+        { cwd: project, env, timeout: 5_000 },
+      ).then(
+        () => ({ failed: false }),
+        (error: unknown) => ({ failed: true, error }),
+      );
+
+      let visible = false;
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        try {
+          await stat(sidecarVisible);
+          visible = true;
+          break;
+        } catch {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+        }
+      }
+      assert.equal(visible, true);
+
+      let consumer: { stdout: string } | undefined;
+      try {
+        consumer = await pexecFile('bash', [easHelper, 'ios', 'development', cache], {
+          cwd: project,
+          env,
+          timeout: 5_000,
+        });
+      } finally {
+        await writeFile(consumerDone, 'done\n');
+      }
+      assert.ok(consumer);
+      const consumerResult = JSON.parse(consumer.stdout) as { path: string; source: string };
+      assert.equal(consumerResult.source, 'cache');
+
+      const publisherResult = await publisher;
+      assert.equal(publisherResult.failed, true);
+      assert.equal(await readFile(consumerResult.path, 'utf8'), 'committed artifact\n');
+      assert.equal(
+        (await readdir(cache)).filter((name) => name.startsWith('.eas-cache-')).length,
+        1,
+      );
+      assert.equal(await readFile(easCalls, 'utf8'), 'call\n');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test('GH-575 EAS resolver rejects permissive and symlinked output directories', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-eas-safety-'));
   const project = join(root, 'project');
