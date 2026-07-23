@@ -174,9 +174,15 @@ interface CachedSnapshot {
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
-let snapshotAuthorityProvider: (() => Record<string, unknown> | null) | null = null;
+let snapshotAuthorityProvider:
+  | {
+      current: () => Record<string, unknown> | null;
+      record: (receipt: SnapshotAuthorityReceipt) => void;
+      validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+    }
+  | null = null;
 
-interface SnapshotAuthorityReceipt {
+export interface SnapshotAuthorityReceipt {
   sessionId: unknown;
   claimEpoch: unknown;
   sourceKey: unknown;
@@ -188,10 +194,20 @@ interface SnapshotAuthorityReceipt {
   installGeneration: unknown;
   runnerInstanceId: unknown;
   runnerClaim: unknown;
+  appId: unknown;
+  artifactDigest: unknown;
+  runnerPid: unknown;
+  runnerProcessBirth: unknown;
 }
 
 export function setSnapshotAuthorityProvider(
-  provider: (() => Record<string, unknown> | null) | null,
+  provider:
+    | {
+        current: () => Record<string, unknown> | null;
+        record: (receipt: SnapshotAuthorityReceipt) => void;
+        validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+      }
+    | null,
 ): void {
   snapshotAuthorityProvider = provider;
   snapshotCache.clear();
@@ -199,7 +215,7 @@ export function setSnapshotAuthorityProvider(
 }
 
 function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
-  const authority = snapshotAuthorityProvider?.();
+  const authority = snapshotAuthorityProvider?.current();
   const session = getActiveSession();
   return {
     sessionId: authority?.sessionId ?? null,
@@ -213,6 +229,10 @@ function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
     installGeneration: authority?.installGeneration ?? null,
     runnerInstanceId: authority?.runnerInstanceId ?? null,
     runnerClaim: authority?.runnerClaim ?? null,
+    appId: authority?.appId ?? session?.appId ?? null,
+    artifactDigest: authority?.artifactDigest ?? null,
+    runnerPid: authority?.runnerPid ?? null,
+    runnerProcessBirth: authority?.runnerProcessBirth ?? null,
   };
 }
 
@@ -225,7 +245,7 @@ function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: s
       receipt.deviceId === current.deviceId
     );
   }
-  return (
+  return Boolean(
     receipt.platform === platform &&
     receipt.sessionId === current.sessionId &&
     receipt.claimEpoch === current.claimEpoch &&
@@ -235,7 +255,12 @@ function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: s
     receipt.deviceId !== null &&
     receipt.installGeneration !== null &&
     receipt.runnerInstanceId !== null &&
-    receipt.runnerClaim !== null
+    receipt.runnerClaim !== null &&
+    receipt.appId !== null &&
+    receipt.artifactDigest !== null &&
+    receipt.runnerPid !== null &&
+    receipt.runnerProcessBirth !== null &&
+    snapshotAuthorityProvider?.validate(receipt)
   );
 }
 
@@ -249,9 +274,11 @@ function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: s
 let snapshotCacheDirty = true;
 
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
+  const authorityReceipt = currentSnapshotAuthority(platform);
+  if (authorityReceipt.sessionId !== null) snapshotAuthorityProvider?.record(authorityReceipt);
   snapshotCache.set(platform, {
     platform,
-    authorityReceipt: currentSnapshotAuthority(platform),
+    authorityReceipt,
     nodes,
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),

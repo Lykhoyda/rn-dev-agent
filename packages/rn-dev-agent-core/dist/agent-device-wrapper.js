@@ -107,7 +107,7 @@ export function setSnapshotAuthorityProvider(provider) {
     snapshotCacheDirty = true;
 }
 function currentSnapshotAuthority(platform) {
-    const authority = snapshotAuthorityProvider?.();
+    const authority = snapshotAuthorityProvider?.current();
     const session = getActiveSession();
     return {
         sessionId: authority?.sessionId ?? null,
@@ -121,6 +121,10 @@ function currentSnapshotAuthority(platform) {
         installGeneration: authority?.installGeneration ?? null,
         runnerInstanceId: authority?.runnerInstanceId ?? null,
         runnerClaim: authority?.runnerClaim ?? null,
+        appId: authority?.appId ?? session?.appId ?? null,
+        artifactDigest: authority?.artifactDigest ?? null,
+        runnerPid: authority?.runnerPid ?? null,
+        runnerProcessBirth: authority?.runnerProcessBirth ?? null,
     };
 }
 function snapshotAuthorityIsValid(receipt, platform) {
@@ -130,7 +134,7 @@ function snapshotAuthorityIsValid(receipt, platform) {
             receipt.platform === platform &&
             receipt.deviceId === current.deviceId);
     }
-    return (receipt.platform === platform &&
+    return Boolean(receipt.platform === platform &&
         receipt.sessionId === current.sessionId &&
         receipt.claimEpoch === current.claimEpoch &&
         receipt.sourceKey === current.sourceKey &&
@@ -139,7 +143,12 @@ function snapshotAuthorityIsValid(receipt, platform) {
         receipt.deviceId !== null &&
         receipt.installGeneration !== null &&
         receipt.runnerInstanceId !== null &&
-        receipt.runnerClaim !== null);
+        receipt.runnerClaim !== null &&
+        receipt.appId !== null &&
+        receipt.artifactDigest !== null &&
+        receipt.runnerPid !== null &&
+        receipt.runnerProcessBirth !== null &&
+        snapshotAuthorityProvider?.validate(receipt));
 }
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot
@@ -150,9 +159,12 @@ function snapshotAuthorityIsValid(receipt, platform) {
 // stale-by-content cache would drive a wrong-element tap.
 let snapshotCacheDirty = true;
 export function cacheSnapshot(platform, nodes) {
+    const authorityReceipt = currentSnapshotAuthority(platform);
+    if (authorityReceipt.sessionId !== null)
+        snapshotAuthorityProvider?.record(authorityReceipt);
     snapshotCache.set(platform, {
         platform,
-        authorityReceipt: currentSnapshotAuthority(platform),
+        authorityReceipt,
         nodes,
         capturedAt: new Date().toISOString(),
         capturedAtMs: Date.now(),

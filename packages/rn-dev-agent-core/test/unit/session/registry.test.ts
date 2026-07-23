@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 
 const roots = [];
@@ -424,26 +425,26 @@ test('runtime target replacement refuses a target claimed by another live sessio
   assert.doesNotThrow(() => registry.verifyOperation(operation));
 });
 
-test('registry refuses a schema newer than version 3 without downgrading it', () => {
+test('registry refuses a schema newer than version 4 without downgrading it', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-schema-'));
   roots.push(root);
   const path = join(root, 'registry.sqlite3');
   const future = new DatabaseSync(path);
   future.exec(`
     CREATE TABLE authority_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    INSERT INTO authority_meta(key, value) VALUES ('schema_version', '4');
+    INSERT INTO authority_meta(key, value) VALUES ('schema_version', '5');
   `);
   future.close();
 
   assert.throws(
     () => openSessionRegistry(path, { ownerStatus: () => 'unknown' }),
-    /AUTHORITY_STORE_UNAVAILABLE.*schema 4 is newer than supported schema 3/,
+    /AUTHORITY_STORE_UNAVAILABLE.*schema 5 is newer than supported schema 4/,
   );
 
   const unchanged = new DatabaseSync(path);
   assert.equal(
     unchanged.prepare('SELECT value FROM authority_meta WHERE key = ?').get('schema_version').value,
-    '4',
+    '5',
   );
   unchanged.close();
 });
@@ -590,4 +591,83 @@ test('handoff cancellation and explicit expiry recovery restore the unchanged ow
   assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'handoff');
   registry.cancelHandoff(owner, expired.handoffId);
   assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
+});
+
+test('opaque recovery handles authorize only their bounded transition', () => {
+  const { registry, create } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  const capability = 'recovery-capability';
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update(capability).digest('hex'),
+    },
+  });
+  registry.bindRecoveryWorker(
+    target,
+    { instanceId: 'recovery-worker', pid: 202, token: 'recovery-birth' },
+    capability,
+  );
+  const status = registry.getSessionStatus(target.sessionId);
+  const handle = status?.bindings.recoveryHandles?.handoffRecipient?.token;
+
+  assert.equal(typeof handle, 'string');
+  assert.throws(
+    () => registry.prepareHandoffForHandle(owner, { targetHandle: 'forged' }),
+    /HANDOFF_TARGET_MISMATCH/,
+  );
+  assert.doesNotThrow(() =>
+    registry.prepareHandoffForHandle(owner, { targetHandle: String(handle) }),
+  );
+  assert.equal(
+    registry.getSessionStatus(target.sessionId)?.bindings.recoveryHandles.handoffRecipient,
+    null,
+  );
+});
+
+test('persistent platform receipts reject exact authority replacement', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:runner-a' }]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'device-a', appId: 'dev.example' },
+      install: {
+        buildGeneration: 1,
+        installGeneration: 'install-a',
+        artifactDigest: 'artifact-a',
+      },
+      runner: {
+        instanceId: 'runner-a',
+        pid: 303,
+        processBirth: 'runner-birth-a',
+      },
+    },
+  });
+  const receipt = {
+    sessionId: owner.sessionId,
+    claimEpoch: owner.claimEpoch,
+    sourceKey: 'repo',
+    worktreeKey: 'a',
+    appRootKey: '.',
+    platform: 'ios',
+    deviceId: 'device-a',
+    appId: 'dev.example',
+    buildGeneration: 1,
+    installGeneration: 'install-a',
+    artifactDigest: 'artifact-a',
+    runnerInstanceId: 'runner-a',
+    runnerPid: 303,
+    runnerProcessBirth: 'runner-birth-a',
+    runnerClaim: 'ios:device-a:runner-a',
+  };
+  registry.recordPlatformAuthorityReceipt(owner, 'ios', receipt);
+  assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), true);
+
+  registry.replaceDeviceAuthority(owner, {
+    device: { platform: 'ios', deviceId: 'device-b', appId: 'dev.example' },
+  });
+  assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), false);
 });

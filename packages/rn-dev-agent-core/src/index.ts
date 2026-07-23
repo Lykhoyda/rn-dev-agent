@@ -127,6 +127,8 @@ import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
 import { stopFastRunner } from './runners/rn-fast-runner-client.js';
+import { captureInstallGeneration } from './session/install-authority.js';
+import { readProcessBirth } from './session/process-birth.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
@@ -322,25 +324,69 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
-setSnapshotAuthorityProvider(() => {
-  const status = authorityRuntime.status();
-  if (!status.available) return null;
-  const device = status.bindings.device as Record<string, unknown> | undefined;
-  const install = status.bindings.install as Record<string, unknown> | undefined;
-  const runner = status.bindings.runner as Record<string, unknown> | undefined;
-  return {
-    sessionId: status.sessionId,
-    claimEpoch: status.claimEpoch,
-    sourceKey: status.sourceKey,
-    worktreeKey: status.worktreeKey,
-    appRootKey: status.appRootKey,
-    platform: device?.platform,
-    deviceId: device?.deviceId,
-    buildGeneration: install?.buildGeneration,
-    installGeneration: install?.installGeneration,
-    runnerInstanceId: runner?.instanceId,
-    runnerClaim: status.claims.find((claim) => claim.type === 'runner')?.key,
-  };
+setSnapshotAuthorityProvider({
+  current: () => {
+    const status = authorityRuntime.status();
+    if (!status.available) return null;
+    const device = status.bindings.device as Record<string, unknown> | undefined;
+    const install = status.bindings.install as Record<string, unknown> | undefined;
+    const runner = status.bindings.runner as Record<string, unknown> | undefined;
+    return {
+      sessionId: status.sessionId,
+      claimEpoch: status.claimEpoch,
+      sourceKey: status.sourceKey,
+      worktreeKey: status.worktreeKey,
+      appRootKey: status.appRootKey,
+      platform: device?.platform,
+      deviceId: device?.deviceId,
+      appId: device?.appId,
+      buildGeneration: install?.buildGeneration,
+      installGeneration: install?.installGeneration,
+      artifactDigest: install?.artifactDigest,
+      runnerInstanceId: runner?.instanceId,
+      runnerPid: runner?.pid,
+      runnerProcessBirth: runner?.processBirth,
+      runnerClaim: status.claims.find((claim) => claim.type === 'runner')?.key,
+    };
+  },
+  record: (receipt) => {
+    const { registry, session } = authorityRuntime.requireOperational();
+    registry.recordPlatformAuthorityReceipt(session, String(receipt.platform), {
+      ...receipt,
+    });
+  },
+  validate: (receipt) => {
+    try {
+      const { registry, session } = authorityRuntime.requireOperational();
+      if (
+        !registry.validatePlatformAuthorityReceipt(session, String(receipt.platform), {
+          ...receipt,
+        })
+      ) {
+        return false;
+      }
+      if (
+        typeof receipt.platform !== 'string' ||
+        typeof receipt.deviceId !== 'string' ||
+        typeof receipt.appId !== 'string' ||
+        typeof receipt.installGeneration !== 'string' ||
+        captureInstallGeneration({
+          platform: receipt.platform as 'ios' | 'android',
+          deviceId: receipt.deviceId,
+          appId: receipt.appId,
+        }) !== receipt.installGeneration
+      ) {
+        return false;
+      }
+      return (
+        typeof receipt.runnerPid === 'number' &&
+        typeof receipt.runnerProcessBirth === 'string' &&
+        readProcessBirth(receipt.runnerPid)?.token === receipt.runnerProcessBirth
+      );
+    } catch {
+      return false;
+    }
+  },
 });
 const localAuthorityProbe = createLocalAuthorityProbe({
   runtime: authorityRuntime,
@@ -382,6 +428,7 @@ setObserveAuthorityDeps({
   },
   bind: ({ port, authority }) => {
     const { registry, session } = authorityRuntime.requireAvailable();
+    const controller = registry.getControllerBinding(session);
     registry.updateBindings(session, {
       bindings: {
         observe: {
@@ -390,6 +437,8 @@ setObserveAuthorityDeps({
           claimEpoch: authority.claimEpoch,
           instanceId: authority.instanceId,
           cleanupCapability: authority.capability,
+          pid: controller.worker.pid,
+          processBirth: controller.worker.token,
         },
       },
     });
@@ -802,10 +851,10 @@ trackedTool(
     metroInstanceId: z.string().optional(),
     buildGeneration: z.number().int().nonnegative().optional(),
     mode: z.enum(['managed', 'external']).optional(),
-    targetInstance: z.string().optional(),
+    targetHandle: z.string().optional(),
     handoffId: z.string().optional(),
     token: z.string().optional(),
-    priorSessionId: z.string().optional(),
+    adoptionHandle: z.string().optional(),
     confirmed: z.boolean().optional(),
   },
   sessionHandler,

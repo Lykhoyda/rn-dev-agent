@@ -23304,7 +23304,7 @@ function setSnapshotAuthorityProvider(provider) {
   snapshotCacheDirty = true;
 }
 function currentSnapshotAuthority(platform) {
-  const authority = snapshotAuthorityProvider?.();
+  const authority = snapshotAuthorityProvider?.current();
   const session = getActiveSession();
   return {
     sessionId: authority?.sessionId ?? null,
@@ -23317,7 +23317,11 @@ function currentSnapshotAuthority(platform) {
     buildGeneration: authority?.buildGeneration ?? null,
     installGeneration: authority?.installGeneration ?? null,
     runnerInstanceId: authority?.runnerInstanceId ?? null,
-    runnerClaim: authority?.runnerClaim ?? null
+    runnerClaim: authority?.runnerClaim ?? null,
+    appId: authority?.appId ?? session?.appId ?? null,
+    artifactDigest: authority?.artifactDigest ?? null,
+    runnerPid: authority?.runnerPid ?? null,
+    runnerProcessBirth: authority?.runnerProcessBirth ?? null
   };
 }
 function snapshotAuthorityIsValid(receipt2, platform) {
@@ -23325,12 +23329,15 @@ function snapshotAuthorityIsValid(receipt2, platform) {
   if (receipt2.sessionId === null) {
     return current.sessionId === null && receipt2.platform === platform && receipt2.deviceId === current.deviceId;
   }
-  return receipt2.platform === platform && receipt2.sessionId === current.sessionId && receipt2.claimEpoch === current.claimEpoch && receipt2.sourceKey === current.sourceKey && receipt2.worktreeKey === current.worktreeKey && receipt2.appRootKey === current.appRootKey && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.runnerInstanceId !== null && receipt2.runnerClaim !== null;
+  return Boolean(receipt2.platform === platform && receipt2.sessionId === current.sessionId && receipt2.claimEpoch === current.claimEpoch && receipt2.sourceKey === current.sourceKey && receipt2.worktreeKey === current.worktreeKey && receipt2.appRootKey === current.appRootKey && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.runnerInstanceId !== null && receipt2.runnerClaim !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && receipt2.runnerPid !== null && receipt2.runnerProcessBirth !== null && snapshotAuthorityProvider?.validate(receipt2));
 }
 function cacheSnapshot(platform, nodes) {
+  const authorityReceipt = currentSnapshotAuthority(platform);
+  if (authorityReceipt.sessionId !== null)
+    snapshotAuthorityProvider?.record(authorityReceipt);
   snapshotCache.set(platform, {
     platform,
-    authorityReceipt: currentSnapshotAuthority(platform),
+    authorityReceipt,
     nodes,
     capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
     capturedAtMs: Date.now()
@@ -49634,6 +49641,14 @@ function projectPublicAuthorityStatus(status) {
       code: status.code
     };
   }
+  const recovery = status.bindings.recoveryHandles;
+  const recoveryStatus = status.state === "blocked" && recovery ? {
+    handoffRecipientHandle: typeof recovery.handoffRecipient?.token === "string" ? recovery.handoffRecipient.token : void 0,
+    handoffRecipientExpiresMs: typeof recovery.handoffRecipient?.expiresMs === "number" ? recovery.handoffRecipient.expiresMs : void 0,
+    adoptionRequired: Boolean(recovery.adoptStale),
+    adoptionHandle: typeof recovery.adoptStale?.token === "string" ? recovery.adoptStale.token : void 0,
+    adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
+  } : void 0;
   return {
     available: true,
     state: status.state,
@@ -49646,6 +49661,7 @@ function projectPublicAuthorityStatus(status) {
     metroBound: Boolean(status.bindings.metro),
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
+    ...recoveryStatus ? { recovery: recoveryStatus } : {},
     migration: inspectAuthorityMigration(status)
   };
 }
@@ -61698,6 +61714,79 @@ function createMetroEventsHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/index.js
 init_rn_fast_runner_client();
+
+// packages/rn-dev-agent-core/dist/session/install-authority.js
+import { execFileSync as execFileSync10 } from "node:child_process";
+import { createHash as createHash10 } from "node:crypto";
+import { readFileSync as readFileSync26, statSync as statSync9 } from "node:fs";
+import { join as join38 } from "node:path";
+function runText(command, args) {
+  return execFileSync10(command, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 1e4,
+    maxBuffer: 8 * 1024 * 1024
+  });
+}
+function generation(parts) {
+  return createHash10("sha256").update(parts.join("\0")).digest("hex");
+}
+function androidApkPaths(target, text) {
+  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
+}
+function captureInstallGeneration(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join38(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const stat2 = dependencies.stat ?? statSync9;
+    const metadata2 = [infoPath, join38(appPath, executable)].map((path) => {
+      const value = stat2(path);
+      return `${path}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+    });
+    return generation(metadata2);
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  const metadata = text("adb", [
+    "-s",
+    target.deviceId,
+    "shell",
+    "stat",
+    "-c",
+    "%n:%i:%s:%Y",
+    ...apkPaths
+  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
+  if (metadata.length !== apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
+  }
+  return generation(metadata);
+}
+
+// packages/rn-dev-agent-core/dist/index.js
+init_process_birth();
 init_ensure_single_runner();
 
 // packages/rn-dev-agent-core/dist/observability/instrumentation.js
@@ -61801,7 +61890,7 @@ function instrumentTool(toolName, handler) {
 }
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join38 } from "node:path";
+import { join as join39 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
@@ -61944,7 +62033,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join38(tmpdir12(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join39(tmpdir12(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -61958,9 +62047,9 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync26 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname15, join as join39 } from "node:path";
+import { dirname as dirname15, join as join40 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
 import { randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
@@ -62214,7 +62303,7 @@ var ObservabilityServer = class {
   }
   index(res) {
     try {
-      let html = readFileSync26(join39(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync27(join40(__dir, "web-dist", "index.html"), "utf8");
       if (this.authority) {
         const authorityJs = JSON.stringify({
           capability: this.authority.capability,
@@ -62402,10 +62491,10 @@ init_project_config();
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
 init_secure_state_file();
 init_storage();
-import { join as join40 } from "node:path";
+import { join as join41 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join40(getStateDir(), "observe", `${safe}.json`);
+  return join41(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -62585,7 +62674,7 @@ init_project_config();
 import { spawn as spawn5, execFile as execFile25 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir13 } from "node:os";
-import { join as join41 } from "node:path";
+import { join as join42 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
 var MAX_FRAME_BYTES = 8e6;
@@ -62741,7 +62830,7 @@ var IosSimctlLoopSource = class {
     this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
     this.idleDelayMs = opts.idleDelayMs ?? 25;
     this.failurePauseMs = opts.failurePauseMs ?? 500;
-    this.tmpPath = opts.tmpPath ?? (() => join41(tmpdir13(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+    this.tmpPath = opts.tmpPath ?? (() => join42(tmpdir13(), "rn-mirror-simctl-" + process.pid + ".jpg"));
   }
   start(sink) {
     this.active = true;
@@ -63176,20 +63265,20 @@ function buildMirrorTargetResolver(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync29 } from "node:fs";
+import { readFileSync as readFileSync30 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname16, join as join42 } from "node:path";
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync17, renameSync as renameSync6, readFileSync as readFileSync27, readdirSync as readdirSync10, existsSync as existsSync30 } from "node:fs";
-import { createHash as createHash10 } from "node:crypto";
+import { dirname as dirname16, join as join43 } from "node:path";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync17, renameSync as renameSync6, readFileSync as readFileSync28, readdirSync as readdirSync10, existsSync as existsSync30 } from "node:fs";
+import { createHash as createHash11 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
-  return join42(projectRoot, ".rn-agent", "e2e");
+  return join43(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join42(dir, `${id}.yaml`);
+  const file = join43(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -63213,7 +63302,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash10("sha256").update(s).digest("hex");
+  return createHash11("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -63239,7 +63328,7 @@ function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync30(filePath))
     return null;
-  return parseLockedTest(readFileSync27(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync28(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
@@ -63282,12 +63371,12 @@ function parseLockedTest(text, filePath) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync28 } from "node:fs";
-import { join as join43 } from "node:path";
+import { readFileSync as readFileSync29 } from "node:fs";
+import { join as join44 } from "node:path";
 function loadE2eConfig(projectRoot) {
-  const filePath = join43(projectRoot, ".rn-agent", "e2e.config.json");
+  const filePath = join44(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync28(filePath, "utf8");
+    const raw = readFileSync29(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -63324,8 +63413,8 @@ function redactSecrets(text, secretValues) {
 }
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync10 } from "node:child_process";
-var defaultExec3 = (cmd, args) => execFileSync10(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+import { execFileSync as execFileSync11 } from "node:child_process";
+var defaultExec3 = (cmd, args) => execFileSync11(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -63355,7 +63444,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync29(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync30(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -63413,8 +63502,8 @@ function createLockE2eTestHandler(deps = {}) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
-import { join as join44 } from "node:path";
-import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync18, renameSync as renameSync7, readFileSync as readFileSync30, existsSync as existsSync31 } from "node:fs";
+import { join as join45 } from "node:path";
+import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync18, renameSync as renameSync7, readFileSync as readFileSync31, existsSync as existsSync31 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -63469,20 +63558,20 @@ function diffNewlyFailing(current, previousGreen) {
 }
 var INDEX_MAX = 100;
 function e2eRunsDirFor(projectRoot) {
-  return join44(sessionStateDirectory(projectRoot), "e2e-runs");
+  return join45(sessionStateDirectory(projectRoot), "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync17(join44(file, ".."), { recursive: true });
+  mkdirSync17(join45(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync18(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync7(tmp, file);
 }
 function loadIndex(projectRoot) {
-  const file = join44(e2eRunsDirFor(projectRoot), "index.json");
+  const file = join45(e2eRunsDirFor(projectRoot), "index.json");
   if (!existsSync31(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync30(file, "utf8"));
+    const parsed = JSON.parse(readFileSync31(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -63491,7 +63580,7 @@ function loadIndex(projectRoot) {
 function writeRunRecord(projectRoot, rec) {
   assertValidActionId(rec.runId, "writeRunRecord");
   const dir = e2eRunsDirFor(projectRoot);
-  writeJsonAtomic(join44(dir, `${rec.runId}.json`), rec);
+  writeJsonAtomic(join45(dir, `${rec.runId}.json`), rec);
   const entry = {
     runId: rec.runId,
     finishedAt: rec.finishedAt,
@@ -63499,15 +63588,15 @@ function writeRunRecord(projectRoot, rec) {
     totals: rec.totals
   };
   const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
-  writeJsonAtomic(join44(dir, "index.json"), next);
+  writeJsonAtomic(join45(dir, "index.json"), next);
 }
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
-  const file = join44(e2eRunsDirFor(projectRoot), `${runId}.json`);
+  const file = join45(e2eRunsDirFor(projectRoot), `${runId}.json`);
   if (!existsSync31(file))
     return null;
   try {
-    return JSON.parse(readFileSync30(file, "utf8"));
+    return JSON.parse(readFileSync31(file, "utf8"));
   } catch {
     return null;
   }
@@ -63523,8 +63612,8 @@ init_storage();
 init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
-import { join as join45 } from "node:path";
-import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync31, readdirSync as readdirSync11, existsSync as existsSync32 } from "node:fs";
+import { join as join46 } from "node:path";
+import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync32, readdirSync as readdirSync11, existsSync as existsSync32 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -63532,11 +63621,11 @@ var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "interrupted"
 ]);
 function requestsDir(projectRoot) {
-  return join45(e2eRunsDirFor(projectRoot), "requests");
+  return join46(e2eRunsDirFor(projectRoot), "requests");
 }
 function requestPath(projectRoot, runId) {
   assertValidActionId(runId, "e2e-run-request");
-  return join45(requestsDir(projectRoot), `${runId}.json`);
+  return join46(requestsDir(projectRoot), `${runId}.json`);
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
@@ -63550,7 +63639,7 @@ function loadRequest(projectRoot, runId) {
   if (!existsSync32(file))
     return null;
   try {
-    return JSON.parse(readFileSync31(file, "utf8"));
+    return JSON.parse(readFileSync32(file, "utf8"));
   } catch {
     return null;
   }
@@ -63851,9 +63940,9 @@ init_storage();
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
 import { readdirSync as readdirSync12 } from "node:fs";
-import { join as join46 } from "node:path";
+import { join as join47 } from "node:path";
 async function listActions(projectRoot) {
-  const actionsDir = join46(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join47(projectRoot, ".rn-agent", "actions");
   let files;
   try {
     files = readdirSync12(actionsDir);
@@ -63920,11 +64009,11 @@ function inspectSessionOwner(owner, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/registry.js
-import { createHash as createHash11, randomBytes as randomBytes5, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { createHash as createHash12, randomBytes as randomBytes5, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync as chmodSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync19, statSync as statSync9 } from "node:fs";
+import { chmodSync as chmodSync3, lstatSync as lstatSync6, mkdirSync as mkdirSync19, statSync as statSync10 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { dirname as dirname17 } from "node:path";
 var require2 = createRequire2(import.meta.url);
@@ -63949,7 +64038,7 @@ function assertPrivateDirectory(path) {
   if (link.isSymbolicLink() || !link.isDirectory()) {
     throw new Error("authority state root must be a real directory");
   }
-  const stat2 = statSync9(path);
+  const stat2 = statSync10(path);
   if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
     throw new Error("authority state root is not owned by the current user");
   }
@@ -63962,7 +64051,7 @@ function secureDatabaseFiles(path) {
       if (link.isSymbolicLink() || !link.isFile()) {
         throw new Error("authority database path is not a regular file");
       }
-      const stat2 = statSync9(candidate);
+      const stat2 = statSync10(candidate);
       if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
         throw new Error("authority database is not owned by the current user");
       }
@@ -64055,7 +64144,7 @@ var errorAxes = {
   PROOF_AUTHORITY_MISMATCH: "P"
 };
 function shortAuthorityIdentity(value) {
-  return createHash11("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return createHash12("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 function authorityErrorMeta(error2) {
   return {
@@ -64237,16 +64326,33 @@ var SessionRegistry = class {
       const row = this.#requireRecoverableSession(session);
       const bindings = JSON.parse(row.bindings_json);
       const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-      const actual = createHash11("sha256").update(capability).digest();
+      const actual = createHash12("sha256").update(capability).digest();
       if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
         throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
       }
+      const adoptionRequired = bindings.adoptionRequired;
+      const expiresMs = now + 5 * 6e4;
+      const recoveryHandles = {
+        handoffRecipient: {
+          token: randomBytes5(32).toString("base64url"),
+          expiresMs,
+          workerInstance: worker.instanceId
+        },
+        ...typeof adoptionRequired?.sessionId === "string" ? {
+          adoptStale: {
+            token: randomBytes5(32).toString("base64url"),
+            expiresMs,
+            priorSessionId: adoptionRequired.sessionId,
+            priorClaimEpoch: adoptionRequired.claimEpoch
+          }
+        } : {}
+      };
       this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
       this.#database.prepare(`UPDATE sessions
            SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
-               authority_version = authority_version + 1, updated_ms = ?
+               bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?
-             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, now, session.sessionId, session.claimEpoch);
+             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, JSON.stringify({ ...bindings, recoveryHandles }), now, session.sessionId, session.claimEpoch);
     });
   }
   replaceDeviceAuthority(session, input) {
@@ -64282,6 +64388,7 @@ var SessionRegistry = class {
         proof: null,
         pendingBuild: null
       };
+      this.#database.prepare("DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?").run(session.sessionId, String(input.device.platform));
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
@@ -64300,6 +64407,13 @@ var SessionRegistry = class {
         ...JSON.parse(current.bindings_json),
         ...input.bindings
       };
+      if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install") || Object.hasOwn(input.bindings, "runner")) {
+        const currentBindings = JSON.parse(current.bindings_json);
+        const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
+        if (platform) {
+          this.#database.prepare("DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?").run(session.sessionId, platform);
+        }
+      }
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
@@ -64465,9 +64579,30 @@ var SessionRegistry = class {
     const now = this.#now();
     const handoffId = randomBytes5(16).toString("hex");
     const token2 = randomBytes5(32).toString("base64url");
-    const tokenHash = createHash11("sha256").update(token2).digest("hex");
+    const tokenHash = createHash12("sha256").update(token2).digest("hex");
     this.#transaction(() => {
       const current = this.#requireSession(session);
+      let targetInstance = input.targetInstance;
+      if (input.targetHandle) {
+        const targets = this.#database.prepare(`SELECT session_id, bindings_json FROM sessions
+             WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(current.source_key, current.worktree_key, current.app_root_key);
+        for (const target of targets) {
+          const bindings = JSON.parse(target.bindings_json);
+          const handles = bindings.recoveryHandles;
+          const handle = handles?.handoffRecipient;
+          if (typeof handle?.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, input.targetHandle)) {
+            targetInstance = typeof handle.workerInstance === "string" ? handle.workerInstance : void 0;
+            this.#database.prepare("UPDATE sessions SET bindings_json = ? WHERE session_id = ?").run(JSON.stringify({
+              ...bindings,
+              recoveryHandles: { ...handles, handoffRecipient: null }
+            }), target.session_id);
+            break;
+          }
+        }
+      }
+      if (!targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff recipient capability is invalid or expired");
+      }
       const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
       if (active && !String(active.profile).startsWith("transition:")) {
@@ -64476,13 +64611,16 @@ var SessionRegistry = class {
       this.#database.prepare(`INSERT INTO handoffs(
             handoff_id, session_id, claim_epoch, target_instance,
             token_hash, source_state, expires_ms, consumed_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, input.targetInstance, tokenHash, this.#requireSession(session).state, now + (input.ttlMs ?? 15e3));
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, targetInstance, tokenHash, this.#requireSession(session).state, now + (input.ttlMs ?? 15e3));
       this.#database.prepare(`UPDATE sessions
            SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
       this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
     });
     return { handoffId, token: token2 };
+  }
+  prepareHandoffForHandle(session, input) {
+    return this.prepareHandoff(session, input);
   }
   cancelHandoff(session, handoffId) {
     const now = this.#now();
@@ -64532,7 +64670,7 @@ var SessionRegistry = class {
       throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
     }
     const expected = Buffer.from(handoff.token_hash, "hex");
-    const actual = createHash11("sha256").update(input.token).digest();
+    const actual = createHash12("sha256").update(input.token).digest();
     if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
       throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
     }
@@ -64560,7 +64698,7 @@ var SessionRegistry = class {
         throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
       }
       const expected = Buffer.from(handoff.token_hash, "hex");
-      const actual = Buffer.from(createHash11("sha256").update(input.token).digest("hex"), "hex");
+      const actual = Buffer.from(createHash12("sha256").update(input.token).digest("hex"), "hex");
       if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
         throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
       }
@@ -64619,7 +64757,7 @@ var SessionRegistry = class {
         throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
       }
       const expected = Buffer.from(handoff.token_hash, "hex");
-      const actual = createHash11("sha256").update(input.token).digest();
+      const actual = createHash12("sha256").update(input.token).digest();
       if (expected.length !== actual.length || !timingSafeEqual3(expected, actual)) {
         throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
       }
@@ -64692,6 +64830,33 @@ var SessionRegistry = class {
       }), now, target.sessionId, target.claimEpoch);
     });
   }
+  recordPlatformAuthorityReceipt(session, platform, receipt2) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireSession(session);
+      const bindings = JSON.parse(row.bindings_json);
+      const device = bindings.device;
+      const install = bindings.install;
+      const runner = bindings.runner;
+      const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
+      if (device?.platform !== platform || receipt2.sessionId !== session.sessionId || receipt2.claimEpoch !== session.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerClaim !== runnerClaim?.resource_key) {
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
+      }
+      this.#database.prepare(`INSERT INTO platform_authority_receipts(
+             session_id, claim_epoch, platform, receipt_json, updated_ms
+           ) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(session_id, platform) DO UPDATE SET
+             claim_epoch = excluded.claim_epoch,
+             receipt_json = excluded.receipt_json,
+             updated_ms = excluded.updated_ms`).run(session.sessionId, session.claimEpoch, platform, JSON.stringify(receipt2), now);
+    });
+  }
+  validatePlatformAuthorityReceipt(session, platform, receipt2) {
+    const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
+    return row?.claim_epoch === session.claimEpoch && typeof row.receipt_json === "string" && row.receipt_json === JSON.stringify(receipt2);
+  }
   adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
     const priorStatus = this.getSessionStatus(priorSessionId);
     if (!priorStatus) {
@@ -64734,6 +64899,7 @@ var SessionRegistry = class {
            WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
         ...targetBindings,
         adoptionRequired: null,
+        recoveryHandles: null,
         metro: sameMetro ? priorBindings.metro : null,
         device: priorBindings.device ?? null,
         install: priorBindings.install ?? null,
@@ -64744,6 +64910,19 @@ var SessionRegistry = class {
       }), now, target.sessionId, target.claimEpoch);
       this.#fenceSession(prior.session_id, now);
     });
+  }
+  adoptStaleWithHandle(target, handle, targetInstance) {
+    const targetStatus = this.getSessionStatus(target.sessionId);
+    const recovery = targetStatus?.bindings.recoveryHandles;
+    const adoption = recovery?.adoptStale;
+    if (targetStatus?.state !== "blocked" || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
+    }
+    const prior = this.getSessionStatus(adoption.priorSessionId);
+    if (prior?.claimEpoch !== adoption.priorClaimEpoch) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
+    }
+    this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance);
   }
   beginOperation(session, operation) {
     const now = this.#now();
@@ -64825,7 +65004,7 @@ var SessionRegistry = class {
       const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
       if (existing)
         return existing.port;
-      const digest2 = createHash11("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+      const digest2 = createHash12("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
       const preferred = digest2.readUInt32BE(0) % input.span;
       for (let offset = 0; offset < input.span; offset += 1) {
         const port = input.base + (preferred + offset) % input.span;
@@ -64842,8 +65021,8 @@ var SessionRegistry = class {
   #initialize() {
     const schema = this.#database.prepare("SELECT value FROM authority_meta WHERE key = ?").get("schema_version")?.value;
     const version2 = Number(schema);
-    if (!Number.isSafeInteger(version2) || version2 < 1 || version2 > 3) {
-      throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version2 > 3 ? `authority registry schema ${version2} is newer than supported schema 3` : "authority registry schema version is invalid");
+    if (!Number.isSafeInteger(version2) || version2 < 1 || version2 > 4) {
+      throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version2 > 4 ? `authority registry schema ${version2} is newer than supported schema 4` : "authority registry schema version is invalid");
     }
     this.#database.exec("BEGIN IMMEDIATE");
     try {
@@ -64907,6 +65086,14 @@ var SessionRegistry = class {
         expires_ms INTEGER NOT NULL,
         consumed_ms INTEGER
       );
+      CREATE TABLE IF NOT EXISTS platform_authority_receipts (
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        PRIMARY KEY(session_id, platform)
+      );
       `);
       if (version2 < 3) {
         const columns = this.#database.prepare("PRAGMA table_info(handoffs)").all();
@@ -64914,7 +65101,7 @@ var SessionRegistry = class {
           this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
         }
       }
-      this.#database.exec("UPDATE authority_meta SET value = '3' WHERE key = 'schema_version';");
+      this.#database.exec("UPDATE authority_meta SET value = '4' WHERE key = 'schema_version';");
       this.#database.exec("COMMIT");
     } catch (error2) {
       this.#database.exec("ROLLBACK");
@@ -64989,6 +65176,11 @@ var SessionRegistry = class {
   #findClaim(type, key) {
     return asClaim(this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
            FROM claims WHERE resource_type = ? AND resource_key = ?`).get(type, key));
+  }
+  #capabilityMatches(expected, actual) {
+    const expectedDigest = createHash12("sha256").update(expected).digest();
+    const actualDigest = createHash12("sha256").update(actual).digest();
+    return timingSafeEqual3(expectedDigest, actualDigest);
   }
   #fenceSession(sessionId, now) {
     this.#database.prepare("DELETE FROM claims WHERE session_id = ?").run(sessionId);
@@ -65178,76 +65370,6 @@ function verifyBuildReceipt(receipt2, capability, expected) {
     }
   }
   return receipt2.payload;
-}
-
-// packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync11 } from "node:child_process";
-import { createHash as createHash12 } from "node:crypto";
-import { readFileSync as readFileSync32, statSync as statSync10 } from "node:fs";
-import { join as join47 } from "node:path";
-function runText(command, args) {
-  return execFileSync11(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 1e4,
-    maxBuffer: 8 * 1024 * 1024
-  });
-}
-function generation(parts) {
-  return createHash12("sha256").update(parts.join("\0")).digest("hex");
-}
-function androidApkPaths(target, text) {
-  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
-}
-function captureInstallGeneration(target, dependencies = {}) {
-  const text = dependencies.runText ?? runText;
-  if (target.platform === "ios") {
-    const appPath = text("xcrun", [
-      "simctl",
-      "get_app_container",
-      target.deviceId,
-      target.appId,
-      "app"
-    ]).trim();
-    if (!appPath) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
-    }
-    const infoPath = join47(appPath, "Info.plist");
-    const executable = text("plutil", [
-      "-extract",
-      "CFBundleExecutable",
-      "raw",
-      "-o",
-      "-",
-      infoPath
-    ]).trim();
-    if (!executable) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
-    }
-    const stat2 = dependencies.stat ?? statSync10;
-    const metadata2 = [infoPath, join47(appPath, executable)].map((path) => {
-      const value = stat2(path);
-      return `${path}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
-    });
-    return generation(metadata2);
-  }
-  const apkPaths = androidApkPaths(target, text);
-  if (!apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
-  }
-  const metadata = text("adb", [
-    "-s",
-    target.deviceId,
-    "shell",
-    "stat",
-    "-c",
-    "%n:%i:%s:%Y",
-    ...apkPaths
-  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
-  if (metadata.length !== apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
-  }
-  return generation(metadata);
 }
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
@@ -65748,11 +65870,57 @@ init_rn_android_runner_client();
 import { readFileSync as readFileSync34 } from "node:fs";
 import { dirname as dirname19, join as join49 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-async function stopHandoffObserve(binding) {
+init_process_birth();
+
+// packages/rn-dev-agent-core/dist/session/managed-metro.js
+import { execFileSync as execFileSync12, spawn as spawn6 } from "node:child_process";
+init_metro_cwd();
+init_process_birth();
+function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync12) {
+  try {
+    if (platform === "win32") {
+      const output = execute("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-NetTCPConnection -State Listen -LocalPort ${port} | Select-Object -First 1 -ExpandProperty OwningProcess)`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      const pid = Number(String(output).trim());
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
+    if (platform === "linux") {
+      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const match = /pid=(\d+)/.exec(String(output));
+      const pid = Number(match?.[1]);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
+    return pidForPort(port);
+  } catch {
+    return null;
+  }
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+async function waitForStopped(probe, timeoutMs, message) {
+  const deadline = Date.now() + timeoutMs;
+  while (probe()) {
+    if (Date.now() >= deadline) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", message);
+    }
+    await new Promise((resolve8) => setTimeout(resolve8, 25));
+  }
+}
+async function stopHandoffObserve(binding, listenerPid = managedMetroListenerPid, processBirth = readProcessBirth, timeoutMs = 2e3) {
   const port = Number(binding.port);
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
   const instanceId = String(binding.instanceId ?? "");
   const capability = String(binding.cleanupCapability ?? "");
-  if (!Number.isSafeInteger(port) || !instanceId || !capability) {
+  if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability || listenerPid(port) !== pid || processBirth(pid)?.token !== expectedBirth) {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
   }
   const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
@@ -65765,13 +65933,25 @@ async function stopHandoffObserve(binding) {
   if (!response.ok) {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe server refused fenced handoff cleanup");
   }
+  await waitForStopped(() => listenerPid(port) === pid, timeoutMs, "source Observe listener did not stop before the cleanup deadline");
 }
-async function stopHandoffRunner(binding) {
+async function stopHandoffRunner(binding, processBirth = readProcessBirth, timeoutMs = 2e3) {
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  if (!Number.isSafeInteger(pid) || !expectedBirth) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner cleanup identity is incomplete");
+  }
+  if (processBirth(pid)?.token !== expectedBirth) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner process identity changed before cleanup");
+  }
   if (binding.platform === "ios") {
     stopFastRunner(typeof binding.deviceId === "string" ? binding.deviceId : void 0);
   } else if (binding.platform === "android") {
     await stopAndroidRunner(typeof binding.deviceId === "string" ? binding.deviceId : void 0);
+  } else {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner platform is unavailable");
   }
+  await waitForStopped(() => processBirth(pid)?.token === expectedBirth, timeoutMs, "source runner process did not stop before the cleanup deadline");
 }
 function authorityFailure(error2) {
   if (error2 instanceof SessionAuthorityError) {
@@ -65896,8 +66076,8 @@ function createSessionHandler(runtime, dependencies = {}) {
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "prepare_handoff") {
-        const targetInstance = required2(input.targetInstance, "targetInstance");
-        return okResult(registry2.prepareHandoff(session, { targetInstance }));
+        const targetHandle = required2(input.targetHandle, "targetHandle");
+        return okResult(registry2.prepareHandoffForHandle(session, { targetHandle }));
       }
       if (input.action === "cancel_handoff") {
         const handoffId = required2(input.handoffId, "handoffId");
@@ -66002,10 +66182,18 @@ function createSessionHandler(runtime, dependencies = {}) {
           });
         }
         if (cleanup?.runner) {
-          await (dependencies.stopHandoffRunner ?? stopHandoffRunner)(cleanup.runner);
+          if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(cleanup.runner);
+          } else {
+            await stopHandoffRunner(cleanup.runner, dependencies.readProcessBirth, dependencies.cleanupTimeoutMs);
+          }
         }
         if (cleanup?.observe) {
-          await (dependencies.stopHandoffObserve ?? stopHandoffObserve)(cleanup.observe);
+          if (dependencies.stopHandoffObserve) {
+            await dependencies.stopHandoffObserve(cleanup.observe);
+          } else {
+            await stopHandoffObserve(cleanup.observe, dependencies.pidForPort, dependencies.readProcessBirth, dependencies.cleanupTimeoutMs);
+          }
         }
         registry2.finishHandoffCleanup(session, status.worker.instanceId);
         return okResult({
@@ -66016,19 +66204,14 @@ function createSessionHandler(runtime, dependencies = {}) {
         });
       }
       if (input.action === "adopt_stale") {
-        const priorSessionId = required2(input.priorSessionId, "priorSessionId");
+        const adoptionHandle = required2(input.adoptionHandle, "adoptionHandle");
         const current = registry2.getSessionStatus(session.sessionId);
-        const prior = registry2.getSessionStatus(priorSessionId);
-        if (!current || !prior || current.sourceKey !== prior.sourceKey || current.worktreeKey !== prior.worktreeKey || current.appRootKey !== prior.appRootKey) {
-          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
-        }
-        if (!current.worker.instanceId) {
+        if (!current?.worker.instanceId) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "recovery worker identity is unavailable");
         }
-        registry2.adoptStaleIntoBlocked(session, priorSessionId, current.worker.instanceId);
+        registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
         return okResult({
           adopted: true,
-          priorSessionId: priorSessionId.slice(0, 12),
           session: projectPublicAuthorityStatus(runtime.status()),
           runner: {
             adopted: false,
@@ -66652,7 +66835,7 @@ function createAuthorityGate(runtime, dependencies) {
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 init_metro_cwd();
-import { execFileSync as execFileSync13 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 import { createHash as createHash14 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
@@ -66687,7 +66870,7 @@ init_process_birth();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash13 } from "node:crypto";
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 import { readFileSync as readFileSync35, realpathSync as realpathSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join50, relative as relative2, resolve as resolve7 } from "node:path";
 function digest(parts) {
@@ -66699,7 +66882,7 @@ function digest(parts) {
   return hash.digest("hex");
 }
 function defaultGit(root, args) {
-  return execFileSync12("git", ["-C", root, ...args], {
+  return execFileSync13("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -66822,7 +67005,7 @@ async function defaultFetchJson(url, init) {
 }
 function defaultDeviceExists(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync13("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync14("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -66830,7 +67013,7 @@ function defaultDeviceExists(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync13("adb", ["devices"], {
+  const output = execFileSync14("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -67184,26 +67367,58 @@ var strictProofMonitor = new StrictProofMonitor();
 addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 var authorityRuntime = getWorkerAuthorityRuntime();
-setSnapshotAuthorityProvider(() => {
-  const status = authorityRuntime.status();
-  if (!status.available)
-    return null;
-  const device = status.bindings.device;
-  const install = status.bindings.install;
-  const runner = status.bindings.runner;
-  return {
-    sessionId: status.sessionId,
-    claimEpoch: status.claimEpoch,
-    sourceKey: status.sourceKey,
-    worktreeKey: status.worktreeKey,
-    appRootKey: status.appRootKey,
-    platform: device?.platform,
-    deviceId: device?.deviceId,
-    buildGeneration: install?.buildGeneration,
-    installGeneration: install?.installGeneration,
-    runnerInstanceId: runner?.instanceId,
-    runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key
-  };
+setSnapshotAuthorityProvider({
+  current: () => {
+    const status = authorityRuntime.status();
+    if (!status.available)
+      return null;
+    const device = status.bindings.device;
+    const install = status.bindings.install;
+    const runner = status.bindings.runner;
+    return {
+      sessionId: status.sessionId,
+      claimEpoch: status.claimEpoch,
+      sourceKey: status.sourceKey,
+      worktreeKey: status.worktreeKey,
+      appRootKey: status.appRootKey,
+      platform: device?.platform,
+      deviceId: device?.deviceId,
+      appId: device?.appId,
+      buildGeneration: install?.buildGeneration,
+      installGeneration: install?.installGeneration,
+      artifactDigest: install?.artifactDigest,
+      runnerInstanceId: runner?.instanceId,
+      runnerPid: runner?.pid,
+      runnerProcessBirth: runner?.processBirth,
+      runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key
+    };
+  },
+  record: (receipt2) => {
+    const { registry: registry2, session } = authorityRuntime.requireOperational();
+    registry2.recordPlatformAuthorityReceipt(session, String(receipt2.platform), {
+      ...receipt2
+    });
+  },
+  validate: (receipt2) => {
+    try {
+      const { registry: registry2, session } = authorityRuntime.requireOperational();
+      if (!registry2.validatePlatformAuthorityReceipt(session, String(receipt2.platform), {
+        ...receipt2
+      })) {
+        return false;
+      }
+      if (typeof receipt2.platform !== "string" || typeof receipt2.deviceId !== "string" || typeof receipt2.appId !== "string" || typeof receipt2.installGeneration !== "string" || captureInstallGeneration({
+        platform: receipt2.platform,
+        deviceId: receipt2.deviceId,
+        appId: receipt2.appId
+      }) !== receipt2.installGeneration) {
+        return false;
+      }
+      return typeof receipt2.runnerPid === "number" && typeof receipt2.runnerProcessBirth === "string" && readProcessBirth(receipt2.runnerPid)?.token === receipt2.runnerProcessBirth;
+    } catch {
+      return false;
+    }
+  }
 });
 var localAuthorityProbe = createLocalAuthorityProbe({
   runtime: authorityRuntime,
@@ -67236,6 +67451,7 @@ setObserveAuthorityDeps({
   },
   bind: ({ port, authority }) => {
     const { registry: registry2, session } = authorityRuntime.requireAvailable();
+    const controller = registry2.getControllerBinding(session);
     registry2.updateBindings(session, {
       bindings: {
         observe: {
@@ -67243,7 +67459,9 @@ setObserveAuthorityDeps({
           sessionId: authority.sessionId,
           claimEpoch: authority.claimEpoch,
           instanceId: authority.instanceId,
-          cleanupCapability: authority.capability
+          cleanupCapability: authority.capability,
+          pid: controller.worker.pid,
+          processBirth: controller.worker.token
         }
       }
     });
@@ -67522,10 +67740,10 @@ trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent author
   metroInstanceId: external_exports.string().optional(),
   buildGeneration: external_exports.number().int().nonnegative().optional(),
   mode: external_exports.enum(["managed", "external"]).optional(),
-  targetInstance: external_exports.string().optional(),
+  targetHandle: external_exports.string().optional(),
   handoffId: external_exports.string().optional(),
   token: external_exports.string().optional(),
-  priorSessionId: external_exports.string().optional(),
+  adoptionHandle: external_exports.string().optional(),
   confirmed: external_exports.boolean().optional()
 }, sessionHandler);
 trackedTool("cdp_status", "Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.", {

@@ -8186,12 +8186,29 @@ var SessionRegistry = class {
       if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
         throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
       }
+      const adoptionRequired = bindings.adoptionRequired;
+      const expiresMs = now + 5 * 6e4;
+      const recoveryHandles = {
+        handoffRecipient: {
+          token: randomBytes(32).toString("base64url"),
+          expiresMs,
+          workerInstance: worker.instanceId
+        },
+        ...typeof adoptionRequired?.sessionId === "string" ? {
+          adoptStale: {
+            token: randomBytes(32).toString("base64url"),
+            expiresMs,
+            priorSessionId: adoptionRequired.sessionId,
+            priorClaimEpoch: adoptionRequired.claimEpoch
+          }
+        } : {}
+      };
       this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
       this.#database.prepare(`UPDATE sessions
            SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
-               authority_version = authority_version + 1, updated_ms = ?
+               bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?
-             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, now, session.sessionId, session.claimEpoch);
+             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, JSON.stringify({ ...bindings, recoveryHandles }), now, session.sessionId, session.claimEpoch);
     });
   }
   replaceDeviceAuthority(session, input) {
@@ -8227,6 +8244,7 @@ var SessionRegistry = class {
         proof: null,
         pendingBuild: null
       };
+      this.#database.prepare("DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?").run(session.sessionId, String(input.device.platform));
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
@@ -8245,6 +8263,13 @@ var SessionRegistry = class {
         ...JSON.parse(current.bindings_json),
         ...input.bindings
       };
+      if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install") || Object.hasOwn(input.bindings, "runner")) {
+        const currentBindings = JSON.parse(current.bindings_json);
+        const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
+        if (platform) {
+          this.#database.prepare("DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?").run(session.sessionId, platform);
+        }
+      }
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
@@ -8413,6 +8438,27 @@ var SessionRegistry = class {
     const tokenHash = createHash3("sha256").update(token2).digest("hex");
     this.#transaction(() => {
       const current = this.#requireSession(session);
+      let targetInstance = input.targetInstance;
+      if (input.targetHandle) {
+        const targets = this.#database.prepare(`SELECT session_id, bindings_json FROM sessions
+             WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(current.source_key, current.worktree_key, current.app_root_key);
+        for (const target of targets) {
+          const bindings = JSON.parse(target.bindings_json);
+          const handles = bindings.recoveryHandles;
+          const handle = handles?.handoffRecipient;
+          if (typeof handle?.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, input.targetHandle)) {
+            targetInstance = typeof handle.workerInstance === "string" ? handle.workerInstance : void 0;
+            this.#database.prepare("UPDATE sessions SET bindings_json = ? WHERE session_id = ?").run(JSON.stringify({
+              ...bindings,
+              recoveryHandles: { ...handles, handoffRecipient: null }
+            }), target.session_id);
+            break;
+          }
+        }
+      }
+      if (!targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff recipient capability is invalid or expired");
+      }
       const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
       if (active && !String(active.profile).startsWith("transition:")) {
@@ -8421,13 +8467,16 @@ var SessionRegistry = class {
       this.#database.prepare(`INSERT INTO handoffs(
             handoff_id, session_id, claim_epoch, target_instance,
             token_hash, source_state, expires_ms, consumed_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, input.targetInstance, tokenHash, this.#requireSession(session).state, now + (input.ttlMs ?? 15e3));
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, targetInstance, tokenHash, this.#requireSession(session).state, now + (input.ttlMs ?? 15e3));
       this.#database.prepare(`UPDATE sessions
            SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
       this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
     });
     return { handoffId, token: token2 };
+  }
+  prepareHandoffForHandle(session, input) {
+    return this.prepareHandoff(session, input);
   }
   cancelHandoff(session, handoffId) {
     const now = this.#now();
@@ -8637,6 +8686,33 @@ var SessionRegistry = class {
       }), now, target.sessionId, target.claimEpoch);
     });
   }
+  recordPlatformAuthorityReceipt(session, platform, receipt) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireSession(session);
+      const bindings = JSON.parse(row.bindings_json);
+      const device = bindings.device;
+      const install = bindings.install;
+      const runner = bindings.runner;
+      const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
+      if (device?.platform !== platform || receipt.sessionId !== session.sessionId || receipt.claimEpoch !== session.claimEpoch || receipt.sourceKey !== row.source_key || receipt.worktreeKey !== row.worktree_key || receipt.appRootKey !== row.app_root_key || receipt.deviceId !== device.deviceId || receipt.appId !== device.appId || receipt.installGeneration !== install?.installGeneration || receipt.artifactDigest !== install?.artifactDigest || receipt.runnerInstanceId !== runner?.instanceId || receipt.runnerPid !== runner?.pid || receipt.runnerProcessBirth !== runner?.processBirth || receipt.runnerClaim !== runnerClaim?.resource_key) {
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
+      }
+      this.#database.prepare(`INSERT INTO platform_authority_receipts(
+             session_id, claim_epoch, platform, receipt_json, updated_ms
+           ) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(session_id, platform) DO UPDATE SET
+             claim_epoch = excluded.claim_epoch,
+             receipt_json = excluded.receipt_json,
+             updated_ms = excluded.updated_ms`).run(session.sessionId, session.claimEpoch, platform, JSON.stringify(receipt), now);
+    });
+  }
+  validatePlatformAuthorityReceipt(session, platform, receipt) {
+    const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
+    return row?.claim_epoch === session.claimEpoch && typeof row.receipt_json === "string" && row.receipt_json === JSON.stringify(receipt);
+  }
   adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
     const priorStatus = this.getSessionStatus(priorSessionId);
     if (!priorStatus) {
@@ -8679,6 +8755,7 @@ var SessionRegistry = class {
            WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
         ...targetBindings,
         adoptionRequired: null,
+        recoveryHandles: null,
         metro: sameMetro ? priorBindings.metro : null,
         device: priorBindings.device ?? null,
         install: priorBindings.install ?? null,
@@ -8689,6 +8766,19 @@ var SessionRegistry = class {
       }), now, target.sessionId, target.claimEpoch);
       this.#fenceSession(prior.session_id, now);
     });
+  }
+  adoptStaleWithHandle(target, handle, targetInstance) {
+    const targetStatus = this.getSessionStatus(target.sessionId);
+    const recovery = targetStatus?.bindings.recoveryHandles;
+    const adoption = recovery?.adoptStale;
+    if (targetStatus?.state !== "blocked" || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
+    }
+    const prior = this.getSessionStatus(adoption.priorSessionId);
+    if (prior?.claimEpoch !== adoption.priorClaimEpoch) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
+    }
+    this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance);
   }
   beginOperation(session, operation) {
     const now = this.#now();
@@ -8787,8 +8877,8 @@ var SessionRegistry = class {
   #initialize() {
     const schema = this.#database.prepare("SELECT value FROM authority_meta WHERE key = ?").get("schema_version")?.value;
     const version = Number(schema);
-    if (!Number.isSafeInteger(version) || version < 1 || version > 3) {
-      throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version > 3 ? `authority registry schema ${version} is newer than supported schema 3` : "authority registry schema version is invalid");
+    if (!Number.isSafeInteger(version) || version < 1 || version > 4) {
+      throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version > 4 ? `authority registry schema ${version} is newer than supported schema 4` : "authority registry schema version is invalid");
     }
     this.#database.exec("BEGIN IMMEDIATE");
     try {
@@ -8852,6 +8942,14 @@ var SessionRegistry = class {
         expires_ms INTEGER NOT NULL,
         consumed_ms INTEGER
       );
+      CREATE TABLE IF NOT EXISTS platform_authority_receipts (
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        PRIMARY KEY(session_id, platform)
+      );
       `);
       if (version < 3) {
         const columns = this.#database.prepare("PRAGMA table_info(handoffs)").all();
@@ -8859,7 +8957,7 @@ var SessionRegistry = class {
           this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
         }
       }
-      this.#database.exec("UPDATE authority_meta SET value = '3' WHERE key = 'schema_version';");
+      this.#database.exec("UPDATE authority_meta SET value = '4' WHERE key = 'schema_version';");
       this.#database.exec("COMMIT");
     } catch (error) {
       this.#database.exec("ROLLBACK");
@@ -8934,6 +9032,11 @@ var SessionRegistry = class {
   #findClaim(type, key) {
     return asClaim(this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
            FROM claims WHERE resource_type = ? AND resource_key = ?`).get(type, key));
+  }
+  #capabilityMatches(expected, actual) {
+    const expectedDigest = createHash3("sha256").update(expected).digest();
+    const actualDigest = createHash3("sha256").update(actual).digest();
+    return timingSafeEqual4(expectedDigest, actualDigest);
   }
   #fenceSession(sessionId, now) {
     this.#database.prepare("DELETE FROM claims WHERE session_id = ?").run(sessionId);
@@ -9180,6 +9283,14 @@ function projectPublicAuthorityStatus(status) {
       code: status.code
     };
   }
+  const recovery = status.bindings.recoveryHandles;
+  const recoveryStatus = status.state === "blocked" && recovery ? {
+    handoffRecipientHandle: typeof recovery.handoffRecipient?.token === "string" ? recovery.handoffRecipient.token : void 0,
+    handoffRecipientExpiresMs: typeof recovery.handoffRecipient?.expiresMs === "number" ? recovery.handoffRecipient.expiresMs : void 0,
+    adoptionRequired: Boolean(recovery.adoptStale),
+    adoptionHandle: typeof recovery.adoptStale?.token === "string" ? recovery.adoptStale.token : void 0,
+    adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
+  } : void 0;
   return {
     available: true,
     state: status.state,
@@ -9192,6 +9303,7 @@ function projectPublicAuthorityStatus(status) {
     metroBound: Boolean(status.bindings.metro),
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
+    ...recoveryStatus ? { recovery: recoveryStatus } : {},
     migration: inspectAuthorityMigration(status)
   };
 }

@@ -24,6 +24,8 @@ import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
+import { readProcessBirth } from '../session/process-birth.js';
+import { managedMetroListenerPid } from '../session/managed-metro.js';
 
 export interface SessionToolInput {
   action:
@@ -49,10 +51,10 @@ export interface SessionToolInput {
   metroInstanceId?: string;
   buildGeneration?: number;
   mode?: 'managed' | 'external';
-  targetInstance?: string;
+  targetHandle?: string;
   handoffId?: string;
   token?: string;
-  priorSessionId?: string;
+  adoptionHandle?: string;
   confirmed?: boolean;
 }
 
@@ -71,13 +73,45 @@ interface SessionHandlerDependencies {
   pinDevClient?: (status: SessionStatus) => Promise<BundleAuthorityBinding>;
   stopHandoffObserve?: (binding: Record<string, unknown>) => Promise<void>;
   stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
+  readProcessBirth?: typeof readProcessBirth;
+  pidForPort?: typeof managedMetroListenerPid;
+  cleanupTimeoutMs?: number;
 }
 
-async function stopHandoffObserve(binding: Record<string, unknown>): Promise<void> {
+async function waitForStopped(
+  probe: () => boolean,
+  timeoutMs: number,
+  message: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (probe()) {
+    if (Date.now() >= deadline) {
+      throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', message);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function stopHandoffObserve(
+  binding: Record<string, unknown>,
+  listenerPid: typeof managedMetroListenerPid = managedMetroListenerPid,
+  processBirth: typeof readProcessBirth = readProcessBirth,
+  timeoutMs = 2_000,
+): Promise<void> {
   const port = Number(binding.port);
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? '');
   const instanceId = String(binding.instanceId ?? '');
   const capability = String(binding.cleanupCapability ?? '');
-  if (!Number.isSafeInteger(port) || !instanceId || !capability) {
+  if (
+    !Number.isSafeInteger(port) ||
+    !Number.isSafeInteger(pid) ||
+    !expectedBirth ||
+    !instanceId ||
+    !capability ||
+    listenerPid(port) !== pid ||
+    processBirth(pid)?.token !== expectedBirth
+  ) {
     throw new SessionAuthorityError(
       'OBSERVE_AUTHORITY_MISMATCH',
       'source Observe cleanup authority is incomplete',
@@ -96,16 +130,49 @@ async function stopHandoffObserve(binding: Record<string, unknown>): Promise<voi
       'source Observe server refused fenced handoff cleanup',
     );
   }
+  await waitForStopped(
+    () => listenerPid(port) === pid,
+    timeoutMs,
+    'source Observe listener did not stop before the cleanup deadline',
+  );
 }
 
-async function stopHandoffRunner(binding: Record<string, unknown>): Promise<void> {
+async function stopHandoffRunner(
+  binding: Record<string, unknown>,
+  processBirth: typeof readProcessBirth = readProcessBirth,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? '');
+  if (!Number.isSafeInteger(pid) || !expectedBirth) {
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'source runner cleanup identity is incomplete',
+    );
+  }
+  if (processBirth(pid)?.token !== expectedBirth) {
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'source runner process identity changed before cleanup',
+    );
+  }
   if (binding.platform === 'ios') {
     stopFastRunner(typeof binding.deviceId === 'string' ? binding.deviceId : undefined);
   } else if (binding.platform === 'android') {
     await stopAndroidRunner(
       typeof binding.deviceId === 'string' ? binding.deviceId : undefined,
     );
+  } else {
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'source runner platform is unavailable',
+    );
   }
+  await waitForStopped(
+    () => processBirth(pid)?.token === expectedBirth,
+    timeoutMs,
+    'source runner process did not stop before the cleanup deadline',
+  );
 }
 
 function authorityFailure(error: unknown): ToolResult {
@@ -266,8 +333,8 @@ export function createSessionHandler(
       }
 
       if (input.action === 'prepare_handoff') {
-        const targetInstance = required(input.targetInstance, 'targetInstance') as string;
-        return okResult(registry.prepareHandoff(session, { targetInstance }));
+        const targetHandle = required(input.targetHandle, 'targetHandle') as string;
+        return okResult(registry.prepareHandoffForHandle(session, { targetHandle }));
       }
 
       if (input.action === 'cancel_handoff') {
@@ -427,10 +494,27 @@ export function createSessionHandler(
           });
         }
         if (cleanup?.runner) {
-          await (dependencies.stopHandoffRunner ?? stopHandoffRunner)(cleanup.runner);
+          if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(cleanup.runner);
+          } else {
+            await stopHandoffRunner(
+              cleanup.runner,
+              dependencies.readProcessBirth,
+              dependencies.cleanupTimeoutMs,
+            );
+          }
         }
         if (cleanup?.observe) {
-          await (dependencies.stopHandoffObserve ?? stopHandoffObserve)(cleanup.observe);
+          if (dependencies.stopHandoffObserve) {
+            await dependencies.stopHandoffObserve(cleanup.observe);
+          } else {
+            await stopHandoffObserve(
+              cleanup.observe,
+              dependencies.pidForPort,
+              dependencies.readProcessBirth,
+              dependencies.cleanupTimeoutMs,
+            );
+          }
         }
         registry.finishHandoffCleanup(session, status.worker.instanceId);
         return okResult({
@@ -443,31 +527,17 @@ export function createSessionHandler(
       }
 
       if (input.action === 'adopt_stale') {
-        const priorSessionId = required(input.priorSessionId, 'priorSessionId') as string;
+        const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle') as string;
         const current = registry.getSessionStatus(session.sessionId);
-        const prior = registry.getSessionStatus(priorSessionId);
-        if (
-          !current ||
-          !prior ||
-          current.sourceKey !== prior.sourceKey ||
-          current.worktreeKey !== prior.worktreeKey ||
-          current.appRootKey !== prior.appRootKey
-        ) {
-          throw new SessionAuthorityError(
-            'SOURCE_WORKTREE_MISMATCH',
-            'stale session does not belong to this exact source worktree',
-          );
-        }
-        if (!current.worker.instanceId) {
+        if (!current?.worker.instanceId) {
           throw new SessionAuthorityError(
             'HANDOFF_NOT_AUTHORIZED',
             'recovery worker identity is unavailable',
           );
         }
-        registry.adoptStaleIntoBlocked(session, priorSessionId, current.worker.instanceId);
+        registry.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
         return okResult({
           adopted: true,
-          priorSessionId: priorSessionId.slice(0, 12),
           session: projectPublicAuthorityStatus(runtime.status()),
           runner: {
             adopted: false,

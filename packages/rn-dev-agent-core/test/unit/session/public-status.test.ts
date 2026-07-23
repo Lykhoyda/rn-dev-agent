@@ -40,3 +40,39 @@ test('public authority status excludes capabilities and literal authority identi
     assert.equal(serialized.includes(secret), false);
   }
 });
+
+test('blocked public status exposes only bounded opaque recovery handles', () => {
+  const projected = projectPublicAuthorityStatus({
+    available: true,
+    sessionId: 'session-secret',
+    sourceKey: 'source-secret',
+    worktreeKey: 'worktree-secret',
+    appRootKey: 'app-secret',
+    state: 'blocked',
+    claimEpoch: 1,
+    authorityVersion: 2,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      recoveryHandles: {
+        handoffRecipient: { token: 'opaque-target', expiresMs: 5000 },
+        adoptStale: {
+          token: 'opaque-adopt',
+          expiresMs: 5000,
+          priorSessionId: 'prior-secret',
+        },
+      },
+    },
+    claims: [],
+    worker: { instanceId: 'worker-secret', pid: 1, birthAvailable: true },
+  });
+
+  assert.deepEqual(projected.recovery, {
+    handoffRecipientHandle: 'opaque-target',
+    handoffRecipientExpiresMs: 5000,
+    adoptionRequired: true,
+    adoptionHandle: 'opaque-adopt',
+    adoptionExpiresMs: 5000,
+  });
+  assert.equal(JSON.stringify(projected).includes('prior-secret'), false);
+});
