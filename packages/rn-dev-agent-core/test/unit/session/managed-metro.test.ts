@@ -1,9 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  managedMetroListenerPid,
   resolveManagedMetroCommand,
   startManagedMetro,
 } from '../../../dist/session/managed-metro.js';
+
+test('managed Metro discovers listener PIDs with platform-native commands', () => {
+  const calls: Array<[string, string[]]> = [];
+  const execute = ((file: string, args: string[]) => {
+    calls.push([file, args]);
+    return file === 'powershell.exe' ? '412\n' : 'users:(("node",pid=513,fd=19))\n';
+  }) as never;
+
+  assert.equal(managedMetroListenerPid(8341, 'win32', execute), 412);
+  assert.equal(managedMetroListenerPid(8341, 'linux', execute), 513);
+  assert.equal(calls[0]?.[0], 'powershell.exe');
+  assert.equal(calls[1]?.[0], 'ss');
+});
 
 test('managed Metro selects only package-local Expo and bare RN CLIs', () => {
   assert.deepEqual(

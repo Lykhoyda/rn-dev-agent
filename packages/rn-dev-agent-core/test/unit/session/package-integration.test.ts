@@ -73,6 +73,17 @@ test('Metro integration composes object and promise configs and is reversible', 
   }
 });
 
+test('Metro restoration preserves edits after the generated block', () => {
+  const original = "module.exports = { resolver: {} };\n";
+  const integrated = previewMetroIntegration(original);
+  const withSuffix = `${integrated}module.exports.watchFolders = ['/later'];\n`;
+
+  assert.equal(
+    restoreMetroIntegration(withSuffix),
+    `${original}module.exports.watchFolders = ['/later'];\n`,
+  );
+});
+
 test('integration preview refuses shell operators and unknown session-aware commands', () => {
   assert.throws(
     () =>

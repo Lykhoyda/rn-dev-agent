@@ -25,7 +25,9 @@ test('public authority status excludes capabilities and literal authority identi
   });
   const serialized = JSON.stringify(projected);
 
-  assert.equal(projected.sessionId, 'session-secr');
+  assert.equal('sessionId' in projected, false);
+  assert.equal('claimEpoch' in projected, false);
+  assert.equal('authorityVersion' in projected, false);
   for (const secret of [
     'bearer-secret',
     'birth-secret',

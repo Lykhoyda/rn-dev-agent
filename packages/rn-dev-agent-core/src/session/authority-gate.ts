@@ -254,7 +254,9 @@ export function createAuthorityGate(
           tool === 'rn_session' &&
           (args.action === 'status' ||
             args.action === 'preview_integration' ||
-            args.action === 'cancel_handoff')
+            args.action === 'cancel_handoff' ||
+            args.action === 'accept_handoff' ||
+            args.action === 'adopt_stale')
             ? {
                 kind: 'diagnostic' as const,
                 axes: [] as const,
@@ -295,6 +297,15 @@ export function createAuthorityGate(
 
         if (profile.kind === 'diagnostic') {
           return addMeta(await handler(...handlerArgs), { authoritative: false });
+        }
+        const runtimeStatus = runtime.status();
+        if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
+          return authorityFailure(
+            new SessionAuthorityError(
+              'SESSION_AUTHORITY_REQUIRED',
+              'blocked contender exposes only accept_handoff and adopt_stale recovery',
+            ),
+          );
         }
         if (profile.kind === 'transition') {
           let operation: OperationRef | null = null;
@@ -346,7 +357,9 @@ export function createAuthorityGate(
               ),
             );
             registry.verifyOperation(operation);
-            const result = await handler(...handlerArgs);
+            const result = await registry.runWithOperation(operation, () =>
+              handler(...handlerArgs),
+            );
             if (!resultIsCanonicalSuccess(result)) {
               return addMeta(result, { authoritative: false });
             }
@@ -360,7 +373,7 @@ export function createAuthorityGate(
             const gateCommitsProof =
               tool === 'proof_capture' && args.action === 'begin_rehearsal';
             if (!gateCommitsProof) {
-              operation = registry.refreshOperation(operation);
+              registry.verifyOperation(operation);
               const nextStatus = runtime.status();
               if (
                 !nextStatus.available ||

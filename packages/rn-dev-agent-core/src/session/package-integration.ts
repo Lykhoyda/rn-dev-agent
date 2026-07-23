@@ -81,10 +81,18 @@ export function restoreMetroIntegration(source: string): string {
   const start = source.indexOf(METRO_START);
   const end = source.indexOf(METRO_END);
   if (start < 0 && end < 0) return source;
-  if (start < 0 || end < start) {
+  if (
+    start < 0 ||
+    end < start ||
+    source.indexOf(METRO_START, start + METRO_START.length) >= 0 ||
+    source.indexOf(METRO_END, end + METRO_END.length) >= 0
+  ) {
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt');
   }
-  return `${source.slice(0, start).trimEnd()}\n`;
+  const blockEnd = end + METRO_END.length;
+  const prefix = source.slice(0, start).trimEnd();
+  const suffix = source.slice(blockEnd).replace(/^(?:\r?\n)+/, '');
+  return suffix ? `${prefix}\n${suffix}` : `${prefix}\n`;
 }
 
 interface PackageIntegrationPreview {

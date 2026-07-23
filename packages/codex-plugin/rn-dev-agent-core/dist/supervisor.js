@@ -931,6 +931,7 @@ var init_authority_store = __esm({
 
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash4, randomBytes, timingSafeEqual } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 function shortAuthorityIdentity(value) {
   return createHash4("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
@@ -1036,6 +1037,7 @@ var init_registry = __esm({
       #now;
       #ownerStatus;
       #leaseMs;
+      #operationContext = new AsyncLocalStorage();
       constructor(database, close, secureFiles, dependencies) {
         this.#database = database;
         this.#close = close;
@@ -1047,6 +1049,9 @@ var init_registry = __esm({
       }
       close() {
         this.#close();
+      }
+      runWithOperation(operation, callback) {
+        return this.#operationContext.run(operation, callback);
       }
       createSession(input) {
         const now = this.#now();
@@ -1106,13 +1111,14 @@ var init_registry = __esm({
           this.#database.prepare(`UPDATE sessions
            SET authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, owner.session_id, owner.claim_epoch);
+          this.#advanceActiveOperationFence(session, owner.authority_version, owner.authority_version + 1);
           return session;
         });
       }
       releaseResources(session, resources) {
         const now = this.#now();
         this.#transaction(() => {
-          this.#requireSession(session);
+          const current = this.#requireSession(session);
           for (const resource of resources) {
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
@@ -1120,6 +1126,7 @@ var init_registry = __esm({
           }
           this.#database.prepare(`UPDATE sessions SET authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
         });
       }
       async claimResourcesWithRetry(session, resources, options = {}) {
@@ -1149,6 +1156,24 @@ var init_registry = __esm({
            SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(worker.instanceId, worker.pid, worker.token, now, session.sessionId, session.claimEpoch);
+        });
+      }
+      bindRecoveryWorker(session, worker, capability) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireRecoverableSession(session);
+          const bindings = JSON.parse(row.bindings_json);
+          const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
+          const actual = createHash4("sha256").update(capability).digest();
+          if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
+          }
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+          this.#database.prepare(`UPDATE sessions
+           SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?
+             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, now, session.sessionId, session.claimEpoch);
         });
       }
       replaceDeviceAuthority(session, input) {
@@ -1188,6 +1213,7 @@ var init_registry = __esm({
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(input.install ? "device_bound" : "device_claimed", JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
+          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
         });
       }
       updateBindings(session, input) {
@@ -1205,6 +1231,7 @@ var init_registry = __esm({
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
+          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
         });
       }
       replaceBindingsDuringOperation(operation, input) {
@@ -1250,6 +1277,10 @@ var init_registry = __esm({
           this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`).run(nextAuthorityVersion, leaseUntil, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          const context = this.#operationContext.getStore();
+          if (context?.operationId === operation.operationId) {
+            context.authorityVersion = nextAuthorityVersion;
+          }
           return { ...operation, authorityVersion: nextAuthorityVersion };
         });
       }
@@ -1327,6 +1358,10 @@ var init_registry = __esm({
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot be released while an operation is active");
           }
           if (active) {
+            const context = this.#operationContext.getStore();
+            if (!context || context.operationId !== active.operation_id || context.sessionId !== session.sessionId || context.claimEpoch !== session.claimEpoch) {
+              throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session release is not owned by the active operation fence");
+            }
             this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
           }
           this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
@@ -1359,7 +1394,7 @@ var init_registry = __esm({
         const token2 = randomBytes(32).toString("base64url");
         const tokenHash = createHash4("sha256").update(token2).digest("hex");
         this.#transaction(() => {
-          this.#requireSession(session);
+          const current = this.#requireSession(session);
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
           if (active && !String(active.profile).startsWith("transition:")) {
@@ -1372,6 +1407,7 @@ var init_registry = __esm({
           this.#database.prepare(`UPDATE sessions
            SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
         });
         return { handoffId, token: token2 };
       }
@@ -1401,7 +1437,10 @@ var init_registry = __esm({
         return typeof row?.session_id === "string" ? row.session_id : null;
       }
       validateHandoffInto(target, input) {
-        const targetRow = this.#requireSession(target);
+        const targetRow = this.#requireRecoverableSession(target);
+        if (targetRow.state !== "blocked") {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
+        }
         if (targetRow.worker_instance !== input.targetInstance) {
           throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target is not the current fenced worker instance");
         }
@@ -1484,7 +1523,10 @@ var init_registry = __esm({
       acceptHandoffInto(target, input) {
         const now = this.#now();
         return this.#transaction(() => {
-          const targetRow = this.#requireSession(target);
+          const targetRow = this.#requireRecoverableSession(target);
+          if (targetRow.state !== "blocked") {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
+          }
           if (targetRow.worker_instance !== input.targetInstance) {
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target is not the current fenced worker instance");
           }
@@ -1532,8 +1574,9 @@ var init_registry = __esm({
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
           const bindings = JSON.parse(prior.bindings_json);
+          const targetBindings = JSON.parse(targetRow.bindings_json);
           this.#database.prepare(`UPDATE sessions
-           SET state = 'source_bound', bindings_json = ?,
+           SET state = 'handoff_cleanup', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
             ...bindings,
@@ -1541,14 +1584,92 @@ var init_registry = __esm({
             runner: null,
             observe: null,
             proof: null,
-            pendingBuild: null
+            pendingBuild: null,
+            recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
+            handoffCleanup: {
+              observe: bindings.observe ?? null,
+              runner: bindings.runner ?? null
+            }
           }), now, target.sessionId, target.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, prior.session_id, prior.claim_epoch);
           this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
-          return target;
+          return {
+            ...bindings.observe && typeof bindings.observe === "object" ? { observe: bindings.observe } : {},
+            ...bindings.runner && typeof bindings.runner === "object" ? { runner: bindings.runner } : {}
+          };
+        });
+      }
+      finishHandoffCleanup(target, targetInstance) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
+             FROM sessions WHERE session_id = ?`).get(target.sessionId));
+          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== targetInstance) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
+          }
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'source_bound', bindings_json = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+            ...JSON.parse(row.bindings_json),
+            handoffCleanup: null
+          }), now, target.sessionId, target.claimEpoch);
+        });
+      }
+      adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
+        const priorStatus = this.getSessionStatus(priorSessionId);
+        if (!priorStatus) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale session is unavailable");
+        }
+        const owner = asSession(this.#database.prepare(`SELECT supervisor_pid, supervisor_birth FROM sessions WHERE session_id = ?`).get(priorSessionId));
+        if (!owner || this.#ownerStatus({
+          sessionId: priorSessionId,
+          pid: owner.supervisor_pid,
+          token: owner.supervisor_birth
+        }) !== "mismatch") {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "prior source owner is not proven stale");
+        }
+        const now = this.#now();
+        this.#transaction(() => {
+          const targetRow = this.#requireRecoverableSession(target);
+          if (targetRow.state !== "blocked") {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption is not available during handoff cleanup");
+          }
+          if (targetRow.worker_instance !== targetInstance) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
+          }
+          const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                    claim_epoch, bindings_json
+             FROM sessions WHERE session_id = ?`).get(priorSessionId));
+          if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
+            throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
+          }
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
+          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+          const priorBindings = JSON.parse(prior.bindings_json);
+          const targetBindings = JSON.parse(targetRow.bindings_json);
+          const sameMetro = Number(priorBindings.metro?.port) === Number(targetBindings.metroPort);
+          this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
+            ...targetBindings,
+            adoptionRequired: null,
+            metro: sameMetro ? priorBindings.metro : null,
+            device: priorBindings.device ?? null,
+            install: priorBindings.install ?? null,
+            bundle: null,
+            runner: null,
+            observe: null,
+            proof: null
+          }), now, target.sessionId, target.claimEpoch);
+          this.#fenceSession(prior.session_id, now);
         });
       }
       beginOperation(session, operation) {
@@ -1573,19 +1694,8 @@ var init_registry = __esm({
         });
       }
       refreshOperation(operation) {
-        const now = this.#now();
-        return this.#transaction(() => {
-          const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
-             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
-          const active = this.#database.prepare(`SELECT authority_version FROM operations
-           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch);
-          if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || active?.authority_version !== operation.authorityVersion || session.authority_version < operation.authorityVersion) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "transition fence no longer matches current authority");
-          }
-          this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
-           WHERE operation_id = ? AND authority_version = ?`).run(session.authority_version, now + this.#leaseMs, operation.operationId, operation.authorityVersion);
-          return { ...operation, authorityVersion: session.authority_version };
-        });
+        this.verifyOperation(operation);
+        return operation;
       }
       endOperation(operation) {
         this.#transaction(() => {
@@ -1774,6 +1884,34 @@ var init_registry = __esm({
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
         }
         return row;
+      }
+      #requireRecoverableSession(session) {
+        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session.sessionId));
+        if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup" || row.claim_epoch !== session.claimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session is not an unchanged recovery contender");
+        }
+        return row;
+      }
+      #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion) {
+        const active = this.#database.prepare(`SELECT operation_id, authority_version FROM operations
+         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+        if (!active)
+          return;
+        const context = this.#operationContext.getStore();
+        if (!context || context.operationId !== active.operation_id || context.sessionId !== session.sessionId || context.claimEpoch !== session.claimEpoch || context.authorityVersion !== priorAuthorityVersion || active.authority_version !== priorAuthorityVersion) {
+          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "authority mutation is not owned by the active operation fence");
+        }
+        const changed = this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`).run(nextAuthorityVersion, this.#now() + this.#leaseMs, context.operationId, session.sessionId, session.claimEpoch, priorAuthorityVersion);
+        if (changed.changes === 0) {
+          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence did not advance atomically");
+        }
+        context.authorityVersion = nextAuthorityVersion;
       }
       #findClaim(type, key) {
         return asClaim(this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
@@ -33991,7 +34129,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes7, createHash: createHash16 } = __require("crypto");
+    var { randomBytes: randomBytes7, createHash: createHash17 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -34659,7 +34797,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest2 = createHash16("sha1").update(key + GUID).digest("base64");
+        const digest2 = createHash17("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest2) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -35028,7 +35166,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash16 } = __require("crypto");
+    var { createHash: createHash17 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -35335,7 +35473,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest2 = createHash16("sha1").update(key + GUID).digest("base64");
+        const digest2 = createHash17("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -41842,7 +41980,7 @@ var init_cdp_client = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 function normalizeNodeForHash(node) {
   const q = (v) => Math.round(v / BOUNDS_QUANTUM_PX);
   return JSON.stringify([
@@ -41857,7 +41995,7 @@ function normalizeNodeForHash(node) {
   ]);
 }
 function hashSnapshotNodes(nodes) {
-  const h = createHash5("sha256");
+  const h = createHash6("sha256");
   for (const node of nodes) {
     h.update(normalizeNodeForHash(node));
     h.update("\n");
@@ -42508,7 +42646,7 @@ var init_quiescence = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync7, mkdirSync as mkdirSync7, readdirSync as readdirSync3, readFileSync as readFileSync10, rmSync as rmSync2, writeFileSync as writeFileSync6 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { dirname as dirname5, join as join13 } from "node:path";
@@ -42665,7 +42803,7 @@ function readCommittedManifest() {
   }
 }
 function sha256File(p) {
-  return createHash6("sha256").update(readFileSync10(p)).digest("hex");
+  return createHash7("sha256").update(readFileSync10(p)).digest("hex");
 }
 async function fetchToFile(url, dest, opts) {
   const controller = new AbortController();
@@ -45467,9 +45605,9 @@ var init_settle = __esm({
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
 import { unlinkSync as unlinkSync6, rmSync as rmSync5 } from "node:fs";
 import { join as join18 } from "node:path";
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 function getSessionFilePath() {
-  const projectId = createHash7("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+  const projectId = createHash8("sha256").update(process.cwd()).digest("hex").slice(0, 12);
   return join18(getStateDir(), `session-${projectId}.json`);
 }
 function getActiveSession() {
@@ -45502,16 +45640,31 @@ function setSnapshotAuthorityProvider(provider) {
 function currentSnapshotAuthority(platform) {
   const authority = snapshotAuthorityProvider?.();
   const session = getActiveSession();
-  return JSON.stringify(authority ?? {
-    platform,
-    deviceId: session?.deviceId ?? null,
-    appId: session?.appId ?? null
-  });
+  return {
+    sessionId: authority?.sessionId ?? null,
+    claimEpoch: authority?.claimEpoch ?? null,
+    sourceKey: authority?.sourceKey ?? null,
+    worktreeKey: authority?.worktreeKey ?? null,
+    appRootKey: authority?.appRootKey ?? null,
+    platform: authority?.platform ?? platform,
+    deviceId: authority?.deviceId ?? session?.deviceId ?? null,
+    buildGeneration: authority?.buildGeneration ?? null,
+    installGeneration: authority?.installGeneration ?? null,
+    runnerInstanceId: authority?.runnerInstanceId ?? null,
+    runnerClaim: authority?.runnerClaim ?? null
+  };
+}
+function snapshotAuthorityIsValid(receipt2, platform) {
+  const current = currentSnapshotAuthority(platform);
+  if (receipt2.sessionId === null) {
+    return current.sessionId === null && receipt2.platform === platform && receipt2.deviceId === current.deviceId;
+  }
+  return receipt2.platform === platform && receipt2.sessionId === current.sessionId && receipt2.claimEpoch === current.claimEpoch && receipt2.sourceKey === current.sourceKey && receipt2.worktreeKey === current.worktreeKey && receipt2.appRootKey === current.appRootKey && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.runnerInstanceId !== null && receipt2.runnerClaim !== null;
 }
 function cacheSnapshot(platform, nodes) {
   snapshotCache.set(platform, {
     platform,
-    authorityScope: currentSnapshotAuthority(platform),
+    authorityReceipt: currentSnapshotAuthority(platform),
     nodes,
     capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
     capturedAtMs: Date.now()
@@ -45520,7 +45673,7 @@ function cacheSnapshot(platform, nodes) {
 }
 function getCachedSnapshot(platform) {
   const snapshot = snapshotCache.get(platform);
-  return snapshot?.authorityScope === currentSnapshotAuthority(platform) ? snapshot : void 0;
+  return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
 }
 function markSnapshotDirty() {
   snapshotCacheDirty = true;
@@ -45531,7 +45684,7 @@ function isSnapshotCacheValid(platform, maxAgeMs = MAX_REF_MAP_AGE_MS) {
   const entry = snapshotCache.get(platform);
   if (!entry)
     return false;
-  if (entry.authorityScope !== currentSnapshotAuthority(platform))
+  if (!snapshotAuthorityIsValid(entry.authorityReceipt, platform))
     return false;
   return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }
@@ -46755,7 +46908,7 @@ var init_resolve_ios_app_file = __esm({
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { execFile as execFileCb3, spawnSync as spawnSync2 } from "node:child_process";
 import { promisify as promisify5 } from "node:util";
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 import { readFileSync as readFileSync13 } from "node:fs";
 function compareVersions(a, b) {
   const pa = a.split(".").map(Number);
@@ -46827,7 +46980,7 @@ async function defaultExecVersion(bin) {
   return stdout + "\n" + stderr;
 }
 function defaultHashFile(bin) {
-  return createHash8("sha256").update(readFileSync13(bin)).digest("hex");
+  return createHash9("sha256").update(readFileSync13(bin)).digest("hex");
 }
 function safeBool(fn) {
   try {
@@ -52123,6 +52276,82 @@ var init_action_state_store = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
+import { existsSync as existsSync21, readFileSync as readFileSync21 } from "node:fs";
+import { join as join30 } from "node:path";
+function inspectAuthorityMigration(status, dependencies = {}) {
+  const exists = dependencies.exists ?? existsSync21;
+  const readText = dependencies.readText ?? ((path) => readFileSync21(path, "utf8"));
+  const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
+  const manifestPath = appRoot ? join30(appRoot, ".rn-agent", "integration", "rn-session-integration.json") : "";
+  let packageIntegrationInstalled = false;
+  if (manifestPath && exists(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readText(manifestPath));
+      packageIntegrationInstalled = manifest.version === 1;
+    } catch {
+      packageIntegrationInstalled = false;
+    }
+  }
+  const legacyStateDetected = [
+    "/tmp/rn-dev-agent-session.json",
+    "/tmp/rn-fast-runner-state.json",
+    "/tmp/rn-android-runner-state.json"
+  ].some(exists);
+  return {
+    rollout: "strict-default",
+    storeAvailable: true,
+    registrySchema: 3,
+    legacyStateDetected,
+    bundleHandshake: {
+      supported: true,
+      scope: "coarse-initial-bundle",
+      bound: Boolean(status.bindings.bundle),
+      sourceFidelity: "not-proven"
+    },
+    packageIntegration: {
+      supported: true,
+      installed: packageIntegrationInstalled
+    },
+    strictEnforcement: true
+  };
+}
+var init_migration_diagnostic = __esm({
+  "packages/rn-dev-agent-core/dist/session/migration-diagnostic.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/public-status.js
+function projectPublicAuthorityStatus(status) {
+  if (!status.available) {
+    return {
+      available: false,
+      code: status.code
+    };
+  }
+  return {
+    available: true,
+    state: status.state,
+    sourceKind: status.source.kind,
+    metroPort: status.bindings.metroPort,
+    observePort: status.bindings.observePort,
+    platform: status.bindings.device?.platform,
+    deviceBound: Boolean(status.bindings.device),
+    installBound: Boolean(status.bindings.install),
+    metroBound: Boolean(status.bindings.metro),
+    bundleBound: Boolean(status.bindings.bundle),
+    runnerBound: Boolean(status.bindings.runner),
+    migration: inspectAuthorityMigration(status)
+  };
+}
+var init_public_status = __esm({
+  "packages/rn-dev-agent-core/dist/session/public-status.js"() {
+    "use strict";
+    init_migration_diagnostic();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/status.js
 function targetMatchesSession(target, filters) {
   if (!target)
@@ -52145,7 +52374,7 @@ function createPassiveStatusHandler(getClient2, authorityRuntime2) {
     const target = client2.connectedTarget;
     return okResult({
       authoritative: false,
-      authority: authorityRuntime2.status(),
+      authority: projectPublicAuthorityStatus(authorityRuntime2.status()),
       metro: {
         port: client2.metroPort,
         requestedPort: args.metroPort ?? null,
@@ -52154,10 +52383,8 @@ function createPassiveStatusHandler(getClient2, authorityRuntime2) {
       cdp: {
         connected: client2.isConnected,
         target: target ? {
-          id: target.id,
-          title: target.title,
           platform: target.platform ?? null,
-          appId: targetBundleIdentity(target)
+          appBound: Boolean(targetBundleIdentity(target))
         } : null,
         requestedPlatform: args.platform ?? null
       },
@@ -52186,6 +52413,7 @@ var init_status = __esm({
     init_action_state_store();
     init_engine_pin();
     init_agent_device_wrapper();
+    init_public_status();
   }
 });
 
@@ -53948,7 +54176,7 @@ var init_recorder = __esm({
 import { mkdirSync as mkdirSync14 } from "node:fs";
 import { execFile as execFile17 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { dirname as dirname11, join as join30 } from "node:path";
+import { dirname as dirname11, join as join31 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
   try {
@@ -53992,7 +54220,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join30(homedir9(), args.path.slice(2));
+      return join31(homedir9(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
@@ -55049,7 +55277,7 @@ var init_macro_asserts = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync13, renameSync as renameSync6, statSync as statSync10, mkdirSync as mkdirSync15, existsSync as existsSync21, unlinkSync as unlinkSync9, readdirSync as readdirSync7 } from "node:fs";
+import { writeFileSync as writeFileSync13, renameSync as renameSync6, statSync as statSync10, mkdirSync as mkdirSync15, existsSync as existsSync22, unlinkSync as unlinkSync9, readdirSync as readdirSync7 } from "node:fs";
 import { dirname as dirname12, basename as basename4 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -55133,7 +55361,7 @@ var init_atomic_writer = __esm({
        *  cases for ensureDir / cleanupOrphans can simulate exotic failures
        *  (PR #109 review). */
       _exists(path) {
-        return existsSync21(path);
+        return existsSync22(path);
       },
       /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
       _mkdir(path) {
@@ -55161,14 +55389,14 @@ var init_atomic_writer = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync22, readFileSync as readFileSync21, statSync as statSync11 } from "node:fs";
-import { join as join31 } from "node:path";
+import { existsSync as existsSync23, readFileSync as readFileSync22, statSync as statSync11 } from "node:fs";
+import { join as join32 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join31(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join32(projectRoot, ".rn-agent", "actions");
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
-  return join31(actionsDir, fileName);
+  return join32(actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -55231,9 +55459,9 @@ function joinYaml(parts) {
 }
 function loadAction(projectRoot, actionId) {
   const filePath = actionPathFor(projectRoot, actionId);
-  if (!existsSync22(filePath))
+  if (!existsSync23(filePath))
     return null;
-  const text = readFileSync21(filePath, "utf8");
+  const text = readFileSync22(filePath, "utf8");
   const metadata = parseM7Header(text, actionId);
   if (!metadata)
     return null;
@@ -55247,12 +55475,12 @@ function loadAction(projectRoot, actionId) {
   };
 }
 function saveAction(action) {
-  if (existsSync22(action.filePath) && actionWasEditedExternally(action)) {
+  if (existsSync23(action.filePath) && actionWasEditedExternally(action)) {
     throw new SaveActionPreconditionError(action.filePath);
   }
   let topSection = "";
-  if (existsSync22(action.filePath)) {
-    const existing = readFileSync21(action.filePath, "utf8");
+  if (existsSync23(action.filePath)) {
+    const existing = readFileSync22(action.filePath, "utf8");
     topSection = splitYaml(existing).topSection;
   }
   if (!topSection && action.metadata.appId) {
@@ -55305,7 +55533,7 @@ function canonicalRuntimeJson(state) {
 function runtimeSidecarMatches(sidecarPath, expected) {
   let onDisk;
   try {
-    onDisk = JSON.parse(readFileSync21(sidecarPath, "utf8"));
+    onDisk = JSON.parse(readFileSync22(sidecarPath, "utf8"));
   } catch {
     return false;
   }
@@ -55314,7 +55542,7 @@ function runtimeSidecarMatches(sidecarPath, expected) {
 }
 function saveActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync22(sidecarPath)) {
+  if (existsSync23(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
@@ -55327,7 +55555,7 @@ function saveActionRuntimeWithCAS(expected, nextState) {
 }
 function promoteActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync22(sidecarPath)) {
+  if (existsSync23(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
@@ -55336,7 +55564,7 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync21(expected.filePath, "utf8");
+  const yaml2 = readFileSync22(expected.filePath, "utf8");
   const marker = /^# status: experimental[ \t]*$/gm;
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
@@ -56368,7 +56596,7 @@ var init_test_recorder_generators = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder.js
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join as join32 } from "node:path";
+import { join as join33 } from "node:path";
 function deduplicateEvents(events) {
   const out = [];
   for (let i = 0; i < events.length; i++) {
@@ -56546,7 +56774,7 @@ function createRecordTestSaveHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join32(dir, `${safe}.json`);
+    const filePath = join33(dir, `${safe}.json`);
     const payload = { savedAt: (/* @__PURE__ */ new Date()).toISOString(), events: storedEvents };
     await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
     return okResult({
@@ -56567,7 +56795,7 @@ function createRecordTestLoadHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join32(dir, `${safe}.json`);
+    const filePath = join33(dir, `${safe}.json`);
     let raw;
     try {
       raw = await readFile(filePath, "utf8");
@@ -56626,7 +56854,7 @@ var init_test_recorder = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/save-as-action.js
-import { existsSync as existsSync23 } from "node:fs";
+import { existsSync as existsSync24 } from "node:fs";
 function createSaveAsActionHandler() {
   return async (args) => {
     if (!args.id || typeof args.id !== "string") {
@@ -56644,7 +56872,7 @@ function createSaveAsActionHandler() {
     }
     const projectRoot = args.projectRoot ?? process.cwd();
     const filePath = actionPathFor(projectRoot, args.id);
-    const preexisted = existsSync23(filePath);
+    const preexisted = existsSync24(filePath);
     if (preexisted && !args.overwrite) {
       return failResult(`cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`, "BAD_FILENAME", {
         actionId: args.id,
@@ -59614,10 +59842,10 @@ var init_device_deeplink = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile22 } from "node:child_process";
-import { existsSync as existsSync24 } from "node:fs";
+import { existsSync as existsSync25 } from "node:fs";
 import { promisify as promisify24 } from "node:util";
 import { fileURLToPath } from "node:url";
-import { dirname as dirname13, join as join33 } from "node:path";
+import { dirname as dirname13, join as join34 } from "node:path";
 function parseAllBootedIosDevices(jsonText) {
   let data;
   try {
@@ -59701,15 +59929,15 @@ function candidateRecordScripts(baseDir = dirname13(fileURLToPath(import.meta.ur
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
     process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
-    codexPluginRoot ? join33(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join33(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join33(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
+    codexPluginRoot ? join34(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join34(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join34(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join33(baseDir, "..", "..", "scripts", "record_proof.sh"),
+    join34(baseDir, "..", "..", "scripts", "record_proof.sh"),
     // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
-    join33(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
+    join34(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
     // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
-    join33(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
+    join34(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
 function resolveRecordScript(baseDir = dirname13(fileURLToPath(import.meta.url))) {
@@ -59717,7 +59945,7 @@ function resolveRecordScript(baseDir = dirname13(fileURLToPath(import.meta.url))
     return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
   }
   const candidates = candidateRecordScripts(baseDir);
-  return candidates.find((path) => existsSync24(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync25(path)) ?? candidates[0];
 }
 function getRecordScript() {
   return resolveRecordScript();
@@ -59910,7 +60138,7 @@ var init_device_record = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 function canonicalizeProofValue(value) {
   if (Array.isArray(value))
     return value.map(canonicalizeProofValue);
@@ -59922,14 +60150,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash9("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash10("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash9("sha256").update(bytes).digest("hex");
+  return createHash10("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -60430,10 +60658,10 @@ var init_proof_receipt = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash10, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID5 } from "node:crypto";
 import { execFileSync as execFileSync9 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync4, existsSync as existsSync25, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync16, openSync as openSync4, readFileSync as readFileSync22, realpathSync as realpathSync4, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
-import { basename as basename5, dirname as dirname14, extname, isAbsolute as isAbsolute4, join as join34, relative as relative2, resolve as resolve7, sep as sep5 } from "node:path";
+import { chmodSync as chmodSync4, closeSync as closeSync4, existsSync as existsSync26, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync16, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync4, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
+import { basename as basename5, dirname as dirname14, extname, isAbsolute as isAbsolute4, join as join35, relative as relative2, resolve as resolve7, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   if (timestamps.length !== steps.length)
@@ -60457,7 +60685,7 @@ function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   return reasons;
 }
 function hashBytes(bytes) {
-  return createHash10("sha256").update(bytes).digest("hex");
+  return createHash11("sha256").update(bytes).digest("hex");
 }
 function realpathOrSelf(path) {
   try {
@@ -60483,9 +60711,9 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
       continue;
     }
     for (const host of ["claude-plugin", "codex-plugin"]) {
-      const hostRoot = join34(root, "packages", host);
-      const coreIndex = realpathOrSelf(join34(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-      const coreSupervisor = realpathOrSelf(join34(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+      const hostRoot = join35(root, "packages", host);
+      const coreIndex = realpathOrSelf(join35(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+      const coreSupervisor = realpathOrSelf(join35(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
       if (arg === coreIndex) {
         return {
           host,
@@ -60504,8 +60732,8 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
           kind: "core-supervisor"
         };
       }
-      if (host === "codex-plugin" && arg === realpathOrSelf(join34(hostRoot, "bin", "cdp-supervisor.js"))) {
-        if (!existsSync25(coreIndex) || !existsSync25(coreSupervisor))
+      if (host === "codex-plugin" && arg === realpathOrSelf(join35(hostRoot, "bin", "cdp-supervisor.js"))) {
+        if (!existsSync26(coreIndex) || !existsSync26(coreSupervisor))
           return null;
         return {
           host,
@@ -60537,7 +60765,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   }
   if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
     return false;
-  if (coreRootOverride && join34(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+  if (coreRootOverride && join35(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
     return false;
   }
   if (workerOverride && workerOverride !== entrypoint.coreBundle)
@@ -60563,12 +60791,12 @@ function readProofCandidateRuntime(candidateRoot) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
   const { host, coreBundle } = entrypoint;
-  const runnerManifest = join34(root, "packages", host, "runner-manifest.json");
+  const runnerManifest = join35(root, "packages", host, "runner-manifest.json");
   return proofCandidateRuntimeSchema.parse({
     repo: "Lykhoyda/rn-dev-agent",
     sha,
-    coreBundleSha256: hashBytes(readFileSync22(coreBundle)),
-    runnerManifestSha256: hashBytes(readFileSync22(runnerManifest)),
+    coreBundleSha256: hashBytes(readFileSync23(coreBundle)),
+    runnerManifestSha256: hashBytes(readFileSync23(runnerManifest)),
     mcp: { pid: process.pid, argv, cwd: process.cwd() }
   });
 }
@@ -60588,16 +60816,16 @@ function sameProofAction(left, right) {
 function readProofActionIdentity(appProjectRoot, actionId) {
   try {
     const path = actionPathFor(appProjectRoot, actionId);
-    const bytesBefore = readFileSync22(path);
+    const bytesBefore = readFileSync23(path);
     const action = loadAction(appProjectRoot, actionId);
-    const bytesAfter = readFileSync22(path);
+    const bytesAfter = readFileSync23(path);
     if (!action || action.metadata.id !== actionId || !bytesBefore.equals(bytesAfter) || !Number.isInteger(action.state.revision) || action.state.revision < 1) {
       return null;
     }
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash10("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash11("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
@@ -60628,7 +60856,7 @@ function validCaptureContext(args, expectedRoot) {
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
     return false;
-  const proofRoot = join34(expectedRoot, "docs", "proof", args.runId);
+  const proofRoot = join35(expectedRoot, "docs", "proof", args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
@@ -60642,7 +60870,7 @@ function validCaptureContext(args, expectedRoot) {
   }));
 }
 function proofRootExists(args) {
-  const proofRoot = join34(args.projectRoot, "docs", "proof", args.runId);
+  const proofRoot = join35(args.projectRoot, "docs", "proof", args.runId);
   try {
     lstatSync7(proofRoot);
     return true;
@@ -60782,7 +61010,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
   ];
   for (const path of candidates) {
     try {
-      const bytes = readFileSync22(path, "utf8");
+      const bytes = readFileSync23(path, "utf8");
       return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
     } catch {
     }
@@ -61108,7 +61336,7 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
       }
       try {
-        const proofRoot = join34(args.projectRoot, "docs", "proof", args.runId);
+        const proofRoot = join35(args.projectRoot, "docs", "proof", args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
           return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
         }
@@ -61635,11 +61863,11 @@ var init_proof_capture2 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir10 } from "node:os";
-import { dirname as dirname15, join as join35 } from "node:path";
+import { dirname as dirname15, join as join36 } from "node:path";
 function fail2(reason) {
   throw new MediaFailure(reason);
 }
@@ -61670,7 +61898,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash11("sha256");
+  const hash = createHash12("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -61768,7 +61996,7 @@ async function matchScreenshotAt(process3, input) {
   if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
     fail2("INVALID_MEDIA_INPUT");
   }
-  const normalizedScreenshotPath = join35(input.scratchDir, `screenshot-${index}.png`);
+  const normalizedScreenshotPath = join36(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process3, [
     "-y",
@@ -61793,7 +62021,7 @@ async function matchScreenshotAt(process3, input) {
   let best = null;
   let decodedFrameCount = 0;
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
-    const framePath = join35(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    const framePath = join36(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
     await rm(framePath, { force: true });
     try {
       await runFrameProcess(process3, [
@@ -61917,7 +62145,7 @@ async function validateMedia(process3, input) {
     const scratchRoot = input.scratchRoot ?? tmpdir10();
     try {
       await mkdir2(scratchRoot, { recursive: true });
-      scratchDir = await mkdtemp(join35(scratchRoot, "proof-media-"));
+      scratchDir = await mkdtemp(join36(scratchRoot, "proof-media-"));
     } catch {
       fail2("MEDIA_IO_FAILED");
     }
@@ -63129,8 +63357,8 @@ var init_nav_graph = __esm({
 // packages/rn-dev-agent-core/dist/tools/auto-login.js
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
-import { existsSync as existsSync26, readFileSync as readFileSync23, writeFileSync as writeFileSync15, readdirSync as readdirSync8 } from "node:fs";
-import { join as join36 } from "node:path";
+import { existsSync as existsSync27, readFileSync as readFileSync24, writeFileSync as writeFileSync15, readdirSync as readdirSync8 } from "node:fs";
+import { join as join37 } from "node:path";
 import { homedir as homedir10 } from "node:os";
 function matchesAuthPattern(routeName) {
   const lower = routeName.toLowerCase();
@@ -63161,9 +63389,9 @@ async function isOnAuthScreen(client2) {
   }
 }
 function findLoginFlow(projectRoot) {
-  const searchDirs = [join36(projectRoot, ".maestro", "subflows"), join36(projectRoot, ".maestro")];
+  const searchDirs = [join37(projectRoot, ".maestro", "subflows"), join37(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
-    if (!existsSync26(dir))
+    if (!existsSync27(dir))
       continue;
     let files;
     try {
@@ -63173,12 +63401,12 @@ function findLoginFlow(projectRoot) {
     }
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join36(dir, candidate);
+        return join37(dir, candidate);
       }
     }
     const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
     if (authFile)
-      return join36(dir, authFile);
+      return join37(dir, authFile);
   }
   return null;
 }
@@ -63214,7 +63442,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
-  const originalContent = readFileSync23(flowPath, "utf-8");
+  const originalContent = readFileSync24(flowPath, "utf-8");
   const flowContent = stripClearState(originalContent);
   let validatedCommands;
   try {
@@ -63251,8 +63479,8 @@ async function handleAutoLogin(client2, opts = {}) {
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync15(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join36(homedir10(), ".maestro-runner", "bin", "maestro-runner");
-  if (!existsSync26(runnerPath)) {
+  const runnerPath = join37(homedir10(), ".maestro-runner", "bin", "maestro-runner");
+  if (!existsSync27(runnerPath)) {
     return {
       loggedIn: false,
       reason: "maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
@@ -63735,8 +63963,8 @@ var init_graceful_shutdown = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-generate.js
-import { existsSync as existsSync27, mkdirSync as mkdirSync17, writeFileSync as writeFileSync16 } from "node:fs";
-import { join as join37 } from "node:path";
+import { existsSync as existsSync28, mkdirSync as mkdirSync17, writeFileSync as writeFileSync16 } from "node:fs";
+import { join as join38 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
   switch (step.action) {
@@ -63792,16 +64020,16 @@ function createMaestroGenerateHandler() {
       return failResult("Provide a flow name and at least one step.");
     }
     const root = findProjectRoot();
-    const outputDir = args.outputDir ?? (root ? join37(root, ".rn-agent", "actions") : null);
+    const outputDir = args.outputDir ?? (root ? join38(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
-    if (!existsSync27(outputDir)) {
+    if (!existsSync28(outputDir)) {
       mkdirSync17(outputDir, { recursive: true });
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join37(outputDir, fileName);
+    const filePath = join38(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
@@ -63841,14 +64069,14 @@ var init_maestro_generate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
 import { execFile as execFileCb21 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
-import { existsSync as existsSync28, readdirSync as readdirSync9, readFileSync as readFileSync24, writeFileSync as writeFileSync17 } from "node:fs";
-import { join as join38 } from "node:path";
+import { existsSync as existsSync29, readdirSync as readdirSync9, readFileSync as readFileSync25, writeFileSync as writeFileSync17 } from "node:fs";
+import { join as join39 } from "node:path";
 import { tmpdir as tmpdir11 } from "node:os";
 function discoverFlows(dir, pattern) {
-  if (!existsSync28(dir))
+  if (!existsSync29(dir))
     return [];
   const files = readdirSync9(dir, { recursive: true });
-  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join38(dir, f)).sort();
+  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join39(dir, f)).sort();
   if (pattern) {
     if (pattern.length > 256) {
       return yamls;
@@ -63880,7 +64108,7 @@ function createMaestroTestAllHandler() {
       return failResult(dispatch.error);
     }
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join38(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join39(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
@@ -63900,11 +64128,11 @@ function createMaestroTestAllHandler() {
       let appFile;
       let flowHasHideKeyboard = false;
       try {
-        const yamlText = readFileSync24(flow, "utf-8");
+        const yamlText = readFileSync25(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsed.appId !== void 0 ? { appId: parsed.appId } : {}, parsed.commands);
-        safeFlowFile = join38(tmpdir11(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        safeFlowFile = join39(tmpdir11(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync17(safeFlowFile, canonical, "utf-8");
         const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, void 0);
         if (!appFileResolution.ok) {
@@ -64048,8 +64276,8 @@ var init_maestro_test_all = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
-import { readFileSync as readFileSync25, readdirSync as readdirSync10, lstatSync as lstatSync8 } from "node:fs";
-import { join as join39, extname as extname2 } from "node:path";
+import { readFileSync as readFileSync26, readdirSync as readdirSync10, lstatSync as lstatSync8 } from "node:fs";
+import { join as join40, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
   return nodes.some((n) => {
@@ -64072,7 +64300,7 @@ function discoverTestIDs(dir) {
     for (const entry of entries) {
       if (entry === "node_modules" || entry.startsWith("."))
         continue;
-      const full = join39(d, entry);
+      const full = join40(d, entry);
       try {
         const st = lstatSync8(full);
         if (st.isSymbolicLink())
@@ -64083,7 +64311,7 @@ function discoverTestIDs(dir) {
         }
         if (!SCAN_EXTENSIONS.has(extname2(entry)))
           continue;
-        const src = readFileSync25(full, "utf8");
+        const src = readFileSync26(full, "utf8");
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id)
@@ -64421,7 +64649,7 @@ var init_instrumentation = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join40 } from "node:path";
+import { join as join41 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
@@ -64516,7 +64744,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join40(tmpdir12(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join41(tmpdir12(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -64611,9 +64839,9 @@ var init_e2e_csrf = __esm({
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync26 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname16, join as join41 } from "node:path";
+import { dirname as dirname16, join as join42 } from "node:path";
 function listen(server3, port) {
   return new Promise((resolve9, reject) => {
     const onErr = (e) => {
@@ -64699,6 +64927,14 @@ var init_server3 = __esm({
             claimEpoch: this.authority?.claimEpoch,
             instanceId: this.authority?.instanceId
           });
+        }
+        if (path === "/api/stop" && req.method === "POST") {
+          res.writeHead(202, { "content-type": "application/json" });
+          res.end('{"stopping":true}');
+          queueMicrotask(() => {
+            void this.stop();
+          });
+          return;
         }
         if (path === "/api/stream")
           return this.stream(res);
@@ -64848,7 +65084,7 @@ var init_server3 = __esm({
       }
       index(res) {
         try {
-          let html = readFileSync26(join41(__dir, "web-dist", "index.html"), "utf8");
+          let html = readFileSync27(join42(__dir, "web-dist", "index.html"), "utf8");
           if (this.authority) {
             const authorityJs = JSON.stringify({
               capability: this.authority.capability,
@@ -65019,10 +65255,10 @@ var init_server3 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
-import { join as join42 } from "node:path";
+import { join as join43 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join42(getStateDir(), "observe", `${safe}.json`);
+  return join43(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -65261,7 +65497,7 @@ var init_jpeg_stream = __esm({
 import { spawn as spawn5, execFile as execFile25 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir13 } from "node:os";
-import { join as join43 } from "node:path";
+import { join as join44 } from "node:path";
 async function detectIdb(execFileFn = execFile25) {
   return new Promise((resolve9) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve9(!err));
@@ -65417,7 +65653,7 @@ var init_sources = __esm({
         this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
         this.idleDelayMs = opts.idleDelayMs ?? 25;
         this.failurePauseMs = opts.failurePauseMs ?? 500;
-        this.tmpPath = opts.tmpPath ?? (() => join43(tmpdir13(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+        this.tmpPath = opts.tmpPath ?? (() => join44(tmpdir13(), "rn-mirror-simctl-" + process.pid + ".jpg"));
       }
       start(sink) {
         this.active = true;
@@ -65839,16 +66075,16 @@ var init_target = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname17, join as join44 } from "node:path";
-import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync18, renameSync as renameSync8, readFileSync as readFileSync27, readdirSync as readdirSync11, existsSync as existsSync29 } from "node:fs";
-import { createHash as createHash12 } from "node:crypto";
+import { dirname as dirname17, join as join45 } from "node:path";
+import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync18, renameSync as renameSync8, readFileSync as readFileSync28, readdirSync as readdirSync11, existsSync as existsSync30 } from "node:fs";
+import { createHash as createHash13 } from "node:crypto";
 function e2eDirFor(projectRoot) {
-  return join44(projectRoot, ".rn-agent", "e2e");
+  return join45(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join44(dir, `${id}.yaml`);
+  const file = join45(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -65872,7 +66108,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash12("sha256").update(s).digest("hex");
+  return createHash13("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -65896,13 +66132,13 @@ function freezeLockedTest(projectRoot, source, ctx) {
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
-  if (!existsSync29(filePath))
+  if (!existsSync30(filePath))
     return null;
-  return parseLockedTest(readFileSync27(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync28(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
-  if (!existsSync29(dir))
+  if (!existsSync30(dir))
     return [];
   return readdirSync11(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
@@ -65949,12 +66185,12 @@ var init_e2e_test = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync28 } from "node:fs";
-import { join as join45 } from "node:path";
+import { readFileSync as readFileSync29 } from "node:fs";
+import { join as join46 } from "node:path";
 function loadE2eConfig(projectRoot) {
-  const filePath = join45(projectRoot, ".rn-agent", "e2e.config.json");
+  const filePath = join46(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync28(filePath, "utf8");
+    const raw = readFileSync29(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -66015,7 +66251,7 @@ var init_git_info = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync29 } from "node:fs";
+import { readFileSync as readFileSync30 } from "node:fs";
 function readPassed(result) {
   try {
     const env = JSON.parse(result.content[0].text);
@@ -66030,7 +66266,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync29(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync30(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -66100,8 +66336,8 @@ var init_lock_e2e_test = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
-import { join as join46 } from "node:path";
-import { mkdirSync as mkdirSync19, writeFileSync as writeFileSync19, renameSync as renameSync9, readFileSync as readFileSync30, existsSync as existsSync30 } from "node:fs";
+import { join as join47 } from "node:path";
+import { mkdirSync as mkdirSync19, writeFileSync as writeFileSync19, renameSync as renameSync9, readFileSync as readFileSync31, existsSync as existsSync31 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -66155,20 +66391,20 @@ function diffNewlyFailing(current, previousGreen) {
   return current.results.filter((r) => !r.passed && r.classification !== "skipped" && (previousGreen === null || wasPassing.has(r.testId))).map((r) => r.testId);
 }
 function e2eRunsDirFor(projectRoot) {
-  return join46(sessionStateDirectory(projectRoot), "e2e-runs");
+  return join47(sessionStateDirectory(projectRoot), "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync19(join46(file, ".."), { recursive: true });
+  mkdirSync19(join47(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync19(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync9(tmp, file);
 }
 function loadIndex(projectRoot) {
-  const file = join46(e2eRunsDirFor(projectRoot), "index.json");
-  if (!existsSync30(file))
+  const file = join47(e2eRunsDirFor(projectRoot), "index.json");
+  if (!existsSync31(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync30(file, "utf8"));
+    const parsed = JSON.parse(readFileSync31(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -66177,7 +66413,7 @@ function loadIndex(projectRoot) {
 function writeRunRecord(projectRoot, rec) {
   assertValidActionId(rec.runId, "writeRunRecord");
   const dir = e2eRunsDirFor(projectRoot);
-  writeJsonAtomic(join46(dir, `${rec.runId}.json`), rec);
+  writeJsonAtomic(join47(dir, `${rec.runId}.json`), rec);
   const entry = {
     runId: rec.runId,
     finishedAt: rec.finishedAt,
@@ -66185,15 +66421,15 @@ function writeRunRecord(projectRoot, rec) {
     totals: rec.totals
   };
   const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
-  writeJsonAtomic(join46(dir, "index.json"), next);
+  writeJsonAtomic(join47(dir, "index.json"), next);
 }
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
-  const file = join46(e2eRunsDirFor(projectRoot), `${runId}.json`);
-  if (!existsSync30(file))
+  const file = join47(e2eRunsDirFor(projectRoot), `${runId}.json`);
+  if (!existsSync31(file))
     return null;
   try {
-    return JSON.parse(readFileSync30(file, "utf8"));
+    return JSON.parse(readFileSync31(file, "utf8"));
   } catch {
     return null;
   }
@@ -66213,14 +66449,14 @@ var init_e2e_run = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
-import { join as join47 } from "node:path";
-import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync20, renameSync as renameSync10, readFileSync as readFileSync31, readdirSync as readdirSync12, existsSync as existsSync31 } from "node:fs";
+import { join as join48 } from "node:path";
+import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync20, renameSync as renameSync10, readFileSync as readFileSync32, readdirSync as readdirSync12, existsSync as existsSync32 } from "node:fs";
 function requestsDir(projectRoot) {
-  return join47(e2eRunsDirFor(projectRoot), "requests");
+  return join48(e2eRunsDirFor(projectRoot), "requests");
 }
 function requestPath(projectRoot, runId) {
   assertValidActionId(runId, "e2e-run-request");
-  return join47(requestsDir(projectRoot), `${runId}.json`);
+  return join48(requestsDir(projectRoot), `${runId}.json`);
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
@@ -66231,10 +66467,10 @@ function writeRequest(projectRoot, req) {
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
-  if (!existsSync31(file))
+  if (!existsSync32(file))
     return null;
   try {
-    return JSON.parse(readFileSync31(file, "utf8"));
+    return JSON.parse(readFileSync32(file, "utf8"));
   } catch {
     return null;
   }
@@ -66249,7 +66485,7 @@ function updateRequest(projectRoot, runId, patch) {
 }
 function listRequests(projectRoot) {
   const dir = requestsDir(projectRoot);
-  if (!existsSync31(dir))
+  if (!existsSync32(dir))
     return [];
   const out = [];
   for (const f of readdirSync12(dir)) {
@@ -66564,9 +66800,9 @@ var init_preflight = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
 import { readdirSync as readdirSync13 } from "node:fs";
-import { join as join48 } from "node:path";
+import { join as join49 } from "node:path";
 async function listActions(projectRoot) {
-  const actionsDir = join48(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join49(projectRoot, ".rn-agent", "actions");
   let files;
   try {
     files = readdirSync13(actionsDir);
@@ -66636,12 +66872,23 @@ function createWorkerAuthorityRuntime(environment = process.env, dependencies = 
       ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
     });
     const session = { sessionId, claimEpoch };
-    registry2.bindWorker(session, {
-      instanceId: workerInstance,
-      pid: birth.pid,
-      token: birth.token
-    });
-    return new WorkerAuthorityRuntime(registry2, session, null);
+    const status = registry2.getSessionStatus(sessionId);
+    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
+    if (recoveryOnly) {
+      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
+      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
+      if (!recoveryCapability) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
+      }
+      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
+    } else {
+      registry2.bindWorker(session, {
+        instanceId: workerInstance,
+        pid: birth.pid,
+        token: birth.token
+      });
+    }
+    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
   } catch (error2) {
     return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
   }
@@ -66657,22 +66904,41 @@ var init_runtime = __esm({
     init_process_birth();
     init_process_owner();
     init_registry();
+    init_secure_state_file();
     WorkerAuthorityRuntime = class {
       available;
       #registry;
       #session;
       #unavailable;
-      constructor(registry2, session, unavailable2) {
+      #recoveryOnly;
+      constructor(registry2, session, unavailable2, recoveryOnly = false) {
         this.#registry = registry2;
         this.#session = session;
         this.#unavailable = unavailable2;
         this.available = registry2 !== null && session !== null;
+        this.#recoveryOnly = recoveryOnly;
       }
       requireAvailable() {
         if (!this.#registry || !this.#session) {
           throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
         }
         return { registry: this.#registry, session: this.#session };
+      }
+      requireOperational() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
+        }
+        return available;
+      }
+      requireRecovery() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
+        }
+        return available;
       }
       status() {
         if (!this.#registry || !this.#session) {
@@ -66732,9 +66998,9 @@ var init_build_receipt = __esm({
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
-import { createHash as createHash13 } from "node:crypto";
-import { readFileSync as readFileSync32, statSync as statSync12 } from "node:fs";
-import { join as join49 } from "node:path";
+import { createHash as createHash14 } from "node:crypto";
+import { readFileSync as readFileSync33, statSync as statSync12 } from "node:fs";
+import { join as join50 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
     encoding: "utf8",
@@ -66744,7 +67010,7 @@ function runText(command, args) {
   });
 }
 function generation(parts) {
-  return createHash13("sha256").update(parts.join("\0")).digest("hex");
+  return createHash14("sha256").update(parts.join("\0")).digest("hex");
 }
 function androidApkPaths(target, text) {
   return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
@@ -66762,7 +67028,7 @@ function captureInstallGeneration(target, dependencies = {}) {
     if (!appPath) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
     }
-    const infoPath = join49(appPath, "Info.plist");
+    const infoPath = join50(appPath, "Info.plist");
     const executable = text("plutil", [
       "-extract",
       "CFBundleExecutable",
@@ -66775,7 +67041,7 @@ function captureInstallGeneration(target, dependencies = {}) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
     }
     const stat2 = dependencies.stat ?? statSync12;
-    const metadata2 = [infoPath, join49(appPath, executable)].map((path) => {
+    const metadata2 = [infoPath, join50(appPath, executable)].map((path) => {
       const value = stat2(path);
       return `${path}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
     });
@@ -66875,8 +67141,8 @@ var init_build_adapter = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { chmodSync as chmodSync5, existsSync as existsSync32, lstatSync as lstatSync9, mkdirSync as mkdirSync21, readFileSync as readFileSync33, renameSync as renameSync11, rmSync as rmSync8, statSync as statSync13, writeFileSync as writeFileSync21 } from "node:fs";
-import { dirname as dirname18, join as join50, resolve as resolve8 } from "node:path";
+import { chmodSync as chmodSync5, existsSync as existsSync33, lstatSync as lstatSync9, mkdirSync as mkdirSync21, readFileSync as readFileSync34, renameSync as renameSync11, rmSync as rmSync8, statSync as statSync13, writeFileSync as writeFileSync21 } from "node:fs";
+import { dirname as dirname18, join as join51, resolve as resolve8 } from "node:path";
 function renderMetroIntegrationAdapter() {
   return `'use strict';
 const path = require('node:path');
@@ -66920,10 +67186,14 @@ function restoreMetroIntegration(source) {
   const end = source.indexOf(METRO_END);
   if (start < 0 && end < 0)
     return source;
-  if (start < 0 || end < start) {
+  if (start < 0 || end < start || source.indexOf(METRO_START, start + METRO_START.length) >= 0 || source.indexOf(METRO_END, end + METRO_END.length) >= 0) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt");
   }
-  return `${source.slice(0, start).trimEnd()}
+  const blockEnd = end + METRO_END.length;
+  const prefix = source.slice(0, start).trimEnd();
+  const suffix = source.slice(blockEnd).replace(/^(?:\r?\n)+/, "");
+  return suffix ? `${prefix}
+${suffix}` : `${prefix}
 `;
 }
 function parseSupportedScript(script, platform) {
@@ -67143,8 +67413,8 @@ function atomicWrite(path, contents, mode) {
 function snapshotFiles(paths) {
   return paths.map((path) => ({
     path,
-    contents: existsSync32(path) ? readFileSync33(path) : null,
-    mode: existsSync32(path) ? statSync13(path).mode & 511 : 384
+    contents: existsSync33(path) ? readFileSync34(path) : null,
+    mode: existsSync33(path) ? statSync13(path).mode & 511 : 384
   }));
 }
 function restoreSnapshots(snapshots) {
@@ -67158,11 +67428,11 @@ function restoreSnapshots(snapshots) {
 }
 function applyPackageIntegration(input) {
   const appRoot = resolve8(input.appRoot);
-  const packagePath = join50(appRoot, "package.json");
-  const integrationRoot = join50(appRoot, ".rn-agent", "integration");
-  const manifestPath = join50(integrationRoot, "rn-session-integration.json");
-  const adapterPath = join50(appRoot, ADAPTER);
-  const metroConfigPath = ["metro.config.js", "metro.config.cjs"].map((name) => join50(appRoot, name)).find((path) => {
+  const packagePath = join51(appRoot, "package.json");
+  const integrationRoot = join51(appRoot, ".rn-agent", "integration");
+  const manifestPath = join51(integrationRoot, "rn-session-integration.json");
+  const adapterPath = join51(appRoot, ADAPTER);
+  const metroConfigPath = ["metro.config.js", "metro.config.cjs"].map((name) => join51(appRoot, name)).find((path) => {
     try {
       return lstatSync9(path).isFile();
     } catch {
@@ -67172,8 +67442,8 @@ function applyPackageIntegration(input) {
   if (!metroConfigPath) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
   }
-  const metroAdapterPath = join50(appRoot, METRO_ADAPTER);
-  const authorityModulePath = join50(appRoot, AUTHORITY_MODULE);
+  const metroAdapterPath = join51(appRoot, METRO_ADAPTER);
+  const authorityModulePath = join51(appRoot, AUTHORITY_MODULE);
   for (const path of [packagePath, integrationRoot, metroConfigPath]) {
     try {
       if (lstatSync9(path).isSymbolicLink()) {
@@ -67184,16 +67454,16 @@ function applyPackageIntegration(input) {
         throw error2;
     }
   }
-  const packageJson = JSON.parse(readFileSync33(packagePath, "utf8"));
+  const packageJson = JSON.parse(readFileSync34(packagePath, "utf8"));
   const existing = (() => {
     try {
-      return JSON.parse(readFileSync33(manifestPath, "utf8"));
+      return JSON.parse(readFileSync34(manifestPath, "utf8"));
     } catch {
       return void 0;
     }
   })();
   const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
-  const metroSource = readFileSync33(metroConfigPath, "utf8");
+  const metroSource = readFileSync34(metroConfigPath, "utf8");
   const nextMetroSource = previewMetroIntegration(metroSource);
   preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
   const snapshots = snapshotFiles([
@@ -67222,22 +67492,22 @@ function applyPackageIntegration(input) {
 }
 function restorePackageIntegrationFiles(input) {
   const appRoot = resolve8(input.appRoot);
-  const packagePath = join50(appRoot, "package.json");
-  const manifestPath = join50(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
-  const manifest = JSON.parse(readFileSync33(manifestPath, "utf8"));
-  const metroConfigPath = join50(appRoot, manifest.metroConfig ?? "metro.config.js");
+  const packagePath = join51(appRoot, "package.json");
+  const manifestPath = join51(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+  const manifest = JSON.parse(readFileSync34(manifestPath, "utf8"));
+  const metroConfigPath = join51(appRoot, manifest.metroConfig ?? "metro.config.js");
   const generated = [
     manifestPath,
-    join50(appRoot, ADAPTER),
-    join50(appRoot, METRO_ADAPTER),
-    join50(appRoot, AUTHORITY_MODULE)
+    join51(appRoot, ADAPTER),
+    join51(appRoot, METRO_ADAPTER),
+    join51(appRoot, AUTHORITY_MODULE)
   ];
   const snapshots = snapshotFiles([packagePath, metroConfigPath, ...generated]);
   try {
-    const packageJson = JSON.parse(readFileSync33(packagePath, "utf8"));
+    const packageJson = JSON.parse(readFileSync34(packagePath, "utf8"));
     atomicWrite(packagePath, `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
 `, 420);
-    atomicWrite(metroConfigPath, restoreMetroIntegration(readFileSync33(metroConfigPath, "utf8")), 420);
+    atomicWrite(metroConfigPath, restoreMetroIntegration(readFileSync34(metroConfigPath, "utf8")), 420);
     for (const path of generated)
       rmSync8(path, { force: true });
   } catch (error2) {
@@ -67262,89 +67532,35 @@ var init_package_integration = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
-import { existsSync as existsSync33, readFileSync as readFileSync34 } from "node:fs";
-import { join as join51 } from "node:path";
-function inspectAuthorityMigration(status, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync33;
-  const readText = dependencies.readText ?? ((path) => readFileSync34(path, "utf8"));
-  const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
-  const manifestPath = appRoot ? join51(appRoot, ".rn-agent", "integration", "rn-session-integration.json") : "";
-  let packageIntegrationInstalled = false;
-  if (manifestPath && exists(manifestPath)) {
-    try {
-      const manifest = JSON.parse(readText(manifestPath));
-      packageIntegrationInstalled = manifest.version === 1;
-    } catch {
-      packageIntegrationInstalled = false;
-    }
-  }
-  const legacyStateDetected = [
-    "/tmp/rn-dev-agent-session.json",
-    "/tmp/rn-fast-runner-state.json",
-    "/tmp/rn-android-runner-state.json"
-  ].some(exists);
-  return {
-    rollout: "strict-default",
-    storeAvailable: true,
-    registrySchema: 3,
-    legacyStateDetected,
-    bundleHandshake: {
-      supported: true,
-      scope: "coarse-initial-bundle",
-      bound: Boolean(status.bindings.bundle),
-      sourceFidelity: "not-proven"
-    },
-    packageIntegration: {
-      supported: true,
-      installed: packageIntegrationInstalled
-    },
-    strictEnforcement: true
-  };
-}
-var init_migration_diagnostic = __esm({
-  "packages/rn-dev-agent-core/dist/session/migration-diagnostic.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/public-status.js
-function projectPublicAuthorityStatus(status) {
-  if (!status.available) {
-    return {
-      available: false,
-      code: status.code
-    };
-  }
-  return {
-    available: true,
-    sessionId: status.sessionId.slice(0, 12),
-    claimEpoch: status.claimEpoch,
-    state: status.state,
-    authorityVersion: status.authorityVersion,
-    sourceKind: status.source.kind,
-    metroPort: status.bindings.metroPort,
-    observePort: status.bindings.observePort,
-    platform: status.bindings.device?.platform,
-    deviceBound: Boolean(status.bindings.device),
-    installBound: Boolean(status.bindings.install),
-    metroBound: Boolean(status.bindings.metro),
-    bundleBound: Boolean(status.bindings.bundle),
-    runnerBound: Boolean(status.bindings.runner),
-    migration: inspectAuthorityMigration(status)
-  };
-}
-var init_public_status = __esm({
-  "packages/rn-dev-agent-core/dist/session/public-status.js"() {
-    "use strict";
-    init_migration_diagnostic();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/tools/session.js
 import { readFileSync as readFileSync35 } from "node:fs";
 import { dirname as dirname19, join as join52 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
+async function stopHandoffObserve(binding) {
+  const port = Number(binding.port);
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.cleanupCapability ?? "");
+  if (!Number.isSafeInteger(port) || !instanceId || !capability) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
+  }
+  const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${capability}`,
+      "x-rn-observe-instance": instanceId
+    }
+  });
+  if (!response.ok) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe server refused fenced handoff cleanup");
+  }
+}
+async function stopHandoffRunner(binding) {
+  if (binding.platform === "ios") {
+    stopFastRunner(typeof binding.deviceId === "string" ? binding.deviceId : void 0);
+  } else if (binding.platform === "android") {
+    await stopAndroidRunner(typeof binding.deviceId === "string" ? binding.deviceId : void 0);
+  }
+}
 function authorityFailure(error2) {
   if (error2 instanceof SessionAuthorityError) {
     return failResult(error2.message, error2.code, authorityErrorMeta(error2));
@@ -67369,7 +67585,8 @@ function createSessionHandler(runtime, dependencies = {}) {
       });
     }
     try {
-      const { registry: registry2, session } = runtime.requireAvailable();
+      const isRecovery = input.action === "accept_handoff" || input.action === "adopt_stale";
+      const { registry: registry2, session } = isRecovery ? runtime.requireRecovery() : runtime.requireOperational();
       if (input.action === "bind_device") {
         const platform = required2(input.platform, "platform");
         const deviceId = required2(input.deviceId, "deviceId");
@@ -67549,33 +67766,36 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status?.worker.instanceId) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "target worker identity is unavailable");
         }
-        registry2.validateHandoffInto(session, {
-          handoffId,
-          token: token2,
-          targetInstance: status.worker.instanceId
-        });
+        let cleanup = status.bindings.handoffCleanup;
         const priorSessionId = registry2.getHandoffOwner(handoffId);
         const priorStatus = priorSessionId ? registry2.getSessionStatus(priorSessionId) : null;
-        const priorRunner = priorStatus?.bindings.runner;
-        if (priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
+        const priorRunner = cleanup?.runner ?? priorStatus?.bindings.runner;
+        if (status.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
           sessionId: priorSessionId ?? "unknown",
           pid: priorRunner.pid,
           token: priorRunner.processBirth
         }) !== "match")) {
           throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "prior runner process identity cannot be proven for capability rotation");
         }
-        if (priorStatus?.bindings.observe)
-          await stopObserveServer();
-        if (priorRunner?.platform === "ios") {
-          stopFastRunner(typeof priorRunner.deviceId === "string" ? priorRunner.deviceId : void 0);
-        } else if (priorRunner?.platform === "android") {
-          await stopAndroidRunner(typeof priorRunner.deviceId === "string" ? priorRunner.deviceId : void 0);
+        if (status.state !== "handoff_cleanup") {
+          registry2.validateHandoffInto(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status.worker.instanceId
+          });
+          cleanup = registry2.acceptHandoffInto(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status.worker.instanceId
+          });
         }
-        registry2.acceptHandoffInto(session, {
-          handoffId,
-          token: token2,
-          targetInstance: status.worker.instanceId
-        });
+        if (cleanup?.runner) {
+          await (dependencies.stopHandoffRunner ?? stopHandoffRunner)(cleanup.runner);
+        }
+        if (cleanup?.observe) {
+          await (dependencies.stopHandoffObserve ?? stopHandoffObserve)(cleanup.observe);
+        }
+        registry2.finishHandoffCleanup(session, status.worker.instanceId);
         return okResult({
           accepted: true,
           session: projectPublicAuthorityStatus(runtime.status()),
@@ -67590,21 +67810,10 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!current || !prior || current.sourceKey !== prior.sourceKey || current.worktreeKey !== prior.worktreeKey || current.appRootKey !== prior.appRootKey) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
         }
-        const transferable = prior.claims.filter((claim) => (/* @__PURE__ */ new Set(["source", "metro-port", "observe-port", "device"])).has(claim.type)).map(({ type, key }) => ({ type, key }));
-        registry2.claimResources(session, transferable);
-        const metro = prior.bindings.metro;
-        const sameMetro = Number(metro?.port) === Number(current.bindings.metroPort);
-        registry2.updateBindings(session, {
-          state: sameMetro && prior.bindings.device ? "device_bound" : "source_bound",
-          bindings: {
-            adoptionRequired: null,
-            ...sameMetro ? { metro: prior.bindings.metro } : { metro: null },
-            ...prior.bindings.device ? { device: prior.bindings.device } : {},
-            ...prior.bindings.install ? { install: prior.bindings.install } : {},
-            bundle: null,
-            runner: null
-          }
-        });
+        if (!current.worker.instanceId) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "recovery worker identity is unavailable");
+        }
+        registry2.adoptStaleIntoBlocked(session, priorSessionId, current.worker.instanceId);
         return okResult({
           adopted: true,
           priorSessionId: priorSessionId.slice(0, 12),
@@ -67635,7 +67844,6 @@ var init_session = __esm({
     init_rn_android_runner_client();
     init_process_owner();
     init_public_status();
-    init_observe();
   }
 });
 
@@ -68003,7 +68211,7 @@ function createAuthorityGate(runtime, dependencies) {
     wrap: (tool, handler) => async (...handlerArgs) => {
       const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
       const baseProfile = authorityProfileFor(tool);
-      const profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "cancel_handoff") ? {
+      const profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "cancel_handoff" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
         kind: "diagnostic",
         axes: [],
         mutation: false,
@@ -68026,6 +68234,10 @@ function createAuthorityGate(runtime, dependencies) {
       } : baseProfile;
       if (profile.kind === "diagnostic") {
         return addMeta2(await handler(...handlerArgs), { authoritative: false });
+      }
+      const runtimeStatus = runtime.status();
+      if (runtimeStatus.available && runtimeStatus.state === "blocked") {
+        return authorityFailure2(new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery"));
       }
       if (profile.kind === "transition") {
         let operation2 = null;
@@ -68063,7 +68275,7 @@ function createAuthorityGate(runtime, dependencies) {
           });
           const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
           registry3.verifyOperation(operation2);
-          const result = await handler(...handlerArgs);
+          const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
           if (!resultIsCanonicalSuccess(result)) {
             return addMeta2(result, { authoritative: false });
           }
@@ -68076,7 +68288,7 @@ function createAuthorityGate(runtime, dependencies) {
           }
           const gateCommitsProof = tool === "proof_capture" && args.action === "begin_rehearsal";
           if (!gateCommitsProof) {
-            operation2 = registry3.refreshOperation(operation2);
+            registry3.verifyOperation(operation2);
             const nextStatus = runtime.status();
             if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
               throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "transition did not advance the fenced authority generation");
@@ -68294,9 +68506,9 @@ var init_metro_authority = __esm({
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 import { execFileSync as execFileSync13 } from "node:child_process";
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 function identity(value) {
-  return createHash14("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash15("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -68584,12 +68796,45 @@ var init_dev_client_authority = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/target-device-authority.js
+async function proveTargetDeviceAssociation(input, dependencies) {
+  const targetDeviceName = input.targetDeviceName?.trim();
+  if (!targetDeviceName) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
+  }
+  if (input.platform === "ios") {
+    const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
+    const parsed = JSON.parse(output.stdout);
+    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && device.name === targetDeviceName);
+    if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
+      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
+    }
+    return;
+  }
+  const devices = (await dependencies.execute("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  const matching = [];
+  for (const serial of devices) {
+    const model = (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim();
+    if (model && (targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
+      matching.push(serial);
+    }
+  }
+  if (matching.length !== 1 || matching[0] !== input.deviceId) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+}
+var init_target_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/session/target-device-authority.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/index.js
 var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash15, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID7 } from "node:crypto";
 import { readFileSync as readFileSync36, rmSync as rmSync9 } from "node:fs";
 import { execFile as execFile26 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
@@ -68689,30 +68934,7 @@ async function pinSessionDevClient(status) {
       if (!target || exactClient.metroPort !== metroPort || !targetMatchesSession(target, { platform, bundleId: appId })) {
         throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");
       }
-      const targetDeviceName = target.deviceName?.trim();
-      if (!targetDeviceName) {
-        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
-      }
-      if (platform === "ios") {
-        const output = await execFileP("xcrun", ["simctl", "list", "devices", "--json"]);
-        const parsed = JSON.parse(output.stdout);
-        const booted = Object.values(parsed.devices ?? {}).flat().filter((device2) => device2.state === "Booted" && device2.name === targetDeviceName);
-        if (booted.length !== 1 || booted[0]?.udid !== deviceId) {
-          throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
-        }
-      } else {
-        const devices = (await execFileP("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
-        const matching = [];
-        for (const serial of devices) {
-          const model = (await execFileP("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim();
-          if (model && (targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
-            matching.push(serial);
-          }
-        }
-        if (matching.length !== 1 || matching[0] !== deviceId) {
-          throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
-        }
-      }
+      await proveTargetDeviceAssociation({ platform, deviceId, targetDeviceName: target.deviceName }, { execute: execFileP });
       return {
         targetId: target.id,
         connectionGeneration: exactClient.connectionGeneration,
@@ -68740,6 +68962,11 @@ async function rebindSessionRuntime(status) {
   })) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: runtime reset did not reconnect the exact session target");
   }
+  await proveTargetDeviceAssociation({
+    platform: device.platform,
+    deviceId: device.deviceId,
+    targetDeviceName: target.deviceName
+  }, { execute: execFileP });
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
   const evaluated = await client2.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
   const outer = typeof evaluated.value === "string" ? JSON.parse(evaluated.value) : null;
@@ -69002,6 +69229,7 @@ var init_index = __esm({
     init_secure_state_file();
     init_dev_client_authority();
     init_metro_authority();
+    init_target_device_authority();
     init_source_identity();
     pkgPath = join53(dirname20(fileURLToPath5(import.meta.url)), "..", "package.json");
     pkgVersion = JSON.parse(readFileSync36(pkgPath, "utf8")).version;
@@ -69106,9 +69334,12 @@ var init_index = __esm({
       return {
         sessionId: status.sessionId,
         claimEpoch: status.claimEpoch,
-        authorityVersion: status.authorityVersion,
+        sourceKey: status.sourceKey,
+        worktreeKey: status.worktreeKey,
+        appRootKey: status.appRootKey,
         platform: device?.platform,
         deviceId: device?.deviceId,
+        buildGeneration: install?.buildGeneration,
         installGeneration: install?.installGeneration,
         runnerInstanceId: runner?.instanceId,
         runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key
@@ -69151,7 +69382,8 @@ var init_index = __esm({
               port,
               sessionId: authority.sessionId,
               claimEpoch: authority.claimEpoch,
-              instanceId: authority.instanceId
+              instanceId: authority.instanceId,
+              cleanupCapability: authority.capability
             }
           }
         });
@@ -69732,7 +69964,7 @@ var init_index = __esm({
           connectedAt: current.connectedAt
         }),
         errorCount: errors.length,
-        errorSha256: createHash15("sha256").update(errorBytes).digest("hex"),
+        errorSha256: createHash16("sha256").update(errorBytes).digest("hex"),
         device: identity2.device,
         runtime: identity2.runtime
       };
@@ -70237,7 +70469,7 @@ init_source_identity();
 
 // packages/rn-dev-agent-core/dist/session/supervisor-authority.js
 init_registry();
-import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
+import { createHash as createHash5, randomBytes as randomBytes2, randomUUID } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/shared-knowledge-root.js
 import { cpSync, lstatSync as lstatSync2, readdirSync, readlinkSync, renameSync, rmSync, statSync as statSync3 } from "node:fs";
@@ -70413,6 +70645,7 @@ function createSupervisorAuthority(input) {
   const sessionId = input.sessionId ?? randomUUID();
   const signerCapability = randomBytes2(32).toString("base64url");
   const observeCapability = randomBytes2(32).toString("base64url");
+  const recoveryCapability = randomBytes2(32).toString("base64url");
   const session = registry2.createSession({
     sessionId,
     sourceKey: input.source.sourceKey,
@@ -70459,6 +70692,7 @@ function createSupervisorAuthority(input) {
       metroPort,
       observePort,
       ...adoptionRequired ? {
+        recoveryCapabilityHash: createHash5("sha256").update(recoveryCapability).digest("hex"),
         adoptionRequired: {
           sessionId: adoptionRequired.sessionId,
           claimEpoch: adoptionRequired.claimEpoch
@@ -70468,7 +70702,8 @@ function createSupervisorAuthority(input) {
   });
   const secretPath = writeSessionSecret(layout, sessionId, {
     signerCapability,
-    observeCapability
+    observeCapability,
+    recoveryCapability
   });
   writeSessionPublicReceipt(layout, sessionId, {
     sessionId,
@@ -70524,7 +70759,7 @@ function createSupervisorAuthority(input) {
         }
         if (status?.state === "blocked") {
           registry2.discardBlockedSession(session);
-        } else {
+        } else if (status?.state !== "handoff_cleanup") {
           registry2.releaseSession(session);
         }
       } finally {

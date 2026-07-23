@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { openSessionRegistry } from './registry.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro } from './managed-metro.js';
@@ -15,6 +15,7 @@ export function createSupervisorAuthority(input) {
     const sessionId = input.sessionId ?? randomUUID();
     const signerCapability = randomBytes(32).toString('base64url');
     const observeCapability = randomBytes(32).toString('base64url');
+    const recoveryCapability = randomBytes(32).toString('base64url');
     const session = registry.createSession({
         sessionId,
         sourceKey: input.source.sourceKey,
@@ -66,6 +67,9 @@ export function createSupervisorAuthority(input) {
             observePort,
             ...(adoptionRequired
                 ? {
+                    recoveryCapabilityHash: createHash('sha256')
+                        .update(recoveryCapability)
+                        .digest('hex'),
                     adoptionRequired: {
                         sessionId: adoptionRequired.sessionId,
                         claimEpoch: adoptionRequired.claimEpoch,
@@ -77,6 +81,7 @@ export function createSupervisorAuthority(input) {
     const secretPath = writeSessionSecret(layout, sessionId, {
         signerCapability,
         observeCapability,
+        recoveryCapability,
     });
     writeSessionPublicReceipt(layout, sessionId, {
         sessionId,
@@ -133,7 +138,7 @@ export function createSupervisorAuthority(input) {
                 if (status?.state === 'blocked') {
                     registry.discardBlockedSession(session);
                 }
-                else {
+                else if (status?.state !== 'handoff_cleanup') {
                     registry.releaseSession(session);
                 }
             }

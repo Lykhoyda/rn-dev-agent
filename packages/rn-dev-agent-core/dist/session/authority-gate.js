@@ -174,7 +174,9 @@ export function createAuthorityGate(runtime, dependencies) {
             const profile = tool === 'rn_session' &&
                 (args.action === 'status' ||
                     args.action === 'preview_integration' ||
-                    args.action === 'cancel_handoff')
+                    args.action === 'cancel_handoff' ||
+                    args.action === 'accept_handoff' ||
+                    args.action === 'adopt_stale')
                 ? {
                     kind: 'diagnostic',
                     axes: [],
@@ -213,6 +215,10 @@ export function createAuthorityGate(runtime, dependencies) {
                             : baseProfile;
             if (profile.kind === 'diagnostic') {
                 return addMeta(await handler(...handlerArgs), { authoritative: false });
+            }
+            const runtimeStatus = runtime.status();
+            if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
+                return authorityFailure(new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'blocked contender exposes only accept_handoff and adopt_stale recovery'));
             }
             if (profile.kind === 'transition') {
                 let operation = null;
@@ -260,7 +266,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     });
                     const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                     registry.verifyOperation(operation);
-                    const result = await handler(...handlerArgs);
+                    const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                     if (!resultIsCanonicalSuccess(result)) {
                         return addMeta(result, { authoritative: false });
                     }
@@ -273,7 +279,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     }
                     const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
                     if (!gateCommitsProof) {
-                        operation = registry.refreshOperation(operation);
+                        registry.verifyOperation(operation);
                         const nextStatus = runtime.status();
                         if (!nextStatus.available ||
                             nextStatus.authorityVersion <= initialAuthorityVersion) {

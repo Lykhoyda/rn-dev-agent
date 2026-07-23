@@ -1,22 +1,44 @@
 import { readProcessBirth } from './process-birth.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './registry.js';
+import { readJsonStateFile } from '../util/secure-state-file.js';
 export class WorkerAuthorityRuntime {
     available;
     #registry;
     #session;
     #unavailable;
-    constructor(registry, session, unavailable) {
+    #recoveryOnly;
+    constructor(registry, session, unavailable, recoveryOnly = false) {
         this.#registry = registry;
         this.#session = session;
         this.#unavailable = unavailable;
         this.available = registry !== null && session !== null;
+        this.#recoveryOnly = recoveryOnly;
     }
     requireAvailable() {
         if (!this.#registry || !this.#session) {
             throw new SessionAuthorityError(this.#unavailable?.code ?? 'SESSION_NOT_INITIALIZED', this.#unavailable?.reason ?? 'authority session is unavailable');
         }
         return { registry: this.#registry, session: this.#session };
+    }
+    requireOperational() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (status.available &&
+            (status.state === 'blocked' || status.state === 'handoff_cleanup')) {
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'blocked contender exposes only accept_handoff and adopt_stale recovery');
+        }
+        return available;
+    }
+    requireRecovery() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (!this.#recoveryOnly ||
+            !status.available ||
+            (status.state !== 'blocked' && status.state !== 'handoff_cleanup')) {
+            throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'session is not a capability-bound recovery contender');
+        }
+        return available;
     }
     status() {
         if (!this.#registry || !this.#session) {
@@ -71,12 +93,26 @@ export function createWorkerAuthorityRuntime(environment = process.env, dependen
             ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner,
         });
         const session = { sessionId, claimEpoch };
-        registry.bindWorker(session, {
-            instanceId: workerInstance,
-            pid: birth.pid,
-            token: birth.token,
-        });
-        return new WorkerAuthorityRuntime(registry, session, null);
+        const status = registry.getSessionStatus(sessionId);
+        const recoveryOnly = status?.state === 'blocked' || status?.state === 'handoff_cleanup';
+        if (recoveryOnly) {
+            const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
+            const recoveryCapability = secretPath
+                ? readJsonStateFile(secretPath)?.recoveryCapability
+                : null;
+            if (!recoveryCapability) {
+                throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'blocked recovery capability is unavailable');
+            }
+            registry.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
+        }
+        else {
+            registry.bindWorker(session, {
+                instanceId: workerInstance,
+                pid: birth.pid,
+                token: birth.token,
+            });
+        }
+        return new WorkerAuthorityRuntime(registry, session, null, recoveryOnly);
     }
     catch (error) {
         return unavailable(error instanceof Error

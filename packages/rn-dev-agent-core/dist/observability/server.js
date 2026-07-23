@@ -81,6 +81,14 @@ export class ObservabilityServer {
                 instanceId: this.authority?.instanceId,
             });
         }
+        if (path === '/api/stop' && req.method === 'POST') {
+            res.writeHead(202, { 'content-type': 'application/json' });
+            res.end('{"stopping":true}');
+            queueMicrotask(() => {
+                void this.stop();
+            });
+            return;
+        }
         if (path === '/api/stream')
             return this.stream(res);
         const shot = /^\/api\/screenshot\/(\d+)$/.exec(path);

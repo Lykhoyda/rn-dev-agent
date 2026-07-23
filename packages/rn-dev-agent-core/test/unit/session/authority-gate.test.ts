@@ -44,6 +44,7 @@ function fixture() {
       };
     },
     verifyOperation: () => calls.push('cas'),
+    runWithOperation: async (_operation, callback) => callback(),
     endOperation: () => calls.push('end'),
     cancelOperation: () => calls.push('cancel'),
     refreshOperation: (operation) => {

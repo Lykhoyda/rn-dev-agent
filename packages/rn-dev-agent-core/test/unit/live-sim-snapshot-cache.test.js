@@ -64,19 +64,51 @@ test('snapshot cache: dirty flag is global but validity is keyed per platform re
   assert.equal(isSnapshotCacheValid('android'), false);
 });
 
-test('snapshot cache rejects a stale session authority generation', () => {
-  let authorityVersion = 1;
+test('snapshot cache preserves exact per-platform receipts within one source generation', () => {
+  let platform = 'ios';
+  let deviceId = 'ios-device';
   setSnapshotAuthorityProvider(() => ({
     sessionId: 'session-a',
-    deviceId: 'device-a',
-    installGeneration: 'install-a',
-    authorityVersion,
+    claimEpoch: 1,
+    sourceKey: 'source-a',
+    worktreeKey: 'worktree-a',
+    appRootKey: 'app-a',
+    platform,
+    deviceId,
+    buildGeneration: 1,
+    installGeneration: `${platform}-install`,
+    runnerInstanceId: `${platform}-runner`,
+    runnerClaim: `${platform}:${deviceId}`,
   }));
   cacheSnapshot('ios', NODES);
-  authorityVersion += 1;
+  platform = 'android';
+  deviceId = 'android-device';
+  cacheSnapshot('android', NODES);
+
+  assert.deepEqual(getCachedSnapshot('ios')?.nodes, NODES);
+  assert.deepEqual(getCachedSnapshot('android')?.nodes, NODES);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects cross-session and stale-source receipts', () => {
+  let sessionId = 'session-a';
+  const source = {
+    claimEpoch: 1,
+    sourceKey: 'source-a',
+    worktreeKey: 'worktree-a',
+    appRootKey: 'app-a',
+    platform: 'ios',
+    deviceId: 'ios-device',
+    buildGeneration: 1,
+    installGeneration: 'ios-install',
+    runnerInstanceId: 'ios-runner',
+    runnerClaim: 'ios:ios-device',
+  };
+  setSnapshotAuthorityProvider(() => ({ ...source, sessionId }));
+  cacheSnapshot('ios', NODES);
+  sessionId = 'session-b';
 
   assert.equal(getCachedSnapshot('ios'), undefined);
-  assert.equal(isSnapshotCacheValid('ios'), false);
   setSnapshotAuthorityProvider(null);
 });
 

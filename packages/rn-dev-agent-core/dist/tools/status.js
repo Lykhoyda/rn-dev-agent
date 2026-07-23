@@ -16,6 +16,7 @@ import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 import { storeMode } from '../domain/action-state-store.js';
 import { getEngineStatus } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
+import { projectPublicAuthorityStatus } from '../session/public-status.js';
 export function sessionConnectFilters(session) {
     if (!session || (session.platform !== 'ios' && session.platform !== 'android'))
         return null;
@@ -52,7 +53,7 @@ export function createPassiveStatusHandler(getClient, authorityRuntime) {
         const target = client.connectedTarget;
         return okResult({
             authoritative: false,
-            authority: authorityRuntime.status(),
+            authority: projectPublicAuthorityStatus(authorityRuntime.status()),
             metro: {
                 port: client.metroPort,
                 requestedPort: args.metroPort ?? null,
@@ -62,10 +63,8 @@ export function createPassiveStatusHandler(getClient, authorityRuntime) {
                 connected: client.isConnected,
                 target: target
                     ? {
-                        id: target.id,
-                        title: target.title,
                         platform: target.platform ?? null,
-                        appId: targetBundleIdentity(target),
+                        appBound: Boolean(targetBundleIdentity(target)),
                     }
                     : null,
                 requestedPlatform: args.platform ?? null,

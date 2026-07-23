@@ -37,6 +37,34 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
     }
     return false;
 }
+export function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync) {
+    try {
+        if (platform === 'win32') {
+            const output = execute('powershell.exe', [
+                '-NoProfile',
+                '-NonInteractive',
+                '-Command',
+                `(Get-NetTCPConnection -State Listen -LocalPort ${port} | Select-Object -First 1 -ExpandProperty OwningProcess)`,
+            ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 });
+            const pid = Number(String(output).trim());
+            return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+        }
+        if (platform === 'linux') {
+            const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'ignore'],
+                timeout: 2_000,
+            });
+            const match = /pid=(\d+)/.exec(String(output));
+            const pid = Number(match?.[1]);
+            return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+        }
+        return pidForPort(port);
+    }
+    catch {
+        return null;
+    }
+}
 export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
     const exists = dependencies.exists ?? existsSync;
     const readText = dependencies.readText ?? ((path) => readFileSync(path, 'utf8'));
@@ -89,7 +117,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         throw new Error('PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven');
     }
     child.unref();
-    const listenerPid = dependencies.listenerPid ?? pidForPort;
+    const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
     const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
     const capture = dependencies.capture ?? captureMetroBinding;
     const wait = dependencies.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));

@@ -10,10 +10,7 @@ export function projectPublicAuthorityStatus(status: WorkerAuthorityStatus): Rec
   }
   return {
     available: true,
-    sessionId: status.sessionId.slice(0, 12),
-    claimEpoch: status.claimEpoch,
     state: status.state,
-    authorityVersion: status.authorityVersion,
     sourceKind: status.source.kind,
     metroPort: status.bindings.metroPort,
     observePort: status.bindings.observePort,

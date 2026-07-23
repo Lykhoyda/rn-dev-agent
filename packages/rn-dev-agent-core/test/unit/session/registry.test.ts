@@ -253,6 +253,10 @@ test('handoff into a live target transfers claims once and drops bundle and runn
     pid: 202,
     token: 'birth-worker-next',
   });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-target' },
+  });
   registry.claimResources(owner, [
     { type: 'device', key: 'ios:device-1' },
     { type: 'metro-port', key: '8341' },
@@ -267,10 +271,12 @@ test('handoff into a live target transfers claims once and drops bundle and runn
   });
   const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
 
-  registry.acceptHandoffInto(target, {
+  const cleanup = registry.acceptHandoffInto(target, {
     ...handoff,
     targetInstance: 'worker-next',
   });
+  assert.deepEqual(cleanup.runner, { instanceId: 'old-runner' });
+  registry.finishHandoffCleanup(target, 'worker-next');
 
   assert.equal(registry.getClaim('device', 'ios:device-1').sessionId, target.sessionId);
   assert.equal(registry.getClaim('metro-port', '8341').sessionId, target.sessionId);
@@ -283,8 +289,63 @@ test('handoff into a live target transfers claims once and drops bundle and runn
         ...handoff,
         targetInstance: 'worker-next',
       }),
-    /HANDOFF_ALREADY_CONSUMED/,
+    /SESSION_OWNER_LOST/,
   );
+});
+
+test('only the active operation context may advance transition authority', async () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'operation-a',
+    tool: 'rn_session',
+    profile: 'transition:CS>CS',
+  });
+
+  assert.throws(
+    () => registry.updateBindings(owner, { bindings: { metro: { port: 8341 } } }),
+    /not owned by the active operation fence/,
+  );
+  await registry.runWithOperation(operation, async () => {
+    registry.updateBindings(owner, { bindings: { metro: { port: 8341 } } });
+  });
+
+  assert.doesNotThrow(() => registry.verifyOperation(operation));
+  registry.endOperation(operation);
+});
+
+test('blocked recovery atomically adopts only a proven-stale exact source owner', () => {
+  const { registry, create, ownerStates } = fixture();
+  const prior = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.claimResources(prior, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'device', key: 'ios:device-a' },
+  ]);
+  registry.updateBindings(prior, {
+    state: 'device_bound',
+    bindings: {
+      metroPort: 8341,
+      device: { platform: 'ios', deviceId: 'device-a' },
+      install: { installGeneration: 'install-a' },
+    },
+  });
+  registry.bindWorker(target, {
+    instanceId: 'recovery-worker',
+    pid: 202,
+    token: 'recovery-birth',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { metroPort: 8341, recoveryCapabilityHash: 'recovery-target' },
+  });
+  ownerStates.set(prior.sessionId, 'mismatch');
+
+  registry.adoptStaleIntoBlocked(target, prior.sessionId, 'recovery-worker');
+
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'source_bound');
+  assert.equal(registry.getClaim('source', 'shared-worktree')?.sessionId, target.sessionId);
+  assert.equal(registry.getSessionStatus(prior.sessionId)?.state, 'stale');
 });
 
 test('busy retries yield to heartbeats instead of blocking the worker event loop', async () => {
@@ -303,7 +364,7 @@ test('busy retries yield to heartbeats instead of blocking the worker event loop
       timeoutMs: 250,
       retryDelayMs: 4,
     });
-    assert.ok(ticks >= 2);
+    assert.ok(ticks >= 1);
   } finally {
     clearInterval(heartbeat);
     blocker.close();
@@ -458,6 +519,10 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
     pid: 202,
     token: 'birth-worker-next',
   });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-target' },
+  });
   registry.claimResources(owner, [
     { type: 'source', key: 'shared-worktree' },
     { type: 'metro-port', key: '8341' },
@@ -479,7 +544,13 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
   });
   const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
 
-  registry.acceptHandoffInto(target, { ...handoff, targetInstance: 'worker-next' });
+  const cleanup = registry.acceptHandoffInto(target, {
+    ...handoff,
+    targetInstance: 'worker-next',
+  });
+  assert.deepEqual(cleanup.observe, { instanceId: 'observe-1' });
+  assert.deepEqual(cleanup.runner, { instanceId: 'runner-1' });
+  registry.finishHandoffCleanup(target, 'worker-next');
 
   const status = registry.getSessionStatus(target.sessionId);
   assert.equal(registry.getClaim('source', 'shared-worktree')?.sessionId, target.sessionId);

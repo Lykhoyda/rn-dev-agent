@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -125,6 +125,24 @@ test('a supervisor without the source claim stays blocked and exposes the full a
         }),
       /SESSION_OWNER_LOST/,
     );
+    const environment = blocked.workerEnvironment('blocked-worker');
+    const secret = JSON.parse(
+      readFileSync(environment.RN_DEV_AGENT_SESSION_SECRET_PATH, 'utf8'),
+    );
+    blocked.registry.bindRecoveryWorker(
+      blocked.session,
+      {
+        instanceId: 'blocked-worker',
+        pid: 203,
+        token: 'blocked-worker-birth',
+      },
+      secret.recoveryCapability,
+    );
+    assert.equal(
+      blocked.registry.getSessionStatus(blocked.session.sessionId)?.worker.instanceId,
+      'blocked-worker',
+    );
+    assert.throws(() => blocked.registry.getControllerBinding(blocked.session), /SESSION_OWNER_LOST/);
   } finally {
     blocked.close();
     prior.close();

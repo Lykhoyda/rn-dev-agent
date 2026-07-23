@@ -157,7 +157,7 @@ export function hasActiveSession(): boolean {
 // Updated by fetchSnapshotNodes() in device-interact.ts whenever a snapshot succeeds.
 interface CachedSnapshot {
   platform: string;
-  authorityScope: string;
+  authorityReceipt: SnapshotAuthorityReceipt;
   // Lossless: the full runner nodes are stored (rect/enabled included) so a
   // cache-served device_find ranks and dedups identically to a fresh snapshot.
   nodes: {
@@ -176,6 +176,20 @@ interface CachedSnapshot {
 const snapshotCache = new Map<string, CachedSnapshot>();
 let snapshotAuthorityProvider: (() => Record<string, unknown> | null) | null = null;
 
+interface SnapshotAuthorityReceipt {
+  sessionId: unknown;
+  claimEpoch: unknown;
+  sourceKey: unknown;
+  worktreeKey: unknown;
+  appRootKey: unknown;
+  platform: unknown;
+  deviceId: unknown;
+  buildGeneration: unknown;
+  installGeneration: unknown;
+  runnerInstanceId: unknown;
+  runnerClaim: unknown;
+}
+
 export function setSnapshotAuthorityProvider(
   provider: (() => Record<string, unknown> | null) | null,
 ): void {
@@ -184,15 +198,44 @@ export function setSnapshotAuthorityProvider(
   snapshotCacheDirty = true;
 }
 
-function currentSnapshotAuthority(platform: string): string {
+function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
   const authority = snapshotAuthorityProvider?.();
   const session = getActiveSession();
-  return JSON.stringify(
-    authority ?? {
-      platform,
-      deviceId: session?.deviceId ?? null,
-      appId: session?.appId ?? null,
-    },
+  return {
+    sessionId: authority?.sessionId ?? null,
+    claimEpoch: authority?.claimEpoch ?? null,
+    sourceKey: authority?.sourceKey ?? null,
+    worktreeKey: authority?.worktreeKey ?? null,
+    appRootKey: authority?.appRootKey ?? null,
+    platform: authority?.platform ?? platform,
+    deviceId: authority?.deviceId ?? session?.deviceId ?? null,
+    buildGeneration: authority?.buildGeneration ?? null,
+    installGeneration: authority?.installGeneration ?? null,
+    runnerInstanceId: authority?.runnerInstanceId ?? null,
+    runnerClaim: authority?.runnerClaim ?? null,
+  };
+}
+
+function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: string): boolean {
+  const current = currentSnapshotAuthority(platform);
+  if (receipt.sessionId === null) {
+    return (
+      current.sessionId === null &&
+      receipt.platform === platform &&
+      receipt.deviceId === current.deviceId
+    );
+  }
+  return (
+    receipt.platform === platform &&
+    receipt.sessionId === current.sessionId &&
+    receipt.claimEpoch === current.claimEpoch &&
+    receipt.sourceKey === current.sourceKey &&
+    receipt.worktreeKey === current.worktreeKey &&
+    receipt.appRootKey === current.appRootKey &&
+    receipt.deviceId !== null &&
+    receipt.installGeneration !== null &&
+    receipt.runnerInstanceId !== null &&
+    receipt.runnerClaim !== null
   );
 }
 
@@ -208,7 +251,7 @@ let snapshotCacheDirty = true;
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
   snapshotCache.set(platform, {
     platform,
-    authorityScope: currentSnapshotAuthority(platform),
+    authorityReceipt: currentSnapshotAuthority(platform),
     nodes,
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),
@@ -219,7 +262,9 @@ export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']):
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {
   const snapshot = snapshotCache.get(platform);
-  return snapshot?.authorityScope === currentSnapshotAuthority(platform) ? snapshot : undefined;
+  return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
+    ? snapshot
+    : undefined;
 }
 
 // Called at the runNative dispatch choke point on any screen-mutating verb
@@ -237,7 +282,7 @@ export function isSnapshotCacheValid(
   if (snapshotCacheDirty) return false;
   const entry = snapshotCache.get(platform);
   if (!entry) return false;
-  if (entry.authorityScope !== currentSnapshotAuthority(platform)) return false;
+  if (!snapshotAuthorityIsValid(entry.authorityReceipt, platform)) return false;
   return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }
 

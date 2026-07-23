@@ -182,6 +182,7 @@ import {
   verifyMetroAuthorityMarker,
   type MetroAuthorityMarker,
 } from './session/metro-authority.js';
+import { proveTargetDeviceAssociation } from './session/target-device-authority.js';
 import type { SessionStatus } from './session/registry.js';
 import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
 
@@ -330,9 +331,12 @@ setSnapshotAuthorityProvider(() => {
   return {
     sessionId: status.sessionId,
     claimEpoch: status.claimEpoch,
-    authorityVersion: status.authorityVersion,
+    sourceKey: status.sourceKey,
+    worktreeKey: status.worktreeKey,
+    appRootKey: status.appRootKey,
     platform: device?.platform,
     deviceId: device?.deviceId,
+    buildGeneration: install?.buildGeneration,
     installGeneration: install?.installGeneration,
     runnerInstanceId: runner?.instanceId,
     runnerClaim: status.claims.find((claim) => claim.type === 'runner')?.key,
@@ -385,6 +389,7 @@ setObserveAuthorityDeps({
           sessionId: authority.sessionId,
           claimEpoch: authority.claimEpoch,
           instanceId: authority.instanceId,
+          cleanupCapability: authority.capability,
         },
       },
     });
@@ -625,49 +630,10 @@ async function pinSessionDevClient(status: SessionStatus) {
             'CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro',
           );
         }
-        const targetDeviceName = target.deviceName?.trim();
-        if (!targetDeviceName) {
-          throw new Error(
-            'CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association',
-          );
-        }
-        if (platform === 'ios') {
-          const output = await execFileP('xcrun', ['simctl', 'list', 'devices', '--json']);
-          const parsed = JSON.parse(output.stdout) as {
-            devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
-          };
-          const booted = Object.values(parsed.devices ?? {})
-            .flat()
-            .filter((device) => device.state === 'Booted' && device.name === targetDeviceName);
-          if (booted.length !== 1 || booted[0]?.udid !== deviceId) {
-            throw new Error(
-              'CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign',
-            );
-          }
-        } else {
-          const devices = (await execFileP('adb', ['devices'])).stdout
-            .split('\n')
-            .map((line) => line.trim().split(/\s+/))
-            .filter((parts) => parts[0] && parts[1] === 'device')
-            .map((parts) => parts[0]!);
-          const matching: string[] = [];
-          for (const serial of devices) {
-            const model = (
-              await execFileP('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
-            ).stdout.trim();
-            if (
-              model &&
-              (targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))
-            ) {
-              matching.push(serial);
-            }
-          }
-          if (matching.length !== 1 || matching[0] !== deviceId) {
-            throw new Error(
-              'CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign',
-            );
-          }
-        }
+        await proveTargetDeviceAssociation(
+          { platform, deviceId, targetDeviceName: target.deviceName },
+          { execute: execFileP },
+        );
         return {
           targetId: target.id,
           connectionGeneration: exactClient.connectionGeneration,
@@ -718,6 +684,14 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
       'CDP_TARGET_AUTHORITY_MISMATCH: runtime reset did not reconnect the exact session target',
     );
   }
+  await proveTargetDeviceAssociation(
+    {
+      platform: device.platform,
+      deviceId: device.deviceId,
+      targetDeviceName: target.deviceName,
+    },
+    { execute: execFileP },
+  );
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
     ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
     : null;

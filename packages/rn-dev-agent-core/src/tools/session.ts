@@ -24,7 +24,6 @@ import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
-import { stopObserveServer } from './observe.js';
 
 export interface SessionToolInput {
   action:
@@ -70,6 +69,43 @@ interface SessionHandlerDependencies {
     buildGeneration: number;
   }) => Promise<MetroBinding>;
   pinDevClient?: (status: SessionStatus) => Promise<BundleAuthorityBinding>;
+  stopHandoffObserve?: (binding: Record<string, unknown>) => Promise<void>;
+  stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
+}
+
+async function stopHandoffObserve(binding: Record<string, unknown>): Promise<void> {
+  const port = Number(binding.port);
+  const instanceId = String(binding.instanceId ?? '');
+  const capability = String(binding.cleanupCapability ?? '');
+  if (!Number.isSafeInteger(port) || !instanceId || !capability) {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'source Observe cleanup authority is incomplete',
+    );
+  }
+  const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${capability}`,
+      'x-rn-observe-instance': instanceId,
+    },
+  });
+  if (!response.ok) {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'source Observe server refused fenced handoff cleanup',
+    );
+  }
+}
+
+async function stopHandoffRunner(binding: Record<string, unknown>): Promise<void> {
+  if (binding.platform === 'ios') {
+    stopFastRunner(typeof binding.deviceId === 'string' ? binding.deviceId : undefined);
+  } else if (binding.platform === 'android') {
+    await stopAndroidRunner(
+      typeof binding.deviceId === 'string' ? binding.deviceId : undefined,
+    );
+  }
 }
 
 function authorityFailure(error: unknown): ToolResult {
@@ -105,7 +141,11 @@ export function createSessionHandler(
     }
 
     try {
-      const { registry, session } = runtime.requireAvailable();
+      const isRecovery =
+        input.action === 'accept_handoff' || input.action === 'adopt_stale';
+      const { registry, session } = isRecovery
+        ? runtime.requireRecovery()
+        : runtime.requireOperational();
       if (input.action === 'bind_device') {
         const platform = required(input.platform, 'platform') as 'ios' | 'android';
         const deviceId = required(input.deviceId, 'deviceId') as string;
@@ -345,14 +385,12 @@ export function createSessionHandler(
             'target worker identity is unavailable',
           );
         }
-        registry.validateHandoffInto(session, {
-          handoffId,
-          token,
-          targetInstance: status.worker.instanceId,
-        });
+        let cleanup = status.bindings.handoffCleanup as
+          | { observe?: Record<string, unknown>; runner?: Record<string, unknown> }
+          | undefined;
         const priorSessionId = registry.getHandoffOwner(handoffId);
         const priorStatus = priorSessionId ? registry.getSessionStatus(priorSessionId) : null;
-        const priorRunner = priorStatus?.bindings.runner as
+        const priorRunner = (cleanup?.runner ?? priorStatus?.bindings.runner) as
           | {
               platform?: unknown;
               deviceId?: unknown;
@@ -361,6 +399,7 @@ export function createSessionHandler(
             }
           | undefined;
         if (
+          status.state !== 'handoff_cleanup' &&
           priorRunner &&
           (typeof priorRunner.pid !== 'number' ||
             typeof priorRunner.processBirth !== 'string' ||
@@ -375,21 +414,25 @@ export function createSessionHandler(
             'prior runner process identity cannot be proven for capability rotation',
           );
         }
-        if (priorStatus?.bindings.observe) await stopObserveServer();
-        if (priorRunner?.platform === 'ios') {
-          stopFastRunner(
-            typeof priorRunner.deviceId === 'string' ? priorRunner.deviceId : undefined,
-          );
-        } else if (priorRunner?.platform === 'android') {
-          await stopAndroidRunner(
-            typeof priorRunner.deviceId === 'string' ? priorRunner.deviceId : undefined,
-          );
+        if (status.state !== 'handoff_cleanup') {
+          registry.validateHandoffInto(session, {
+            handoffId,
+            token,
+            targetInstance: status.worker.instanceId,
+          });
+          cleanup = registry.acceptHandoffInto(session, {
+            handoffId,
+            token,
+            targetInstance: status.worker.instanceId,
+          });
         }
-        registry.acceptHandoffInto(session, {
-          handoffId,
-          token,
-          targetInstance: status.worker.instanceId,
-        });
+        if (cleanup?.runner) {
+          await (dependencies.stopHandoffRunner ?? stopHandoffRunner)(cleanup.runner);
+        }
+        if (cleanup?.observe) {
+          await (dependencies.stopHandoffObserve ?? stopHandoffObserve)(cleanup.observe);
+        }
+        registry.finishHandoffCleanup(session, status.worker.instanceId);
         return okResult({
           accepted: true,
           session: projectPublicAuthorityStatus(runtime.status()),
@@ -415,25 +458,13 @@ export function createSessionHandler(
             'stale session does not belong to this exact source worktree',
           );
         }
-        const transferable = prior.claims
-          .filter((claim) =>
-            new Set(['source', 'metro-port', 'observe-port', 'device']).has(claim.type),
-          )
-          .map(({ type, key }) => ({ type, key }));
-        registry.claimResources(session, transferable);
-        const metro = prior.bindings.metro as { port?: unknown } | undefined;
-        const sameMetro = Number(metro?.port) === Number(current.bindings.metroPort);
-        registry.updateBindings(session, {
-          state: sameMetro && prior.bindings.device ? 'device_bound' : 'source_bound',
-          bindings: {
-            adoptionRequired: null,
-            ...(sameMetro ? { metro: prior.bindings.metro } : { metro: null }),
-            ...(prior.bindings.device ? { device: prior.bindings.device } : {}),
-            ...(prior.bindings.install ? { install: prior.bindings.install } : {}),
-            bundle: null,
-            runner: null,
-          },
-        });
+        if (!current.worker.instanceId) {
+          throw new SessionAuthorityError(
+            'HANDOFF_NOT_AUTHORIZED',
+            'recovery worker identity is unavailable',
+          );
+        }
+        registry.adoptStaleIntoBlocked(session, priorSessionId, current.worker.instanceId);
         return okResult({
           adopted: true,
           priorSessionId: priorSessionId.slice(0, 12),

@@ -29,6 +29,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import type { ConnectFilters } from '../cdp/connect.js';
 import type { HermesTarget } from '../types.js';
 import type { WorkerAuthorityRuntime } from '../session/runtime.js';
+import { projectPublicAuthorityStatus } from '../session/public-status.js';
 
 export function sessionConnectFilters(
   session: ReturnType<typeof getActiveSession>,
@@ -80,7 +81,7 @@ export function createPassiveStatusHandler(
     const target = client.connectedTarget;
     return okResult({
       authoritative: false,
-      authority: authorityRuntime.status(),
+      authority: projectPublicAuthorityStatus(authorityRuntime.status()),
       metro: {
         port: client.metroPort,
         requestedPort: args.metroPort ?? null,
@@ -90,10 +91,8 @@ export function createPassiveStatusHandler(
         connected: client.isConnected,
         target: target
           ? {
-              id: target.id,
-              title: target.title,
               platform: target.platform ?? null,
-              appId: targetBundleIdentity(target),
+              appBound: Boolean(targetBundleIdentity(target)),
             }
           : null,
         requestedPlatform: args.platform ?? null,

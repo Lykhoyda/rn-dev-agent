@@ -65,6 +65,42 @@ function listenerOwnedByLauncher(listenerPid: number, launcherPid: number): bool
   return false;
 }
 
+export function managedMetroListenerPid(
+  port: number,
+  platform: NodeJS.Platform = process.platform,
+  execute: typeof execFileSync = execFileSync,
+): number | null {
+  try {
+    if (platform === 'win32') {
+      const output = execute(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `(Get-NetTCPConnection -State Listen -LocalPort ${port} | Select-Object -First 1 -ExpandProperty OwningProcess)`,
+        ],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
+      );
+      const pid = Number(String(output).trim());
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
+    if (platform === 'linux') {
+      const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 2_000,
+      });
+      const match = /pid=(\d+)/.exec(String(output));
+      const pid = Number(match?.[1]);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
+    return pidForPort(port);
+  } catch {
+    return null;
+  }
+}
+
 export function resolveManagedMetroCommand(
   appRoot: string,
   dependencies: Pick<ManagedMetroDependencies, 'exists' | 'readText'> = {},
@@ -148,7 +184,7 @@ export async function startManagedMetro(
   }
   child.unref();
 
-  const listenerPid = dependencies.listenerPid ?? pidForPort;
+  const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const wait =
