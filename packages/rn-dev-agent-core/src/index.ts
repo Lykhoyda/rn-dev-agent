@@ -346,6 +346,10 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
+      runnerCapabilityHash:
+        typeof runner?.capability === 'string'
+          ? createHash('sha256').update(runner.capability).digest('hex')
+          : undefined,
       runnerClaim: status.claims.find((claim) => claim.type === 'runner')?.key,
     };
   },

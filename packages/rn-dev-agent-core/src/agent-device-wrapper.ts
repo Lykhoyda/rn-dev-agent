@@ -198,6 +198,7 @@ export interface SnapshotAuthorityReceipt {
   artifactDigest: unknown;
   runnerPid: unknown;
   runnerProcessBirth: unknown;
+  runnerCapabilityHash: unknown;
 }
 
 export function setSnapshotAuthorityProvider(
@@ -233,6 +234,7 @@ function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
     artifactDigest: authority?.artifactDigest ?? null,
     runnerPid: authority?.runnerPid ?? null,
     runnerProcessBirth: authority?.runnerProcessBirth ?? null,
+    runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
   };
 }
 
@@ -260,6 +262,7 @@ function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: s
     receipt.artifactDigest !== null &&
     receipt.runnerPid !== null &&
     receipt.runnerProcessBirth !== null &&
+    receipt.runnerCapabilityHash !== null &&
     snapshotAuthorityProvider?.validate(receipt)
   );
 }

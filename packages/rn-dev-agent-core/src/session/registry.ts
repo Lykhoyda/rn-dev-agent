@@ -191,6 +191,7 @@ const conflictCodes: Record<string, string> = {
   'metro-port': 'METRO_PORT_CLAIM_CONFLICT',
   'observe-port': 'OBSERVE_PORT_CLAIM_CONFLICT',
   runner: 'RUNNER_CLAIM_CONFLICT',
+  'runner-receipt': 'RUNNER_CLAIM_CONFLICT',
 };
 
 function asSession(row: Record<string, unknown> | undefined): SessionRow | null {
@@ -223,6 +224,11 @@ function isOperationalState(state: string): boolean {
 
 function isFenceableState(state: string): boolean {
   return isOperationalState(state) || state === 'handoff';
+}
+
+function bindingsRunnerPresent(bindingsJson: string): boolean {
+  const bindings = JSON.parse(bindingsJson) as Record<string, unknown>;
+  return Boolean(bindings.runner && typeof bindings.runner === 'object');
 }
 
 export class SessionRegistry {
@@ -318,7 +324,7 @@ export class SessionRegistry {
       const reclaim = new Set<string>();
 
       for (const resource of resources) {
-        const claim = this.#findClaim(resource.type, resource.key);
+        const claim = this.#findConflictingClaim(resource);
         if (
           !claim ||
           (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)
@@ -388,6 +394,23 @@ export class SessionRegistry {
     this.#transaction(() => {
       const current = this.#requireSession(session);
       for (const resource of resources) {
+        if (resource.type === 'runner') {
+          const rows = this.#database
+            .prepare(
+              `SELECT platform, receipt_json FROM platform_authority_receipts
+               WHERE session_id = ? AND claim_epoch = ?`,
+            )
+            .all(session.sessionId, session.claimEpoch) as {
+            platform: string;
+            receipt_json: string;
+          }[];
+          for (const row of rows) {
+            const receipt = JSON.parse(row.receipt_json) as Record<string, unknown>;
+            if (receipt.runnerClaim === resource.key) {
+              this.#invalidatePlatformReceipt(session, row.platform);
+            }
+          }
+        }
         this.#database
           .prepare(
             `DELETE FROM claims
@@ -606,11 +629,7 @@ export class SessionRegistry {
         proof: null,
         pendingBuild: null,
       };
-      this.#database
-        .prepare(
-          'DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?',
-        )
-        .run(session.sessionId, String(input.device.platform));
+      this.#invalidatePlatformReceipt(session, String(input.device.platform));
       this.#database
         .prepare(
           `UPDATE sessions
@@ -671,11 +690,7 @@ export class SessionRegistry {
           )?.platform ?? '',
         );
         if (platform) {
-          this.#database
-            .prepare(
-              'DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?',
-            )
-            .run(session.sessionId, platform);
+          this.#invalidatePlatformReceipt(session, platform);
         }
       }
       this.#database
@@ -745,7 +760,7 @@ export class SessionRegistry {
       }
 
       for (const resource of input.claimResources ?? []) {
-        const claim = this.#findClaim(resource.type, resource.key);
+        const claim = this.#findConflictingClaim(resource);
         if (
           claim &&
           (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)
@@ -1429,6 +1444,18 @@ export class SessionRegistry {
           'handoff cannot transfer while either session has an active operation',
         );
       }
+      const priorRunnerClaim = this.#database
+        .prepare(
+          `SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`,
+        )
+        .get(prior.session_id, prior.claim_epoch) as { resource_key?: unknown } | undefined;
+      if (bindingsRunnerPresent(prior.bindings_json) && !priorRunnerClaim?.resource_key) {
+        throw new SessionAuthorityError(
+          'RUNNER_OWNERSHIP_MISMATCH',
+          'handoff runner binding has no exclusive cleanup claim',
+        );
+      }
 
       this.#database
         .prepare(
@@ -1440,7 +1467,7 @@ export class SessionRegistry {
         .prepare(
           `DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`,
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')`,
         )
         .run(prior.session_id, prior.claim_epoch);
       this.#database
@@ -1474,8 +1501,23 @@ export class SessionRegistry {
             pendingBuild: null,
             recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
             handoffCleanup: {
-              observe: bindings.observe ?? null,
-              runner: bindings.runner ?? null,
+              observe:
+                bindings.observe && typeof bindings.observe === 'object'
+                  ? {
+                      ...(bindings.observe as Record<string, unknown>),
+                      stopRequestedAt: null,
+                      completedAt: null,
+                    }
+                  : null,
+              runner:
+                bindings.runner && typeof bindings.runner === 'object'
+                  ? {
+                      ...(bindings.runner as Record<string, unknown>),
+                      claimKey: priorRunnerClaim?.resource_key,
+                      stopRequestedAt: null,
+                      completedAt: null,
+                    }
+                  : null,
             },
           }),
           now,
@@ -1494,13 +1536,116 @@ export class SessionRegistry {
         .prepare('UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?')
         .run(now, handoff.handoff_id);
       return {
-        ...(bindings.observe && typeof bindings.observe === 'object'
-          ? { observe: bindings.observe as Record<string, unknown> }
-          : {}),
-        ...(bindings.runner && typeof bindings.runner === 'object'
-          ? { runner: bindings.runner as Record<string, unknown> }
-          : {}),
+        ...((this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup as
+          | HandoffCleanupPlan
+          | undefined) ?? {}),
       };
+    });
+  }
+
+  beginHandoffCleanupResource(
+    target: SessionRef,
+    targetInstance: string,
+    resource: 'runner' | 'observe',
+  ): Record<string, unknown> | null {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+      const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
+      const cleanup = bindings.handoffCleanup as Record<string, unknown> | undefined;
+      const current = cleanup?.[resource];
+      if (!current || typeof current !== 'object') return null;
+      const binding = current as Record<string, unknown>;
+      if (typeof binding.completedAt === 'number') return binding;
+      if (resource === 'runner') {
+        const claimKey = String(binding.claimKey ?? '');
+        const expectedClaimKey = `${String(binding.platform)}:${String(
+          binding.deviceId,
+        )}:${String(binding.port)}`;
+        const claim = this.#findClaim('runner', claimKey);
+        if (
+          !claimKey ||
+          claimKey !== expectedClaimKey ||
+          claim?.session_id !== target.sessionId ||
+          claim.claim_epoch !== target.claimEpoch ||
+          typeof binding.capability !== 'string' ||
+          typeof binding.instanceId !== 'string'
+        ) {
+          throw new SessionAuthorityError(
+            'RUNNER_OWNERSHIP_MISMATCH',
+            'handoff runner cleanup claim no longer matches the authenticated binding',
+          );
+        }
+      }
+      const requested = {
+        ...binding,
+        stopRequestedAt:
+          typeof binding.stopRequestedAt === 'number' ? binding.stopRequestedAt : now,
+      };
+      this.#database
+        .prepare(
+          `UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`,
+        )
+        .run(
+          JSON.stringify({
+            ...bindings,
+            handoffCleanup: { ...cleanup, [resource]: requested },
+          }),
+          now,
+          target.sessionId,
+          target.claimEpoch,
+        );
+      return requested;
+    });
+  }
+
+  completeHandoffCleanupResource(
+    target: SessionRef,
+    targetInstance: string,
+    resource: 'runner' | 'observe',
+  ): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+      const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
+      const cleanup = bindings.handoffCleanup as Record<string, unknown> | undefined;
+      const current = cleanup?.[resource];
+      if (!current || typeof current !== 'object') return;
+      const binding = current as Record<string, unknown>;
+      if (typeof binding.stopRequestedAt !== 'number') {
+        throw new SessionAuthorityError(
+          'HANDOFF_NOT_AUTHORIZED',
+          `${resource} cleanup was not durably requested`,
+        );
+      }
+      if (typeof binding.completedAt === 'number') return;
+      if (resource === 'runner') {
+        this.#database
+          .prepare(
+            `DELETE FROM claims
+             WHERE resource_type = 'runner' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`,
+          )
+          .run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+      }
+      this.#database
+        .prepare(
+          `UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`,
+        )
+        .run(
+          JSON.stringify({
+            ...bindings,
+            handoffCleanup: {
+              ...cleanup,
+              [resource]: { ...binding, completedAt: now },
+            },
+          }),
+          now,
+          target.sessionId,
+          target.claimEpoch,
+        );
     });
   }
 
@@ -1526,6 +1671,21 @@ export class SessionRegistry {
           'handoff cleanup is not owned by this recovery worker',
         );
       }
+      const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
+      const cleanup = bindings.handoffCleanup as Record<string, unknown> | undefined;
+      for (const resource of ['runner', 'observe'] as const) {
+        const binding = cleanup?.[resource];
+        if (
+          binding &&
+          typeof binding === 'object' &&
+          typeof (binding as Record<string, unknown>).completedAt !== 'number'
+        ) {
+          throw new SessionAuthorityError(
+            'HANDOFF_NOT_AUTHORIZED',
+            `${resource} cleanup has not been durably completed`,
+          );
+        }
+      }
       this.#database
         .prepare(
           `UPDATE sessions
@@ -1535,7 +1695,7 @@ export class SessionRegistry {
         )
         .run(
           JSON.stringify({
-            ...(JSON.parse(row.bindings_json) as Record<string, unknown>),
+            ...bindings,
             handoffCleanup: null,
           }),
           now,
@@ -1563,6 +1723,10 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`,
         )
         .get(session.sessionId, session.claimEpoch) as { resource_key?: unknown } | undefined;
+      const runnerCapabilityHash =
+        typeof runner?.capability === 'string'
+          ? createHash('sha256').update(runner.capability).digest('hex')
+          : null;
       if (
         device?.platform !== platform ||
         receipt.sessionId !== session.sessionId ||
@@ -1577,13 +1741,35 @@ export class SessionRegistry {
         receipt.runnerInstanceId !== runner?.instanceId ||
         receipt.runnerPid !== runner?.pid ||
         receipt.runnerProcessBirth !== runner?.processBirth ||
-        receipt.runnerClaim !== runnerClaim?.resource_key
+        receipt.runnerClaim !== runnerClaim?.resource_key ||
+        receipt.runnerCapabilityHash !== runnerCapabilityHash
       ) {
         throw new SessionAuthorityError(
           'RUNNER_OWNERSHIP_MISMATCH',
           'snapshot receipt does not match exact persistent platform authority',
         );
       }
+      const claimKey = String(receipt.runnerClaim);
+      const existingReceiptClaim = this.#findClaim('runner-receipt', claimKey);
+      if (
+        existingReceiptClaim &&
+        (existingReceiptClaim.session_id !== session.sessionId ||
+          existingReceiptClaim.claim_epoch !== session.claimEpoch)
+      ) {
+        throw claimConflict(existingReceiptClaim);
+      }
+      this.#invalidatePlatformReceipt(session, platform);
+      this.#database
+        .prepare(
+          `INSERT INTO claims(
+             resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+           ) VALUES ('runner-receipt', ?, ?, ?, ?)
+           ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+             session_id = excluded.session_id,
+             claim_epoch = excluded.claim_epoch,
+             lease_until_ms = excluded.lease_until_ms`,
+        )
+        .run(claimKey, session.sessionId, session.claimEpoch, now + this.#leaseMs);
       this.#database
         .prepare(
           `INSERT INTO platform_authority_receipts(
@@ -1611,10 +1797,13 @@ export class SessionRegistry {
       .get(session.sessionId, platform) as
       | { claim_epoch?: unknown; receipt_json?: unknown }
       | undefined;
+    const claim = this.#findClaim('runner-receipt', String(receipt.runnerClaim));
     return (
       row?.claim_epoch === session.claimEpoch &&
       typeof row.receipt_json === 'string' &&
-      row.receipt_json === JSON.stringify(receipt)
+      row.receipt_json === JSON.stringify(receipt) &&
+      claim?.session_id === session.sessionId &&
+      claim.claim_epoch === session.claimEpoch
     );
   }
 
@@ -2090,7 +2279,7 @@ export class SessionRegistry {
   ): Map<string, { claimEpoch: number; status: OwnerStatus }> {
     const owners = new Map<string, { claimEpoch: number; status: OwnerStatus }>();
     for (const resource of resources) {
-      const claim = this.#findClaim(resource.type, resource.key);
+      const claim = this.#findConflictingClaim(resource);
       if (!claim || claim.session_id === session.sessionId || owners.has(claim.session_id)) {
         continue;
       }
@@ -2165,6 +2354,17 @@ export class SessionRegistry {
     return row;
   }
 
+  #requireHandoffCleanupOwner(session: SessionRef, targetInstance: string): SessionRow {
+    const row = this.#requireRecoverableSession(session);
+    if (row.state !== 'handoff_cleanup' || row.worker_instance !== targetInstance) {
+      throw new SessionAuthorityError(
+        'HANDOFF_NOT_AUTHORIZED',
+        'handoff cleanup is not owned by this recovery worker',
+      );
+    }
+    return row;
+  }
+
   #advanceActiveOperationFence(
     session: SessionRef,
     priorAuthorityVersion: number,
@@ -2225,6 +2425,42 @@ export class SessionRegistry {
         )
         .get(type, key),
     );
+  }
+
+  #findConflictingClaim(resource: ResourceClaim): ClaimRow | null {
+    return (
+      this.#findClaim(resource.type, resource.key) ??
+      (resource.type === 'runner' ? this.#findClaim('runner-receipt', resource.key) : null)
+    );
+  }
+
+  #invalidatePlatformReceipt(session: SessionRef, platform: string): void {
+    const row = this.#database
+      .prepare(
+        `SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`,
+      )
+      .get(session.sessionId, session.claimEpoch, platform) as
+      | { receipt_json?: unknown }
+      | undefined;
+    if (typeof row?.receipt_json === 'string') {
+      const receipt = JSON.parse(row.receipt_json) as Record<string, unknown>;
+      if (typeof receipt.runnerClaim === 'string') {
+        this.#database
+          .prepare(
+            `DELETE FROM claims
+             WHERE resource_type = 'runner-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`,
+          )
+          .run(receipt.runnerClaim, session.sessionId, session.claimEpoch);
+      }
+    }
+    this.#database
+      .prepare(
+        `DELETE FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`,
+      )
+      .run(session.sessionId, session.claimEpoch, platform);
   }
 
   #capabilityMatches(expected: string, actual: string): boolean {

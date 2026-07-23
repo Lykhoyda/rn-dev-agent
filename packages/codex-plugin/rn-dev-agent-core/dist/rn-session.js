@@ -8019,7 +8019,8 @@ var conflictCodes = {
   target: "TARGET_CLAIM_CONFLICT",
   "metro-port": "METRO_PORT_CLAIM_CONFLICT",
   "observe-port": "OBSERVE_PORT_CLAIM_CONFLICT",
-  runner: "RUNNER_CLAIM_CONFLICT"
+  runner: "RUNNER_CLAIM_CONFLICT",
+  "runner-receipt": "RUNNER_CLAIM_CONFLICT"
 };
 function asSession(row) {
   return row ? row : null;
@@ -8047,6 +8048,10 @@ function isOperationalState(state) {
 }
 function isFenceableState(state) {
   return isOperationalState(state) || state === "handoff";
+}
+function bindingsRunnerPresent(bindingsJson) {
+  const bindings = JSON.parse(bindingsJson);
+  return Boolean(bindings.runner && typeof bindings.runner === "object");
 }
 var SessionRegistry = class {
   #database;
@@ -8093,7 +8098,7 @@ var SessionRegistry = class {
       const owner = this.#requireSession(session);
       const reclaim = /* @__PURE__ */ new Set();
       for (const resource of resources) {
-        const claim = this.#findClaim(resource.type, resource.key);
+        const claim = this.#findConflictingClaim(resource);
         if (!claim || claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch) {
           continue;
         }
@@ -8138,6 +8143,16 @@ var SessionRegistry = class {
     this.#transaction(() => {
       const current = this.#requireSession(session);
       for (const resource of resources) {
+        if (resource.type === "runner") {
+          const rows = this.#database.prepare(`SELECT platform, receipt_json FROM platform_authority_receipts
+               WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
+          for (const row of rows) {
+            const receipt = JSON.parse(row.receipt_json);
+            if (receipt.runnerClaim === resource.key) {
+              this.#invalidatePlatformReceipt(session, row.platform);
+            }
+          }
+        }
         this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
@@ -8244,7 +8259,7 @@ var SessionRegistry = class {
         proof: null,
         pendingBuild: null
       };
-      this.#database.prepare("DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?").run(session.sessionId, String(input.device.platform));
+      this.#invalidatePlatformReceipt(session, String(input.device.platform));
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
@@ -8267,7 +8282,7 @@ var SessionRegistry = class {
         const currentBindings = JSON.parse(current.bindings_json);
         const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
         if (platform) {
-          this.#database.prepare("DELETE FROM platform_authority_receipts WHERE session_id = ? AND platform = ?").run(session.sessionId, platform);
+          this.#invalidatePlatformReceipt(session, platform);
         }
       }
       this.#database.prepare(`UPDATE sessions
@@ -8289,7 +8304,7 @@ var SessionRegistry = class {
         throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
       }
       for (const resource of input.claimResources ?? []) {
-        const claim = this.#findClaim(resource.type, resource.key);
+        const claim = this.#findConflictingClaim(resource);
         if (claim && (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)) {
           throw claimConflict(claim);
         }
@@ -8633,11 +8648,16 @@ var SessionRegistry = class {
       if (active) {
         throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "handoff cannot transfer while either session has an active operation");
       }
+      const priorRunnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(prior.session_id, prior.claim_epoch);
+      if (bindingsRunnerPresent(prior.bindings_json) && !priorRunnerClaim?.resource_key) {
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner binding has no exclusive cleanup claim");
+      }
       this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch);
       this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')`).run(prior.session_id, prior.claim_epoch);
       this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
       const bindings = JSON.parse(prior.bindings_json);
@@ -8654,8 +8674,17 @@ var SessionRegistry = class {
         pendingBuild: null,
         recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
         handoffCleanup: {
-          observe: bindings.observe ?? null,
-          runner: bindings.runner ?? null
+          observe: bindings.observe && typeof bindings.observe === "object" ? {
+            ...bindings.observe,
+            stopRequestedAt: null,
+            completedAt: null
+          } : null,
+          runner: bindings.runner && typeof bindings.runner === "object" ? {
+            ...bindings.runner,
+            claimKey: priorRunnerClaim?.resource_key,
+            stopRequestedAt: null,
+            completedAt: null
+          } : null
         }
       }), now, target.sessionId, target.claimEpoch);
       this.#database.prepare(`UPDATE sessions
@@ -8664,9 +8693,70 @@ var SessionRegistry = class {
            WHERE session_id = ? AND claim_epoch = ?`).run(now, prior.session_id, prior.claim_epoch);
       this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
       return {
-        ...bindings.observe && typeof bindings.observe === "object" ? { observe: bindings.observe } : {},
-        ...bindings.runner && typeof bindings.runner === "object" ? { runner: bindings.runner } : {}
+        ...this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup ?? {}
       };
+    });
+  }
+  beginHandoffCleanupResource(target, targetInstance, resource) {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+      const bindings = JSON.parse(row.bindings_json);
+      const cleanup = bindings.handoffCleanup;
+      const current = cleanup?.[resource];
+      if (!current || typeof current !== "object")
+        return null;
+      const binding = current;
+      if (typeof binding.completedAt === "number")
+        return binding;
+      if (resource === "runner") {
+        const claimKey = String(binding.claimKey ?? "");
+        const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}:${String(binding.port)}`;
+        const claim = this.#findClaim("runner", claimKey);
+        if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.capability !== "string" || typeof binding.instanceId !== "string") {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner cleanup claim no longer matches the authenticated binding");
+        }
+      }
+      const requested = {
+        ...binding,
+        stopRequestedAt: typeof binding.stopRequestedAt === "number" ? binding.stopRequestedAt : now
+      };
+      this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+        ...bindings,
+        handoffCleanup: { ...cleanup, [resource]: requested }
+      }), now, target.sessionId, target.claimEpoch);
+      return requested;
+    });
+  }
+  completeHandoffCleanupResource(target, targetInstance, resource) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+      const bindings = JSON.parse(row.bindings_json);
+      const cleanup = bindings.handoffCleanup;
+      const current = cleanup?.[resource];
+      if (!current || typeof current !== "object")
+        return;
+      const binding = current;
+      if (typeof binding.stopRequestedAt !== "number") {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup was not durably requested`);
+      }
+      if (typeof binding.completedAt === "number")
+        return;
+      if (resource === "runner") {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'runner' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+      }
+      this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+        ...bindings,
+        handoffCleanup: {
+          ...cleanup,
+          [resource]: { ...binding, completedAt: now }
+        }
+      }), now, target.sessionId, target.claimEpoch);
     });
   }
   finishHandoffCleanup(target, targetInstance) {
@@ -8677,11 +8767,19 @@ var SessionRegistry = class {
       if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== targetInstance) {
         throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
       }
+      const bindings = JSON.parse(row.bindings_json);
+      const cleanup = bindings.handoffCleanup;
+      for (const resource of ["runner", "observe"]) {
+        const binding = cleanup?.[resource];
+        if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
+        }
+      }
       this.#database.prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
-        ...JSON.parse(row.bindings_json),
+        ...bindings,
         handoffCleanup: null
       }), now, target.sessionId, target.claimEpoch);
     });
@@ -8696,9 +8794,23 @@ var SessionRegistry = class {
       const runner = bindings.runner;
       const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
            WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
-      if (device?.platform !== platform || receipt.sessionId !== session.sessionId || receipt.claimEpoch !== session.claimEpoch || receipt.sourceKey !== row.source_key || receipt.worktreeKey !== row.worktree_key || receipt.appRootKey !== row.app_root_key || receipt.deviceId !== device.deviceId || receipt.appId !== device.appId || receipt.installGeneration !== install?.installGeneration || receipt.artifactDigest !== install?.artifactDigest || receipt.runnerInstanceId !== runner?.instanceId || receipt.runnerPid !== runner?.pid || receipt.runnerProcessBirth !== runner?.processBirth || receipt.runnerClaim !== runnerClaim?.resource_key) {
+      const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash3("sha256").update(runner.capability).digest("hex") : null;
+      if (device?.platform !== platform || receipt.sessionId !== session.sessionId || receipt.claimEpoch !== session.claimEpoch || receipt.sourceKey !== row.source_key || receipt.worktreeKey !== row.worktree_key || receipt.appRootKey !== row.app_root_key || receipt.deviceId !== device.deviceId || receipt.appId !== device.appId || receipt.installGeneration !== install?.installGeneration || receipt.artifactDigest !== install?.artifactDigest || receipt.runnerInstanceId !== runner?.instanceId || receipt.runnerPid !== runner?.pid || receipt.runnerProcessBirth !== runner?.processBirth || receipt.runnerClaim !== runnerClaim?.resource_key || receipt.runnerCapabilityHash !== runnerCapabilityHash) {
         throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
       }
+      const claimKey = String(receipt.runnerClaim);
+      const existingReceiptClaim = this.#findClaim("runner-receipt", claimKey);
+      if (existingReceiptClaim && (existingReceiptClaim.session_id !== session.sessionId || existingReceiptClaim.claim_epoch !== session.claimEpoch)) {
+        throw claimConflict(existingReceiptClaim);
+      }
+      this.#invalidatePlatformReceipt(session, platform);
+      this.#database.prepare(`INSERT INTO claims(
+             resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+           ) VALUES ('runner-receipt', ?, ?, ?, ?)
+           ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+             session_id = excluded.session_id,
+             claim_epoch = excluded.claim_epoch,
+             lease_until_ms = excluded.lease_until_ms`).run(claimKey, session.sessionId, session.claimEpoch, now + this.#leaseMs);
       this.#database.prepare(`INSERT INTO platform_authority_receipts(
              session_id, claim_epoch, platform, receipt_json, updated_ms
            ) VALUES (?, ?, ?, ?, ?)
@@ -8711,7 +8823,8 @@ var SessionRegistry = class {
   validatePlatformAuthorityReceipt(session, platform, receipt) {
     const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
          WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
-    return row?.claim_epoch === session.claimEpoch && typeof row.receipt_json === "string" && row.receipt_json === JSON.stringify(receipt);
+    const claim = this.#findClaim("runner-receipt", String(receipt.runnerClaim));
+    return row?.claim_epoch === session.claimEpoch && typeof row.receipt_json === "string" && row.receipt_json === JSON.stringify(receipt) && claim?.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch;
   }
   adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
     const priorStatus = this.getSessionStatus(priorSessionId);
@@ -8968,7 +9081,7 @@ var SessionRegistry = class {
   #probeClaimOwners(session, resources) {
     const owners = /* @__PURE__ */ new Map();
     for (const resource of resources) {
-      const claim = this.#findClaim(resource.type, resource.key);
+      const claim = this.#findConflictingClaim(resource);
       if (!claim || claim.session_id === session.sessionId || owners.has(claim.session_id)) {
         continue;
       }
@@ -9012,6 +9125,13 @@ var SessionRegistry = class {
     }
     return row;
   }
+  #requireHandoffCleanupOwner(session, targetInstance) {
+    const row = this.#requireRecoverableSession(session);
+    if (row.state !== "handoff_cleanup" || row.worker_instance !== targetInstance) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
+    }
+    return row;
+  }
   #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion) {
     const active = this.#database.prepare(`SELECT operation_id, authority_version FROM operations
          WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
@@ -9032,6 +9152,23 @@ var SessionRegistry = class {
   #findClaim(type, key) {
     return asClaim(this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
            FROM claims WHERE resource_type = ? AND resource_key = ?`).get(type, key));
+  }
+  #findConflictingClaim(resource) {
+    return this.#findClaim(resource.type, resource.key) ?? (resource.type === "runner" ? this.#findClaim("runner-receipt", resource.key) : null);
+  }
+  #invalidatePlatformReceipt(session, platform) {
+    const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session.sessionId, session.claimEpoch, platform);
+    if (typeof row?.receipt_json === "string") {
+      const receipt = JSON.parse(row.receipt_json);
+      if (typeof receipt.runnerClaim === "string") {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'runner-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(receipt.runnerClaim, session.sessionId, session.claimEpoch);
+      }
+    }
+    this.#database.prepare(`DELETE FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session.sessionId, session.claimEpoch, platform);
   }
   #capabilityMatches(expected, actual) {
     const expectedDigest = createHash3("sha256").update(expected).digest();

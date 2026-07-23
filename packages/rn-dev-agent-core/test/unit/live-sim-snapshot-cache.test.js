@@ -84,6 +84,7 @@ test('snapshot cache preserves exact per-platform receipts within one source gen
       runnerInstanceId: `${platform}-runner`,
       runnerPid: 123,
       runnerProcessBirth: `${platform}-birth`,
+      runnerCapabilityHash: `${platform}-capability`,
       runnerClaim: `${platform}:${deviceId}`,
     }),
     record: (receipt) => valid.add(JSON.stringify(receipt)),
@@ -115,6 +116,7 @@ test('snapshot cache rejects cross-session and stale-source receipts', () => {
     runnerInstanceId: 'ios-runner',
     runnerPid: 123,
     runnerProcessBirth: 'ios-birth',
+    runnerCapabilityHash: 'ios-capability',
     runnerClaim: 'ios:ios-device',
   };
   const valid = new Set();
@@ -148,6 +150,7 @@ test('snapshot cache rejects a receipt invalidated by persistent platform author
       runnerInstanceId: 'ios-runner',
       runnerPid: 123,
       runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
       runnerClaim: 'ios:ios-device',
     }),
     record: () => {},

@@ -194,6 +194,7 @@ test('graceful handoff is one-time, transfers every claim epoch, and fences the 
   registry.claimResources(owner, [
     { type: 'device', key: 'ios:device-1' },
     { type: 'metro-port', key: '8341' },
+    { type: 'runner', key: 'ios:device-1:9100' },
   ]);
 
   const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
@@ -261,13 +262,20 @@ test('handoff into a live target transfers claims once and drops bundle and runn
   registry.claimResources(owner, [
     { type: 'device', key: 'ios:device-1' },
     { type: 'metro-port', key: '8341' },
+    { type: 'runner', key: 'ios:device-1:9100' },
   ]);
   registry.updateBindings(owner, {
     state: 'ready',
     bindings: {
       device: { platform: 'ios', deviceId: 'device-1' },
       bundle: { targetId: 'old-target' },
-      runner: { instanceId: 'old-runner' },
+      runner: {
+        platform: 'ios',
+        deviceId: 'device-1',
+        port: 9100,
+        instanceId: 'old-runner',
+        capability: 'runner-capability',
+      },
     },
   });
   const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
@@ -276,7 +284,9 @@ test('handoff into a live target transfers claims once and drops bundle and runn
     ...handoff,
     targetInstance: 'worker-next',
   });
-  assert.deepEqual(cleanup.runner, { instanceId: 'old-runner' });
+  assert.equal(cleanup.runner?.instanceId, 'old-runner');
+  registry.beginHandoffCleanupResource(target, 'worker-next', 'runner');
+  registry.completeHandoffCleanupResource(target, 'worker-next', 'runner');
   registry.finishHandoffCleanup(target, 'worker-next');
 
   assert.equal(registry.getClaim('device', 'ios:device-1').sessionId, target.sessionId);
@@ -538,7 +548,13 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
       device: { platform: 'ios', deviceId: 'device-1' },
       install: { artifactDigest: 'artifact-1' },
       bundle: { targetId: 'target-1' },
-      runner: { instanceId: 'runner-1' },
+      runner: {
+        platform: 'ios',
+        deviceId: 'device-1',
+        port: 9100,
+        instanceId: 'runner-1',
+        capability: 'runner-capability',
+      },
       observe: { instanceId: 'observe-1' },
       proof: { runId: 'proof-1' },
     },
@@ -549,8 +565,12 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
     ...handoff,
     targetInstance: 'worker-next',
   });
-  assert.deepEqual(cleanup.observe, { instanceId: 'observe-1' });
-  assert.deepEqual(cleanup.runner, { instanceId: 'runner-1' });
+  assert.equal(cleanup.observe?.instanceId, 'observe-1');
+  assert.equal(cleanup.runner?.instanceId, 'runner-1');
+  registry.beginHandoffCleanupResource(target, 'worker-next', 'runner');
+  registry.completeHandoffCleanupResource(target, 'worker-next', 'runner');
+  registry.beginHandoffCleanupResource(target, 'worker-next', 'observe');
+  registry.completeHandoffCleanupResource(target, 'worker-next', 'observe');
   registry.finishHandoffCleanup(target, 'worker-next');
 
   const status = registry.getSessionStatus(target.sessionId);
@@ -643,6 +663,7 @@ test('persistent platform receipts reject exact authority replacement', () => {
         instanceId: 'runner-a',
         pid: 303,
         processBirth: 'runner-birth-a',
+        capability: 'runner-capability-a',
       },
     },
   });
@@ -661,6 +682,7 @@ test('persistent platform receipts reject exact authority replacement', () => {
     runnerInstanceId: 'runner-a',
     runnerPid: 303,
     runnerProcessBirth: 'runner-birth-a',
+    runnerCapabilityHash: createHash('sha256').update('runner-capability-a').digest('hex'),
     runnerClaim: 'ios:device-a:runner-a',
   };
   registry.recordPlatformAuthorityReceipt(owner, 'ios', receipt);
@@ -670,4 +692,99 @@ test('persistent platform receipts reject exact authority replacement', () => {
     device: { platform: 'ios', deviceId: 'device-b', appId: 'dev.example' },
   });
   assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), false);
+});
+
+test('retained platform receipt claim blocks runner authority reuse', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const contender = create('b');
+  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:9100' }]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'device-a', appId: 'dev.example' },
+      install: {
+        buildGeneration: 1,
+        installGeneration: 'install-a',
+        artifactDigest: 'artifact-a',
+      },
+      runner: {
+        instanceId: 'runner-a',
+        pid: 303,
+        processBirth: 'runner-birth-a',
+        capability: 'runner-capability-a',
+      },
+    },
+  });
+  const receipt = {
+    sessionId: owner.sessionId,
+    claimEpoch: owner.claimEpoch,
+    sourceKey: 'repo',
+    worktreeKey: 'a',
+    appRootKey: '.',
+    platform: 'ios',
+    deviceId: 'device-a',
+    appId: 'dev.example',
+    buildGeneration: 1,
+    installGeneration: 'install-a',
+    artifactDigest: 'artifact-a',
+    runnerInstanceId: 'runner-a',
+    runnerPid: 303,
+    runnerProcessBirth: 'runner-birth-a',
+    runnerCapabilityHash: createHash('sha256').update('runner-capability-a').digest('hex'),
+    runnerClaim: 'ios:device-a:9100',
+  };
+  registry.recordPlatformAuthorityReceipt(owner, 'ios', receipt);
+  registry.replaceDeviceAuthority(owner, {
+    device: { platform: 'android', deviceId: 'device-b', appId: 'dev.example' },
+  });
+
+  assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), true);
+  assert.throws(
+    () =>
+      registry.claimResources(contender, [
+        { type: 'runner', key: 'ios:device-a:9100' },
+      ]),
+    /RUNNER_CLAIM_CONFLICT/,
+  );
+});
+
+test('handoff cleanup retains runner claim until its durable checkpoint', () => {
+  const { registry, create } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.bindWorker(target, {
+    instanceId: 'worker-next',
+    pid: 202,
+    token: 'birth-worker-next',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-target' },
+  });
+  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:9100' }]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      runner: {
+        platform: 'ios',
+        deviceId: 'device-a',
+        port: 9100,
+        instanceId: 'runner-a',
+        capability: 'runner-capability-a',
+      },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+  registry.acceptHandoffInto(target, { ...handoff, targetInstance: 'worker-next' });
+
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, target.sessionId);
+  assert.throws(
+    () => registry.finishHandoffCleanup(target, 'worker-next'),
+    /runner cleanup has not been durably completed/,
+  );
+  registry.beginHandoffCleanupResource(target, 'worker-next', 'runner');
+  registry.completeHandoffCleanupResource(target, 'worker-next', 'runner');
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100'), null);
+  assert.doesNotThrow(() => registry.finishHandoffCleanup(target, 'worker-next'));
 });

@@ -125,6 +125,7 @@ function currentSnapshotAuthority(platform) {
         artifactDigest: authority?.artifactDigest ?? null,
         runnerPid: authority?.runnerPid ?? null,
         runnerProcessBirth: authority?.runnerProcessBirth ?? null,
+        runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
     };
 }
 function snapshotAuthorityIsValid(receipt, platform) {
@@ -148,6 +149,7 @@ function snapshotAuthorityIsValid(receipt, platform) {
         receipt.artifactDigest !== null &&
         receipt.runnerPid !== null &&
         receipt.runnerProcessBirth !== null &&
+        receipt.runnerCapabilityHash !== null &&
         snapshotAuthorityProvider?.validate(receipt));
 }
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already

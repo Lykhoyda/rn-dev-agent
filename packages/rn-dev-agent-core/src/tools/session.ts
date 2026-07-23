@@ -20,8 +20,6 @@ import {
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { readProcessBirth } from '../session/process-birth.js';
@@ -75,6 +73,7 @@ interface SessionHandlerDependencies {
   stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
   readProcessBirth?: typeof readProcessBirth;
   pidForPort?: typeof managedMetroListenerPid;
+  signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
   cleanupTimeoutMs?: number;
 }
 
@@ -103,18 +102,26 @@ async function stopHandoffObserve(
   const expectedBirth = String(binding.processBirth ?? '');
   const instanceId = String(binding.instanceId ?? '');
   const capability = String(binding.cleanupCapability ?? '');
+  const stopRequestedAt = Number(binding.stopRequestedAt);
   if (
     !Number.isSafeInteger(port) ||
     !Number.isSafeInteger(pid) ||
     !expectedBirth ||
     !instanceId ||
     !capability ||
-    listenerPid(port) !== pid ||
-    processBirth(pid)?.token !== expectedBirth
+    !Number.isFinite(stopRequestedAt)
   ) {
     throw new SessionAuthorityError(
       'OBSERVE_AUTHORITY_MISMATCH',
       'source Observe cleanup authority is incomplete',
+    );
+  }
+  const currentListener = listenerPid(port);
+  if (currentListener !== pid) return;
+  if (processBirth(pid)?.token !== expectedBirth) {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'source Observe listener PID was reused before cleanup completed',
     );
   }
   const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
@@ -140,34 +147,30 @@ async function stopHandoffObserve(
 async function stopHandoffRunner(
   binding: Record<string, unknown>,
   processBirth: typeof readProcessBirth = readProcessBirth,
+  signalProcess: (pid: number, signal: NodeJS.Signals) => void = process.kill,
   timeoutMs = 2_000,
 ): Promise<void> {
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? '');
-  if (!Number.isSafeInteger(pid) || !expectedBirth) {
+  const instanceId = String(binding.instanceId ?? '');
+  const capability = String(binding.capability ?? '');
+  const claimKey = String(binding.claimKey ?? '');
+  const stopRequestedAt = Number(binding.stopRequestedAt);
+  if (
+    !Number.isSafeInteger(pid) ||
+    !expectedBirth ||
+    !instanceId ||
+    !capability ||
+    !claimKey ||
+    !Number.isFinite(stopRequestedAt)
+  ) {
     throw new SessionAuthorityError(
       'RUNNER_ADOPTION_REQUIRED',
       'source runner cleanup identity is incomplete',
     );
   }
-  if (processBirth(pid)?.token !== expectedBirth) {
-    throw new SessionAuthorityError(
-      'RUNNER_ADOPTION_REQUIRED',
-      'source runner process identity changed before cleanup',
-    );
-  }
-  if (binding.platform === 'ios') {
-    stopFastRunner(typeof binding.deviceId === 'string' ? binding.deviceId : undefined);
-  } else if (binding.platform === 'android') {
-    await stopAndroidRunner(
-      typeof binding.deviceId === 'string' ? binding.deviceId : undefined,
-    );
-  } else {
-    throw new SessionAuthorityError(
-      'RUNNER_ADOPTION_REQUIRED',
-      'source runner platform is unavailable',
-    );
-  }
+  if (processBirth(pid)?.token !== expectedBirth) return;
+  signalProcess(pid, 'SIGTERM');
   await waitForStopped(
     () => processBirth(pid)?.token === expectedBirth,
     timeoutMs,
@@ -493,28 +496,69 @@ export function createSessionHandler(
             targetInstance: status.worker.instanceId,
           });
         }
-        if (cleanup?.runner) {
+        if (
+          cleanup?.runner &&
+          typeof cleanup.runner.completedAt !== 'number'
+        ) {
+          const runnerCleanup = registry.beginHandoffCleanupResource(
+            session,
+            status.worker.instanceId,
+            'runner',
+          );
+          if (!runnerCleanup) {
+            throw new SessionAuthorityError(
+              'RUNNER_ADOPTION_REQUIRED',
+              'runner cleanup binding disappeared while fenced',
+            );
+          }
           if (dependencies.stopHandoffRunner) {
-            await dependencies.stopHandoffRunner(cleanup.runner);
+            await dependencies.stopHandoffRunner(runnerCleanup);
           } else {
             await stopHandoffRunner(
-              cleanup.runner,
+              runnerCleanup,
               dependencies.readProcessBirth,
+              dependencies.signalProcess,
               dependencies.cleanupTimeoutMs,
             );
           }
+          registry.completeHandoffCleanupResource(
+            session,
+            status.worker.instanceId,
+            'runner',
+          );
         }
-        if (cleanup?.observe) {
+        const afterRunner = registry.getSessionStatus(session.sessionId);
+        cleanup = afterRunner?.bindings.handoffCleanup as typeof cleanup;
+        if (
+          cleanup?.observe &&
+          typeof cleanup.observe.completedAt !== 'number'
+        ) {
+          const observeCleanup = registry.beginHandoffCleanupResource(
+            session,
+            status.worker.instanceId,
+            'observe',
+          );
+          if (!observeCleanup) {
+            throw new SessionAuthorityError(
+              'OBSERVE_AUTHORITY_MISMATCH',
+              'Observe cleanup binding disappeared while fenced',
+            );
+          }
           if (dependencies.stopHandoffObserve) {
-            await dependencies.stopHandoffObserve(cleanup.observe);
+            await dependencies.stopHandoffObserve(observeCleanup);
           } else {
             await stopHandoffObserve(
-              cleanup.observe,
+              observeCleanup,
               dependencies.pidForPort,
               dependencies.readProcessBirth,
               dependencies.cleanupTimeoutMs,
             );
           }
+          registry.completeHandoffCleanupResource(
+            session,
+            status.worker.instanceId,
+            'observe',
+          );
         }
         registry.finishHandoffCleanup(session, status.worker.instanceId);
         return okResult({
