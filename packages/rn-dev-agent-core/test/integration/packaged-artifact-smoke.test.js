@@ -3,7 +3,7 @@
 // ensure-cdp-deps.sh:24-25 copies — installs production-only with
 // --ignore-scripts (lockfile-pinned, matching user machines), then drives
 // dist/supervisor.js over stdio: MCP handshake, tools/list vs the committed
-// golden, observe start + SPA fetch, clean SIGTERM. CI runs the
+// golden, passive Observe status + packaged SPA contents, clean SIGTERM. CI runs the
 // dist-freshness gate first, so the "fresh" dist this exercises is provably
 // identical to the committed one.
 import { test } from 'node:test';
@@ -59,7 +59,11 @@ test(
       s = startSupervisor({
         supervisorPath: join(tmp, 'dist/supervisor.js'),
         cwd: tmp,
-        env: { RN_AGENT_OBSERVE_PORT: String(port) },
+        env: {
+          RN_AGENT_OBSERVE_PORT: String(port),
+          RN_DEV_AGENT_DECLARED_ROOT: tmp,
+          RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+        },
         // Cold worker boot right after a cold install on a loaded 2-core CI
         // runner — double gh-264's 15s interactive budget.
         lineTimeoutMs: 30_000,
@@ -97,20 +101,23 @@ test(
           '  Intentional change? node scripts/update-tool-registry.mjs, review the diff, commit.',
       );
 
-      s.send('tools/call', { name: 'observe', arguments: { action: 'start' } });
+      s.send('tools/call', { name: 'observe', arguments: { action: 'status' } });
       const call = JSON.parse(await s.nextLine());
       const envelope = JSON.parse(call.result?.content?.[0]?.text ?? '{}');
       assert.equal(
         envelope.ok,
         true,
-        `SMOKE_OBSERVE: observe start failed: ${JSON.stringify(call)}`,
+        `SMOKE_OBSERVE: passive observe status failed: ${JSON.stringify(call)}`,
       );
-      const res = await fetch(envelope.data.url);
-      const body = await res.text();
-      assert.equal(res.status, 200, 'SMOKE_OBSERVE: observe server must serve GET /');
+      assert.equal(typeof envelope.data.running, 'boolean');
+      assert.equal(envelope.meta.authoritative, false);
+      const body = await readFile(
+        join(tmp, 'dist/observability/web-dist/index.html'),
+        'utf8',
+      );
       assert.ok(
         body.includes('__E2E_CSRF__'),
-        'SMOKE_OBSERVE: expected the real SPA bundle (CSRF marker), not the "SPA bundle not built" branch — is dist/observability/web-dist/ in the packaged tree?',
+        'SMOKE_OBSERVE: expected the packaged SPA bundle to include its CSRF marker',
       );
 
       s.child.kill('SIGTERM');

@@ -77,5 +77,6 @@
   "maestro_test_all",
   "observe",
   "proof_capture",
-  "proof_step"
+  "proof_step",
+  "rn_session"
 ]

@@ -16,25 +16,47 @@ test('macOS second-resolution process identity fails conservative', () => {
   assert.equal(readProcessBirth(123, { platform: 'darwin', run }), null);
 });
 
-test('a reused PID after reboot cannot match the prior birth token', () => {
-  const runForBoot = (bootSeconds) => (command) => {
-    if (command === 'ps') return 'Wed Jul 23 09:41:08 2026\n';
-    if (command === 'sysctl') {
-      return `{ sec = ${bootSeconds}, usec = 0 } Wed Jul 23 09:00:00 2026\n`;
+test('macOS process identity uses microsecond libproc birth and boot session', () => {
+  const runForBoot = (bootSession) => (command, args) => {
+    if (command === '/usr/bin/python3') {
+      assert.equal(args.at(-1), '123');
+      return '123:1784818868:345678\n';
+    }
+    if (command === '/usr/sbin/sysctl') {
+      assert.deepEqual(args, ['-n', 'kern.bootsessionuuid']);
+      return `${bootSession}\n`;
     }
     throw new Error(`unexpected command ${command}`);
   };
   const before = readProcessBirth(123, {
     platform: 'darwin',
-    run: runForBoot(1784790000),
+    run: runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
   const after = readProcessBirth(123, {
     platform: 'darwin',
-    run: runForBoot(1784793600),
+    run: runForBoot('D9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
 
-  assert.equal(before, null);
-  assert.equal(after, null);
+  assert.equal(before?.source, 'darwin-libproc');
+  assert.match(before?.token ?? '', /^[a-f0-9]{64}$/);
+  assert.notEqual(before?.token, after?.token);
+});
+
+test('macOS process probes distinguish confirmed absence from unreadable identity', () => {
+  assert.deepEqual(
+    probeProcessBirth(123, {
+      platform: 'darwin',
+      run: () => 'ABSENT\n',
+    }),
+    { status: 'absent' },
+  );
+  assert.deepEqual(
+    probeProcessBirth(123, {
+      platform: 'darwin',
+      run: () => '123:1784818868:1000000\n',
+    }),
+    { status: 'unknown' },
+  );
 });
 
 test('Linux process identity handles process names containing spaces', () => {
@@ -100,7 +122,7 @@ test('process birth probes distinguish confirmed absence from unreadable identit
 });
 
 test('current process has a portable birth identity on supported hosts', () => {
-  if (process.platform !== 'linux' && process.platform !== 'win32') {
+  if (!['darwin', 'linux', 'win32'].includes(process.platform)) {
     return;
   }
 
