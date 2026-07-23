@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { observeStreamUrl } from '../authority';
+import { observeUrl } from '../authority';
 import type { AgentEvent, Conn, E2eProgress, MirrorState } from '../types';
 
 const MAX_EVENTS = 500;
@@ -40,7 +40,7 @@ export function useEventStream(): EventStream {
       });
     };
 
-    const es = new EventSource(observeStreamUrl('/api/stream'));
+    const es = new EventSource(observeUrl('/api/stream'));
     es.onopen = () => setConn('open');
     es.onerror = () => setConn('error');
     es.onmessage = (msg) => {

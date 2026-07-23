@@ -24,7 +24,7 @@ export function observeFetch(input: string, init: RequestInit = {}): Promise<Res
   });
 }
 
-export function observeStreamUrl(path: string): string {
+export function observeUrl(path: string): string {
   const value = authority();
   const url = new URL(path, window.location.origin);
   url.searchParams.set('instance', value.instanceId);

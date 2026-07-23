@@ -49,6 +49,11 @@ test('Observe bootstraps one capability but protects every API by session instan
       claimEpoch: 4,
       instanceId: 'observe-a',
     });
+
+    const queryResponse = await fetch(
+      `${url}/api/authority?instance=${authority.instanceId}&capability=${authority.capability}`,
+    );
+    assert.equal(queryResponse.status, 200);
   } finally {
     await server.stop();
   }
