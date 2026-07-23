@@ -78,6 +78,20 @@ export type ManagedMetroListenerProbe =
   | { status: 'absent' }
   | { status: 'unknown' };
 
+function numericListener(output: unknown, emptyStatus: 'absent' | 'unknown') {
+  const value = String(output).trim();
+  if (!value) return { status: emptyStatus } as ManagedMetroListenerProbe;
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: 'unknown' } as const;
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0
+    ? ({ status: 'listening', pid } as const)
+    : ({ status: 'unknown' } as const);
+}
+
 export function probeManagedMetroListener(
   port: number,
   platform: NodeJS.Platform = process.platform,
@@ -91,14 +105,14 @@ export function probeManagedMetroListener(
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          `(Get-NetTCPConnection -State Listen -LocalPort ${port} | Select-Object -First 1 -ExpandProperty OwningProcess)`,
+          `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); ` +
+            `if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`,
         ],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
       );
-      const pid = Number(String(output).trim());
-      return Number.isSafeInteger(pid) && pid > 0
-        ? { status: 'listening', pid }
-        : { status: 'absent' };
+      return String(output).trim() === 'ABSENT'
+        ? { status: 'absent' }
+        : numericListener(output, 'unknown');
     }
     if (platform === 'linux') {
       const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
@@ -106,23 +120,29 @@ export function probeManagedMetroListener(
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 2_000,
       });
-      const match = /pid=(\d+)/.exec(String(output));
-      const pid = Number(match?.[1]);
-      return Number.isSafeInteger(pid) && pid > 0
+      const value = String(output).trim();
+      if (!value) return { status: 'absent' };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0
         ? { status: 'listening', pid }
-        : { status: 'absent' };
+        : { status: 'unknown' };
     }
-    const output = execute('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 2_000,
-    });
-    const pid = Number(String(output).trim().split(/\s+/)[0]);
-    return Number.isSafeInteger(pid) && pid > 0
-      ? { status: 'listening', pid }
-      : { status: 'absent' };
+    if (platform === 'darwin') {
+      const output = execute('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 2_000,
+      });
+      return numericListener(output, 'unknown');
+    }
+    return { status: 'unknown' };
   } catch (error) {
-    return platform === 'darwin' && (error as { status?: unknown }).status === 1
+    const failure = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    return platform === 'darwin' &&
+      failure.status === 1 &&
+      !String(failure.stdout ?? '').trim() &&
+      !String(failure.stderr ?? '').trim()
       ? { status: 'absent' }
       : { status: 'unknown' };
   }
