@@ -131,6 +131,23 @@ function resultSucceeded(result) {
         return false;
     }
 }
+function resultIsCanonicalSuccess(result) {
+    const first = result?.content?.[0];
+    if (!first?.text)
+        return false;
+    try {
+        const envelope = JSON.parse(first.text);
+        return (envelope.ok === true &&
+            envelope.truncated !== true &&
+            !envelope.meta?.warning &&
+            envelope.data?.partial !== true &&
+            envelope.data?.truncated !== true &&
+            envelope.data?.inconclusive !== true);
+    }
+    catch {
+        return false;
+    }
+}
 function receipt(status, profile, observations) {
     return {
         version: 1,
@@ -154,7 +171,10 @@ export function createAuthorityGate(runtime, dependencies) {
                 ? handlerArgs[0]
                 : {};
             const baseProfile = authorityProfileFor(tool);
-            const profile = tool === 'rn_session' && args.action === 'status'
+            const profile = tool === 'rn_session' &&
+                (args.action === 'status' ||
+                    args.action === 'preview_integration' ||
+                    args.action === 'cancel_handoff')
                 ? {
                     kind: 'diagnostic',
                     axes: [],
@@ -195,33 +215,84 @@ export function createAuthorityGate(runtime, dependencies) {
                 return addMeta(await handler(...handlerArgs), { authoritative: false });
             }
             if (profile.kind === 'transition') {
+                let operation = null;
+                let registry = null;
                 try {
-                    runtime.requireAvailable();
-                    const status = runtime.status();
-                    if (!status.available) {
-                        throw new SessionAuthorityError(status.code, status.reason);
+                    const available = runtime.requireAvailable();
+                    registry = available.registry;
+                    const initialStatus = runtime.status();
+                    if (!initialStatus.available) {
+                        throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
                     }
+                    let status = initialStatus;
+                    const initialAuthorityVersion = status.authorityVersion;
                     bindSessionArguments(status, profile, args);
-                    requireCompleteAxes(status, profile);
                     if (tool === 'device_snapshot')
                         requireDeviceTransition(status, args);
-                    if (tool === 'observe' && (args.action === 'start' || args.action === 'restart')) {
-                        requireCompleteAxes(status, {
-                            kind: 'authoritative',
-                            axes: ['C', 'S', 'I', 'M', 'B', 'D'],
-                            mutation: false,
-                            liveBundleProbe: true,
+                    const transitionAxes = tool === 'device_snapshot'
+                        ? args.action === 'open'
+                            ? {
+                                before: ['C', 'S', 'I', 'M', 'D'],
+                                after: ['C', 'S', 'I', 'M', 'D', 'R'],
+                            }
+                            : {
+                                before: ['C', 'S', 'I', 'M', 'D', 'R'],
+                                after: ['C', 'S', 'I', 'M', 'D'],
+                            }
+                        : tool === 'observe'
+                            ? args.action === 'stop'
+                                ? {
+                                    before: ['C', 'S', 'I', 'M', 'B', 'D', 'R', 'O'],
+                                    after: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
+                                }
+                                : {
+                                    before: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
+                                    after: ['C', 'S', 'I', 'M', 'B', 'D', 'R', 'O'],
+                                }
+                            : tool === 'rn_session' && args.action === 'prepare_handoff'
+                                ? { before: [...profile.axes], after: [] }
+                                : { before: [...profile.axes], after: [...profile.axes] };
+                    requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
+                    operation = registry.beginOperation(available.session, {
+                        operationId: randomUUID(),
+                        tool,
+                        profile: `transition:${transitionAxes.before.join('')}>${transitionAxes.after.join('')}`,
+                    });
+                    const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
+                    registry.verifyOperation(operation);
+                    const result = await handler(...handlerArgs);
+                    if (!resultIsCanonicalSuccess(result)) {
+                        return addMeta(result, { authoritative: false });
+                    }
+                    if (tool === 'rn_session' && args.action === 'release') {
+                        operation = null;
+                        return addMeta(result, {
+                            authoritative: false,
+                            authorityTransition: true,
                         });
                     }
-                    const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
-                    const result = await handler(...handlerArgs);
-                    const after = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'postflight', tool, profile, status, args })));
-                    for (let index = 0; index < before.length; index += 1) {
-                        if (before[index]?.identity !== after[index]?.identity) {
-                            throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', `${before[index]?.axis ?? 'unknown'} authority changed during the transition`);
+                    const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
+                    if (!gateCommitsProof) {
+                        operation = registry.refreshOperation(operation);
+                        const nextStatus = runtime.status();
+                        if (!nextStatus.available ||
+                            nextStatus.authorityVersion <= initialAuthorityVersion) {
+                            throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'transition did not advance the fenced authority generation');
+                        }
+                        status = nextStatus;
+                    }
+                    requireCompleteAxes(status, { ...profile, axes: transitionAxes.after });
+                    const after = await Promise.all(transitionAxes.after.map((axis) => dependencies.probe({ axis, phase: 'postflight', tool, profile, status, args })));
+                    for (const observation of before) {
+                        if (observation.axis === 'C' || !transitionAxes.after.includes(observation.axis)) {
+                            continue;
+                        }
+                        const postflight = after.find((candidate) => candidate.axis === observation.axis);
+                        if (observation.identity !== postflight?.identity) {
+                            throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', `${observation.axis} authority changed during the transition`);
                         }
                     }
-                    if (tool === 'proof_capture' && args.action === 'begin_rehearsal') {
+                    if (gateCommitsProof) {
                         const runId = typeof args.runId === 'string' ? args.runId : '';
                         if (!runId) {
                             throw new SessionAuthorityError('PROOF_AUTHORITY_MISMATCH', 'proof transition did not provide a run ID');
@@ -229,19 +300,36 @@ export function createAuthorityGate(runtime, dependencies) {
                         const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
                         if (envelope.ok !== true)
                             return result;
-                        const { registry, session } = runtime.requireAvailable();
-                        registry.updateBindings(session, {
+                        const current = runtime.requireAvailable();
+                        registry.endOperation(operation);
+                        operation = null;
+                        current.registry.updateBindings(current.session, {
                             bindings: { proof: { runId } },
                             expectedAuthorityVersion: status.authorityVersion,
                         });
+                        const proofStatus = runtime.status();
+                        if (!proofStatus.available) {
+                            throw new SessionAuthorityError(proofStatus.code, proofStatus.reason);
+                        }
+                        status = proofStatus;
                     }
                     return addMeta(result, {
                         authorityTransition: true,
-                        authorityReceipt: receipt(status, profile, after),
+                        authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after),
                     });
                 }
                 catch (error) {
                     return authorityFailure(error);
+                }
+                finally {
+                    if (registry && operation) {
+                        try {
+                            registry.endOperation(operation);
+                        }
+                        catch {
+                            registry.cancelOperation(operation);
+                        }
+                    }
                 }
             }
             let operation = null;
@@ -329,6 +417,9 @@ export function createAuthorityGate(runtime, dependencies) {
                             expectedAuthorityVersion: status.authorityVersion,
                         });
                     }
+                }
+                if (!resultIsCanonicalSuccess(result)) {
+                    return addMeta(result, { authoritative: false });
                 }
                 return addMeta(result, { authorityReceipt: receipt(status, profile, after) });
             }

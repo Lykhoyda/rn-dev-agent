@@ -25,7 +25,7 @@ export function inspectAuthorityMigration(status, dependencies = {}) {
     return {
         rollout: 'strict-default',
         storeAvailable: true,
-        registrySchema: 2,
+        registrySchema: 3,
         legacyStateDetected,
         bundleHandshake: {
             supported: true,

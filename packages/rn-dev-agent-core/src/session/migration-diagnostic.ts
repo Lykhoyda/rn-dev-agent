@@ -10,7 +10,7 @@ interface MigrationDiagnosticDependencies {
 export interface AuthorityMigrationDiagnostic {
   rollout: 'strict-default';
   storeAvailable: true;
-  registrySchema: 2;
+  registrySchema: 3;
   legacyStateDetected: boolean;
   bundleHandshake: {
     supported: true;
@@ -53,7 +53,7 @@ export function inspectAuthorityMigration(
   return {
     rollout: 'strict-default',
     storeAvailable: true,
-    registrySchema: 2,
+    registrySchema: 3,
     legacyStateDetected,
     bundleHandshake: {
       supported: true,

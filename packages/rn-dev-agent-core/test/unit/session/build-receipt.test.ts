@@ -12,6 +12,7 @@ const input = {
   appId: 'com.example.app',
   metroPort: 8341,
   artifactDigest: 'artifact-a',
+  installGeneration: 'generation-a',
   buildGeneration: 2,
 };
 

@@ -1,16 +1,17 @@
 import { authorityErrorMeta, SessionAuthorityError } from '../session/registry.js';
 import { failResult, okResult } from '../utils.js';
 import { verifyBuildReceipt } from '../session/build-receipt.js';
-import { captureInstalledArtifact, verifyInstalledArtifact, } from '../session/install-authority.js';
+import { captureInstallGeneration, } from '../session/install-authority.js';
 import { captureMetroBinding } from '../session/metro-binding.js';
-import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, } from '../session/package-integration.js';
+import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, restorePackageIntegrationFiles, } from '../session/package-integration.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
-import { inspectAuthorityMigration } from '../session/migration-diagnostic.js';
+import { projectPublicAuthorityStatus } from '../session/public-status.js';
+import { stopObserveServer } from './observe.js';
 function authorityFailure(error) {
     if (error instanceof SessionAuthorityError) {
         return failResult(error.message, error.code, authorityErrorMeta(error));
@@ -31,14 +32,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
             const authority = runtime.status();
             return okResult({
                 authoritative: false,
-                authority,
-                migration: authority.available
-                    ? inspectAuthorityMigration(authority)
-                    : {
-                        rollout: 'strict-default',
-                        storeAvailable: authority.code !== 'AUTHORITY_STORE_UNAVAILABLE',
-                        strictEnforcement: true,
-                    },
+                authority: projectPublicAuthorityStatus(authority),
             });
         }
         try {
@@ -52,21 +46,18 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before device binding');
                 }
-                registry.claimResources(session, [{ type: 'device', key: `${platform}:${deviceId}` }]);
                 if (!input.buildReceipt) {
-                    registry.updateBindings(session, {
-                        state: 'device_claimed',
-                        bindings: {
-                            device: {
-                                platform,
-                                deviceId,
-                                appId,
-                                ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
-                            },
+                    registry.replaceDeviceAuthority(session, {
+                        resource: { type: 'device', key: `${platform}:${deviceId}` },
+                        device: {
+                            platform,
+                            deviceId,
+                            appId,
+                            ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
                         },
                     });
                     return okResult({
-                        session: registry.getSessionStatus(session.sessionId),
+                        session: projectPublicAuthorityStatus(runtime.status()),
                         buildReceiptRequired: true,
                     });
                 }
@@ -83,20 +74,20 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     appId,
                     metroPort: Number(status.bindings.metroPort),
                 });
-                const observed = (dependencies.captureInstall ?? captureInstalledArtifact)({
+                const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
                     platform,
                     deviceId,
                     appId,
                 });
-                verifyInstalledArtifact(receipt, observed);
-                registry.updateBindings(session, {
-                    state: 'device_bound',
-                    bindings: {
-                        device: { platform, deviceId, appId },
-                        install: receipt,
-                    },
+                if (observedGeneration !== receipt.installGeneration) {
+                    throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact generation does not match the signed build receipt');
+                }
+                registry.replaceDeviceAuthority(session, {
+                    resource: { type: 'device', key: `${platform}:${deviceId}` },
+                    device: { platform, deviceId, appId },
+                    install: { ...receipt },
                 });
-                return okResult({ session: registry.getSessionStatus(session.sessionId) });
+                return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
             if (input.action === 'bind_metro') {
                 const port = required(input.metroPort, 'metroPort');
@@ -120,7 +111,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     state: status.bindings.install ? 'device_bound' : 'metro_bound',
                     bindings: { metro: { ...metro, mode: input.mode ?? 'external' } },
                 });
-                return okResult({ session: registry.getSessionStatus(session.sessionId) });
+                return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
             if (input.action === 'pin_dev_client') {
                 const status = registry.getSessionStatus(session.sessionId);
@@ -140,13 +131,23 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     state: 'ready',
                     bindings: { bundle },
                 });
-                return okResult({ session: registry.getSessionStatus(session.sessionId) });
+                return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
             if (input.action === 'prepare_handoff') {
                 const targetInstance = required(input.targetInstance, 'targetInstance');
                 return okResult(registry.prepareHandoff(session, { targetInstance }));
             }
-            if (input.action === 'preview_integration' || input.action === 'apply_integration') {
+            if (input.action === 'cancel_handoff') {
+                const handoffId = required(input.handoffId, 'handoffId');
+                registry.cancelHandoff(session, handoffId);
+                return okResult({
+                    cancelled: true,
+                    session: projectPublicAuthorityStatus(runtime.status()),
+                });
+            }
+            if (input.action === 'preview_integration' ||
+                input.action === 'apply_integration' ||
+                input.action === 'restore_integration') {
                 const status = registry.getSessionStatus(session.sessionId);
                 const appRoot = String(status?.source.appRoot ?? '');
                 if (!status || !appRoot) {
@@ -178,6 +179,19 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ??
                     join(dirname(fileURLToPath(import.meta.url)), '..', 'rn-session.js');
+                if (input.action === 'restore_integration') {
+                    if (input.confirmed !== true) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'restore_integration requires confirmed=true');
+                    }
+                    if (!existing) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration manifest is unavailable for restoration');
+                    }
+                    restorePackageIntegrationFiles({ appRoot });
+                    registry.updateBindings(session, {
+                        bindings: { packageIntegration: null },
+                    });
+                    return okResult({ restored: true, packagePath, manifestPath });
+                }
                 const preview = previewPackageIntegration(packageJson, existing, sessionCli);
                 const metroBefore = readFileSync(metroConfigPath, 'utf8');
                 const metroAfter = previewMetroIntegration(metroBefore);
@@ -197,6 +211,9 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'apply_integration requires confirmed=true after reviewing preview_integration');
                 }
                 applyPackageIntegration({ appRoot, sessionCli });
+                registry.updateBindings(session, {
+                    bindings: { packageIntegration: { applied: true } },
+                });
                 return okResult({ applied: true, packagePath, manifestPath });
             }
             if (input.action === 'accept_handoff') {
@@ -206,6 +223,11 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status?.worker.instanceId) {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'target worker identity is unavailable');
                 }
+                registry.validateHandoffInto(session, {
+                    handoffId,
+                    token,
+                    targetInstance: status.worker.instanceId,
+                });
                 const priorSessionId = registry.getHandoffOwner(handoffId);
                 const priorStatus = priorSessionId ? registry.getSessionStatus(priorSessionId) : null;
                 const priorRunner = priorStatus?.bindings.runner;
@@ -219,20 +241,22 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         }) !== 'match')) {
                     throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'prior runner process identity cannot be proven for capability rotation');
                 }
-                registry.acceptHandoffInto(session, {
-                    handoffId,
-                    token,
-                    targetInstance: status.worker.instanceId,
-                });
+                if (priorStatus?.bindings.observe)
+                    await stopObserveServer();
                 if (priorRunner?.platform === 'ios') {
                     stopFastRunner(typeof priorRunner.deviceId === 'string' ? priorRunner.deviceId : undefined);
                 }
                 else if (priorRunner?.platform === 'android') {
                     await stopAndroidRunner(typeof priorRunner.deviceId === 'string' ? priorRunner.deviceId : undefined);
                 }
+                registry.acceptHandoffInto(session, {
+                    handoffId,
+                    token,
+                    targetInstance: status.worker.instanceId,
+                });
                 return okResult({
                     accepted: true,
-                    session: registry.getSessionStatus(session.sessionId),
+                    session: projectPublicAuthorityStatus(runtime.status()),
                     runnerCapabilityRotated: Boolean(priorRunner),
                     nextAction: 'Reopen the exact device runner and pin the dev client before authoritative tools.',
                 });
@@ -268,7 +292,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 return okResult({
                     adopted: true,
                     priorSessionId: priorSessionId.slice(0, 12),
-                    session: registry.getSessionStatus(session.sessionId),
+                    session: projectPublicAuthorityStatus(runtime.status()),
                     runner: {
                         adopted: false,
                         reason: 'runner capability is never crash-adopted; reopen the exact device to bind a fresh runner',

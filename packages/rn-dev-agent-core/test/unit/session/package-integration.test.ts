@@ -12,6 +12,7 @@ import {
   renderMetroIntegrationAdapter,
   renderProjectAdapter,
   restoreMetroIntegration,
+  restorePackageIntegrationFiles,
   restorePackageIntegration,
 } from '../../../dist/session/package-integration.js';
 
@@ -197,6 +198,29 @@ test('confirmed integration writes package and Metro sentinels together', () => 
     assert.match(
       readFileSync(join(root, '.rn-agent/integration/authority-marker.js'), 'utf8'),
       /status:'unavailable'/,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('confirmed integration can be transactionally restored through its public file surface', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-'));
+  try {
+    writeFileSync(join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+    const metroBefore = 'module.exports = { serializer: {} };\n';
+    writeFileSync(join(root, 'metro.config.js'), metroBefore);
+    const sessionCli = join(root, 'rn-session.js');
+    writeFileSync(sessionCli, '');
+
+    applyPackageIntegration({ appRoot: root, sessionCli });
+    restorePackageIntegrationFiles({ appRoot: root });
+
+    assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')), packageJson);
+    assert.equal(readFileSync(join(root, 'metro.config.js'), 'utf8'), metroBefore);
+    assert.throws(
+      () => readFileSync(join(root, '.rn-agent/integration/rn-session-integration.json')),
+      /ENOENT/,
     );
   } finally {
     rmSync(root, { force: true, recursive: true });

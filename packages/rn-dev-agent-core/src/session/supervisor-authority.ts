@@ -40,7 +40,6 @@ export function createSupervisorAuthority(input: {
     );
   }
   const layout = createAuthorityStateLayout(input.stateDir);
-  const sharedKnowledge = ensureSharedKnowledgeRoot(input.source.appRoot);
   const registry = openSessionRegistry(layout.registry, {
     ownerStatus: input.ownerStatus,
     leaseMs: 30_000,
@@ -91,15 +90,18 @@ export function createSupervisorAuthority(input: {
       throw error;
     }
   }
+  const sharedKnowledge = adoptionRequired
+    ? { migrated: false }
+    : ensureSharedKnowledgeRoot(input.source.appRoot);
   registry.updateBindings(session, {
-    state: adoptionRequired ? 'creating' : 'source_bound',
+    state: adoptionRequired ? 'blocked' : 'source_bound',
     bindings: {
       metroPort,
       observePort,
       ...(adoptionRequired
         ? {
             adoptionRequired: {
-              sessionId: adoptionRequired.sessionId.slice(0, 12),
+              sessionId: adoptionRequired.sessionId,
               claimEpoch: adoptionRequired.claimEpoch,
             },
           }
@@ -162,7 +164,11 @@ export function createSupervisorAuthority(input: {
             signerCapability,
           });
         }
-        registry.releaseSession(session);
+        if (status?.state === 'blocked') {
+          registry.discardBlockedSession(session);
+        } else {
+          registry.releaseSession(session);
+        }
       } finally {
         registry.close();
       }

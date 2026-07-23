@@ -106,8 +106,21 @@ for session_cli in \
     else
       candidate=$(node "$session_cli" feedback-json 2>/dev/null || true)
     fi
-    if printf '%s' "$candidate" | python3 -c 'import json,sys; value=json.load(sys.stdin); assert value.get("sessionAvailable") is True' 2>/dev/null; then
-      authority_json="$candidate"
+    projected=$(printf '%s' "$candidate" | python3 -c '
+import json,sys
+value=json.load(sys.stdin)
+assert value.get("sessionAvailable") is True
+safe={
+  "sessionAvailable": True,
+  "authorityState": str(value.get("authorityState", "unavailable")),
+  "ownMetroAllocated": value.get("ownMetroAllocated") is True,
+  "ownMetroBound": value.get("ownMetroBound") is True,
+  "foreignSessionCount": int(value.get("foreignSessionCount", 0)),
+}
+print(json.dumps(safe,separators=(",",":")))
+' 2>/dev/null || true)
+    if [ -n "$projected" ]; then
+      authority_json="$projected"
       break
     fi
   fi

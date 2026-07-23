@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
-import { captureInstalledArtifact, verifyInstalledArtifact } from './install-authority.js';
+import { captureInstallGeneration } from './install-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { readProcessBirth } from './process-birth.js';
@@ -115,9 +115,19 @@ export function createLocalAuthorityProbe(dependencies) {
         }
         if (axis === 'I') {
             const expected = objectBinding(status, 'install');
-            const observed = captureInstalledArtifact(expected);
-            verifyInstalledArtifact(expected, observed);
-            return { axis, identity: identity(observed) };
+            const observedGeneration = captureInstallGeneration(expected);
+            if (observedGeneration !== expected.installGeneration) {
+                throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact generation no longer matches the session build');
+            }
+            return {
+                axis,
+                identity: identity({
+                    platform: expected.platform,
+                    deviceId: expected.deviceId,
+                    appId: expected.appId,
+                    installGeneration: observedGeneration,
+                }),
+            };
         }
         if (axis === 'M') {
             const metro = objectBinding(status, 'metro');
@@ -134,7 +144,10 @@ export function createLocalAuthorityProbe(dependencies) {
             if (!statusText.includes('packager-status:running')) {
                 throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'claimed Metro endpoint is not running');
             }
-            const servingRoot = cwdForPort(port);
+            const servingRoot = cwdForPort(port) ??
+                (metro.mode === 'managed' && typeof metro.servingRoot === 'string'
+                    ? metro.servingRoot
+                    : null);
             const expectedRoot = String(status.source.contentRoot ?? '');
             if (!servingRoot || !pathMatchesRoot(servingRoot, expectedRoot)) {
                 throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'Metro serving root cannot be proven for this worktree');

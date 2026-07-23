@@ -2,26 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { processBirthMatches, readProcessBirth } from '../../../dist/session/process-birth.js';
 
-test('macOS process identity binds start time to the current boot', () => {
+test('macOS second-resolution process identity fails conservative', () => {
   const run = (command) => {
     if (command === 'ps') return 'Wed Jul 23 09:41:08 2026\n';
     if (command === 'sysctl') return '{ sec = 1784790000, usec = 0 } Wed Jul 23 09:00:00 2026\n';
     throw new Error(`unexpected command ${command}`);
   };
 
-  const first = readProcessBirth(123, { platform: 'darwin', run });
-  const second = readProcessBirth(123, { platform: 'darwin', run });
-  const reused = readProcessBirth(123, {
-    platform: 'darwin',
-    run: (command) =>
-      command === 'ps'
-        ? 'Wed Jul 23 09:42:08 2026\n'
-        : '{ sec = 1784790000, usec = 0 } Wed Jul 23 09:00:00 2026\n',
-  });
-
-  assert.deepEqual(first, second);
-  assert.equal(first?.source, 'darwin-ps');
-  assert.notEqual(first?.token, reused?.token);
+  assert.equal(readProcessBirth(123, { platform: 'darwin', run }), null);
 });
 
 test('a reused PID after reboot cannot match the prior birth token', () => {
@@ -41,7 +29,8 @@ test('a reused PID after reboot cannot match the prior birth token', () => {
     run: runForBoot(1784793600),
   });
 
-  assert.notEqual(before?.token, after?.token);
+  assert.equal(before, null);
+  assert.equal(after, null);
 });
 
 test('Linux process identity handles process names containing spaces', () => {
@@ -85,11 +74,7 @@ test('unreadable process birth fails conservative', () => {
 });
 
 test('current process has a portable birth identity on supported hosts', () => {
-  if (
-    process.platform !== 'darwin' &&
-    process.platform !== 'linux' &&
-    process.platform !== 'win32'
-  ) {
+  if (process.platform !== 'linux' && process.platform !== 'win32') {
     return;
   }
 

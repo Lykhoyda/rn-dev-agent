@@ -29,7 +29,7 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
       acceptIosOpenDialog: async (deviceId) => calls.push(['dialog', deviceId]),
       connectExact: async (input) => {
         calls.push(['connect', input]);
-        return { targetId: 'target-a', connectionGeneration: 7 };
+        return { targetId: 'target-a', connectionGeneration: 7, deviceId: 'IOS-UUID' };
       },
       readMarker: async () => ({ status: 'signed', marker }),
     },
@@ -57,7 +57,11 @@ test('dev-client pin refuses any URL drift and never falls back to a picker row'
           throw new Error('must not open');
         },
         acceptIosOpenDialog: async () => {},
-        connectExact: async () => ({ targetId: 'target-a', connectionGeneration: 7 }),
+        connectExact: async () => ({
+          targetId: 'target-a',
+          connectionGeneration: 7,
+          deviceId: 'IOS-UUID',
+        }),
         readMarker: async () => null,
       },
     ),
@@ -86,7 +90,7 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
       },
       connectExact: async (input) => {
         calls.push(['connect', input]);
-        return { targetId: 'target-bare', connectionGeneration: 8 };
+        return { targetId: 'target-bare', connectionGeneration: 8, deviceId: 'IOS-UUID' };
       },
       readMarker: async () => ({ status: 'signed', marker }),
     },
@@ -95,4 +99,30 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
   assert.deepEqual(calls[0], ['launch', 'ios', 'IOS-UUID', 'com.example.app']);
   assert.equal(binding.launchMethod, 'app');
   assert.equal(binding.devClientUrl, undefined);
+});
+
+test('dev-client pinning rejects a target not proven on the claimed device', async () => {
+  const marker = createMetroAuthorityMarker(expected, 'signer');
+  await assert.rejects(
+    pinExactDevClient(
+      {
+        ...expected,
+        deviceId: 'IOS-UUID',
+        metroPort: 8341,
+        signerCapability: 'signer',
+      },
+      {
+        openUrl: async () => {},
+        acceptIosOpenDialog: async () => {},
+        launchExactApp: async () => {},
+        connectExact: async () => ({
+          targetId: 'foreign-target',
+          connectionGeneration: 9,
+          deviceId: 'OTHER-IOS-UUID',
+        }),
+        readMarker: async () => ({ status: 'signed', marker }),
+      },
+    ),
+    /CDP_TARGET_AUTHORITY_MISMATCH/,
+  );
 });

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { closeSync, existsSync, openSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,9 +22,47 @@ interface ManagedMetroDependencies {
     options: Parameters<typeof spawn>[2],
   ) => ChildProcess;
   listenerPid?: (port: number) => number | null;
+  listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
   capture?: typeof captureMetroBinding;
   readBirth?: (pid: number) => ProcessBirth | null;
   wait?: (ms: number) => Promise<void>;
+}
+
+function parentPid(pid: number): number | null {
+  try {
+    const output =
+      process.platform === 'win32'
+        ? execFileSync(
+            'powershell.exe',
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`,
+            ],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
+          )
+        : execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 2_000,
+          });
+    const parsed = Number(output.trim());
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function listenerOwnedByLauncher(listenerPid: number, launcherPid: number): boolean {
+  let current: number | null = listenerPid;
+  const visited = new Set<number>();
+  while (current && !visited.has(current)) {
+    if (current === launcherPid) return true;
+    visited.add(current);
+    current = parentPid(current);
+  }
+  return false;
 }
 
 export function resolveManagedMetroCommand(
@@ -111,6 +149,7 @@ export async function startManagedMetro(
   child.unref();
 
   const listenerPid = dependencies.listenerPid ?? pidForPort;
+  const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const wait =
     dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -119,15 +158,18 @@ export async function startManagedMetro(
   while (Date.now() < deadline) {
     if (child.exitCode !== null) break;
     const pid = listenerPid(input.port);
-    if (pid) {
+    if (pid && ownsListener(pid, child.pid)) {
       try {
-        const binding = await capture({
-          port: input.port,
-          pid,
-          instanceId,
-          sourceRoot: input.sourceRoot,
-          buildGeneration: input.buildGeneration,
-        });
+        const binding = await capture(
+          {
+            port: input.port,
+            pid,
+            instanceId,
+            sourceRoot: input.sourceRoot,
+            buildGeneration: input.buildGeneration,
+          },
+          { servingRoot: () => input.sourceRoot },
+        );
         return {
           ...binding,
           mode: 'managed',

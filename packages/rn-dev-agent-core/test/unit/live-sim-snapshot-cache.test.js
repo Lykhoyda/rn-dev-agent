@@ -16,6 +16,7 @@ import {
   getCachedSnapshot,
   markSnapshotDirty,
   isSnapshotCacheValid,
+  setSnapshotAuthorityProvider,
 } from '../../dist/agent-device-wrapper.js';
 import { toolInvalidatesSnapshotCache } from '../../dist/observability/live-device.js';
 
@@ -61,6 +62,22 @@ test('snapshot cache: dirty flag is global but validity is keyed per platform re
   assert.equal(isSnapshotCacheValid('android'), true);
   markSnapshotDirty();
   assert.equal(isSnapshotCacheValid('android'), false);
+});
+
+test('snapshot cache rejects a stale session authority generation', () => {
+  let authorityVersion = 1;
+  setSnapshotAuthorityProvider(() => ({
+    sessionId: 'session-a',
+    deviceId: 'device-a',
+    installGeneration: 'install-a',
+    authorityVersion,
+  }));
+  cacheSnapshot('ios', NODES);
+  authorityVersion += 1;
+
+  assert.equal(getCachedSnapshot('ios'), undefined);
+  assert.equal(isSnapshotCacheValid('ios'), false);
+  setSnapshotAuthorityProvider(null);
 });
 
 // toolInvalidatesSnapshotCache: the FAIL-SAFE rule at the MCP tool boundary.

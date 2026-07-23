@@ -205,7 +205,6 @@ function claimConflict(claim: ClaimRow): SessionAuthorityError {
 
 function isOperationalState(state: string): boolean {
   return new Set([
-    'creating',
     'active',
     'source_bound',
     'metro_bound',
@@ -214,6 +213,10 @@ function isOperationalState(state: string): boolean {
     'runtime_bound',
     'ready',
   ]).has(state);
+}
+
+function isFenceableState(state: string): boolean {
+  return isOperationalState(state) || state === 'handoff';
 }
 
 export class SessionRegistry {
@@ -438,6 +441,9 @@ export class SessionRegistry {
     this.#transaction(() => {
       this.#requireSession(session);
       this.#database
+        .prepare('DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?')
+        .run(session.sessionId, session.claimEpoch);
+      this.#database
         .prepare(
           `UPDATE sessions
            SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
@@ -448,6 +454,86 @@ export class SessionRegistry {
           worker.instanceId,
           worker.pid,
           worker.token,
+          now,
+          session.sessionId,
+          session.claimEpoch,
+        );
+    });
+  }
+
+  replaceDeviceAuthority(
+    session: SessionRef,
+    input: {
+      device: Record<string, unknown>;
+      install?: Record<string, unknown>;
+      resource?: ResourceClaim;
+    },
+  ): void {
+    const resource =
+      input.resource ??
+      ({
+        type: 'device',
+        key: `${String(input.device.platform)}:${String(input.device.deviceId)}`,
+      } satisfies ResourceClaim);
+    const probes = this.#probeClaimOwners(session, [resource]);
+    const now = this.#now();
+    this.#transaction(() => {
+      const current = this.#requireSession(session);
+      const claim = this.#findClaim(resource.type, resource.key);
+      if (
+        claim &&
+        (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)
+      ) {
+        const probe = probes.get(claim.session_id);
+        if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== 'mismatch') {
+          throw claimConflict(claim);
+        }
+        throw new SessionAuthorityError(
+          'SESSION_AUTHORITY_REQUIRED',
+          'a proven-stale device owner requires explicit adopt_stale before rebinding',
+          { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
+        );
+      }
+      this.#database
+        .prepare(
+          `DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type IN ('device', 'target', 'runner')`,
+        )
+        .run(session.sessionId, session.claimEpoch);
+      this.#database
+        .prepare(
+          `INSERT INTO claims(
+            resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+          ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          resource.type,
+          resource.key,
+          session.sessionId,
+          session.claimEpoch,
+          now + this.#leaseMs,
+        );
+      const bindings = {
+        ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
+        device: input.device,
+        install: input.install ?? null,
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null,
+        pendingBuild: null,
+      };
+      this.#database
+        .prepare(
+          `UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(
+          input.install ? 'device_bound' : 'device_claimed',
+          JSON.stringify(bindings),
           now,
           session.sessionId,
           session.claimEpoch,
@@ -706,19 +792,58 @@ export class SessionRegistry {
       this.#requireSession(session);
       const active = this.#database
         .prepare(
-          `SELECT operation_id FROM operations
+          `SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`,
         )
-        .get(session.sessionId, session.claimEpoch);
-      if (active) {
+        .get(session.sessionId, session.claimEpoch) as { profile?: unknown } | undefined;
+      if (active && !String(active.profile).startsWith('transition:')) {
         throw new SessionAuthorityError(
           'SESSION_OPERATION_ACTIVE',
           'session cannot be released while an operation is active',
         );
       }
+      if (active) {
+        this.#database
+          .prepare('DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?')
+          .run(session.sessionId, session.claimEpoch);
+      }
       this.#database
         .prepare('DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?')
         .run(session.sessionId, session.claimEpoch);
+      this.#database
+        .prepare(
+          `UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(now, session.sessionId, session.claimEpoch);
+    });
+  }
+
+  discardBlockedSession(session: SessionRef): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = asSession(
+        this.#database
+          .prepare('SELECT state, claim_epoch FROM sessions WHERE session_id = ?')
+          .get(session.sessionId),
+      );
+      if (!row || row.state !== 'blocked' || row.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError(
+          'SESSION_OWNER_LOST',
+          'only the unchanged blocked session may be discarded',
+        );
+      }
+      const claim = this.#database
+        .prepare('SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1')
+        .get(session.sessionId);
+      if (claim) {
+        throw new SessionAuthorityError(
+          'SESSION_AUTHORITY_REQUIRED',
+          'blocked session unexpectedly owns resource claims',
+        );
+      }
       this.#database
         .prepare(
           `UPDATE sessions
@@ -742,11 +867,11 @@ export class SessionRegistry {
       this.#requireSession(session);
       const active = this.#database
         .prepare(
-          `SELECT operation_id FROM operations
+          `SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`,
         )
-        .get(session.sessionId, session.claimEpoch);
-      if (active) {
+        .get(session.sessionId, session.claimEpoch) as { profile?: unknown } | undefined;
+      if (active && !String(active.profile).startsWith('transition:')) {
         throw new SessionAuthorityError(
           'SESSION_OPERATION_ACTIVE',
           'session cannot enter handoff while an operation is active',
@@ -756,8 +881,8 @@ export class SessionRegistry {
         .prepare(
           `INSERT INTO handoffs(
             handoff_id, session_id, claim_epoch, target_instance,
-            token_hash, expires_ms, consumed_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+            token_hash, source_state, expires_ms, consumed_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
         )
         .run(
           handoffId,
@@ -765,11 +890,13 @@ export class SessionRegistry {
           session.claimEpoch,
           input.targetInstance,
           tokenHash,
+          this.#requireSession(session).state,
           now + (input.ttlMs ?? 15_000),
         );
       this.#database
         .prepare(
-          `UPDATE sessions SET state = 'handoff', updated_ms = ?
+          `UPDATE sessions
+           SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`,
         )
         .run(now, session.sessionId, session.claimEpoch);
@@ -777,11 +904,120 @@ export class SessionRegistry {
     return { handoffId, token };
   }
 
+  cancelHandoff(session: SessionRef, handoffId: string): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const handoff = this.#database
+        .prepare(
+          `SELECT session_id, claim_epoch, source_state, consumed_ms
+           FROM handoffs WHERE handoff_id = ?`,
+        )
+        .get(handoffId) as
+        | {
+            session_id: string;
+            claim_epoch: number;
+            source_state: string;
+            consumed_ms: number | null;
+          }
+        | undefined;
+      if (
+        !handoff ||
+        handoff.session_id !== session.sessionId ||
+        handoff.claim_epoch !== session.claimEpoch
+      ) {
+        throw new SessionAuthorityError('HANDOFF_NOT_FOUND', 'handoff does not belong to session');
+      }
+      if (handoff.consumed_ms !== null) {
+        throw new SessionAuthorityError('HANDOFF_ALREADY_CONSUMED', 'handoff is already terminal');
+      }
+      const row = asSession(
+        this.#database
+          .prepare('SELECT state, claim_epoch FROM sessions WHERE session_id = ?')
+          .get(session.sessionId),
+      );
+      if (!row || row.state !== 'handoff' || row.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'handoff source owner changed');
+      }
+      this.#database
+        .prepare(
+          `UPDATE sessions
+           SET state = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(handoff.source_state, now, session.sessionId, session.claimEpoch);
+      this.#database
+        .prepare('UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?')
+        .run(now, handoffId);
+    });
+  }
+
   getHandoffOwner(handoffId: string): string | null {
     const row = this.#database
       .prepare('SELECT session_id FROM handoffs WHERE handoff_id = ?')
       .get(handoffId) as { session_id?: unknown } | undefined;
     return typeof row?.session_id === 'string' ? row.session_id : null;
+  }
+
+  validateHandoffInto(
+    target: SessionRef,
+    input: { handoffId: string; token: string; targetInstance: string },
+  ): void {
+    const targetRow = this.#requireSession(target);
+    if (targetRow.worker_instance !== input.targetInstance) {
+      throw new SessionAuthorityError(
+        'HANDOFF_TARGET_MISMATCH',
+        'handoff target is not the current fenced worker instance',
+      );
+    }
+    const handoff = this.#database
+      .prepare(
+        `SELECT session_id, claim_epoch, target_instance, token_hash, expires_ms, consumed_ms
+         FROM handoffs WHERE handoff_id = ?`,
+      )
+      .get(input.handoffId) as
+      | {
+          session_id: string;
+          claim_epoch: number;
+          target_instance: string;
+          token_hash: string;
+          expires_ms: number;
+          consumed_ms: number | null;
+        }
+      | undefined;
+    if (!handoff) {
+      throw new SessionAuthorityError('HANDOFF_NOT_FOUND', 'handoff does not exist');
+    }
+    if (handoff.consumed_ms !== null) {
+      throw new SessionAuthorityError('HANDOFF_ALREADY_CONSUMED', 'handoff is already terminal');
+    }
+    if (handoff.expires_ms < this.#now()) {
+      throw new SessionAuthorityError('HANDOFF_EXPIRED', 'handoff capability expired');
+    }
+    if (handoff.target_instance !== input.targetInstance) {
+      throw new SessionAuthorityError(
+        'HANDOFF_TARGET_MISMATCH',
+        'handoff target instance does not match',
+      );
+    }
+    const expected = Buffer.from(handoff.token_hash, 'hex');
+    const actual = createHash('sha256').update(input.token).digest();
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      throw new SessionAuthorityError('HANDOFF_TOKEN_INVALID', 'handoff capability is invalid');
+    }
+    const prior = this.getSessionStatus(handoff.session_id);
+    if (
+      !prior ||
+      prior.state !== 'handoff' ||
+      prior.claimEpoch !== handoff.claim_epoch ||
+      prior.sourceKey !== targetRow.source_key ||
+      prior.worktreeKey !== targetRow.worktree_key ||
+      prior.appRootKey !== targetRow.app_root_key
+    ) {
+      throw new SessionAuthorityError(
+        'HANDOFF_NOT_AUTHORIZED',
+        'handoff no longer matches the exact source owner',
+      );
+    }
   }
 
   acceptHandoff(input: {
@@ -834,7 +1070,7 @@ export class SessionRegistry {
         this.#database
           .prepare(
             `SELECT session_id, state, claim_epoch, authority_version,
-                    supervisor_pid, supervisor_birth, lease_until_ms
+                    supervisor_pid, supervisor_birth, lease_until_ms, bindings_json
              FROM sessions WHERE session_id = ?`,
           )
           .get(handoff.session_id),
@@ -850,6 +1086,13 @@ export class SessionRegistry {
       const leaseUntil = now + this.#leaseMs;
       this.#database
         .prepare(
+          `DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`,
+        )
+        .run(session.session_id, session.claim_epoch);
+      this.#database
+        .prepare(
           `UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`,
         )
@@ -857,9 +1100,9 @@ export class SessionRegistry {
       this.#database
         .prepare(
           `UPDATE sessions
-           SET state = 'active', claim_epoch = ?, authority_version = authority_version + 1,
+           SET state = 'source_bound', claim_epoch = ?, authority_version = authority_version + 1,
                supervisor_pid = ?, supervisor_birth = ?, heartbeat_ms = ?,
-               lease_until_ms = ?, updated_ms = ?
+               lease_until_ms = ?, bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`,
         )
         .run(
@@ -868,6 +1111,14 @@ export class SessionRegistry {
           input.supervisor.token,
           now,
           leaseUntil,
+          JSON.stringify({
+            ...JSON.parse(session.bindings_json),
+            bundle: null,
+            runner: null,
+            observe: null,
+            proof: null,
+            pendingBuild: null,
+          }),
           now,
           session.session_id,
           session.claim_epoch,
@@ -957,7 +1208,9 @@ export class SessionRegistry {
       const active = this.#database
         .prepare(
           `SELECT operation_id FROM operations
-           WHERE session_id IN (?, ?) LIMIT 1`,
+           WHERE session_id = ?
+              OR (session_id = ? AND profile NOT LIKE 'transition:%')
+           LIMIT 1`,
         )
         .get(prior.session_id, target.sessionId);
       if (active) {
@@ -973,6 +1226,13 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ?`,
         )
         .run(target.sessionId, target.claimEpoch);
+      this.#database
+        .prepare(
+          `DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`,
+        )
+        .run(prior.session_id, prior.claim_epoch);
       this.#database
         .prepare(
           `UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
@@ -994,7 +1254,14 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ?`,
         )
         .run(
-          JSON.stringify({ ...bindings, bundle: null, runner: null }),
+          JSON.stringify({
+            ...bindings,
+            bundle: null,
+            runner: null,
+            observe: null,
+            proof: null,
+            pendingBuild: null,
+          }),
           now,
           target.sessionId,
           target.claimEpoch,
@@ -1021,6 +1288,18 @@ export class SessionRegistry {
     const now = this.#now();
     return this.#transaction(() => {
       const owner = this.#requireSession(session);
+      const active = this.#database
+        .prepare(
+          `SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`,
+        )
+        .get(session.sessionId, session.claimEpoch);
+      if (active) {
+        throw new SessionAuthorityError(
+          'OPERATION_ALREADY_IN_PROGRESS',
+          'session already has an active fenced operation',
+        );
+      }
       this.#database
         .prepare(
           `INSERT INTO operations(
@@ -1044,6 +1323,52 @@ export class SessionRegistry {
         claimEpoch: session.claimEpoch,
         authorityVersion: owner.authority_version,
       };
+    });
+  }
+
+  refreshOperation(operation: OperationRef): OperationRef {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const session = asSession(
+        this.#database
+          .prepare(
+            `SELECT state, claim_epoch, authority_version
+             FROM sessions WHERE session_id = ?`,
+          )
+          .get(operation.sessionId),
+      );
+      const active = this.#database
+        .prepare(
+          `SELECT authority_version FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?`,
+        )
+        .get(operation.operationId, operation.sessionId, operation.claimEpoch) as
+        | { authority_version?: unknown }
+        | undefined;
+      if (
+        !session ||
+        !isFenceableState(session.state) ||
+        session.claim_epoch !== operation.claimEpoch ||
+        active?.authority_version !== operation.authorityVersion ||
+        session.authority_version < operation.authorityVersion
+      ) {
+        throw new SessionAuthorityError(
+          'AUTHORITY_LOST_DURING_OPERATION',
+          'transition fence no longer matches current authority',
+        );
+      }
+      this.#database
+        .prepare(
+          `UPDATE operations SET authority_version = ?, lease_until_ms = ?
+           WHERE operation_id = ? AND authority_version = ?`,
+        )
+        .run(
+          session.authority_version,
+          now + this.#leaseMs,
+          operation.operationId,
+          operation.authorityVersion,
+        );
+      return { ...operation, authorityVersion: session.authority_version };
     });
   }
 
@@ -1071,7 +1396,7 @@ export class SessionRegistry {
         );
       if (
         !session ||
-        !isOperationalState(session.state) ||
+        !isFenceableState(session.state) ||
         session.claim_epoch !== operation.claimEpoch ||
         session.authority_version !== operation.authorityVersion ||
         !active
@@ -1127,7 +1452,7 @@ export class SessionRegistry {
       );
     if (
       !session ||
-      !isOperationalState(session.state) ||
+      !isFenceableState(session.state) ||
       session.claim_epoch !== operation.claimEpoch ||
       session.authority_version !== operation.authorityVersion ||
       !active
@@ -1215,11 +1540,11 @@ export class SessionRegistry {
       .prepare('SELECT value FROM authority_meta WHERE key = ?')
       .get('schema_version')?.value;
     const version = Number(schema);
-    if (!Number.isSafeInteger(version) || version < 1 || version > 2) {
+    if (!Number.isSafeInteger(version) || version < 1 || version > 3) {
       throw new SessionAuthorityError(
         'AUTHORITY_STORE_UNAVAILABLE',
-        version > 2
-          ? `authority registry schema ${version} is newer than supported schema 2`
+        version > 3
+          ? `authority registry schema ${version} is newer than supported schema 3`
           : 'authority registry schema version is invalid',
       );
     }
@@ -1285,8 +1610,18 @@ export class SessionRegistry {
         expires_ms INTEGER NOT NULL,
         consumed_ms INTEGER
       );
-      UPDATE authority_meta SET value = '2' WHERE key = 'schema_version';
       `);
+      if (version < 3) {
+        const columns = this.#database.prepare('PRAGMA table_info(handoffs)').all();
+        if (!columns.some((column) => column.name === 'source_state')) {
+          this.#database.exec(
+            "ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';",
+          );
+        }
+      }
+      this.#database.exec(
+        "UPDATE authority_meta SET value = '3' WHERE key = 'schema_version';",
+      );
       this.#database.exec('COMMIT');
     } catch (error) {
       this.#database.exec('ROLLBACK');

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildRunnerAuthorityEnv } from '../../../dist/runners/rn-fast-runner-client.js';
-import { buildInstrumentAuthorityArgs } from '../../../dist/runners/rn-android-runner-client.js';
+import {
+  androidHealthMatchesAuthority,
+  buildInstrumentAuthorityArgs,
+} from '../../../dist/runners/rn-android-runner-client.js';
 
 test('iOS forwards one runner capability and fenced identity through xcodebuild', () => {
   const env = buildRunnerAuthorityEnv({
@@ -44,4 +47,28 @@ test('Android instrumentation receives the complete runner authority tuple', () 
     RN_RUNNER_DEVICE_ID: 'emulator-5554',
     RN_RUNNER_APP_ID: 'dev.example',
   });
+});
+
+test('fresh Android admission rejects a health tuple from another runner instance', () => {
+  assert.equal(
+    androidHealthMatchesAuthority(
+      {
+        reachable: true,
+        ok: true,
+        instanceId: 'legacy-runner',
+        sessionId: 'session-1',
+        claimEpoch: 9,
+        deviceId: 'emulator-5554',
+        appId: 'dev.example',
+      },
+      {
+        instanceId: 'runner-1',
+        sessionId: 'session-1',
+        claimEpoch: 9,
+        deviceId: 'emulator-5554',
+        appId: 'dev.example',
+      },
+    ),
+    false,
+  );
 });

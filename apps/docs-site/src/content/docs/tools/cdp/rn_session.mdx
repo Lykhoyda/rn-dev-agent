@@ -9,7 +9,7 @@ Inspect and transition the fenced rn-dev-agent authority session. Status is pass
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | accept_handoff | adopt_stale | preview_integration | apply_integration | release` | Yes |  |  |  |
+| `action` | `enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | preview_integration | apply_integration | restore_integration | release` | Yes |  |  |  |
 | `platform` | `enum: ios | android` | No |  |  |  |
 | `deviceId` | `string` | No |  |  |  |
 | `appId` | `string` | No |  |  |  |
@@ -29,5 +29,5 @@ Inspect and transition the fenced rn-dev-agent authority session. Status is pass
 ## Usage
 
 ```
-rn_session(action: <enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | accept_handoff | adopt_stale | preview_integration | apply_integration | release>)
+rn_session(action: <enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | preview_integration | apply_integration | restore_integration | release>)
 ```

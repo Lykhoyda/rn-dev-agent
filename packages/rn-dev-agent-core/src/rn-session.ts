@@ -19,25 +19,7 @@ import { openSessionRegistry, SessionAuthorityError } from './session/registry.j
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
-
-function redact(status: ReturnType<typeof resolveStatus>) {
-  return {
-    sessionId: status.sessionId.slice(0, 12),
-    claimEpoch: status.claimEpoch,
-    state: status.state,
-    authorityVersion: status.authorityVersion,
-    sourceKind: status.source.kind,
-    metroPort: status.bindings.metroPort,
-    observePort: status.bindings.observePort,
-    platform: (status.bindings.device as Record<string, unknown> | undefined)?.platform,
-    deviceBound: Boolean(status.bindings.device),
-    installBound: Boolean(status.bindings.install),
-    metroBound: Boolean(status.bindings.metro),
-    bundleBound: Boolean(status.bindings.bundle),
-    runnerBound: Boolean(status.bindings.runner),
-    migration: inspectAuthorityMigration(status),
-  };
-}
+import { projectPublicAuthorityStatus } from './session/public-status.js';
 
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -208,7 +190,9 @@ async function main(): Promise<void> {
   const status = resolveStatus();
   try {
     if (command === 'status') {
-      process.stdout.write(`${JSON.stringify(redact(status), null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify(projectPublicAuthorityStatus({ available: true, ...status }), null, 2)}\n`,
+      );
       return;
     }
     if (command === 'feedback-json') {
@@ -383,6 +367,7 @@ async function main(): Promise<void> {
           appId: device.appId,
           metroPort: Number(status.bindings.metroPort),
           artifactDigest: installed.artifactDigest,
+          installGeneration: installed.installGeneration,
           buildGeneration: Number(pending.buildGeneration),
           ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
         },

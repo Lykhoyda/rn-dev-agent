@@ -363,26 +363,160 @@ test('runtime target replacement refuses a target claimed by another live sessio
   assert.doesNotThrow(() => registry.verifyOperation(operation));
 });
 
-test('registry migrates schema 1 to 2 but refuses a newer schema without downgrading it', () => {
+test('registry refuses a schema newer than version 3 without downgrading it', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-schema-'));
   roots.push(root);
   const path = join(root, 'registry.sqlite3');
   const future = new DatabaseSync(path);
   future.exec(`
     CREATE TABLE authority_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    INSERT INTO authority_meta(key, value) VALUES ('schema_version', '3');
+    INSERT INTO authority_meta(key, value) VALUES ('schema_version', '4');
   `);
   future.close();
 
   assert.throws(
     () => openSessionRegistry(path, { ownerStatus: () => 'unknown' }),
-    /AUTHORITY_STORE_UNAVAILABLE.*schema 3 is newer than supported schema 2/,
+    /AUTHORITY_STORE_UNAVAILABLE.*schema 4 is newer than supported schema 3/,
   );
 
   const unchanged = new DatabaseSync(path);
   assert.equal(
     unchanged.prepare('SELECT value FROM authority_meta WHERE key = ?').get('schema_version').value,
-    '3',
+    '4',
   );
   unchanged.close();
+});
+
+test('worker replacement removes obsolete operation rows before advancing authority', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.beginOperation(owner, {
+    operationId: 'stale-worker-operation',
+    tool: 'device_press',
+    profile: 'CSIMDR',
+  });
+
+  registry.bindWorker(owner, {
+    instanceId: 'replacement-worker',
+    pid: 303,
+    token: 'replacement-birth',
+  });
+
+  assert.doesNotThrow(() => registry.releaseSession(owner));
+});
+
+test('device rebinding atomically invalidates every prior device-derived authority', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.claimResources(owner, [
+    { type: 'source', key: 'worktree' },
+    { type: 'device', key: 'ios:device-a' },
+    { type: 'target', key: '8193:target-a' },
+    { type: 'runner', key: 'ios:device-a:9100' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'device-a', appId: 'dev.example' },
+      install: { artifactDigest: 'artifact-a', installGeneration: 'generation-a' },
+      bundle: { targetId: 'target-a' },
+      runner: { instanceId: 'runner-a' },
+      observe: { instanceId: 'observe-a' },
+      proof: { runId: 'proof-a' },
+    },
+  });
+
+  registry.replaceDeviceAuthority(owner, {
+    device: { platform: 'android', deviceId: 'device-b', appId: 'dev.example' },
+    install: {
+      platform: 'android',
+      deviceId: 'device-b',
+      appId: 'dev.example',
+      artifactDigest: 'artifact-b',
+      installGeneration: 'generation-b',
+      buildGeneration: 2,
+    },
+  });
+
+  const status = registry.getSessionStatus(owner.sessionId);
+  assert.equal(registry.getClaim('device', 'ios:device-a'), null);
+  assert.equal(registry.getClaim('target', '8193:target-a'), null);
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100'), null);
+  assert.equal(registry.getClaim('device', 'android:device-b')?.sessionId, owner.sessionId);
+  assert.equal(status?.bindings.bundle, null);
+  assert.equal(status?.bindings.runner, null);
+  assert.equal(status?.bindings.observe, null);
+  assert.equal(status?.bindings.proof, null);
+});
+
+test('handoff transfers only safe claims and requires fresh live-resource bindings', () => {
+  const { registry, create } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.bindWorker(target, {
+    instanceId: 'worker-next',
+    pid: 202,
+    token: 'birth-worker-next',
+  });
+  registry.claimResources(owner, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'metro-port', key: '8341' },
+    { type: 'device', key: 'ios:device-1' },
+    { type: 'target', key: '8341:target-1' },
+    { type: 'runner', key: 'ios:device-1:9100' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      metro: { port: 8341 },
+      device: { platform: 'ios', deviceId: 'device-1' },
+      install: { artifactDigest: 'artifact-1' },
+      bundle: { targetId: 'target-1' },
+      runner: { instanceId: 'runner-1' },
+      observe: { instanceId: 'observe-1' },
+      proof: { runId: 'proof-1' },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+
+  registry.acceptHandoffInto(target, { ...handoff, targetInstance: 'worker-next' });
+
+  const status = registry.getSessionStatus(target.sessionId);
+  assert.equal(registry.getClaim('source', 'shared-worktree')?.sessionId, target.sessionId);
+  assert.equal(registry.getClaim('target', '8341:target-1'), null);
+  assert.equal(registry.getClaim('runner', 'ios:device-1:9100'), null);
+  assert.equal(status?.bindings.bundle, null);
+  assert.equal(status?.bindings.runner, null);
+  assert.equal(status?.bindings.observe, null);
+  assert.equal(status?.bindings.proof, null);
+});
+
+test('handoff cancellation and explicit expiry recovery restore the unchanged owner', () => {
+  const { registry, create, advance } = fixture();
+  const owner = create('a');
+  registry.claimResources(owner, [{ type: 'device', key: 'ios:device-1' }]);
+  const cancelled = registry.prepareHandoff(owner, {
+    targetInstance: 'worker-next',
+    ttlMs: 15_000,
+  });
+  registry.cancelHandoff(owner, cancelled.handoffId);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
+  assert.throws(
+    () =>
+      registry.acceptHandoff({
+        ...cancelled,
+        targetInstance: 'worker-next',
+        supervisor: { pid: 303, token: 'birth-next' },
+      }),
+    /HANDOFF_ALREADY_CONSUMED/,
+  );
+
+  const expired = registry.prepareHandoff(owner, {
+    targetInstance: 'worker-next',
+    ttlMs: 15_000,
+  });
+  advance(15_001);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'handoff');
+  registry.cancelHandoff(owner, expired.handoffId);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
 });

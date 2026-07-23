@@ -15,7 +15,11 @@ export async function pinExactDevClient(input, dependencies) {
         metroPort: input.metroPort,
         platform: input.platform,
         appId: input.appId,
+        deviceId: input.deviceId,
     });
+    if (connected.deviceId !== input.deviceId) {
+        throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device');
+    }
     const authority = await dependencies.readMarker();
     if (!authority?.marker || authority.status !== 'signed') {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker');

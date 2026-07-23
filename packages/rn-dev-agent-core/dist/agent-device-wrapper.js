@@ -100,6 +100,21 @@ export function hasActiveSession() {
     return activeSession !== null;
 }
 const snapshotCache = new Map();
+let snapshotAuthorityProvider = null;
+export function setSnapshotAuthorityProvider(provider) {
+    snapshotAuthorityProvider = provider;
+    snapshotCache.clear();
+    snapshotCacheDirty = true;
+}
+function currentSnapshotAuthority(platform) {
+    const authority = snapshotAuthorityProvider?.();
+    const session = getActiveSession();
+    return JSON.stringify(authority ?? {
+        platform,
+        deviceId: session?.deviceId ?? null,
+        appId: session?.appId ?? null,
+    });
+}
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot
 // still faithfully describes the screen. A tap/navigation changes the screen, so
@@ -111,6 +126,7 @@ let snapshotCacheDirty = true;
 export function cacheSnapshot(platform, nodes) {
     snapshotCache.set(platform, {
         platform,
+        authorityScope: currentSnapshotAuthority(platform),
         nodes,
         capturedAt: new Date().toISOString(),
         capturedAtMs: Date.now(),
@@ -119,7 +135,8 @@ export function cacheSnapshot(platform, nodes) {
     snapshotCacheDirty = false;
 }
 export function getCachedSnapshot(platform) {
-    return snapshotCache.get(platform);
+    const snapshot = snapshotCache.get(platform);
+    return snapshot?.authorityScope === currentSnapshotAuthority(platform) ? snapshot : undefined;
 }
 // Called at the runNative dispatch choke point on any screen-mutating verb
 // (tap/press/fill/type/swipe/scroll/back/longpress/pinch/keyboard/drag).
@@ -133,6 +150,8 @@ export function isSnapshotCacheValid(platform, maxAgeMs = MAX_REF_MAP_AGE_MS) {
         return false;
     const entry = snapshotCache.get(platform);
     if (!entry)
+        return false;
+    if (entry.authorityScope !== currentSnapshotAuthority(platform))
         return false;
     return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }

@@ -157,6 +157,7 @@ export function hasActiveSession(): boolean {
 // Updated by fetchSnapshotNodes() in device-interact.ts whenever a snapshot succeeds.
 interface CachedSnapshot {
   platform: string;
+  authorityScope: string;
   // Lossless: the full runner nodes are stored (rect/enabled included) so a
   // cache-served device_find ranks and dedups identically to a fresh snapshot.
   nodes: {
@@ -173,6 +174,27 @@ interface CachedSnapshot {
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
+let snapshotAuthorityProvider: (() => Record<string, unknown> | null) | null = null;
+
+export function setSnapshotAuthorityProvider(
+  provider: (() => Record<string, unknown> | null) | null,
+): void {
+  snapshotAuthorityProvider = provider;
+  snapshotCache.clear();
+  snapshotCacheDirty = true;
+}
+
+function currentSnapshotAuthority(platform: string): string {
+  const authority = snapshotAuthorityProvider?.();
+  const session = getActiveSession();
+  return JSON.stringify(
+    authority ?? {
+      platform,
+      deviceId: session?.deviceId ?? null,
+      appId: session?.appId ?? null,
+    },
+  );
+}
 
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot
@@ -186,6 +208,7 @@ let snapshotCacheDirty = true;
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
   snapshotCache.set(platform, {
     platform,
+    authorityScope: currentSnapshotAuthority(platform),
     nodes,
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),
@@ -195,7 +218,8 @@ export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']):
 }
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {
-  return snapshotCache.get(platform);
+  const snapshot = snapshotCache.get(platform);
+  return snapshot?.authorityScope === currentSnapshotAuthority(platform) ? snapshot : undefined;
 }
 
 // Called at the runNative dispatch choke point on any screen-mutating verb
@@ -213,6 +237,7 @@ export function isSnapshotCacheValid(
   if (snapshotCacheDirty) return false;
   const entry = snapshotCache.get(platform);
   if (!entry) return false;
+  if (entry.authorityScope !== currentSnapshotAuthority(platform)) return false;
   return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }
 

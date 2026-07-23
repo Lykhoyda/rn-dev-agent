@@ -37,12 +37,7 @@ export function readProcessBirth(
   const run = dependencies.run ?? defaultRun;
 
   try {
-    if (platform === 'darwin') {
-      const started = run('ps', ['-p', String(pid), '-o', 'lstart=']).trim();
-      const boot = run('sysctl', ['-n', 'kern.boottime']).trim();
-      if (!started || !boot) return null;
-      return { pid, source: 'darwin-ps', token: token([platform, boot, started]) };
-    }
+    if (platform === 'darwin') return null;
 
     if (platform === 'linux') {
       const boot = read('/proc/sys/kernel/random/boot_id').trim();

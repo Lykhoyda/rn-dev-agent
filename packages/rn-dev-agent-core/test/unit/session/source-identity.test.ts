@@ -59,6 +59,7 @@ test('strict proof computes dirty identity only for Git sources', () => {
   };
   const receipt = strictProofSourceIdentity(normal, {
     git: (_root, args) => {
+      if (args[0] === 'rev-parse') return 'abc123';
       if (args[0] === 'diff') return 'diff-content';
       if (args[0] === 'ls-files') return 'untracked.txt\0';
       throw new Error('unexpected git command');
@@ -67,6 +68,40 @@ test('strict proof computes dirty identity only for Git sources', () => {
 
   assert.equal(receipt.kind, 'git-strict-proof');
   assert.match(receipt.dirtyDigest, /^[a-f0-9]{64}$/);
+});
+
+test('strict proof uses one current repository HEAD and content-root-relative untracked paths', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-nested-'));
+  roots.push(root);
+  const appRoot = join(root, 'apps', 'mobile');
+  mkdirSync(appRoot, { recursive: true });
+  writeFileSync(join(root, 'root-untracked.txt'), 'root candidate');
+  const calls: string[] = [];
+
+  const receipt = strictProofSourceIdentity(
+    {
+      kind: 'git',
+      contentRoot: root,
+      appRoot,
+      sourceKey: 'source',
+      worktreeKey: 'worktree',
+      appRootKey: 'app',
+      head: 'session-start-head',
+    },
+    {
+      git: (commandRoot, args) => {
+        calls.push(`${commandRoot}:${args.join(' ')}`);
+        if (args[0] === 'rev-parse') return 'current-head';
+        if (args[0] === 'diff') return 'diff-content';
+        if (args[0] === 'ls-files') return 'root-untracked.txt\0';
+        throw new Error('unexpected git command');
+      },
+    },
+  );
+
+  assert.equal(receipt.head, 'current-head');
+  assert.ok(calls.every((call) => call.startsWith(`${root}:`)));
+  assert.ok(calls.some((call) => call.includes('diff --binary --no-ext-diff current-head --')));
 });
 
 test('non-Git authority requires declared manifests and remains ineligible for strict proof', () => {

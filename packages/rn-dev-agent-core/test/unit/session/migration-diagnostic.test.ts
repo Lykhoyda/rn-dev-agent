@@ -24,7 +24,7 @@ test('migration diagnostic reports strict-default support without overstating bu
   });
 
   assert.equal(diagnostic.rollout, 'strict-default');
-  assert.equal(diagnostic.registrySchema, 2);
+  assert.equal(diagnostic.registrySchema, 3);
   assert.equal(diagnostic.bundleHandshake.scope, 'coarse-initial-bundle');
   assert.equal(diagnostic.bundleHandshake.sourceFidelity, 'not-proven');
   assert.equal(diagnostic.packageIntegration.installed, true);

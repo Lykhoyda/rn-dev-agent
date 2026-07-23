@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   captureInstalledArtifact,
+  captureInstallGeneration,
   verifyInstalledArtifact,
 } from '../../../dist/session/install-authority.js';
 
@@ -20,12 +21,18 @@ test('iOS install identity is captured from the exact UUID and executable bytes'
         throw new Error('not used');
       },
       read: (path) => Buffer.from(path.endsWith('Info.plist') ? 'plist' : 'executable'),
+      stat: (path) => ({
+        ino: path.endsWith('Info.plist') ? 1 : 2,
+        size: path.length,
+        mtimeMs: 100,
+      }),
     },
   );
 
   assert.equal(calls[0][1][2], 'IOS-UUID');
   assert.equal(receipt.deviceId, 'IOS-UUID');
   assert.match(receipt.artifactDigest, /^[a-f0-9]{64}$/);
+  assert.match(receipt.installGeneration, /^[a-f0-9]{64}$/);
 });
 
 test('Android install identity hashes the exact serial APK without first-device fallback', () => {
@@ -50,6 +57,31 @@ test('Android install identity hashes the exact serial APK without first-device 
   assert.deepEqual(calls[0][1].slice(0, 2), ['-s', 'emulator-5558']);
   assert.deepEqual(calls[1][1].slice(0, 2), ['-s', 'emulator-5558']);
   assert.match(receipt.artifactDigest, /^[a-f0-9]{64}$/);
+  assert.match(receipt.installGeneration, /^[a-f0-9]{64}$/);
+});
+
+test('install generation probes avoid rereading installed artifact bytes', () => {
+  let bufferReads = 0;
+  const generation = captureInstallGeneration(
+    {
+      platform: 'android',
+      deviceId: 'emulator-5554',
+      appId: 'dev.example',
+    },
+    {
+      runText: (_command, args) => {
+        if (args.includes('path')) return 'package:/data/app/base.apk\n';
+        return '1712345678 42000 /data/app/base.apk\n';
+      },
+      runBuffer: () => {
+        bufferReads += 1;
+        return Buffer.from('apk');
+      },
+    },
+  );
+
+  assert.match(generation, /^[a-f0-9]{64}$/);
+  assert.equal(bufferReads, 0);
 });
 
 test('same bundle ID with a foreign installed artifact is rejected', () => {
@@ -61,12 +93,14 @@ test('same bundle ID with a foreign installed artifact is rejected', () => {
           deviceId: 'IOS-UUID',
           appId: 'com.example.app',
           artifactDigest: 'expected',
+          installGeneration: 'generation-a',
         },
         {
           platform: 'ios',
           deviceId: 'IOS-UUID',
           appId: 'com.example.app',
           artifactDigest: 'foreign',
+          installGeneration: 'generation-a',
         },
       ),
     /APP_INSTALL_IDENTITY_CHANGED/,

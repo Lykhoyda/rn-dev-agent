@@ -10,6 +10,7 @@ export interface BuildReceiptPayload {
   appId: string;
   metroPort: number;
   artifactDigest: string;
+  installGeneration: string;
   buildGeneration: number;
   devClientUrl?: string;
 }

@@ -45,6 +45,11 @@ function fixture() {
     },
     verifyOperation: () => calls.push('cas'),
     endOperation: () => calls.push('end'),
+    cancelOperation: () => calls.push('cancel'),
+    refreshOperation: (operation) => {
+      calls.push('refresh-operation');
+      return { ...operation, authorityVersion: status.authorityVersion };
+    },
     replaceBindingsDuringOperation: (operation) => {
       calls.push('replace-binding');
       return { ...operation, authorityVersion: operation.authorityVersion + 1 };
@@ -241,4 +246,94 @@ test('diagnostic tools stay passive and explicitly non-authoritative', async () 
   const envelope = JSON.parse(result.content[0].text);
   assert.equal(envelope.ok, true);
   assert.equal(envelope.meta.authoritative, false);
+});
+
+test('transition handlers remain fenced across their expected authority version advance', async () => {
+  const { runtime, status, calls } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return {
+        axis,
+        identity: axis === 'C' ? `controller-v${status.authorityVersion}` : `${axis}-identity`,
+      };
+    },
+  });
+
+  const result = await gate.wrap('rn_session', async () => {
+    status.authorityVersion += 1;
+    return okResult({ bound: true });
+  })({ action: 'bind_metro' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityTransition, true);
+  assert.equal(envelope.meta.authorityReceipt.authorityVersion, 10);
+  assert.equal(calls[0], 'begin:rn_session');
+  assert.equal(calls.at(-1), 'end');
+});
+
+test('warning results never receive an authoritative receipt', async () => {
+  const { runtime } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('collect_logs', async () =>
+    okResult(
+      { sources: ['native'] },
+      {
+        meta: { warning: 'JavaScript logs unavailable' },
+      },
+    ),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authoritative, false);
+  assert.equal(envelope.meta.authorityReceipt, undefined);
+});
+
+test('runner and Observe lifecycle transitions probe complete before and after axes', async () => {
+  const { runtime, calls, status } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  await gate.wrap('device_snapshot', async () => {
+    status.authorityVersion += 1;
+    return okResult({ opened: true });
+  })({
+    action: 'open',
+    platform: 'ios',
+    deviceId: 'device',
+    appId: 'dev.example',
+  });
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:M', 'preflight:D'],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('postflight:')),
+    [
+      'postflight:C',
+      'postflight:S',
+      'postflight:I',
+      'postflight:M',
+      'postflight:D',
+      'postflight:R',
+    ],
+  );
+
+  calls.length = 0;
+  status.bindings.observe = { instanceId: 'observe' };
+  await gate.wrap('observe', async () => {
+    status.authorityVersion += 1;
+    return okResult({ running: true });
+  })({ action: 'start' });
+  assert.ok(calls.includes('preflight:R'));
+  assert.ok(calls.includes('postflight:O'));
 });

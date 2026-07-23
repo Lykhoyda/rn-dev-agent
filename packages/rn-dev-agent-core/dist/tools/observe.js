@@ -62,7 +62,7 @@ export async function startObserveServer() {
         throw e;
     }
 }
-async function stopObserveServer() {
+export async function stopObserveServer() {
     if (starting) {
         try {
             await starting;

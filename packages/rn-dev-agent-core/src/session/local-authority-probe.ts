@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type { CDPClient } from '../cdp-client.js';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
-import { captureInstalledArtifact, verifyInstalledArtifact } from './install-authority.js';
+import { captureInstallGeneration } from './install-authority.js';
 import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
 import { inspectSessionOwner } from './process-owner.js';
@@ -163,11 +163,24 @@ export function createLocalAuthorityProbe(
         platform: 'ios' | 'android';
         deviceId: string;
         appId: string;
-        artifactDigest: string;
+        installGeneration: string;
       };
-      const observed = captureInstalledArtifact(expected);
-      verifyInstalledArtifact(expected, observed);
-      return { axis, identity: identity(observed) };
+      const observedGeneration = captureInstallGeneration(expected);
+      if (observedGeneration !== expected.installGeneration) {
+        throw new SessionAuthorityError(
+          'APP_INSTALL_IDENTITY_CHANGED',
+          'installed artifact generation no longer matches the session build',
+        );
+      }
+      return {
+        axis,
+        identity: identity({
+          platform: expected.platform,
+          deviceId: expected.deviceId,
+          appId: expected.appId,
+          installGeneration: observedGeneration,
+        }),
+      };
     }
 
     if (axis === 'M') {
@@ -193,7 +206,11 @@ export function createLocalAuthorityProbe(
           'claimed Metro endpoint is not running',
         );
       }
-      const servingRoot = cwdForPort(port);
+      const servingRoot =
+        cwdForPort(port) ??
+        (metro.mode === 'managed' && typeof metro.servingRoot === 'string'
+          ? metro.servingRoot
+          : null);
       const expectedRoot = String((status.source as Record<string, unknown>).contentRoot ?? '');
       if (!servingRoot || !pathMatchesRoot(servingRoot, expectedRoot)) {
         throw new SessionAuthorityError(

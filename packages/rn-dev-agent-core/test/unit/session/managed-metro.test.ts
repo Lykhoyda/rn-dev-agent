@@ -49,6 +49,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
         return child;
       },
       listenerPid: () => 4242,
+      listenerOwnedByLauncher: () => true,
       readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
       capture: async (input) => ({
         ...input,
@@ -65,4 +66,45 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     '/app/node_modules/.bin/expo',
     ['start', '--dev-client', '--port', '8341'],
   ]);
+});
+
+test('managed Metro proves a cross-platform listener belongs to the spawned launcher', async () => {
+  const child = {
+    pid: 101,
+    exitCode: null,
+    kill: () => true,
+    unref: () => {},
+  };
+  let ownershipChecked = false;
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => child,
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: (listenerPid, launcherPid) => {
+        ownershipChecked = true;
+        return listenerPid === 202 && launcherPid === 101;
+      },
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input, dependencies) => ({
+        ...input,
+        birth: 'listener-birth',
+        servingRoot: dependencies.servingRoot(input.port) ?? '',
+      }),
+    },
+  );
+
+  assert.equal(ownershipChecked, true);
+  assert.equal(binding.servingRoot, '/app');
 });

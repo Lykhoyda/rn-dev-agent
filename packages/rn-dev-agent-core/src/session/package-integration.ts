@@ -1,5 +1,15 @@
 import { createBuildLaunchPlan } from './build-adapter.js';
-import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
@@ -314,6 +324,30 @@ function atomicWrite(path: string, contents: string, mode: number): void {
   renameSync(temporary, path);
 }
 
+interface FileSnapshot {
+  path: string;
+  contents: Buffer | null;
+  mode: number;
+}
+
+function snapshotFiles(paths: readonly string[]): FileSnapshot[] {
+  return paths.map((path) => ({
+    path,
+    contents: existsSync(path) ? readFileSync(path) : null,
+    mode: existsSync(path) ? statSync(path).mode & 0o777 : 0o600,
+  }));
+}
+
+function restoreSnapshots(snapshots: readonly FileSnapshot[]): void {
+  for (const snapshot of [...snapshots].reverse()) {
+    if (snapshot.contents === null) {
+      rmSync(snapshot.path, { force: true });
+    } else {
+      atomicWrite(snapshot.path, snapshot.contents.toString('utf8'), snapshot.mode);
+    }
+  }
+}
+
 export function applyPackageIntegration(input: {
   appRoot: string;
   sessionCli: string;
@@ -360,16 +394,61 @@ export function applyPackageIntegration(input: {
   const metroSource = readFileSync(metroConfigPath, 'utf8');
   const nextMetroSource = previewMetroIntegration(metroSource);
   preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
-  mkdirSync(dirname(adapterPath), { recursive: true, mode: 0o700 });
-  atomicWrite(packagePath, `${JSON.stringify(preview.packageJson, null, 2)}\n`, 0o644);
-  atomicWrite(manifestPath, `${JSON.stringify(preview.manifest, null, 2)}\n`, 0o600);
-  atomicWrite(adapterPath, renderProjectAdapter(), 0o755);
-  atomicWrite(metroAdapterPath, renderMetroIntegrationAdapter(), 0o644);
-  atomicWrite(
+  const snapshots = snapshotFiles([
+    packagePath,
+    manifestPath,
+    adapterPath,
+    metroAdapterPath,
     authorityModulePath,
-    "globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n",
-    0o600,
-  );
-  atomicWrite(metroConfigPath, nextMetroSource, 0o644);
+    metroConfigPath,
+  ]);
+  mkdirSync(dirname(adapterPath), { recursive: true, mode: 0o700 });
+  try {
+    atomicWrite(manifestPath, `${JSON.stringify(preview.manifest, null, 2)}\n`, 0o600);
+    atomicWrite(adapterPath, renderProjectAdapter(), 0o755);
+    atomicWrite(metroAdapterPath, renderMetroIntegrationAdapter(), 0o644);
+    atomicWrite(
+      authorityModulePath,
+      "globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n",
+      0o600,
+    );
+    atomicWrite(metroConfigPath, nextMetroSource, 0o644);
+    atomicWrite(packagePath, `${JSON.stringify(preview.packageJson, null, 2)}\n`, 0o644);
+  } catch (error) {
+    restoreSnapshots(snapshots);
+    throw error;
+  }
   return preview;
+}
+
+export function restorePackageIntegrationFiles(input: { appRoot: string }): void {
+  const appRoot = resolve(input.appRoot);
+  const packagePath = join(appRoot, 'package.json');
+  const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as PackageIntegrationManifest;
+  const metroConfigPath = join(appRoot, manifest.metroConfig ?? 'metro.config.js');
+  const generated = [
+    manifestPath,
+    join(appRoot, ADAPTER),
+    join(appRoot, METRO_ADAPTER),
+    join(appRoot, AUTHORITY_MODULE),
+  ];
+  const snapshots = snapshotFiles([packagePath, metroConfigPath, ...generated]);
+  try {
+    const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as PackageJson;
+    atomicWrite(
+      packagePath,
+      `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}\n`,
+      0o644,
+    );
+    atomicWrite(
+      metroConfigPath,
+      restoreMetroIntegration(readFileSync(metroConfigPath, 'utf8')),
+      0o644,
+    );
+    for (const path of generated) rmSync(path, { force: true });
+  } catch (error) {
+    restoreSnapshots(snapshots);
+    throw error;
+  }
 }

@@ -146,8 +146,9 @@ export function strictProofSourceIdentity(
     throw new Error('STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree');
   }
   const git = dependencies.git ?? defaultGit;
-  const diff = git(identity.appRoot, ['diff', '--binary', '--no-ext-diff', 'HEAD', '--']);
-  const untracked = git(identity.appRoot, ['ls-files', '--others', '--exclude-standard', '-z'])
+  const head = git(identity.contentRoot, ['rev-parse', 'HEAD']);
+  const diff = git(identity.contentRoot, ['diff', '--binary', '--no-ext-diff', head, '--']);
+  const untracked = git(identity.contentRoot, ['ls-files', '--others', '--exclude-standard', '-z'])
     .split('\0')
     .filter(Boolean)
     .sort();
@@ -162,7 +163,7 @@ export function strictProofSourceIdentity(
     sourceKey: identity.sourceKey,
     worktreeKey: identity.worktreeKey,
     appRootKey: identity.appRootKey,
-    head: identity.head,
+    head,
     dirtyDigest: digest(dirtyParts),
   };
 }

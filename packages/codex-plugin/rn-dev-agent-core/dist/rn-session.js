@@ -7383,7 +7383,7 @@ function createBuildReceipt(payload, capability) {
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 function runText(command, args) {
   return execFileSync(command, [...args], {
@@ -7408,6 +7408,62 @@ function digest(parts) {
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+function generation(parts) {
+  return createHash("sha256").update(parts.join("\0")).digest("hex");
+}
+function androidApkPaths(target, text) {
+  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
+}
+function captureInstallGeneration(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const stat = dependencies.stat ?? statSync;
+    const metadata2 = [infoPath, join(appPath, executable)].map((path) => {
+      const value = stat(path);
+      return `${path}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+    });
+    return generation(metadata2);
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  const metadata = text("adb", [
+    "-s",
+    target.deviceId,
+    "shell",
+    "stat",
+    "-c",
+    "%n:%i:%s:%Y",
+    ...apkPaths
+  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
+  if (metadata.length !== apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
+  }
+  return generation(metadata);
 }
 function captureInstalledArtifact(target, dependencies = {}) {
   const text = dependencies.runText ?? runText;
@@ -7438,17 +7494,18 @@ function captureInstalledArtifact(target, dependencies = {}) {
     }
     return {
       ...target,
-      artifactDigest: digest([read(infoPath), read(join(appPath, executable))])
+      artifactDigest: digest([read(infoPath), read(join(appPath, executable))]),
+      installGeneration: captureInstallGeneration(target, dependencies)
     };
   }
-  const packageOutput = text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]);
-  const apkPaths = packageOutput.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
+  const apkPaths = androidApkPaths(target, text);
   if (!apkPaths.length) {
     throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
   }
   return {
     ...target,
-    artifactDigest: digest(apkPaths.map((path) => buffer("adb", ["-s", target.deviceId, "exec-out", "cat", path])))
+    artifactDigest: digest(apkPaths.map((path) => buffer("adb", ["-s", target.deviceId, "exec-out", "cat", path]))),
+    installGeneration: captureInstallGeneration(target, dependencies)
   };
 }
 
@@ -7579,13 +7636,8 @@ function readProcessBirth(pid, dependencies = {}) {
   const read = dependencies.read ?? ((path) => readFileSync2(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   try {
-    if (platform === "darwin") {
-      const started = run("ps", ["-p", String(pid), "-o", "lstart="]).trim();
-      const boot = run("sysctl", ["-n", "kern.boottime"]).trim();
-      if (!started || !boot)
-        return null;
-      return { pid, source: "darwin-ps", token: token([platform, boot, started]) };
-    }
+    if (platform === "darwin")
+      return null;
     if (platform === "linux") {
       const boot = read("/proc/sys/kernel/random/boot_id").trim();
       const stat = read(`/proc/${pid}/stat`).trim();
@@ -7656,10 +7708,39 @@ async function captureMetroBinding(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
-import { spawn } from "node:child_process";
+import { execFileSync as execFileSync4, spawn } from "node:child_process";
 import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync as readFileSync3 } from "node:fs";
 import { join as join2 } from "node:path";
+function parentPid(pid) {
+  try {
+    const output = process.platform === "win32" ? execFileSync4("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 }) : execFileSync4("ps", ["-p", String(pid), "-o", "ppid="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    });
+    const parsed = Number(output.trim());
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function listenerOwnedByLauncher(listenerPid, launcherPid) {
+  let current = listenerPid;
+  const visited = /* @__PURE__ */ new Set();
+  while (current && !visited.has(current)) {
+    if (current === launcherPid)
+      return true;
+    visited.add(current);
+    current = parentPid(current);
+  }
+  return false;
+}
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync;
   const readText = dependencies.readText ?? ((path) => readFileSync3(path, "utf8"));
@@ -7711,6 +7792,7 @@ async function startManagedMetro(input, dependencies = {}) {
   }
   child.unref();
   const listenerPid = dependencies.listenerPid ?? pidForPort;
+  const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
   const deadline = Date.now() + 2e4;
@@ -7719,7 +7801,7 @@ async function startManagedMetro(input, dependencies = {}) {
     if (child.exitCode !== null)
       break;
     const pid = listenerPid(input.port);
-    if (pid) {
+    if (pid && ownsListener(pid, child.pid)) {
       try {
         const binding = await capture({
           port: input.port,
@@ -7727,7 +7809,7 @@ async function startManagedMetro(input, dependencies = {}) {
           instanceId,
           sourceRoot: input.sourceRoot,
           buildGeneration: input.buildGeneration
-        });
+        }, { servingRoot: () => input.sourceRoot });
         return {
           ...binding,
           mode: "managed",
@@ -7797,7 +7879,7 @@ function inspectSessionOwner(owner, dependencies = {}) {
 import { createHash as createHash3, randomBytes, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync, lstatSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, statSync as statSync2 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 var require2 = createRequire(import.meta.url);
@@ -7822,7 +7904,7 @@ function assertPrivateDirectory(path) {
   if (link.isSymbolicLink() || !link.isDirectory()) {
     throw new Error("authority state root must be a real directory");
   }
-  const stat = statSync(path);
+  const stat = statSync2(path);
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
     throw new Error("authority state root is not owned by the current user");
   }
@@ -7835,7 +7917,7 @@ function secureDatabaseFiles(path) {
       if (link.isSymbolicLink() || !link.isFile()) {
         throw new Error("authority database path is not a regular file");
       }
-      const stat = statSync(candidate);
+      const stat = statSync2(candidate);
       if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
         throw new Error("authority database is not owned by the current user");
       }
@@ -7926,7 +8008,6 @@ function claimConflict(claim) {
 }
 function isOperationalState(state) {
   return (/* @__PURE__ */ new Set([
-    "creating",
     "active",
     "source_bound",
     "metro_bound",
@@ -7935,6 +8016,9 @@ function isOperationalState(state) {
     "runtime_bound",
     "ready"
   ])).has(state);
+}
+function isFenceableState(state) {
+  return isOperationalState(state) || state === "handoff";
 }
 var SessionRegistry = class {
   #database;
@@ -8051,10 +8135,50 @@ var SessionRegistry = class {
     const now = this.#now();
     this.#transaction(() => {
       this.#requireSession(session);
+      this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
       this.#database.prepare(`UPDATE sessions
            SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(worker.instanceId, worker.pid, worker.token, now, session.sessionId, session.claimEpoch);
+    });
+  }
+  replaceDeviceAuthority(session, input) {
+    const resource = input.resource ?? {
+      type: "device",
+      key: `${String(input.device.platform)}:${String(input.device.deviceId)}`
+    };
+    const probes = this.#probeClaimOwners(session, [resource]);
+    const now = this.#now();
+    this.#transaction(() => {
+      const current = this.#requireSession(session);
+      const claim = this.#findClaim(resource.type, resource.key);
+      if (claim && (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
+        const probe = probes.get(claim.session_id);
+        if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
+          throw claimConflict(claim);
+        }
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+      }
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type IN ('device', 'target', 'runner')`).run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`INSERT INTO claims(
+            resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+          ) VALUES (?, ?, ?, ?, ?)`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, now + this.#leaseMs);
+      const bindings = {
+        ...JSON.parse(current.bindings_json),
+        device: input.device,
+        install: input.install ?? null,
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null,
+        pendingBuild: null
+      };
+      this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(input.install ? "device_bound" : "device_claimed", JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
     });
   }
   updateBindings(session, input) {
@@ -8188,12 +8312,32 @@ var SessionRegistry = class {
     const now = this.#now();
     this.#transaction(() => {
       this.#requireSession(session);
-      const active = this.#database.prepare(`SELECT operation_id FROM operations
+      const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
-      if (active) {
+      if (active && !String(active.profile).startsWith("transition:")) {
         throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot be released while an operation is active");
       }
+      if (active) {
+        this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      }
       this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+    });
+  }
+  discardBlockedSession(session) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+      if (!row || row.state !== "blocked" || row.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged blocked session may be discarded");
+      }
+      const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(session.sessionId);
+      if (claim) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked session unexpectedly owns resource claims");
+      }
       this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
                authority_version = authority_version + 1, updated_ms = ?
@@ -8207,23 +8351,74 @@ var SessionRegistry = class {
     const tokenHash = createHash3("sha256").update(token2).digest("hex");
     this.#transaction(() => {
       this.#requireSession(session);
-      const active = this.#database.prepare(`SELECT operation_id FROM operations
+      const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
-      if (active) {
+      if (active && !String(active.profile).startsWith("transition:")) {
         throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot enter handoff while an operation is active");
       }
       this.#database.prepare(`INSERT INTO handoffs(
             handoff_id, session_id, claim_epoch, target_instance,
-            token_hash, expires_ms, consumed_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, input.targetInstance, tokenHash, now + (input.ttlMs ?? 15e3));
-      this.#database.prepare(`UPDATE sessions SET state = 'handoff', updated_ms = ?
+            token_hash, source_state, expires_ms, consumed_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, input.targetInstance, tokenHash, this.#requireSession(session).state, now + (input.ttlMs ?? 15e3));
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
     });
     return { handoffId, token: token2 };
   }
+  cancelHandoff(session, handoffId) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const handoff = this.#database.prepare(`SELECT session_id, claim_epoch, source_state, consumed_ms
+           FROM handoffs WHERE handoff_id = ?`).get(handoffId);
+      if (!handoff || handoff.session_id !== session.sessionId || handoff.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not belong to session");
+      }
+      if (handoff.consumed_ms !== null) {
+        throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
+      }
+      const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+      if (!row || row.state !== "handoff" || row.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff source owner changed");
+      }
+      this.#database.prepare(`UPDATE sessions
+           SET state = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session.sessionId, session.claimEpoch);
+      this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoffId);
+    });
+  }
   getHandoffOwner(handoffId) {
     const row = this.#database.prepare("SELECT session_id FROM handoffs WHERE handoff_id = ?").get(handoffId);
     return typeof row?.session_id === "string" ? row.session_id : null;
+  }
+  validateHandoffInto(target, input) {
+    const targetRow = this.#requireSession(target);
+    if (targetRow.worker_instance !== input.targetInstance) {
+      throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target is not the current fenced worker instance");
+    }
+    const handoff = this.#database.prepare(`SELECT session_id, claim_epoch, target_instance, token_hash, expires_ms, consumed_ms
+         FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
+    if (!handoff) {
+      throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
+    }
+    if (handoff.consumed_ms !== null) {
+      throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
+    }
+    if (handoff.expires_ms < this.#now()) {
+      throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
+    }
+    if (handoff.target_instance !== input.targetInstance) {
+      throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
+    }
+    const expected = Buffer.from(handoff.token_hash, "hex");
+    const actual = createHash3("sha256").update(input.token).digest();
+    if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
+      throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+    }
+    const prior = this.getSessionStatus(handoff.session_id);
+    if (!prior || prior.state !== "handoff" || prior.claimEpoch !== handoff.claim_epoch || prior.sourceKey !== targetRow.source_key || prior.worktreeKey !== targetRow.worktree_key || prior.appRootKey !== targetRow.app_root_key) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff no longer matches the exact source owner");
+    }
   }
   acceptHandoff(input) {
     const now = this.#now();
@@ -8249,20 +8444,30 @@ var SessionRegistry = class {
         throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
       }
       const session = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
-                    supervisor_pid, supervisor_birth, lease_until_ms
+                    supervisor_pid, supervisor_birth, lease_until_ms, bindings_json
              FROM sessions WHERE session_id = ?`).get(handoff.session_id));
       if (!session || session.state !== "handoff" || session.claim_epoch !== handoff.claim_epoch) {
         throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff no longer matches the session claim epoch");
       }
       const nextEpoch = session.claim_epoch + 1;
       const leaseUntil = now + this.#leaseMs;
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(session.session_id, session.claim_epoch);
       this.#database.prepare(`UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session.session_id, session.claim_epoch);
       this.#database.prepare(`UPDATE sessions
-           SET state = 'active', claim_epoch = ?, authority_version = authority_version + 1,
+           SET state = 'source_bound', claim_epoch = ?, authority_version = authority_version + 1,
                supervisor_pid = ?, supervisor_birth = ?, heartbeat_ms = ?,
-               lease_until_ms = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, input.supervisor.pid, input.supervisor.token, now, leaseUntil, now, session.session_id, session.claim_epoch);
+               lease_until_ms = ?, bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, input.supervisor.pid, input.supervisor.token, now, leaseUntil, JSON.stringify({
+        ...JSON.parse(session.bindings_json),
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null,
+        pendingBuild: null
+      }), now, session.session_id, session.claim_epoch);
       this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
       return { sessionId: session.session_id, claimEpoch: nextEpoch };
     });
@@ -8304,19 +8509,31 @@ var SessionRegistry = class {
         throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "handoff source does not match the target session");
       }
       const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id IN (?, ?) LIMIT 1`).get(prior.session_id, target.sessionId);
+           WHERE session_id = ?
+              OR (session_id = ? AND profile NOT LIKE 'transition:%')
+           LIMIT 1`).get(prior.session_id, target.sessionId);
       if (active) {
         throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "handoff cannot transfer while either session has an active operation");
       }
       this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch);
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
       this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
       const bindings = JSON.parse(prior.bindings_json);
       this.#database.prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, bundle: null, runner: null }), now, target.sessionId, target.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+        ...bindings,
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null,
+        pendingBuild: null
+      }), now, target.sessionId, target.claimEpoch);
       this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
                authority_version = authority_version + 1, updated_ms = ?
@@ -8329,6 +8546,11 @@ var SessionRegistry = class {
     const now = this.#now();
     return this.#transaction(() => {
       const owner = this.#requireSession(session);
+      const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+      if (active) {
+        throw new SessionAuthorityError("OPERATION_ALREADY_IN_PROGRESS", "session already has an active fenced operation");
+      }
       this.#database.prepare(`INSERT INTO operations(
             operation_id, session_id, claim_epoch, authority_version,
             tool, profile, started_ms, lease_until_ms
@@ -8341,6 +8563,21 @@ var SessionRegistry = class {
       };
     });
   }
+  refreshOperation(operation) {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+      const active = this.#database.prepare(`SELECT authority_version FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch);
+      if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || active?.authority_version !== operation.authorityVersion || session.authority_version < operation.authorityVersion) {
+        throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "transition fence no longer matches current authority");
+      }
+      this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
+           WHERE operation_id = ? AND authority_version = ?`).run(session.authority_version, now + this.#leaseMs, operation.operationId, operation.authorityVersion);
+      return { ...operation, authorityVersion: session.authority_version };
+    });
+  }
   endOperation(operation) {
     this.#transaction(() => {
       const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
@@ -8348,7 +8585,7 @@ var SessionRegistry = class {
       const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-      if (!session || !isOperationalState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
+      if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
         throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
       }
       this.#database.prepare("DELETE FROM operations WHERE operation_id = ?").run(operation.operationId);
@@ -8367,7 +8604,7 @@ var SessionRegistry = class {
     const active = this.#database.prepare(`SELECT operation_id FROM operations
          WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
            AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-    if (!session || !isOperationalState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
+    if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
       throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
     }
   }
@@ -8413,8 +8650,8 @@ var SessionRegistry = class {
   #initialize() {
     const schema = this.#database.prepare("SELECT value FROM authority_meta WHERE key = ?").get("schema_version")?.value;
     const version = Number(schema);
-    if (!Number.isSafeInteger(version) || version < 1 || version > 2) {
-      throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version > 2 ? `authority registry schema ${version} is newer than supported schema 2` : "authority registry schema version is invalid");
+    if (!Number.isSafeInteger(version) || version < 1 || version > 3) {
+      throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version > 3 ? `authority registry schema ${version} is newer than supported schema 3` : "authority registry schema version is invalid");
     }
     this.#database.exec("BEGIN IMMEDIATE");
     try {
@@ -8478,8 +8715,14 @@ var SessionRegistry = class {
         expires_ms INTEGER NOT NULL,
         consumed_ms INTEGER
       );
-      UPDATE authority_meta SET value = '2' WHERE key = 'schema_version';
       `);
+      if (version < 3) {
+        const columns = this.#database.prepare("PRAGMA table_info(handoffs)").all();
+        if (!columns.some((column) => column.name === "source_state")) {
+          this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
+        }
+      }
+      this.#database.exec("UPDATE authority_meta SET value = '3' WHERE key = 'schema_version';");
       this.#database.exec("COMMIT");
     } catch (error) {
       this.#database.exec("ROLLBACK");
@@ -8578,7 +8821,7 @@ function openSessionRegistry(path, dependencies) {
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4 } from "node:crypto";
-import { execFileSync as execFileSync4 } from "node:child_process";
+import { execFileSync as execFileSync5 } from "node:child_process";
 import { readFileSync as readFileSync4, realpathSync as realpathSync2 } from "node:fs";
 import { isAbsolute, join as join3, relative, resolve as resolve2 } from "node:path";
 function digest2(parts) {
@@ -8590,7 +8833,7 @@ function digest2(parts) {
   return hash.digest("hex");
 }
 function defaultGit(root, args) {
-  return execFileSync4("git", ["-C", root, ...args], {
+  return execFileSync5("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -8656,7 +8899,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
-import { chmodSync as chmodSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync2, renameSync, statSync as statSync2, writeFileSync } from "node:fs";
+import { chmodSync as chmodSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync2, renameSync, statSync as statSync3, writeFileSync } from "node:fs";
 import { join as join5 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
@@ -8680,7 +8923,7 @@ function ensurePrivateDirectory(path) {
   try {
     mkdirSync2(path, { recursive: true, mode: 448 });
     const link = lstatSync2(path);
-    const stat = statSync2(path);
+    const stat = statSync3(path);
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
     }
@@ -8748,7 +8991,7 @@ function inspectAuthorityMigration(status, dependencies = {}) {
   return {
     rollout: "strict-default",
     storeAvailable: true,
-    registrySchema: 2,
+    registrySchema: 3,
     legacyStateDetected,
     bundleHandshake: {
       supported: true,
@@ -8764,9 +9007,16 @@ function inspectAuthorityMigration(status, dependencies = {}) {
   };
 }
 
-// packages/rn-dev-agent-core/dist/rn-session.js
-function redact(status) {
+// packages/rn-dev-agent-core/dist/session/public-status.js
+function projectPublicAuthorityStatus(status) {
+  if (!status.available) {
+    return {
+      available: false,
+      code: status.code
+    };
+  }
   return {
+    available: true,
     sessionId: status.sessionId.slice(0, 12),
     claimEpoch: status.claimEpoch,
     state: status.state,
@@ -8783,6 +9033,8 @@ function redact(status) {
     migration: inspectAuthorityMigration(status)
   };
 }
+
+// packages/rn-dev-agent-core/dist/rn-session.js
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
   const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
@@ -8885,7 +9137,7 @@ async function main() {
   const status = resolveStatus();
   try {
     if (command === "status") {
-      process.stdout.write(`${JSON.stringify(redact(status), null, 2)}
+      process.stdout.write(`${JSON.stringify(projectPublicAuthorityStatus({ available: true, ...status }), null, 2)}
 `);
       return;
     }
@@ -8989,6 +9241,7 @@ async function main() {
         appId: device.appId,
         metroPort: Number(status.bindings.metroPort),
         artifactDigest: installed.artifactDigest,
+        installGeneration: installed.installGeneration,
         buildGeneration: Number(pending.buildGeneration),
         ...typeof device.devClientUrl === "string" ? { devClientUrl: device.devClientUrl } : {}
       }, signerCapability);

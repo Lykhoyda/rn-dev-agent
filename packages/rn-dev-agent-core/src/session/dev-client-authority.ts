@@ -17,7 +17,8 @@ interface PinDevClientDependencies {
     metroPort: number;
     platform: 'ios' | 'android';
     appId: string;
-  }): Promise<{ targetId: string; connectionGeneration: number }>;
+    deviceId: string;
+  }): Promise<{ targetId: string; connectionGeneration: number; deviceId: string }>;
   readMarker(): Promise<{ status: 'signed'; marker: MetroAuthorityMarker } | null>;
 }
 
@@ -51,7 +52,13 @@ export async function pinExactDevClient(
     metroPort: input.metroPort,
     platform: input.platform,
     appId: input.appId,
+    deviceId: input.deviceId,
   });
+  if (connected.deviceId !== input.deviceId) {
+    throw new Error(
+      'CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device',
+    );
+  }
   const authority = await dependencies.readMarker();
   if (!authority?.marker || authority.status !== 'signed') {
     throw new Error(

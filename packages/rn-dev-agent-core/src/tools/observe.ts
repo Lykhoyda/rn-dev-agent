@@ -91,7 +91,7 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
   }
 }
 
-async function stopObserveServer(): Promise<void> {
+export async function stopObserveServer(): Promise<void> {
   if (starting) {
     try {
       await starting;

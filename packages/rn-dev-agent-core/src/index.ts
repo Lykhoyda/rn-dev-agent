@@ -106,7 +106,11 @@ import {
   foreignGateUdid,
 } from './lifecycle/foreign-flow-gate.js';
 import { getIosRuntimeMajorForUdid } from './domain/blind-probe-gate.js';
-import { getActiveSession, markSnapshotDirty } from './agent-device-wrapper.js';
+import {
+  getActiveSession,
+  markSnapshotDirty,
+  setSnapshotAuthorityProvider,
+} from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -317,6 +321,23 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
+setSnapshotAuthorityProvider(() => {
+  const status = authorityRuntime.status();
+  if (!status.available) return null;
+  const device = status.bindings.device as Record<string, unknown> | undefined;
+  const install = status.bindings.install as Record<string, unknown> | undefined;
+  const runner = status.bindings.runner as Record<string, unknown> | undefined;
+  return {
+    sessionId: status.sessionId,
+    claimEpoch: status.claimEpoch,
+    authorityVersion: status.authorityVersion,
+    platform: device?.platform,
+    deviceId: device?.deviceId,
+    installGeneration: install?.installGeneration,
+    runnerInstanceId: runner?.instanceId,
+    runnerClaim: status.claims.find((claim) => claim.type === 'runner')?.key,
+  };
+});
 const localAuthorityProbe = createLocalAuthorityProbe({
   runtime: authorityRuntime,
   getClient,
@@ -586,7 +607,7 @@ async function pinSessionDevClient(status: SessionStatus) {
           );
         }
       },
-      connectExact: async ({ metroPort, platform, appId }) => {
+      connectExact: async ({ metroPort, platform, appId, deviceId }) => {
         let exactClient = getClient();
         if (exactClient.metroPort !== metroPort) {
           await exactClient.disconnect();
@@ -604,9 +625,53 @@ async function pinSessionDevClient(status: SessionStatus) {
             'CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro',
           );
         }
+        const targetDeviceName = target.deviceName?.trim();
+        if (!targetDeviceName) {
+          throw new Error(
+            'CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association',
+          );
+        }
+        if (platform === 'ios') {
+          const output = await execFileP('xcrun', ['simctl', 'list', 'devices', '--json']);
+          const parsed = JSON.parse(output.stdout) as {
+            devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
+          };
+          const booted = Object.values(parsed.devices ?? {})
+            .flat()
+            .filter((device) => device.state === 'Booted' && device.name === targetDeviceName);
+          if (booted.length !== 1 || booted[0]?.udid !== deviceId) {
+            throw new Error(
+              'CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign',
+            );
+          }
+        } else {
+          const devices = (await execFileP('adb', ['devices'])).stdout
+            .split('\n')
+            .map((line) => line.trim().split(/\s+/))
+            .filter((parts) => parts[0] && parts[1] === 'device')
+            .map((parts) => parts[0]!);
+          const matching: string[] = [];
+          for (const serial of devices) {
+            const model = (
+              await execFileP('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
+            ).stdout.trim();
+            if (
+              model &&
+              (targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))
+            ) {
+              matching.push(serial);
+            }
+          }
+          if (matching.length !== 1 || matching[0] !== deviceId) {
+            throw new Error(
+              'CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign',
+            );
+          }
+        }
         return {
           targetId: target.id,
           connectionGeneration: exactClient.connectionGeneration,
+          deviceId,
         };
       },
       readMarker: async () => {
@@ -745,10 +810,12 @@ trackedTool(
       'bind_metro',
       'pin_dev_client',
       'prepare_handoff',
+      'cancel_handoff',
       'accept_handoff',
       'adopt_stale',
       'preview_integration',
       'apply_integration',
+      'restore_integration',
       'release',
     ]),
     platform: z.enum(['ios', 'android']).optional(),

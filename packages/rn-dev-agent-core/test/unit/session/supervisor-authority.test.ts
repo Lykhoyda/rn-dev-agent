@@ -77,3 +77,56 @@ test('supervisor refuses to manufacture authority without process-birth proof', 
     /PROCESS_BIRTH_UNAVAILABLE/,
   );
 });
+
+test('a supervisor without the source claim stays blocked and exposes the full adoption ID', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  const source = {
+    kind: 'git' as const,
+    contentRoot: '/repo',
+    appRoot: '/repo/apps/mobile',
+    sourceKey: 'source-key',
+    worktreeKey: 'worktree-key',
+    appRootKey: 'app-key',
+    head: 'abc123',
+  };
+  const priorId = '11111111-2222-3333-4444-555555555555';
+  const prior = createSupervisorAuthority({
+    stateDir,
+    source,
+    sessionId: priorId,
+    supervisorBirth: { pid: 101, source: 'linux-proc', token: 'prior-birth' },
+    uid: '501',
+    startHeartbeat: false,
+    ownerStatus: (owner) => (owner.sessionId === priorId ? 'match' : 'unknown'),
+  });
+  const blocked = createSupervisorAuthority({
+    stateDir,
+    source,
+    supervisorBirth: { pid: 202, source: 'linux-proc', token: 'blocked-birth' },
+    uid: '501',
+    startHeartbeat: false,
+    ownerStatus: (owner) => (owner.sessionId === priorId ? 'match' : 'unknown'),
+  });
+
+  try {
+    const status = blocked.registry.getSessionStatus(blocked.session.sessionId);
+    assert.equal(status?.state, 'blocked');
+    assert.equal(
+      (status?.bindings.adoptionRequired as { sessionId?: string }).sessionId,
+      priorId,
+    );
+    assert.throws(
+      () =>
+        blocked.registry.bindWorker(blocked.session, {
+          instanceId: 'blocked-worker',
+          pid: 203,
+          token: 'blocked-worker-birth',
+        }),
+      /SESSION_OWNER_LOST/,
+    );
+  } finally {
+    blocked.close();
+    prior.close();
+  }
+});

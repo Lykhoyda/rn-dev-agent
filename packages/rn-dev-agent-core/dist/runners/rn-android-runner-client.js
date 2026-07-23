@@ -384,6 +384,13 @@ export async function waitForAndroidRunnerHealth(port, opts = {}) {
     }
     return false;
 }
+export function androidHealthMatchesAuthority(info, expected) {
+    return (info.instanceId === expected.instanceId &&
+        info.sessionId === expected.sessionId &&
+        info.claimEpoch === expected.claimEpoch &&
+        info.deviceId === expected.deviceId &&
+        info.appId === expected.appId);
+}
 // Story 04 (#385): capabilities from the last successful /health probe. Warm
 // before any mutating verb — startAndroidRunner probes /health on the reuse
 // and readiness paths. Consumed by the settle engine.
@@ -564,11 +571,13 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, serial)) {
         const info = await probeAndroidRunnerHealthInfo(runnerState.hostPort);
         if (info.reachable && info.ok) {
-            if (info.instanceId !== runnerState.instanceId ||
-                info.sessionId !== runnerState.sessionId ||
-                info.claimEpoch !== runnerState.claimEpoch ||
-                info.deviceId !== runnerState.deviceId ||
-                info.appId !== runnerState.bundleId) {
+            if (!androidHealthMatchesAuthority(info, {
+                instanceId: runnerState.instanceId,
+                sessionId: runnerState.sessionId,
+                claimEpoch: runnerState.claimEpoch,
+                deviceId: runnerState.deviceId,
+                appId: runnerState.bundleId,
+            })) {
                 await reapMismatchedAndroidRunner(deviceId);
                 forceReinstall = true;
             }
@@ -701,6 +710,18 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                 return;
             if (healthy) {
                 const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
+                if (!androidHealthMatchesAuthority(info, {
+                    instanceId: authority.instanceId,
+                    sessionId: authority.sessionId,
+                    claimEpoch: authority.claimEpoch,
+                    deviceId: authority.deviceId,
+                    appId: authority.appId,
+                })) {
+                    resolved = true;
+                    child.kill('SIGTERM');
+                    reject(new Error('RUNNER_OWNERSHIP_MISMATCH: fresh Android runner health identity is foreign'));
+                    return;
+                }
                 const compat = classifyAndroidHealth(info);
                 if (!compat.compatible) {
                     resolved = true;
