@@ -714,11 +714,8 @@ export class SessionRegistry {
       ) {
         const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
         const platform = String(
-          (
-            (input.bindings.device ?? currentBindings.device) as
-              | Record<string, unknown>
-              | undefined
-          )?.platform ?? '',
+          ((input.bindings.device ?? currentBindings.device) as Record<string, unknown> | undefined)
+            ?.platform ?? '',
         );
         if (platform) {
           this.#invalidatePlatformReceipt(session, platform);
@@ -1567,9 +1564,9 @@ export class SessionRegistry {
         .prepare('UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?')
         .run(now, handoff.handoff_id);
       return {
-        ...((this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup as
+        ...(this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup as
           | HandoffCleanupPlan
-          | undefined) ?? {}),
+          | undefined),
       };
     });
   }
@@ -1883,8 +1880,7 @@ export class SessionRegistry {
     const probe = persisted.probe;
     if (
       !probe ||
-      createHash('sha256').update(probe.capability).digest('hex') !==
-        receipt.runnerCapabilityHash
+      createHash('sha256').update(probe.capability).digest('hex') !== receipt.runnerCapabilityHash
     ) {
       return null;
     }
@@ -1898,9 +1894,7 @@ export class SessionRegistry {
     }
     const owner = asSession(
       this.#database
-        .prepare(
-          `SELECT supervisor_pid, supervisor_birth FROM sessions WHERE session_id = ?`,
-        )
+        .prepare(`SELECT supervisor_pid, supervisor_birth FROM sessions WHERE session_id = ?`)
         .get(priorSessionId),
     );
     if (
@@ -2348,9 +2342,7 @@ export class SessionRegistry {
           );
         }
       }
-      this.#database.exec(
-        "UPDATE authority_meta SET value = '4' WHERE key = 'schema_version';",
-      );
+      this.#database.exec("UPDATE authority_meta SET value = '4' WHERE key = 'schema_version';");
       this.#database.exec('COMMIT');
     } catch (error) {
       this.#database.exec('ROLLBACK');

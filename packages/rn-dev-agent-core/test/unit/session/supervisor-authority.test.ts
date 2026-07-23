@@ -111,11 +111,9 @@ test('a supervisor without the source claim stays blocked and exposes the full a
 
   try {
     const status = blocked.registry.getSessionStatus(blocked.session.sessionId);
-    assert.equal(status?.state, 'blocked');
-    assert.equal(
-      (status?.bindings.adoptionRequired as { sessionId?: string }).sessionId,
-      priorId,
-    );
+    assert.ok(status);
+    assert.equal(status.state, 'blocked');
+    assert.equal((status.bindings.adoptionRequired as { sessionId?: string }).sessionId, priorId);
     assert.throws(
       () =>
         blocked.registry.bindWorker(blocked.session, {
@@ -126,9 +124,7 @@ test('a supervisor without the source claim stays blocked and exposes the full a
       /SESSION_OWNER_LOST/,
     );
     const environment = blocked.workerEnvironment('blocked-worker');
-    const secret = JSON.parse(
-      readFileSync(environment.RN_DEV_AGENT_SESSION_SECRET_PATH, 'utf8'),
-    );
+    const secret = JSON.parse(readFileSync(environment.RN_DEV_AGENT_SESSION_SECRET_PATH, 'utf8'));
     blocked.registry.bindRecoveryWorker(
       blocked.session,
       {
@@ -142,7 +138,10 @@ test('a supervisor without the source claim stays blocked and exposes the full a
       blocked.registry.getSessionStatus(blocked.session.sessionId)?.worker.instanceId,
       'blocked-worker',
     );
-    assert.throws(() => blocked.registry.getControllerBinding(blocked.session), /SESSION_OWNER_LOST/);
+    assert.throws(
+      () => blocked.registry.getControllerBinding(blocked.session),
+      /SESSION_OWNER_LOST/,
+    );
   } finally {
     blocked.close();
     prior.close();

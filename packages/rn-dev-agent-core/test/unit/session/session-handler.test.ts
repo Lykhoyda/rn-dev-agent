@@ -74,11 +74,14 @@ function cleanupRuntime(finish: () => void, includeObserve = true, includeRunner
 
 test('handoff cleanup remains fenced when exact shutdown is not proven', async () => {
   let finished = false;
-  const handler = createSessionHandler(cleanupRuntime(() => (finished = true)), {
-    stopHandoffRunner: async () => {
-      throw new Error('RUNNER_ADOPTION_REQUIRED: runner still alive');
+  const handler = createSessionHandler(
+    cleanupRuntime(() => (finished = true)),
+    {
+      stopHandoffRunner: async () => {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: runner still alive');
+      },
     },
-  });
+  );
 
   const result = await handler({
     action: 'accept_handoff',
@@ -92,14 +95,17 @@ test('handoff cleanup remains fenced when exact shutdown is not proven', async (
 
 test('handoff cleanup unblocks only after runner and Observe shutdown complete', async () => {
   const calls: string[] = [];
-  const handler = createSessionHandler(cleanupRuntime(() => calls.push('finish')), {
-    stopHandoffRunner: async () => {
-      calls.push('runner');
+  const handler = createSessionHandler(
+    cleanupRuntime(() => calls.push('finish')),
+    {
+      stopHandoffRunner: async () => {
+        calls.push('runner');
+      },
+      stopHandoffObserve: async () => {
+        calls.push('observe');
+      },
     },
-    stopHandoffObserve: async () => {
-      calls.push('observe');
-    },
-  });
+  );
 
   const result = await handler({
     action: 'accept_handoff',
@@ -114,19 +120,22 @@ test('handoff cleanup unblocks only after runner and Observe shutdown complete',
 test('handoff cleanup signals only the persisted exact runner PID', async () => {
   let alive = true;
   const signals: Array<[number, NodeJS.Signals]> = [];
-  const handler = createSessionHandler(cleanupRuntime(() => {}, false), {
-    probeProcessBirth: () =>
-      alive
-        ? {
-            status: 'present',
-            birth: { pid: 123, source: 'linux-proc', token: 'birth' },
-          }
-        : { status: 'absent' },
-    signalProcess: (pid, signal) => {
-      signals.push([pid, signal]);
-      alive = false;
+  const handler = createSessionHandler(
+    cleanupRuntime(() => {}, false),
+    {
+      probeProcessBirth: () =>
+        alive
+          ? {
+              status: 'present',
+              birth: { pid: 123, source: 'linux-proc', token: 'birth' },
+            }
+          : { status: 'absent' },
+      signalProcess: (pid, signal) => {
+        signals.push([pid, signal]);
+        alive = false;
+      },
     },
-  });
+  );
 
   const result = await handler({
     action: 'accept_handoff',
@@ -140,13 +149,16 @@ test('handoff cleanup signals only the persisted exact runner PID', async () => 
 
 test('handoff cleanup never signals a reused runner PID', async () => {
   const signals: Array<[number, NodeJS.Signals]> = [];
-  const handler = createSessionHandler(cleanupRuntime(() => {}, false), {
-    probeProcessBirth: () => ({
-      status: 'present',
-      birth: { pid: 123, source: 'linux-proc', token: 'replacement-birth' },
-    }),
-    signalProcess: (pid, signal) => signals.push([pid, signal]),
-  });
+  const handler = createSessionHandler(
+    cleanupRuntime(() => {}, false),
+    {
+      probeProcessBirth: () => ({
+        status: 'present',
+        birth: { pid: 123, source: 'linux-proc', token: 'replacement-birth' },
+      }),
+      signalProcess: (pid, signal) => signals.push([pid, signal]),
+    },
+  );
 
   const result = await handler({
     action: 'accept_handoff',
@@ -160,9 +172,12 @@ test('handoff cleanup never signals a reused runner PID', async () => {
 
 test('handoff cleanup remains fenced when runner absence is ambiguous', async () => {
   let finished = false;
-  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), false), {
-    probeProcessBirth: () => ({ status: 'unknown' }),
-  });
+  const handler = createSessionHandler(
+    cleanupRuntime(() => (finished = true), false),
+    {
+      probeProcessBirth: () => ({ status: 'unknown' }),
+    },
+  );
 
   const result = await handler({
     action: 'accept_handoff',
@@ -176,9 +191,12 @@ test('handoff cleanup remains fenced when runner absence is ambiguous', async ()
 
 test('handoff cleanup accepts confirmed runner absence', async () => {
   let finished = false;
-  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), false), {
-    probeProcessBirth: () => ({ status: 'absent' }),
-  });
+  const handler = createSessionHandler(
+    cleanupRuntime(() => (finished = true), false),
+    {
+      probeProcessBirth: () => ({ status: 'absent' }),
+    },
+  );
 
   const result = await handler({
     action: 'accept_handoff',
@@ -192,9 +210,12 @@ test('handoff cleanup accepts confirmed runner absence', async () => {
 
 test('handoff cleanup remains fenced when listener absence is ambiguous', async () => {
   let finished = false;
-  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), true, false), {
-    probeListener: () => ({ status: 'unknown' }),
-  });
+  const handler = createSessionHandler(
+    cleanupRuntime(() => (finished = true), true, false),
+    {
+      probeListener: () => ({ status: 'unknown' }),
+    },
+  );
 
   const result = await handler({
     action: 'accept_handoff',
@@ -208,9 +229,12 @@ test('handoff cleanup remains fenced when listener absence is ambiguous', async 
 
 test('handoff cleanup accepts confirmed listener absence', async () => {
   let finished = false;
-  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), true, false), {
-    probeListener: () => ({ status: 'absent' }),
-  });
+  const handler = createSessionHandler(
+    cleanupRuntime(() => (finished = true), true, false),
+    {
+      probeListener: () => ({ status: 'absent' }),
+    },
+  );
 
   const result = await handler({
     action: 'accept_handoff',

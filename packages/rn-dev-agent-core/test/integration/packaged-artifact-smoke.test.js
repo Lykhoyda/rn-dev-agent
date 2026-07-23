@@ -111,10 +111,7 @@ test(
       );
       assert.equal(typeof envelope.data.running, 'boolean');
       assert.equal(envelope.meta.authoritative, false);
-      const body = await readFile(
-        join(tmp, 'dist/observability/web-dist/index.html'),
-        'utf8',
-      );
+      const body = await readFile(join(tmp, 'dist/observability/web-dist/index.html'), 'utf8');
       assert.ok(
         body.includes('__E2E_CSRF__'),
         'SMOKE_OBSERVE: expected the packaged SPA bundle to include its CSRF marker',

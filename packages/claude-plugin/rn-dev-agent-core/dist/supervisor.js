@@ -1772,7 +1772,7 @@ var init_registry = __esm({
            WHERE session_id = ? AND claim_epoch = ?`).run(now, prior.session_id, prior.claim_epoch);
           this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
           return {
-            ...this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup ?? {}
+            ...this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup
           };
         });
       }
@@ -70000,7 +70000,9 @@ var init_index = __esm({
       validateLive: async (receipt2) => {
         try {
           const { registry: registry2, session } = authorityRuntime.requireOperational();
-          const probe = registry2.getPlatformAuthorityProbe(session, String(receipt2.platform), { ...receipt2 });
+          const probe = registry2.getPlatformAuthorityProbe(session, String(receipt2.platform), {
+            ...receipt2
+          });
           if (!probe || captureInstallGeneration({
             platform: probe.platform,
             deviceId: probe.deviceId,

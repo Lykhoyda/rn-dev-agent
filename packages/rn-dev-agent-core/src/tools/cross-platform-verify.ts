@@ -1,9 +1,6 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join, extname } from 'node:path';
-import {
-  getCachedSnapshot,
-  validateCachedSnapshotAuthority,
-} from '../agent-device-wrapper.js';
+import { getCachedSnapshot, validateCachedSnapshotAuthority } from '../agent-device-wrapper.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
@@ -107,8 +104,7 @@ export function createCrossPlatformVerifyHandler(
     }
 
     const matchBy = args.matchBy ?? 'any';
-    const validateAuthority =
-      dependencies.validateAuthority ?? validateCachedSnapshotAuthority;
+    const validateAuthority = dependencies.validateAuthority ?? validateCachedSnapshotAuthority;
     const [iosValid, androidValid] = await Promise.all([
       validateAuthority('ios'),
       validateAuthority('android'),

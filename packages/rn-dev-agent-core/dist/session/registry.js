@@ -364,7 +364,8 @@ export class SessionRegistry {
                 Object.hasOwn(input.bindings, 'install') ||
                 Object.hasOwn(input.bindings, 'runner')) {
                 const currentBindings = JSON.parse(current.bindings_json);
-                const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? '');
+                const platform = String((input.bindings.device ?? currentBindings.device)
+                    ?.platform ?? '');
                 if (platform) {
                     this.#invalidatePlatformReceipt(session, platform);
                 }
@@ -896,7 +897,7 @@ export class SessionRegistry {
                 .prepare('UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?')
                 .run(now, handoff.handoff_id);
             return {
-                ...(this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup ?? {}),
+                ...this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup,
             };
         });
     }
@@ -1102,8 +1103,7 @@ export class SessionRegistry {
         const persisted = JSON.parse(row.receipt_json);
         const probe = persisted.probe;
         if (!probe ||
-            createHash('sha256').update(probe.capability).digest('hex') !==
-                receipt.runnerCapabilityHash) {
+            createHash('sha256').update(probe.capability).digest('hex') !== receipt.runnerCapabilityHash) {
             return null;
         }
         return probe;

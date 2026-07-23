@@ -21,7 +21,7 @@ The MCP server exposes **79 tools** organized into five conceptual families. All
 
 Read React internals via Chrome DevTools Protocol over a WebSocket connection to Hermes.
 
-**Connection lifecycle:** `cdp_status` (auto-connect) → `cdp_connect` (explicit) → `cdp_disconnect` (teardown) → `cdp_targets` (list without connecting) → `cdp_restart` (full process restart) → `cdp_open_devtools` (attach DevTools)
+**Connection lifecycle:** `cdp_status` (passive diagnostics) → `cdp_connect` (pin the exact authority-bound target) → `cdp_disconnect` (teardown) → `cdp_targets` (diagnostic list without connecting) → `cdp_restart` (full process restart) → `cdp_open_devtools` (attach DevTools)
 
 **Component inspection:** `cdp_component_tree` (filtered fiber tree) → `cdp_component_state` (hook state by testID) → `cdp_diagnostic_renderers` (fiber-root invisibility diagnosis)
 

@@ -156,9 +156,9 @@ and get explicit confirmation.
 2. Follow codebase conventions strictly
 3. Update todos as you progress
 4. After all files are saved:
-   - If `requiresFullReload` is true: call `cdp_reload(full=true)` and wait
-     for reconnection
-   - Otherwise: wait 2 seconds for Fast Refresh to apply
+   - Fast Refresh is useful development feedback but does not prove source
+     fidelity. Before authoritative verification, call `cdp_reload(full=true)`,
+     wait for reconnection, and require the fresh signed initial-bundle marker.
 
 ---
 
@@ -175,23 +175,25 @@ Run this verification sequence in order. Stop and fix if any step fails.
 
 ### GATE: Environment Readiness (CRITICAL — GH #28)
 
-**Before ANY verification, confirm the environment is functional.**
-Call `cdp_status`. If it fails to connect:
+**Before ANY verification, confirm the environment is authoritative.**
+Call `rn_session(action="status")` and require the intended ready session, then
+call passive `cdp_status`. If the exact signed target is not connected:
 
 1. **DO NOT proceed to verification.** Do not fall back to raw bash commands.
 2. **DO NOT use `xcrun simctl`, `adb`, or `xcodebuild` as substitutes for
    CDP tools.** These bypass the plugin's connection management and error
    recovery, and produce a degraded experience.
 3. Instead, tell the user:
-   - "CDP connection failed. Please ensure Metro is running (`npx expo start`
-     or `npx react-native start`) and the app is loaded on a simulator."
+   - "CDP authority is unavailable. Run literal `pnpm ios` or `pnpm android`
+     through the confirmed session integration, then load the bound app."
    - "Run `$rn-dev-agent:check-env` to diagnose missing dependencies."
 4. If Metro is running but CDP still fails, check:
    - Is another debugger connected? (React Native DevTools, Flipper, Chrome)
    - Is the app on the Dev Client launcher instead of the actual app?
-   - Is the correct platform targeted? (`cdp_connect(platform="ios")`)
+   - Does `cdp_connect` resolve the session's exact signed target?
 
-**Only proceed to Step 0 after `cdp_status` returns `ok: true`.**
+**Only proceed to Step 0 after the session is ready and `cdp_status` reports
+the matching target.**
 
 ### Step 0: Ensure Simulator, Device Session & Navigate to Feature
 
@@ -501,8 +503,9 @@ completing. Mark all todos complete.
   in the Phase 7 summary.
 - **RedBox during verification**: Read `cdp_error_log`, fix source, reload,
   restart Phase 5.5.
-- **CDP not connecting**: Call `cdp_status` which auto-connects. If that
-  fails, check Metro is running (`curl http://localhost:8081/status`).
+- **CDP not connecting**: Inspect passive `cdp_status`, then call
+  `cdp_connect` for the exact session target. If that fails, repair the named
+  session or Metro authority axis; never select an ambient port.
 - **Debugger paused**: Call `cdp_reload(full=true)` to resume.
 - **Another debugger connected (code 1006)**: Ask user to close React Native
   DevTools, Flipper, or Chrome DevTools.

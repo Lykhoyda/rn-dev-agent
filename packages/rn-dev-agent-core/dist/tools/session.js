@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
-import { probeProcessBirth, } from '../session/process-birth.js';
+import { probeProcessBirth } from '../session/process-birth.js';
 import { probeManagedMetroListener, } from '../session/managed-metro.js';
 async function waitForExactStopped(probe, timeoutMs, message) {
     const deadline = Date.now() + timeoutMs;
@@ -346,8 +346,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         targetInstance: status.worker.instanceId,
                     });
                 }
-                if (cleanup?.runner &&
-                    typeof cleanup.runner.completedAt !== 'number') {
+                if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
                     const runnerCleanup = registry.beginHandoffCleanupResource(session, status.worker.instanceId, 'runner');
                     if (!runnerCleanup) {
                         throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'runner cleanup binding disappeared while fenced');
@@ -362,8 +361,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const afterRunner = registry.getSessionStatus(session.sessionId);
                 cleanup = afterRunner?.bindings.handoffCleanup;
-                if (cleanup?.observe &&
-                    typeof cleanup.observe.completedAt !== 'number') {
+                if (cleanup?.observe && typeof cleanup.observe.completedAt !== 'number') {
                     const observeCleanup = registry.beginHandoffCleanupResource(session, status.worker.instanceId, 'observe');
                     if (!observeCleanup) {
                         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe cleanup binding disappeared while fenced');

@@ -784,10 +784,7 @@ test('retained platform receipt claims block runner and device authority reuse',
 
   assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), true);
   assert.throws(
-    () =>
-      registry.claimResources(contender, [
-        { type: 'runner', key: 'ios:device-a:9100' },
-      ]),
+    () => registry.claimResources(contender, [{ type: 'runner', key: 'ios:device-a:9100' }]),
     /RUNNER_CLAIM_CONFLICT/,
   );
   assert.throws(

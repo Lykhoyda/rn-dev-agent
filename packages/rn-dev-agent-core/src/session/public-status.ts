@@ -1,7 +1,9 @@
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
 
-export function projectPublicAuthorityStatus(status: WorkerAuthorityStatus): Record<string, unknown> {
+export function projectPublicAuthorityStatus(
+  status: WorkerAuthorityStatus,
+): Record<string, unknown> {
   if (!status.available) {
     return {
       available: false,
@@ -27,9 +29,7 @@ export function projectPublicAuthorityStatus(status: WorkerAuthorityStatus): Rec
               : undefined,
           adoptionRequired: Boolean(recovery.adoptStale),
           adoptionHandle:
-            typeof recovery.adoptStale?.token === 'string'
-              ? recovery.adoptStale.token
-              : undefined,
+            typeof recovery.adoptStale?.token === 'string' ? recovery.adoptStale.token : undefined,
           adoptionExpiresMs:
             typeof recovery.adoptStale?.expiresMs === 'number'
               ? recovery.adoptStale.expiresMs

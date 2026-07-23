@@ -112,12 +112,7 @@ export function probeProcessBirth(
       ]).trim();
       if (processInfo === 'ABSENT') return { status: 'absent' };
       const match = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
-      if (
-        !match ||
-        Number(match[1]) !== pid ||
-        match[2] === '0' ||
-        Number(match[3]) > 999_999
-      ) {
+      if (!match || Number(match[1]) !== pid || match[2] === '0' || Number(match[3]) > 999_999) {
         return { status: 'unknown' };
       }
       const bootSession = run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();

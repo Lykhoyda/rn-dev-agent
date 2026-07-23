@@ -57,10 +57,7 @@ export class WorkerAuthorityRuntime {
   requireOperational(): { registry: SessionRegistry; session: SessionRef } {
     const available = this.requireAvailable();
     const status = this.status();
-    if (
-      status.available &&
-      (status.state === 'blocked' || status.state === 'handoff_cleanup')
-    ) {
+    if (status.available && (status.state === 'blocked' || status.state === 'handoff_cleanup')) {
       throw new SessionAuthorityError(
         'SESSION_AUTHORITY_REQUIRED',
         'blocked contender exposes only accept_handoff and adopt_stale recovery',
@@ -154,8 +151,7 @@ export function createWorkerAuthorityRuntime(
     });
     const session = { sessionId, claimEpoch };
     const status = registry.getSessionStatus(sessionId);
-    const recoveryOnly =
-      status?.state === 'blocked' || status?.state === 'handoff_cleanup';
+    const recoveryOnly = status?.state === 'blocked' || status?.state === 'handoff_cleanup';
     if (recoveryOnly) {
       const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
       const recoveryCapability = secretPath

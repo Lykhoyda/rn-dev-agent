@@ -67,9 +67,7 @@ export function createSupervisorAuthority(input) {
             observePort,
             ...(adoptionRequired
                 ? {
-                    recoveryCapabilityHash: createHash('sha256')
-                        .update(recoveryCapability)
-                        .digest('hex'),
+                    recoveryCapabilityHash: createHash('sha256').update(recoveryCapability).digest('hex'),
                     adoptionRequired: {
                         sessionId: adoptionRequired.sessionId,
                         claimEpoch: adoptionRequired.claimEpoch,

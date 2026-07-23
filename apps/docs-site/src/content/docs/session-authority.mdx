@@ -23,6 +23,8 @@ The authority registry uses Node's built-in `node:sqlite` `DatabaseSync`. Node 2
 
 The registry lives in a private user-local `v2` state root. Its SQLite database, WAL/SHM files, session secrets, runner state, and Observe bootstrap state refuse symlinks and use private permissions.
 
+Lease timeouts are diagnostic signals, not authority to reclaim resources. A contender must exist and must conservatively prove the prior process dead; an expired lease with unknown process-birth identity returns `STALE_LEASE_NOT_RECLAIMABLE`.
+
 ## Session lifecycle
 
 Use `rn_session` for staged transitions:
@@ -43,6 +45,8 @@ When no matching live session or installed integration is available, the copied 
 Normal development uses a coarse Git worktree identity, or a declared root plus declared-manifest hash for non-Git apps. That identity remains stable while source files are edited. Strict proof additionally freezes the Git HEAD and dirty-content digest.
 
 The runtime marker proves that the **initial bundle** came from the claimed Metro instance, session, worktree, app, platform, and build generation. It does not claim Fast Refresh source fidelity. After HMR, the coarse session binding still holds, while `sourceFidelity` remains `not-proven`.
+
+If marker signing is unavailable, Metro may emit an unsigned `unavailable` marker so development builds continue, but authoritative tools return `BUNDLE_HANDSHAKE_UNAVAILABLE`. The installed-app digest is captured once for each build generation and reused as that generation's install identity.
 
 ## Tool authority
 

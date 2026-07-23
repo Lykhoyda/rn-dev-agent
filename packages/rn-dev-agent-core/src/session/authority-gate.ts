@@ -370,15 +370,11 @@ export function createAuthorityGate(
                 authorityTransition: true,
               });
             }
-            const gateCommitsProof =
-              tool === 'proof_capture' && args.action === 'begin_rehearsal';
+            const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
             if (!gateCommitsProof) {
               registry.verifyOperation(operation);
               const nextStatus = runtime.status();
-              if (
-                !nextStatus.available ||
-                nextStatus.authorityVersion <= initialAuthorityVersion
-              ) {
+              if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
                 throw new SessionAuthorityError(
                   'AUTHORITY_LOST_DURING_OPERATION',
                   'transition did not advance the fenced authority generation',
@@ -432,11 +428,7 @@ export function createAuthorityGate(
             if (operation) registry.commitPlatformAuthorityReceipts(operation);
             return addMeta(result, {
               authorityTransition: true,
-              authorityReceipt: receipt(
-                status,
-                { ...profile, axes: transitionAxes.after },
-                after,
-              ),
+              authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after),
             });
           } catch (error) {
             return authorityFailure(error);
@@ -474,9 +466,7 @@ export function createAuthorityGate(
             ),
           );
           registry.verifyOperation(operation);
-          const result = await registry.runWithOperation(operation, () =>
-            handler(...handlerArgs),
-          );
+          const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
           const replacesRuntimeTarget = tool === 'cdp_reload' || tool === 'cdp_restart';
           if (replacesRuntimeTarget && !resultSucceeded(result)) {
             const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;

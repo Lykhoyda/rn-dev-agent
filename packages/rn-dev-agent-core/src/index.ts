@@ -126,10 +126,7 @@ import {
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
-import {
-  probeFastRunnerAuthority,
-  stopFastRunner,
-} from './runners/rn-fast-runner-client.js';
+import { probeFastRunnerAuthority, stopFastRunner } from './runners/rn-fast-runner-client.js';
 import {
   androidHealthMatchesAuthority,
   probeAndroidRunnerHealthInfo,
@@ -403,11 +400,9 @@ setSnapshotAuthorityProvider({
   validateLive: async (receipt) => {
     try {
       const { registry, session } = authorityRuntime.requireOperational();
-      const probe = registry.getPlatformAuthorityProbe(
-        session,
-        String(receipt.platform),
-        { ...receipt },
-      );
+      const probe = registry.getPlatformAuthorityProbe(session, String(receipt.platform), {
+        ...receipt,
+      });
       if (
         !probe ||
         captureInstallGeneration({

@@ -24,8 +24,7 @@ export class WorkerAuthorityRuntime {
     requireOperational() {
         const available = this.requireAvailable();
         const status = this.status();
-        if (status.available &&
-            (status.state === 'blocked' || status.state === 'handoff_cleanup')) {
+        if (status.available && (status.state === 'blocked' || status.state === 'handoff_cleanup')) {
             throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'blocked contender exposes only accept_handoff and adopt_stale recovery');
         }
         return available;

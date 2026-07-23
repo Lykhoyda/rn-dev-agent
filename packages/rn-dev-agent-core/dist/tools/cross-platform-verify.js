@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join, extname } from 'node:path';
-import { getCachedSnapshot, validateCachedSnapshotAuthority, } from '../agent-device-wrapper.js';
+import { getCachedSnapshot, validateCachedSnapshotAuthority } from '../agent-device-wrapper.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 export function findElement(nodes, query, matchBy) {

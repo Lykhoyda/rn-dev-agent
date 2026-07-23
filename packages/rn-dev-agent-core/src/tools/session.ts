@@ -22,10 +22,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
-import {
-  probeProcessBirth,
-  type ProcessBirthProbe,
-} from '../session/process-birth.js';
+import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
   probeManagedMetroListener,
   type ManagedMetroListenerProbe,
@@ -261,8 +258,7 @@ export function createSessionHandler(
     }
 
     try {
-      const isRecovery =
-        input.action === 'accept_handoff' || input.action === 'adopt_stale';
+      const isRecovery = input.action === 'accept_handoff' || input.action === 'adopt_stale';
       const { registry, session } = isRecovery
         ? runtime.requireRecovery()
         : runtime.requireOperational();
@@ -546,10 +542,7 @@ export function createSessionHandler(
             targetInstance: status.worker.instanceId,
           });
         }
-        if (
-          cleanup?.runner &&
-          typeof cleanup.runner.completedAt !== 'number'
-        ) {
+        if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
           const runnerCleanup = registry.beginHandoffCleanupResource(
             session,
             status.worker.instanceId,
@@ -571,18 +564,11 @@ export function createSessionHandler(
               dependencies.cleanupTimeoutMs,
             );
           }
-          registry.completeHandoffCleanupResource(
-            session,
-            status.worker.instanceId,
-            'runner',
-          );
+          registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'runner');
         }
         const afterRunner = registry.getSessionStatus(session.sessionId);
         cleanup = afterRunner?.bindings.handoffCleanup as typeof cleanup;
-        if (
-          cleanup?.observe &&
-          typeof cleanup.observe.completedAt !== 'number'
-        ) {
+        if (cleanup?.observe && typeof cleanup.observe.completedAt !== 'number') {
           const observeCleanup = registry.beginHandoffCleanupResource(
             session,
             status.worker.instanceId,
@@ -604,11 +590,7 @@ export function createSessionHandler(
               dependencies.cleanupTimeoutMs,
             );
           }
-          registry.completeHandoffCleanupResource(
-            session,
-            status.worker.instanceId,
-            'observe',
-          );
+          registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'observe');
         }
         registry.finishHandoffCleanup(session, status.worker.instanceId);
         return okResult({

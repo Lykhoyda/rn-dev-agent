@@ -174,14 +174,12 @@ interface CachedSnapshot {
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
-let snapshotAuthorityProvider:
-  | {
-      current: () => Record<string, unknown> | null;
-      record: (receipt: SnapshotAuthorityReceipt) => void;
-      validate: (receipt: SnapshotAuthorityReceipt) => boolean;
-      validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
-    }
-  | null = null;
+let snapshotAuthorityProvider: {
+  current: () => Record<string, unknown> | null;
+  record: (receipt: SnapshotAuthorityReceipt) => void;
+  validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+  validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+} | null = null;
 
 export interface SnapshotAuthorityReceipt {
   sessionId: unknown;
@@ -205,14 +203,12 @@ export interface SnapshotAuthorityReceipt {
 }
 
 export function setSnapshotAuthorityProvider(
-  provider:
-    | {
-        current: () => Record<string, unknown> | null;
-        record: (receipt: SnapshotAuthorityReceipt) => void;
-        validate: (receipt: SnapshotAuthorityReceipt) => boolean;
-        validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
-      }
-    | null,
+  provider: {
+    current: () => Record<string, unknown> | null;
+    record: (receipt: SnapshotAuthorityReceipt) => void;
+    validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+    validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+  } | null,
 ): void {
   snapshotAuthorityProvider = provider;
   snapshotCache.clear();
@@ -271,7 +267,7 @@ function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: s
     receipt.runnerProcessBirth !== null &&
     receipt.runnerCapabilityHash !== null &&
     receipt.runnerPort !== null &&
-    snapshotAuthorityProvider?.validate(receipt)
+    snapshotAuthorityProvider?.validate(receipt),
   );
 }
 

@@ -16,9 +16,7 @@ export function projectPublicAuthorityStatus(status) {
                 ? recovery.handoffRecipient.expiresMs
                 : undefined,
             adoptionRequired: Boolean(recovery.adoptStale),
-            adoptionHandle: typeof recovery.adoptStale?.token === 'string'
-                ? recovery.adoptStale.token
-                : undefined,
+            adoptionHandle: typeof recovery.adoptStale?.token === 'string' ? recovery.adoptStale.token : undefined,
             adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === 'number'
                 ? recovery.adoptStale.expiresMs
                 : undefined,

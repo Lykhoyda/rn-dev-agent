@@ -74,7 +74,7 @@ test('Metro integration composes object and promise configs and is reversible', 
 });
 
 test('Metro restoration preserves edits after the generated block', () => {
-  const original = "module.exports = { resolver: {} };\n";
+  const original = 'module.exports = { resolver: {} };\n';
   const integrated = previewMetroIntegration(original);
   const withSuffix = `${integrated}module.exports.watchFolders = ['/later'];\n`;
 
