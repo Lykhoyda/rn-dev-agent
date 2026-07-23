@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { processBirthMatches, readProcessBirth } from '../../../dist/session/process-birth.js';
+import {
+  probeProcessBirth,
+  processBirthMatches,
+  readProcessBirth,
+} from '../../../dist/session/process-birth.js';
 
 test('macOS second-resolution process identity fails conservative', () => {
   const run = (command) => {
@@ -70,6 +74,28 @@ test('unreadable process birth fails conservative', () => {
       },
     ),
     false,
+  );
+});
+
+test('process birth probes distinguish confirmed absence from unreadable identity', () => {
+  const missing = new Error('missing');
+  (missing as NodeJS.ErrnoException).code = 'ENOENT';
+  const read = (path) => {
+    if (path.endsWith('boot_id')) return 'boot-123';
+    throw missing;
+  };
+  assert.deepEqual(probeProcessBirth(789, { platform: 'linux', read }), {
+    status: 'absent',
+  });
+  assert.deepEqual(
+    probeProcessBirth(789, {
+      platform: 'linux',
+      read: (path) => {
+        if (path.endsWith('boot_id')) return 'boot-123';
+        throw new Error('permission denied');
+      },
+    }),
+    { status: 'unknown' },
   );
 });
 

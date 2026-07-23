@@ -179,6 +179,7 @@ let snapshotAuthorityProvider:
       current: () => Record<string, unknown> | null;
       record: (receipt: SnapshotAuthorityReceipt) => void;
       validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+      validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
     }
   | null = null;
 
@@ -194,11 +195,13 @@ export interface SnapshotAuthorityReceipt {
   installGeneration: unknown;
   runnerInstanceId: unknown;
   runnerClaim: unknown;
+  deviceClaim: unknown;
   appId: unknown;
   artifactDigest: unknown;
   runnerPid: unknown;
   runnerProcessBirth: unknown;
   runnerCapabilityHash: unknown;
+  runnerPort: unknown;
 }
 
 export function setSnapshotAuthorityProvider(
@@ -207,6 +210,7 @@ export function setSnapshotAuthorityProvider(
         current: () => Record<string, unknown> | null;
         record: (receipt: SnapshotAuthorityReceipt) => void;
         validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+        validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
       }
     | null,
 ): void {
@@ -230,11 +234,13 @@ function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
     installGeneration: authority?.installGeneration ?? null,
     runnerInstanceId: authority?.runnerInstanceId ?? null,
     runnerClaim: authority?.runnerClaim ?? null,
+    deviceClaim: authority?.deviceClaim ?? null,
     appId: authority?.appId ?? session?.appId ?? null,
     artifactDigest: authority?.artifactDigest ?? null,
     runnerPid: authority?.runnerPid ?? null,
     runnerProcessBirth: authority?.runnerProcessBirth ?? null,
     runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
+    runnerPort: authority?.runnerPort ?? null,
   };
 }
 
@@ -258,13 +264,22 @@ function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: s
     receipt.installGeneration !== null &&
     receipt.runnerInstanceId !== null &&
     receipt.runnerClaim !== null &&
+    receipt.deviceClaim !== null &&
     receipt.appId !== null &&
     receipt.artifactDigest !== null &&
     receipt.runnerPid !== null &&
     receipt.runnerProcessBirth !== null &&
     receipt.runnerCapabilityHash !== null &&
+    receipt.runnerPort !== null &&
     snapshotAuthorityProvider?.validate(receipt)
   );
+}
+
+export async function validateCachedSnapshotAuthority(platform: string): Promise<boolean> {
+  const snapshot = snapshotCache.get(platform);
+  if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)) return false;
+  if (snapshot.authorityReceipt.sessionId === null) return true;
+  return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
 }
 
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already

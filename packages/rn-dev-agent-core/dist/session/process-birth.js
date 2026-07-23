@@ -12,17 +12,29 @@ function token(parts) {
     return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
 export function readProcessBirth(pid, dependencies = {}) {
+    const probe = probeProcessBirth(pid, dependencies);
+    return probe.status === 'present' ? probe.birth : null;
+}
+export function probeProcessBirth(pid, dependencies = {}) {
     if (!Number.isSafeInteger(pid) || pid <= 0)
-        return null;
+        return { status: 'unknown' };
     const platform = dependencies.platform ?? process.platform;
     const read = dependencies.read ?? ((path) => readFileSync(path, 'utf8'));
     const run = dependencies.run ?? defaultRun;
+    if (platform === 'darwin')
+        return { status: 'unknown' };
     try {
-        if (platform === 'darwin')
-            return null;
         if (platform === 'linux') {
             const boot = read('/proc/sys/kernel/random/boot_id').trim();
-            const stat = read(`/proc/${pid}/stat`).trim();
+            let stat;
+            try {
+                stat = read(`/proc/${pid}/stat`).trim();
+            }
+            catch (error) {
+                return error.code === 'ENOENT'
+                    ? { status: 'absent' }
+                    : { status: 'unknown' };
+            }
             const commandEnd = stat.lastIndexOf(')');
             const fields = commandEnd >= 0
                 ? stat
@@ -32,26 +44,35 @@ export function readProcessBirth(pid, dependencies = {}) {
                 : [];
             const started = fields[19];
             if (!boot || !started || !/^\d+$/.test(started))
-                return null;
-            return { pid, source: 'linux-proc', token: token([platform, boot, started]) };
+                return { status: 'unknown' };
+            return {
+                status: 'present',
+                birth: { pid, source: 'linux-proc', token: token([platform, boot, started]) },
+            };
         }
         if (platform === 'win32') {
-            const script = `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`;
+            const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
+                `if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
             const started = run('powershell.exe', [
                 '-NoProfile',
                 '-NonInteractive',
                 '-Command',
                 script,
             ]).trim();
+            if (started === 'ABSENT')
+                return { status: 'absent' };
             if (!/^\d+$/.test(started))
-                return null;
-            return { pid, source: 'windows-powershell', token: token([platform, started]) };
+                return { status: 'unknown' };
+            return {
+                status: 'present',
+                birth: { pid, source: 'windows-powershell', token: token([platform, started]) },
+            };
         }
     }
     catch {
-        return null;
+        return { status: 'unknown' };
     }
-    return null;
+    return { status: 'unknown' };
 }
 export function processBirthMatches(expected, dependencies = {}) {
     const observed = readProcessBirth(expected.pid, dependencies);

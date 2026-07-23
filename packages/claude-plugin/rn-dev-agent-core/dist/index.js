@@ -20586,40 +20586,57 @@ function token(parts) {
   return createHash3("sha256").update(parts.join("\0")).digest("hex");
 }
 function readProcessBirth(pid, dependencies = {}) {
+  const probe = probeProcessBirth(pid, dependencies);
+  return probe.status === "present" ? probe.birth : null;
+}
+function probeProcessBirth(pid, dependencies = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0)
-    return null;
+    return { status: "unknown" };
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path) => readFileSync8(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
+  if (platform === "darwin")
+    return { status: "unknown" };
   try {
-    if (platform === "darwin")
-      return null;
     if (platform === "linux") {
       const boot = read("/proc/sys/kernel/random/boot_id").trim();
-      const stat2 = read(`/proc/${pid}/stat`).trim();
+      let stat2;
+      try {
+        stat2 = read(`/proc/${pid}/stat`).trim();
+      } catch (error2) {
+        return error2.code === "ENOENT" ? { status: "absent" } : { status: "unknown" };
+      }
       const commandEnd = stat2.lastIndexOf(")");
       const fields = commandEnd >= 0 ? stat2.slice(commandEnd + 1).trim().split(/\s+/) : [];
       const started = fields[19];
       if (!boot || !started || !/^\d+$/.test(started))
-        return null;
-      return { pid, source: "linux-proc", token: token([platform, boot, started]) };
+        return { status: "unknown" };
+      return {
+        status: "present",
+        birth: { pid, source: "linux-proc", token: token([platform, boot, started]) }
+      };
     }
     if (platform === "win32") {
-      const script = `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`;
+      const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
       const started = run("powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
         script
       ]).trim();
+      if (started === "ABSENT")
+        return { status: "absent" };
       if (!/^\d+$/.test(started))
-        return null;
-      return { pid, source: "windows-powershell", token: token([platform, started]) };
+        return { status: "unknown" };
+      return {
+        status: "present",
+        birth: { pid, source: "windows-powershell", token: token([platform, started]) }
+      };
     }
   } catch {
-    return null;
+    return { status: "unknown" };
   }
-  return null;
+  return { status: "unknown" };
 }
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
@@ -20658,6 +20675,7 @@ __export(rn_fast_runner_client_exports, {
   parseLegacyRunnerState: () => parseLegacyRunnerState,
   parsePersistedRunnerState: () => parsePersistedRunnerState,
   parseReadySignal: () => parseReadySignal,
+  probeFastRunnerAuthority: () => probeFastRunnerAuthority,
   probeFastRunnerLiveness: () => probeFastRunnerLiveness,
   probeFastRunnerLivenessDetailed: () => probeFastRunnerLivenessDetailed,
   reapStaleFastRunner: () => reapStaleFastRunner,
@@ -21186,12 +21204,12 @@ function defaultProcessAlive(pid) {
     return false;
   }
 }
-async function defaultHttpProbe(port, timeoutMs) {
+async function defaultHttpProbe(port, timeoutMs, capabilityOverride) {
   const url = `http://127.0.0.1:${port}/health`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const capability = runnerState?.port === port ? runnerState.capability : void 0;
+    const capability = capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : void 0);
     const res = await fetchImpl(url, {
       signal: controller.signal,
       headers: capability ? { authorization: `Bearer ${capability}` } : {}
@@ -21250,6 +21268,14 @@ async function defaultHttpProbe(port, timeoutMs) {
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+async function probeFastRunnerAuthority(input) {
+  try {
+    const result = await defaultHttpProbe(input.port, 2e3, input.capability);
+    return result.ok && result.status === 200 && result.bodyOk === true && result.instanceId === input.instanceId && result.sessionId === input.sessionId && result.claimEpoch === input.claimEpoch && result.deviceId === input.deviceId && result.appId === input.appId;
+  } catch {
+    return false;
   }
 }
 function clearStateFile() {
@@ -23318,11 +23344,13 @@ function currentSnapshotAuthority(platform) {
     installGeneration: authority?.installGeneration ?? null,
     runnerInstanceId: authority?.runnerInstanceId ?? null,
     runnerClaim: authority?.runnerClaim ?? null,
+    deviceClaim: authority?.deviceClaim ?? null,
     appId: authority?.appId ?? session?.appId ?? null,
     artifactDigest: authority?.artifactDigest ?? null,
     runnerPid: authority?.runnerPid ?? null,
     runnerProcessBirth: authority?.runnerProcessBirth ?? null,
-    runnerCapabilityHash: authority?.runnerCapabilityHash ?? null
+    runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
+    runnerPort: authority?.runnerPort ?? null
   };
 }
 function snapshotAuthorityIsValid(receipt2, platform) {
@@ -23330,7 +23358,15 @@ function snapshotAuthorityIsValid(receipt2, platform) {
   if (receipt2.sessionId === null) {
     return current.sessionId === null && receipt2.platform === platform && receipt2.deviceId === current.deviceId;
   }
-  return Boolean(receipt2.platform === platform && receipt2.sessionId === current.sessionId && receipt2.claimEpoch === current.claimEpoch && receipt2.sourceKey === current.sourceKey && receipt2.worktreeKey === current.worktreeKey && receipt2.appRootKey === current.appRootKey && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.runnerInstanceId !== null && receipt2.runnerClaim !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && receipt2.runnerPid !== null && receipt2.runnerProcessBirth !== null && receipt2.runnerCapabilityHash !== null && snapshotAuthorityProvider?.validate(receipt2));
+  return Boolean(receipt2.platform === platform && receipt2.sessionId === current.sessionId && receipt2.claimEpoch === current.claimEpoch && receipt2.sourceKey === current.sourceKey && receipt2.worktreeKey === current.worktreeKey && receipt2.appRootKey === current.appRootKey && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.runnerInstanceId !== null && receipt2.runnerClaim !== null && receipt2.deviceClaim !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && receipt2.runnerPid !== null && receipt2.runnerProcessBirth !== null && receipt2.runnerCapabilityHash !== null && receipt2.runnerPort !== null && snapshotAuthorityProvider?.validate(receipt2));
+}
+async function validateCachedSnapshotAuthority(platform) {
+  const snapshot = snapshotCache.get(platform);
+  if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform))
+    return false;
+  if (snapshot.authorityReceipt.sessionId === null)
+    return true;
+  return await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt) === true;
 }
 function cacheSnapshot(platform, nodes) {
   const authorityReceipt = currentSnapshotAuthority(platform);
@@ -61518,7 +61554,7 @@ function discoverTestIDs(dir) {
   walk(dir);
   return [...ids].sort();
 }
-function createCrossPlatformVerifyHandler() {
+function createCrossPlatformVerifyHandler(dependencies = {}) {
   return async (args) => {
     let elements = args.elements;
     let discoveredCount = 0;
@@ -61537,8 +61573,13 @@ function createCrossPlatformVerifyHandler() {
       return failResult("Provide elements[] or scanDir to discover testIDs from source.");
     }
     const matchBy = args.matchBy ?? "any";
-    const iosSnap = getCachedSnapshot("ios");
-    const androidSnap = getCachedSnapshot("android");
+    const validateAuthority = dependencies.validateAuthority ?? validateCachedSnapshotAuthority;
+    const [iosValid, androidValid] = await Promise.all([
+      validateAuthority("ios"),
+      validateAuthority("android")
+    ]);
+    const iosSnap = iosValid ? getCachedSnapshot("ios") : void 0;
+    const androidSnap = androidValid ? getCachedSnapshot("android") : void 0;
     if (!iosSnap && !androidSnap) {
       return failResult("No cached snapshots for either platform. Run device_snapshot on iOS and Android first, then call this tool to compare.", {
         hint: "Workflow: open iOS session \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify"
@@ -61715,6 +61756,7 @@ function createMetroEventsHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/index.js
 init_rn_fast_runner_client();
+init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync10 } from "node:child_process";
@@ -64161,6 +64203,7 @@ function authorityErrorMeta(error2) {
 }
 var conflictCodes = {
   device: "DEVICE_CLAIM_CONFLICT",
+  "device-receipt": "DEVICE_CLAIM_CONFLICT",
   target: "TARGET_CLAIM_CONFLICT",
   "metro-port": "METRO_PORT_CLAIM_CONFLICT",
   "observe-port": "OBSERVE_PORT_CLAIM_CONFLICT",
@@ -64206,6 +64249,7 @@ var SessionRegistry = class {
   #ownerStatus;
   #leaseMs;
   #operationContext = new AsyncLocalStorage();
+  #pendingPlatformReceipts = /* @__PURE__ */ new Map();
   constructor(database, close, secureFiles, dependencies) {
     this.#database = database;
     this.#close = close;
@@ -64288,12 +64332,13 @@ var SessionRegistry = class {
     this.#transaction(() => {
       const current = this.#requireSession(session);
       for (const resource of resources) {
-        if (resource.type === "runner") {
+        if (resource.type === "runner" || resource.type === "device") {
           const rows = this.#database.prepare(`SELECT platform, receipt_json FROM platform_authority_receipts
                WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
           for (const row of rows) {
-            const receipt2 = JSON.parse(row.receipt_json);
-            if (receipt2.runnerClaim === resource.key) {
+            const persisted = JSON.parse(row.receipt_json);
+            const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+            if (resource.type === "runner" && receipt2.runnerClaim === resource.key || resource.type === "device" && receipt2.deviceClaim === resource.key) {
               this.#invalidatePlatformReceipt(session, row.platform);
             }
           }
@@ -64380,7 +64425,7 @@ var SessionRegistry = class {
     const now = this.#now();
     this.#transaction(() => {
       const current = this.#requireSession(session);
-      const claim = this.#findClaim(resource.type, resource.key);
+      const claim = this.#findConflictingClaim(resource);
       if (claim && (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
         const probe = probes.get(claim.session_id);
         if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
@@ -64930,46 +64975,82 @@ var SessionRegistry = class {
     });
   }
   recordPlatformAuthorityReceipt(session, platform, receipt2) {
+    const operation = this.#operationContext.getStore();
+    if (!operation || operation.sessionId !== session.sessionId || operation.claimEpoch !== session.claimEpoch) {
+      throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "platform receipt recording requires the active operation fence");
+    }
+    this.verifyOperation(operation);
+    const staged = this.#platformReceiptFromCurrentAuthority(session, platform, receipt2);
+    const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+    pending2.push(staged);
+    this.#pendingPlatformReceipts.set(operation.operationId, pending2);
+  }
+  commitPlatformAuthorityReceipts(operation) {
+    const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+    if (pending2.length === 0)
+      return;
     const now = this.#now();
     this.#transaction(() => {
-      const row = this.#requireSession(session);
-      const bindings = JSON.parse(row.bindings_json);
-      const device = bindings.device;
-      const install = bindings.install;
-      const runner = bindings.runner;
-      const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
-           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
-      const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash12("sha256").update(runner.capability).digest("hex") : null;
-      if (device?.platform !== platform || receipt2.sessionId !== session.sessionId || receipt2.claimEpoch !== session.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerClaim !== runnerClaim?.resource_key || receipt2.runnerCapabilityHash !== runnerCapabilityHash) {
-        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
+      this.verifyOperation(operation);
+      for (const staged of pending2) {
+        const current = this.#platformReceiptFromCurrentAuthority(staged.session, staged.platform, staged.receipt);
+        const runnerClaim = String(staged.receipt.runnerClaim);
+        const deviceClaim = String(staged.receipt.deviceClaim);
+        for (const resource of [
+          { type: "runner-receipt", key: runnerClaim },
+          { type: "device-receipt", key: deviceClaim }
+        ]) {
+          const existing = this.#findClaim(resource.type, resource.key);
+          if (existing && (existing.session_id !== staged.session.sessionId || existing.claim_epoch !== staged.session.claimEpoch)) {
+            throw claimConflict(existing);
+          }
+        }
+        this.#invalidatePlatformReceipt(staged.session, staged.platform);
+        for (const resource of [
+          { type: "runner-receipt", key: runnerClaim },
+          { type: "device-receipt", key: deviceClaim }
+        ]) {
+          this.#database.prepare(`INSERT INTO claims(
+                 resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+               ) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+                 session_id = excluded.session_id,
+                 claim_epoch = excluded.claim_epoch,
+                 lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, staged.session.sessionId, staged.session.claimEpoch, now + this.#leaseMs);
+        }
+        this.#database.prepare(`INSERT INTO platform_authority_receipts(
+               session_id, claim_epoch, platform, receipt_json, updated_ms
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(session_id, platform) DO UPDATE SET
+               claim_epoch = excluded.claim_epoch,
+               receipt_json = excluded.receipt_json,
+               updated_ms = excluded.updated_ms`).run(staged.session.sessionId, staged.session.claimEpoch, staged.platform, JSON.stringify({ receipt: staged.receipt, probe: current.probe }), now);
       }
-      const claimKey = String(receipt2.runnerClaim);
-      const existingReceiptClaim = this.#findClaim("runner-receipt", claimKey);
-      if (existingReceiptClaim && (existingReceiptClaim.session_id !== session.sessionId || existingReceiptClaim.claim_epoch !== session.claimEpoch)) {
-        throw claimConflict(existingReceiptClaim);
-      }
-      this.#invalidatePlatformReceipt(session, platform);
-      this.#database.prepare(`INSERT INTO claims(
-             resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-           ) VALUES ('runner-receipt', ?, ?, ?, ?)
-           ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-             session_id = excluded.session_id,
-             claim_epoch = excluded.claim_epoch,
-             lease_until_ms = excluded.lease_until_ms`).run(claimKey, session.sessionId, session.claimEpoch, now + this.#leaseMs);
-      this.#database.prepare(`INSERT INTO platform_authority_receipts(
-             session_id, claim_epoch, platform, receipt_json, updated_ms
-           ) VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(session_id, platform) DO UPDATE SET
-             claim_epoch = excluded.claim_epoch,
-             receipt_json = excluded.receipt_json,
-             updated_ms = excluded.updated_ms`).run(session.sessionId, session.claimEpoch, platform, JSON.stringify(receipt2), now);
     });
+    this.#pendingPlatformReceipts.delete(operation.operationId);
   }
   validatePlatformAuthorityReceipt(session, platform, receipt2) {
     const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
          WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
-    const claim = this.#findClaim("runner-receipt", String(receipt2.runnerClaim));
-    return row?.claim_epoch === session.claimEpoch && typeof row.receipt_json === "string" && row.receipt_json === JSON.stringify(receipt2) && claim?.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch;
+    const persisted = typeof row?.receipt_json === "string" ? JSON.parse(row.receipt_json) : null;
+    const persistedReceipt = persisted?.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+    const runnerClaim = this.#findClaim("runner-receipt", String(receipt2.runnerClaim));
+    const deviceClaim = this.#findClaim("device-receipt", String(receipt2.deviceClaim));
+    return row?.claim_epoch === session.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt2) && runnerClaim?.session_id === session.sessionId && runnerClaim.claim_epoch === session.claimEpoch && deviceClaim?.session_id === session.sessionId && deviceClaim.claim_epoch === session.claimEpoch;
+  }
+  getPlatformAuthorityProbe(session, platform, receipt2) {
+    if (!this.validatePlatformAuthorityReceipt(session, platform, receipt2))
+      return null;
+    const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session.sessionId, session.claimEpoch, platform);
+    if (typeof row?.receipt_json !== "string")
+      return null;
+    const persisted = JSON.parse(row.receipt_json);
+    const probe = persisted.probe;
+    if (!probe || createHash12("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
+      return null;
+    }
+    return probe;
   }
   adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
     const priorStatus = this.getSessionStatus(priorSessionId);
@@ -65075,6 +65156,7 @@ var SessionRegistry = class {
       }
       this.#database.prepare("DELETE FROM operations WHERE operation_id = ?").run(operation.operationId);
     });
+    this.#pendingPlatformReceipts.delete(operation.operationId);
   }
   cancelOperation(operation) {
     this.#transaction(() => {
@@ -65082,6 +65164,7 @@ var SessionRegistry = class {
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`).run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
     });
+    this.#pendingPlatformReceipts.delete(operation.operationId);
   }
   verifyOperation(operation) {
     const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
@@ -65299,17 +65382,56 @@ var SessionRegistry = class {
            FROM claims WHERE resource_type = ? AND resource_key = ?`).get(type, key));
   }
   #findConflictingClaim(resource) {
-    return this.#findClaim(resource.type, resource.key) ?? (resource.type === "runner" ? this.#findClaim("runner-receipt", resource.key) : null);
+    return this.#findClaim(resource.type, resource.key) ?? (resource.type === "runner" ? this.#findClaim("runner-receipt", resource.key) : resource.type === "device" ? this.#findClaim("device-receipt", resource.key) : null);
+  }
+  #platformReceiptFromCurrentAuthority(session, platform, receipt2) {
+    const row = this.#requireSession(session);
+    const bindings = JSON.parse(row.bindings_json);
+    const device = bindings.device;
+    const install = bindings.install;
+    const runner = bindings.runner;
+    const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
+    const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session.sessionId, session.claimEpoch);
+    const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash12("sha256").update(runner.capability).digest("hex") : null;
+    if (device?.platform !== platform || receipt2.sessionId !== session.sessionId || receipt2.claimEpoch !== session.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerPort !== runner?.port || receipt2.runnerClaim !== runnerClaim?.resource_key || receipt2.deviceClaim !== deviceClaim?.resource_key || receipt2.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
+      throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
+    }
+    return {
+      session,
+      platform,
+      receipt: receipt2,
+      probe: {
+        platform,
+        port: runner.port,
+        capability: runner.capability,
+        instanceId: runner.instanceId,
+        sessionId: session.sessionId,
+        claimEpoch: session.claimEpoch,
+        deviceId: device.deviceId,
+        appId: device.appId,
+        pid: runner.pid,
+        processBirth: runner.processBirth,
+        installGeneration: install.installGeneration
+      }
+    };
   }
   #invalidatePlatformReceipt(session, platform) {
     const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
          WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session.sessionId, session.claimEpoch, platform);
     if (typeof row?.receipt_json === "string") {
-      const receipt2 = JSON.parse(row.receipt_json);
+      const persisted = JSON.parse(row.receipt_json);
+      const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
       if (typeof receipt2.runnerClaim === "string") {
         this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = 'runner-receipt' AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`).run(receipt2.runnerClaim, session.sessionId, session.claimEpoch);
+      }
+      if (typeof receipt2.deviceClaim === "string") {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'device-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(receipt2.deviceClaim, session.sessionId, session.claimEpoch);
       }
     }
     this.#database.prepare(`DELETE FROM platform_authority_receipts
@@ -66010,47 +66132,58 @@ init_process_birth();
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync12, spawn as spawn6 } from "node:child_process";
-init_metro_cwd();
 init_process_birth();
-function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync12) {
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync12) {
   try {
     if (platform === "win32") {
-      const output = execute("powershell.exe", [
+      const output2 = execute("powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
         `(Get-NetTCPConnection -State Listen -LocalPort ${port} | Select-Object -First 1 -ExpandProperty OwningProcess)`
       ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
-      const pid = Number(String(output).trim());
-      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+      const pid2 = Number(String(output2).trim());
+      return Number.isSafeInteger(pid2) && pid2 > 0 ? { status: "listening", pid: pid2 } : { status: "absent" };
     }
     if (platform === "linux") {
-      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
+      const output2 = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 2e3
       });
-      const match = /pid=(\d+)/.exec(String(output));
-      const pid = Number(match?.[1]);
-      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+      const match = /pid=(\d+)/.exec(String(output2));
+      const pid2 = Number(match?.[1]);
+      return Number.isSafeInteger(pid2) && pid2 > 0 ? { status: "listening", pid: pid2 } : { status: "absent" };
     }
-    return pidForPort(port);
-  } catch {
-    return null;
+    const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    });
+    const pid = Number(String(output).trim().split(/\s+/)[0]);
+    return Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "absent" };
+  } catch (error2) {
+    return platform === "darwin" && error2.status === 1 ? { status: "absent" } : { status: "unknown" };
   }
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-async function waitForStopped(probe, timeoutMs, message) {
+async function waitForExactStopped(probe, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs;
-  while (probe()) {
+  while (true) {
+    const status = probe();
+    if (status === "stopped")
+      return;
+    if (status === "unknown") {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${message}; shutdown identity is unknown`);
+    }
     if (Date.now() >= deadline) {
       throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", message);
     }
     await new Promise((resolve8) => setTimeout(resolve8, 25));
   }
 }
-async function stopHandoffObserve(binding, listenerPid = managedMetroListenerPid, processBirth = readProcessBirth, timeoutMs = 2e3) {
+async function stopHandoffObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3) {
   const port = Number(binding.port);
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
@@ -66060,10 +66193,20 @@ async function stopHandoffObserve(binding, listenerPid = managedMetroListenerPid
   if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability || !Number.isFinite(stopRequestedAt)) {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
   }
-  const currentListener = listenerPid(port);
-  if (currentListener !== pid)
+  const currentListener = listenerProbe(port);
+  if (currentListener.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener lookup is inconclusive");
+  }
+  if (currentListener.status === "absent" || currentListener.pid !== pid)
     return;
-  if (processBirth(pid)?.token !== expectedBirth) {
+  const currentBirth = processProbe(pid);
+  if (currentBirth.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe process identity is unavailable");
+  }
+  if (currentBirth.status === "absent") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener identity is internally inconsistent");
+  }
+  if (currentBirth.birth.token !== expectedBirth) {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener PID was reused before cleanup completed");
   }
   const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
@@ -66076,9 +66219,14 @@ async function stopHandoffObserve(binding, listenerPid = managedMetroListenerPid
   if (!response.ok) {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe server refused fenced handoff cleanup");
   }
-  await waitForStopped(() => listenerPid(port) === pid, timeoutMs, "source Observe listener did not stop before the cleanup deadline");
+  await waitForExactStopped(() => {
+    const observed = listenerProbe(port);
+    if (observed.status === "unknown")
+      return "unknown";
+    return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
+  }, timeoutMs, "source Observe listener did not stop before the cleanup deadline");
 }
-async function stopHandoffRunner(binding, processBirth = readProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+async function stopHandoffRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
   const instanceId = String(binding.instanceId ?? "");
@@ -66088,10 +66236,19 @@ async function stopHandoffRunner(binding, processBirth = readProcessBirth, signa
   if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability || !claimKey || !Number.isFinite(stopRequestedAt)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner cleanup identity is incomplete");
   }
-  if (processBirth(pid)?.token !== expectedBirth)
+  const current = processProbe(pid);
+  if (current.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner process identity is unavailable");
+  }
+  if (current.status === "absent" || current.birth.token !== expectedBirth)
     return;
   signalProcess(pid, "SIGTERM");
-  await waitForStopped(() => processBirth(pid)?.token === expectedBirth, timeoutMs, "source runner process did not stop before the cleanup deadline");
+  await waitForExactStopped(() => {
+    const observed = processProbe(pid);
+    if (observed.status === "unknown")
+      return "unknown";
+    return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
+  }, timeoutMs, "source runner process did not stop before the cleanup deadline");
 }
 function authorityFailure(error2) {
   if (error2 instanceof SessionAuthorityError) {
@@ -66329,7 +66486,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (dependencies.stopHandoffRunner) {
             await dependencies.stopHandoffRunner(runnerCleanup);
           } else {
-            await stopHandoffRunner(runnerCleanup, dependencies.readProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+            await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
           }
           registry2.completeHandoffCleanupResource(session, status.worker.instanceId, "runner");
         }
@@ -66343,7 +66500,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (dependencies.stopHandoffObserve) {
             await dependencies.stopHandoffObserve(observeCleanup);
           } else {
-            await stopHandoffObserve(observeCleanup, dependencies.pidForPort, dependencies.readProcessBirth, dependencies.cleanupTimeoutMs);
+            await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
           }
           registry2.completeHandoffCleanupResource(session, status.worker.instanceId, "observe");
         }
@@ -66869,6 +67026,8 @@ function createAuthorityGate(runtime, dependencies) {
             }
             status = proofStatus;
           }
+          if (operation2)
+            registry3.commitPlatformAuthorityReceipts(operation2);
           return addMeta2(result, {
             authorityTransition: true,
             authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after)
@@ -66904,7 +67063,7 @@ function createAuthorityGate(runtime, dependencies) {
         });
         const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
         registry2.verifyOperation(operation);
-        const result = await handler(...handlerArgs);
+        const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
         const replacesRuntimeTarget = tool === "cdp_reload" || tool === "cdp_restart";
         if (replacesRuntimeTarget && !resultSucceeded(result)) {
           const priorBundle = status.bindings.bundle;
@@ -66969,6 +67128,8 @@ function createAuthorityGate(runtime, dependencies) {
         if (!resultIsCanonicalSuccess(result)) {
           return addMeta2(result, { authoritative: false });
         }
+        if (operation)
+          registry2.commitPlatformAuthorityReceipts(operation);
         return addMeta2(result, { authorityReceipt: receipt(status, profile, after) });
       } catch (error2) {
         return authorityFailure2(error2);
@@ -67543,7 +67704,9 @@ setSnapshotAuthorityProvider({
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
       runnerCapabilityHash: typeof runner?.capability === "string" ? createHash15("sha256").update(runner.capability).digest("hex") : void 0,
-      runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key
+      runnerPort: runner?.port,
+      runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
+      deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
     };
   },
   record: (receipt2) => {
@@ -67568,6 +67731,29 @@ setSnapshotAuthorityProvider({
         return false;
       }
       return typeof receipt2.runnerPid === "number" && typeof receipt2.runnerProcessBirth === "string" && readProcessBirth(receipt2.runnerPid)?.token === receipt2.runnerProcessBirth;
+    } catch {
+      return false;
+    }
+  },
+  validateLive: async (receipt2) => {
+    try {
+      const { registry: registry2, session } = authorityRuntime.requireOperational();
+      const probe = registry2.getPlatformAuthorityProbe(session, String(receipt2.platform), { ...receipt2 });
+      if (!probe || captureInstallGeneration({
+        platform: probe.platform,
+        deviceId: probe.deviceId,
+        appId: probe.appId
+      }) !== probe.installGeneration || readProcessBirth(probe.pid)?.token !== probe.processBirth) {
+        return false;
+      }
+      if (probe.platform === "ios") {
+        return probeFastRunnerAuthority(probe);
+      }
+      if (probe.platform === "android") {
+        const health = await probeAndroidRunnerHealthInfo(probe.port, probe.capability);
+        return health.ok === true && androidHealthMatchesAuthority(health, probe);
+      }
+      return false;
     } catch {
       return false;
     }

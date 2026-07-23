@@ -56,6 +56,7 @@ export function authorityErrorMeta(error) {
 }
 const conflictCodes = {
     device: 'DEVICE_CLAIM_CONFLICT',
+    'device-receipt': 'DEVICE_CLAIM_CONFLICT',
     target: 'TARGET_CLAIM_CONFLICT',
     'metro-port': 'METRO_PORT_CLAIM_CONFLICT',
     'observe-port': 'OBSERVE_PORT_CLAIM_CONFLICT',
@@ -101,6 +102,7 @@ export class SessionRegistry {
     #ownerStatus;
     #leaseMs;
     #operationContext = new AsyncLocalStorage();
+    #pendingPlatformReceipts = new Map();
     constructor(database, close, secureFiles, dependencies) {
         this.#database = database;
         this.#close = close;
@@ -190,14 +192,18 @@ export class SessionRegistry {
         this.#transaction(() => {
             const current = this.#requireSession(session);
             for (const resource of resources) {
-                if (resource.type === 'runner') {
+                if (resource.type === 'runner' || resource.type === 'device') {
                     const rows = this.#database
                         .prepare(`SELECT platform, receipt_json FROM platform_authority_receipts
                WHERE session_id = ? AND claim_epoch = ?`)
                         .all(session.sessionId, session.claimEpoch);
                     for (const row of rows) {
-                        const receipt = JSON.parse(row.receipt_json);
-                        if (receipt.runnerClaim === resource.key) {
+                        const persisted = JSON.parse(row.receipt_json);
+                        const receipt = persisted.receipt && typeof persisted.receipt === 'object'
+                            ? persisted.receipt
+                            : persisted;
+                        if ((resource.type === 'runner' && receipt.runnerClaim === resource.key) ||
+                            (resource.type === 'device' && receipt.deviceClaim === resource.key)) {
                             this.#invalidatePlatformReceipt(session, row.platform);
                         }
                     }
@@ -303,7 +309,7 @@ export class SessionRegistry {
         const now = this.#now();
         this.#transaction(() => {
             const current = this.#requireSession(session);
-            const claim = this.#findClaim(resource.type, resource.key);
+            const claim = this.#findConflictingClaim(resource);
             if (claim &&
                 (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
                 const probe = probes.get(claim.session_id);
@@ -1002,76 +1008,105 @@ export class SessionRegistry {
         });
     }
     recordPlatformAuthorityReceipt(session, platform, receipt) {
+        const operation = this.#operationContext.getStore();
+        if (!operation ||
+            operation.sessionId !== session.sessionId ||
+            operation.claimEpoch !== session.claimEpoch) {
+            throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'platform receipt recording requires the active operation fence');
+        }
+        this.verifyOperation(operation);
+        const staged = this.#platformReceiptFromCurrentAuthority(session, platform, receipt);
+        const pending = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+        pending.push(staged);
+        this.#pendingPlatformReceipts.set(operation.operationId, pending);
+    }
+    commitPlatformAuthorityReceipts(operation) {
+        const pending = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+        if (pending.length === 0)
+            return;
         const now = this.#now();
         this.#transaction(() => {
-            const row = this.#requireSession(session);
-            const bindings = JSON.parse(row.bindings_json);
-            const device = bindings.device;
-            const install = bindings.install;
-            const runner = bindings.runner;
-            const runnerClaim = this.#database
-                .prepare(`SELECT resource_key FROM claims
-           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`)
-                .get(session.sessionId, session.claimEpoch);
-            const runnerCapabilityHash = typeof runner?.capability === 'string'
-                ? createHash('sha256').update(runner.capability).digest('hex')
-                : null;
-            if (device?.platform !== platform ||
-                receipt.sessionId !== session.sessionId ||
-                receipt.claimEpoch !== session.claimEpoch ||
-                receipt.sourceKey !== row.source_key ||
-                receipt.worktreeKey !== row.worktree_key ||
-                receipt.appRootKey !== row.app_root_key ||
-                receipt.deviceId !== device.deviceId ||
-                receipt.appId !== device.appId ||
-                receipt.installGeneration !== install?.installGeneration ||
-                receipt.artifactDigest !== install?.artifactDigest ||
-                receipt.runnerInstanceId !== runner?.instanceId ||
-                receipt.runnerPid !== runner?.pid ||
-                receipt.runnerProcessBirth !== runner?.processBirth ||
-                receipt.runnerClaim !== runnerClaim?.resource_key ||
-                receipt.runnerCapabilityHash !== runnerCapabilityHash) {
-                throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'snapshot receipt does not match exact persistent platform authority');
+            this.verifyOperation(operation);
+            for (const staged of pending) {
+                const current = this.#platformReceiptFromCurrentAuthority(staged.session, staged.platform, staged.receipt);
+                const runnerClaim = String(staged.receipt.runnerClaim);
+                const deviceClaim = String(staged.receipt.deviceClaim);
+                for (const resource of [
+                    { type: 'runner-receipt', key: runnerClaim },
+                    { type: 'device-receipt', key: deviceClaim },
+                ]) {
+                    const existing = this.#findClaim(resource.type, resource.key);
+                    if (existing &&
+                        (existing.session_id !== staged.session.sessionId ||
+                            existing.claim_epoch !== staged.session.claimEpoch)) {
+                        throw claimConflict(existing);
+                    }
+                }
+                this.#invalidatePlatformReceipt(staged.session, staged.platform);
+                for (const resource of [
+                    { type: 'runner-receipt', key: runnerClaim },
+                    { type: 'device-receipt', key: deviceClaim },
+                ]) {
+                    this.#database
+                        .prepare(`INSERT INTO claims(
+                 resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+               ) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+                 session_id = excluded.session_id,
+                 claim_epoch = excluded.claim_epoch,
+                 lease_until_ms = excluded.lease_until_ms`)
+                        .run(resource.type, resource.key, staged.session.sessionId, staged.session.claimEpoch, now + this.#leaseMs);
+                }
+                this.#database
+                    .prepare(`INSERT INTO platform_authority_receipts(
+               session_id, claim_epoch, platform, receipt_json, updated_ms
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(session_id, platform) DO UPDATE SET
+               claim_epoch = excluded.claim_epoch,
+               receipt_json = excluded.receipt_json,
+               updated_ms = excluded.updated_ms`)
+                    .run(staged.session.sessionId, staged.session.claimEpoch, staged.platform, JSON.stringify({ receipt: staged.receipt, probe: current.probe }), now);
             }
-            const claimKey = String(receipt.runnerClaim);
-            const existingReceiptClaim = this.#findClaim('runner-receipt', claimKey);
-            if (existingReceiptClaim &&
-                (existingReceiptClaim.session_id !== session.sessionId ||
-                    existingReceiptClaim.claim_epoch !== session.claimEpoch)) {
-                throw claimConflict(existingReceiptClaim);
-            }
-            this.#invalidatePlatformReceipt(session, platform);
-            this.#database
-                .prepare(`INSERT INTO claims(
-             resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-           ) VALUES ('runner-receipt', ?, ?, ?, ?)
-           ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-             session_id = excluded.session_id,
-             claim_epoch = excluded.claim_epoch,
-             lease_until_ms = excluded.lease_until_ms`)
-                .run(claimKey, session.sessionId, session.claimEpoch, now + this.#leaseMs);
-            this.#database
-                .prepare(`INSERT INTO platform_authority_receipts(
-             session_id, claim_epoch, platform, receipt_json, updated_ms
-           ) VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(session_id, platform) DO UPDATE SET
-             claim_epoch = excluded.claim_epoch,
-             receipt_json = excluded.receipt_json,
-             updated_ms = excluded.updated_ms`)
-                .run(session.sessionId, session.claimEpoch, platform, JSON.stringify(receipt), now);
         });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
     }
     validatePlatformAuthorityReceipt(session, platform, receipt) {
         const row = this.#database
             .prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
          WHERE session_id = ? AND platform = ?`)
             .get(session.sessionId, platform);
-        const claim = this.#findClaim('runner-receipt', String(receipt.runnerClaim));
+        const persisted = typeof row?.receipt_json === 'string'
+            ? JSON.parse(row.receipt_json)
+            : null;
+        const persistedReceipt = persisted?.receipt && typeof persisted.receipt === 'object'
+            ? persisted.receipt
+            : persisted;
+        const runnerClaim = this.#findClaim('runner-receipt', String(receipt.runnerClaim));
+        const deviceClaim = this.#findClaim('device-receipt', String(receipt.deviceClaim));
         return (row?.claim_epoch === session.claimEpoch &&
-            typeof row.receipt_json === 'string' &&
-            row.receipt_json === JSON.stringify(receipt) &&
-            claim?.session_id === session.sessionId &&
-            claim.claim_epoch === session.claimEpoch);
+            JSON.stringify(persistedReceipt) === JSON.stringify(receipt) &&
+            runnerClaim?.session_id === session.sessionId &&
+            runnerClaim.claim_epoch === session.claimEpoch &&
+            deviceClaim?.session_id === session.sessionId &&
+            deviceClaim.claim_epoch === session.claimEpoch);
+    }
+    getPlatformAuthorityProbe(session, platform, receipt) {
+        if (!this.validatePlatformAuthorityReceipt(session, platform, receipt))
+            return null;
+        const row = this.#database
+            .prepare(`SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`)
+            .get(session.sessionId, session.claimEpoch, platform);
+        if (typeof row?.receipt_json !== 'string')
+            return null;
+        const persisted = JSON.parse(row.receipt_json);
+        const probe = persisted.probe;
+        if (!probe ||
+            createHash('sha256').update(probe.capability).digest('hex') !==
+                receipt.runnerCapabilityHash) {
+            return null;
+        }
+        return probe;
     }
     adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
         const priorStatus = this.getSessionStatus(priorSessionId);
@@ -1212,6 +1247,7 @@ export class SessionRegistry {
                 .prepare('DELETE FROM operations WHERE operation_id = ?')
                 .run(operation.operationId);
         });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
     }
     cancelOperation(operation) {
         this.#transaction(() => {
@@ -1221,6 +1257,7 @@ export class SessionRegistry {
              AND authority_version = ?`)
                 .run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
         });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
     }
     verifyOperation(operation) {
         const session = asSession(this.#database
@@ -1488,7 +1525,74 @@ export class SessionRegistry {
     }
     #findConflictingClaim(resource) {
         return (this.#findClaim(resource.type, resource.key) ??
-            (resource.type === 'runner' ? this.#findClaim('runner-receipt', resource.key) : null));
+            (resource.type === 'runner'
+                ? this.#findClaim('runner-receipt', resource.key)
+                : resource.type === 'device'
+                    ? this.#findClaim('device-receipt', resource.key)
+                    : null));
+    }
+    #platformReceiptFromCurrentAuthority(session, platform, receipt) {
+        const row = this.#requireSession(session);
+        const bindings = JSON.parse(row.bindings_json);
+        const device = bindings.device;
+        const install = bindings.install;
+        const runner = bindings.runner;
+        const runnerClaim = this.#database
+            .prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`)
+            .get(session.sessionId, session.claimEpoch);
+        const deviceClaim = this.#database
+            .prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`)
+            .get(session.sessionId, session.claimEpoch);
+        const runnerCapabilityHash = typeof runner?.capability === 'string'
+            ? createHash('sha256').update(runner.capability).digest('hex')
+            : null;
+        if (device?.platform !== platform ||
+            receipt.sessionId !== session.sessionId ||
+            receipt.claimEpoch !== session.claimEpoch ||
+            receipt.sourceKey !== row.source_key ||
+            receipt.worktreeKey !== row.worktree_key ||
+            receipt.appRootKey !== row.app_root_key ||
+            receipt.deviceId !== device.deviceId ||
+            receipt.appId !== device.appId ||
+            receipt.installGeneration !== install?.installGeneration ||
+            receipt.artifactDigest !== install?.artifactDigest ||
+            receipt.runnerInstanceId !== runner?.instanceId ||
+            receipt.runnerPid !== runner?.pid ||
+            receipt.runnerProcessBirth !== runner?.processBirth ||
+            receipt.runnerPort !== runner?.port ||
+            receipt.runnerClaim !== runnerClaim?.resource_key ||
+            receipt.deviceClaim !== deviceClaim?.resource_key ||
+            receipt.runnerCapabilityHash !== runnerCapabilityHash ||
+            typeof runner?.port !== 'number' ||
+            typeof runner.capability !== 'string' ||
+            typeof runner.instanceId !== 'string' ||
+            typeof runner.pid !== 'number' ||
+            typeof runner.processBirth !== 'string' ||
+            typeof device?.deviceId !== 'string' ||
+            typeof device.appId !== 'string' ||
+            typeof install?.installGeneration !== 'string') {
+            throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'snapshot receipt does not match exact persistent platform authority');
+        }
+        return {
+            session,
+            platform,
+            receipt,
+            probe: {
+                platform,
+                port: runner.port,
+                capability: runner.capability,
+                instanceId: runner.instanceId,
+                sessionId: session.sessionId,
+                claimEpoch: session.claimEpoch,
+                deviceId: device.deviceId,
+                appId: device.appId,
+                pid: runner.pid,
+                processBirth: runner.processBirth,
+                installGeneration: install.installGeneration,
+            },
+        };
     }
     #invalidatePlatformReceipt(session, platform) {
         const row = this.#database
@@ -1496,13 +1600,23 @@ export class SessionRegistry {
          WHERE session_id = ? AND claim_epoch = ? AND platform = ?`)
             .get(session.sessionId, session.claimEpoch, platform);
         if (typeof row?.receipt_json === 'string') {
-            const receipt = JSON.parse(row.receipt_json);
+            const persisted = JSON.parse(row.receipt_json);
+            const receipt = persisted.receipt && typeof persisted.receipt === 'object'
+                ? persisted.receipt
+                : persisted;
             if (typeof receipt.runnerClaim === 'string') {
                 this.#database
                     .prepare(`DELETE FROM claims
              WHERE resource_type = 'runner-receipt' AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`)
                     .run(receipt.runnerClaim, session.sessionId, session.claimEpoch);
+            }
+            if (typeof receipt.deviceClaim === 'string') {
+                this.#database
+                    .prepare(`DELETE FROM claims
+             WHERE resource_type = 'device-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`)
+                    .run(receipt.deviceClaim, session.sessionId, session.claimEpoch);
             }
         }
         this.#database

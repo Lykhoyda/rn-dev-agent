@@ -17,6 +17,7 @@ import {
   markSnapshotDirty,
   isSnapshotCacheValid,
   setSnapshotAuthorityProvider,
+  validateCachedSnapshotAuthority,
 } from '../../dist/agent-device-wrapper.js';
 import { toolInvalidatesSnapshotCache } from '../../dist/observability/live-device.js';
 
@@ -85,7 +86,9 @@ test('snapshot cache preserves exact per-platform receipts within one source gen
       runnerPid: 123,
       runnerProcessBirth: `${platform}-birth`,
       runnerCapabilityHash: `${platform}-capability`,
+      runnerPort: platform === 'ios' ? 9100 : 9200,
       runnerClaim: `${platform}:${deviceId}`,
+      deviceClaim: `${platform}:${deviceId}`,
     }),
     record: (receipt) => valid.add(JSON.stringify(receipt)),
     validate: (receipt) => valid.has(JSON.stringify(receipt)),
@@ -117,7 +120,9 @@ test('snapshot cache rejects cross-session and stale-source receipts', () => {
     runnerPid: 123,
     runnerProcessBirth: 'ios-birth',
     runnerCapabilityHash: 'ios-capability',
+    runnerPort: 9100,
     runnerClaim: 'ios:ios-device',
+    deviceClaim: 'ios:ios-device',
   };
   const valid = new Set();
   setSnapshotAuthorityProvider({
@@ -151,7 +156,9 @@ test('snapshot cache rejects a receipt invalidated by persistent platform author
       runnerPid: 123,
       runnerProcessBirth: 'ios-birth',
       runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
       runnerClaim: 'ios:ios-device',
+      deviceClaim: 'ios:ios-device',
     }),
     record: () => {},
     validate: () => valid,
@@ -160,6 +167,38 @@ test('snapshot cache rejects a receipt invalidated by persistent platform author
   valid = false;
 
   assert.equal(getCachedSnapshot('ios'), undefined);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects unavailable live runner authority', async () => {
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform: 'ios',
+      deviceId: 'ios-device',
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: 'ios-install',
+      artifactDigest: 'ios-artifact',
+      runnerInstanceId: 'ios-runner',
+      runnerPid: 123,
+      runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
+      runnerClaim: 'ios:ios-device:9100',
+      deviceClaim: 'ios:ios-device',
+    }),
+    record: () => {},
+    validate: () => true,
+    validateLive: async () => false,
+  });
+  cacheSnapshot('ios', NODES);
+
+  assert.equal(await validateCachedSnapshotAuthority('ios'), false);
   setSnapshotAuthorityProvider(null);
 });
 

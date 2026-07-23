@@ -319,6 +319,8 @@ export function createAuthorityGate(runtime, dependencies) {
                         }
                         status = proofStatus;
                     }
+                    if (operation)
+                        registry.commitPlatformAuthorityReceipts(operation);
                     return addMeta(result, {
                         authorityTransition: true,
                         authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after),
@@ -357,7 +359,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 });
                 const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                 registry.verifyOperation(operation);
-                const result = await handler(...handlerArgs);
+                const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                 const replacesRuntimeTarget = tool === 'cdp_reload' || tool === 'cdp_restart';
                 if (replacesRuntimeTarget && !resultSucceeded(result)) {
                     const priorBundle = status.bindings.bundle;
@@ -427,6 +429,8 @@ export function createAuthorityGate(runtime, dependencies) {
                 if (!resultIsCanonicalSuccess(result)) {
                     return addMeta(result, { authoritative: false });
                 }
+                if (operation)
+                    registry.commitPlatformAuthorityReceipts(operation);
                 return addMeta(result, { authorityReceipt: receipt(status, profile, after) });
             }
             catch (error) {

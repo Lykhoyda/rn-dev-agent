@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   managedMetroListenerPid,
+  probeManagedMetroListener,
   resolveManagedMetroCommand,
   startManagedMetro,
 } from '../../../dist/session/managed-metro.js';
@@ -17,6 +18,23 @@ test('managed Metro discovers listener PIDs with platform-native commands', () =
   assert.equal(managedMetroListenerPid(8341, 'linux', execute), 513);
   assert.equal(calls[0]?.[0], 'powershell.exe');
   assert.equal(calls[1]?.[0], 'ss');
+});
+
+test('managed Metro listener probes distinguish absence from lookup failure', () => {
+  assert.deepEqual(
+    probeManagedMetroListener(8341, 'linux', (() => '') as never),
+    { status: 'absent' },
+  );
+  assert.deepEqual(
+    probeManagedMetroListener(
+      8341,
+      'linux',
+      (() => {
+        throw new Error('ss unavailable');
+      }) as never,
+    ),
+    { status: 'unknown' },
+  );
 });
 
 test('managed Metro selects only package-local Expo and bare RN CLIs', () => {

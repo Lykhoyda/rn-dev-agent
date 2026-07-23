@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { buildRunnerAuthorityEnv } from '../../../dist/runners/rn-fast-runner-client.js';
+import { afterEach, test } from 'node:test';
+import {
+  _setFetchForTest,
+  buildRunnerAuthorityEnv,
+  probeFastRunnerAuthority,
+} from '../../../dist/runners/rn-fast-runner-client.js';
 import {
   androidHealthMatchesAuthority,
   buildInstrumentAuthorityArgs,
 } from '../../../dist/runners/rn-android-runner-client.js';
+
+afterEach(() => {
+  _setFetchForTest(globalThis.fetch);
+});
 
 test('iOS forwards one runner capability and fenced identity through xcodebuild', () => {
   const env = buildRunnerAuthorityEnv({
@@ -71,4 +79,37 @@ test('fresh Android admission rejects a health tuple from another runner instanc
     ),
     false,
   );
+});
+
+test('retained iOS authority probe authenticates capability and exact tuple', async () => {
+  let authorization = '';
+  _setFetchForTest(async (_url, init) => {
+    authorization = String(init?.headers?.authorization ?? '');
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        instanceId: 'runner-1',
+        sessionId: 'session-1',
+        claimEpoch: 9,
+        deviceId: 'device-1',
+        appId: 'dev.example',
+      }),
+    };
+  });
+
+  assert.equal(
+    await probeFastRunnerAuthority({
+      port: 9100,
+      capability: 'secret',
+      instanceId: 'runner-1',
+      sessionId: 'session-1',
+      claimEpoch: 9,
+      deviceId: 'device-1',
+      appId: 'dev.example',
+    }),
+    true,
+  );
+  assert.equal(authorization, 'Bearer secret');
 });

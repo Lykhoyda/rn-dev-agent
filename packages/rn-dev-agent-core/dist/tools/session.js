@@ -9,18 +9,24 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
-import { readProcessBirth } from '../session/process-birth.js';
-import { managedMetroListenerPid } from '../session/managed-metro.js';
-async function waitForStopped(probe, timeoutMs, message) {
+import { probeProcessBirth, } from '../session/process-birth.js';
+import { probeManagedMetroListener, } from '../session/managed-metro.js';
+async function waitForExactStopped(probe, timeoutMs, message) {
     const deadline = Date.now() + timeoutMs;
-    while (probe()) {
+    while (true) {
+        const status = probe();
+        if (status === 'stopped')
+            return;
+        if (status === 'unknown') {
+            throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', `${message}; shutdown identity is unknown`);
+        }
         if (Date.now() >= deadline) {
             throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', message);
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
     }
 }
-async function stopHandoffObserve(binding, listenerPid = managedMetroListenerPid, processBirth = readProcessBirth, timeoutMs = 2_000) {
+async function stopHandoffObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2_000) {
     const port = Number(binding.port);
     const pid = Number(binding.pid);
     const expectedBirth = String(binding.processBirth ?? '');
@@ -35,10 +41,20 @@ async function stopHandoffObserve(binding, listenerPid = managedMetroListenerPid
         !Number.isFinite(stopRequestedAt)) {
         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'source Observe cleanup authority is incomplete');
     }
-    const currentListener = listenerPid(port);
-    if (currentListener !== pid)
+    const currentListener = listenerProbe(port);
+    if (currentListener.status === 'unknown') {
+        throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'source Observe listener lookup is inconclusive');
+    }
+    if (currentListener.status === 'absent' || currentListener.pid !== pid)
         return;
-    if (processBirth(pid)?.token !== expectedBirth) {
+    const currentBirth = processProbe(pid);
+    if (currentBirth.status === 'unknown') {
+        throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'source Observe process identity is unavailable');
+    }
+    if (currentBirth.status === 'absent') {
+        throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'source Observe listener identity is internally inconsistent');
+    }
+    if (currentBirth.birth.token !== expectedBirth) {
         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'source Observe listener PID was reused before cleanup completed');
     }
     const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
@@ -51,9 +67,14 @@ async function stopHandoffObserve(binding, listenerPid = managedMetroListenerPid
     if (!response.ok) {
         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'source Observe server refused fenced handoff cleanup');
     }
-    await waitForStopped(() => listenerPid(port) === pid, timeoutMs, 'source Observe listener did not stop before the cleanup deadline');
+    await waitForExactStopped(() => {
+        const observed = listenerProbe(port);
+        if (observed.status === 'unknown')
+            return 'unknown';
+        return observed.status === 'listening' && observed.pid === pid ? 'running' : 'stopped';
+    }, timeoutMs, 'source Observe listener did not stop before the cleanup deadline');
 }
-async function stopHandoffRunner(binding, processBirth = readProcessBirth, signalProcess = process.kill, timeoutMs = 2_000) {
+async function stopHandoffRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2_000) {
     const pid = Number(binding.pid);
     const expectedBirth = String(binding.processBirth ?? '');
     const instanceId = String(binding.instanceId ?? '');
@@ -68,10 +89,21 @@ async function stopHandoffRunner(binding, processBirth = readProcessBirth, signa
         !Number.isFinite(stopRequestedAt)) {
         throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'source runner cleanup identity is incomplete');
     }
-    if (processBirth(pid)?.token !== expectedBirth)
+    const current = processProbe(pid);
+    if (current.status === 'unknown') {
+        throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'source runner process identity is unavailable');
+    }
+    if (current.status === 'absent' || current.birth.token !== expectedBirth)
         return;
     signalProcess(pid, 'SIGTERM');
-    await waitForStopped(() => processBirth(pid)?.token === expectedBirth, timeoutMs, 'source runner process did not stop before the cleanup deadline');
+    await waitForExactStopped(() => {
+        const observed = processProbe(pid);
+        if (observed.status === 'unknown')
+            return 'unknown';
+        return observed.status === 'present' && observed.birth.token === expectedBirth
+            ? 'running'
+            : 'stopped';
+    }, timeoutMs, 'source runner process did not stop before the cleanup deadline');
 }
 function authorityFailure(error) {
     if (error instanceof SessionAuthorityError) {
@@ -324,7 +356,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         await dependencies.stopHandoffRunner(runnerCleanup);
                     }
                     else {
-                        await stopHandoffRunner(runnerCleanup, dependencies.readProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+                        await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
                     }
                     registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'runner');
                 }
@@ -340,7 +372,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         await dependencies.stopHandoffObserve(observeCleanup);
                     }
                     else {
-                        await stopHandoffObserve(observeCleanup, dependencies.pidForPort, dependencies.readProcessBirth, dependencies.cleanupTimeoutMs);
+                        await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
                     }
                     registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'observe');
                 }

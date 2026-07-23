@@ -73,7 +73,8 @@ import { createRecordTestStartHandler, createRecordTestStopHandler, createRecord
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
-import { stopFastRunner } from './runners/rn-fast-runner-client.js';
+import { probeFastRunnerAuthority, stopFastRunner, } from './runners/rn-fast-runner-client.js';
+import { androidHealthMatchesAuthority, probeAndroidRunnerHealthInfo, } from './runners/rn-android-runner-client.js';
 import { captureInstallGeneration } from './session/install-authority.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
@@ -263,7 +264,9 @@ setSnapshotAuthorityProvider({
             runnerCapabilityHash: typeof runner?.capability === 'string'
                 ? createHash('sha256').update(runner.capability).digest('hex')
                 : undefined,
+            runnerPort: runner?.port,
             runnerClaim: status.claims.find((claim) => claim.type === 'runner')?.key,
+            deviceClaim: status.claims.find((claim) => claim.type === 'device')?.key,
         };
     },
     record: (receipt) => {
@@ -294,6 +297,32 @@ setSnapshotAuthorityProvider({
             return (typeof receipt.runnerPid === 'number' &&
                 typeof receipt.runnerProcessBirth === 'string' &&
                 readProcessBirth(receipt.runnerPid)?.token === receipt.runnerProcessBirth);
+        }
+        catch {
+            return false;
+        }
+    },
+    validateLive: async (receipt) => {
+        try {
+            const { registry, session } = authorityRuntime.requireOperational();
+            const probe = registry.getPlatformAuthorityProbe(session, String(receipt.platform), { ...receipt });
+            if (!probe ||
+                captureInstallGeneration({
+                    platform: probe.platform,
+                    deviceId: probe.deviceId,
+                    appId: probe.appId,
+                }) !== probe.installGeneration ||
+                readProcessBirth(probe.pid)?.token !== probe.processBirth) {
+                return false;
+            }
+            if (probe.platform === 'ios') {
+                return probeFastRunnerAuthority(probe);
+            }
+            if (probe.platform === 'android') {
+                const health = await probeAndroidRunnerHealthInfo(probe.port, probe.capability);
+                return health.ok === true && androidHealthMatchesAuthority(health, probe);
+            }
+            return false;
         }
         catch {
             return false;

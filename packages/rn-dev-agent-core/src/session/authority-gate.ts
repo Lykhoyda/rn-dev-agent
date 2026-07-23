@@ -429,6 +429,7 @@ export function createAuthorityGate(
               }
               status = proofStatus;
             }
+            if (operation) registry.commitPlatformAuthorityReceipts(operation);
             return addMeta(result, {
               authorityTransition: true,
               authorityReceipt: receipt(
@@ -473,7 +474,9 @@ export function createAuthorityGate(
             ),
           );
           registry.verifyOperation(operation);
-          const result = await handler(...handlerArgs);
+          const result = await registry.runWithOperation(operation, () =>
+            handler(...handlerArgs),
+          );
           const replacesRuntimeTarget = tool === 'cdp_reload' || tool === 'cdp_restart';
           if (replacesRuntimeTarget && !resultSucceeded(result)) {
             const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
@@ -562,6 +565,7 @@ export function createAuthorityGate(
           if (!resultIsCanonicalSuccess(result)) {
             return addMeta(result, { authoritative: false });
           }
+          if (operation) registry.commitPlatformAuthorityReceipts(operation);
           return addMeta(result, { authorityReceipt: receipt(status, profile, after) });
         } catch (error) {
           return authorityFailure(error);

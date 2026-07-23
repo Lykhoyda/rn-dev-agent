@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 
-function cleanupRuntime(finish: () => void, includeObserve = true) {
+function cleanupRuntime(finish: () => void, includeObserve = true, includeRunner = true) {
   const status = {
     sessionId: 'target',
     sourceKey: 'source',
@@ -15,21 +15,25 @@ function cleanupRuntime(finish: () => void, includeObserve = true) {
     source: { kind: 'git' },
     bindings: {
       handoffCleanup: {
-        runner: {
-          platform: 'ios',
-          deviceId: 'device',
-          pid: 123,
-          processBirth: 'birth',
-          instanceId: 'runner',
-          capability: 'runner-capability',
-          claimKey: 'ios:device:9100',
-          port: 9100,
-          stopRequestedAt: null,
-          completedAt: null,
-        },
+        runner: includeRunner
+          ? {
+              platform: 'ios',
+              deviceId: 'device',
+              pid: 123,
+              processBirth: 'birth',
+              instanceId: 'runner',
+              capability: 'runner-capability',
+              claimKey: 'ios:device:9100',
+              port: 9100,
+              stopRequestedAt: null,
+              completedAt: null,
+            }
+          : null,
         observe: includeObserve
           ? {
               port: 7333,
+              pid: 456,
+              processBirth: 'observe-birth',
               instanceId: 'observe',
               cleanupCapability: 'capability',
               stopRequestedAt: null,
@@ -111,8 +115,13 @@ test('handoff cleanup signals only the persisted exact runner PID', async () => 
   let alive = true;
   const signals: Array<[number, NodeJS.Signals]> = [];
   const handler = createSessionHandler(cleanupRuntime(() => {}, false), {
-    readProcessBirth: () =>
-      alive ? { pid: 123, source: 'linux-proc', token: 'birth' } : null,
+    probeProcessBirth: () =>
+      alive
+        ? {
+            status: 'present',
+            birth: { pid: 123, source: 'linux-proc', token: 'birth' },
+          }
+        : { status: 'absent' },
     signalProcess: (pid, signal) => {
       signals.push([pid, signal]);
       alive = false;
@@ -132,7 +141,10 @@ test('handoff cleanup signals only the persisted exact runner PID', async () => 
 test('handoff cleanup never signals a reused runner PID', async () => {
   const signals: Array<[number, NodeJS.Signals]> = [];
   const handler = createSessionHandler(cleanupRuntime(() => {}, false), {
-    readProcessBirth: () => ({ pid: 123, source: 'linux-proc', token: 'replacement-birth' }),
+    probeProcessBirth: () => ({
+      status: 'present',
+      birth: { pid: 123, source: 'linux-proc', token: 'replacement-birth' },
+    }),
     signalProcess: (pid, signal) => signals.push([pid, signal]),
   });
 
@@ -144,6 +156,70 @@ test('handoff cleanup never signals a reused runner PID', async () => {
 
   assert.equal(result.isError, undefined);
   assert.deepEqual(signals, []);
+});
+
+test('handoff cleanup remains fenced when runner absence is ambiguous', async () => {
+  let finished = false;
+  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), false), {
+    probeProcessBirth: () => ({ status: 'unknown' }),
+  });
+
+  const result = await handler({
+    action: 'accept_handoff',
+    handoffId: 'handoff',
+    token: 'token',
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(finished, false);
+});
+
+test('handoff cleanup accepts confirmed runner absence', async () => {
+  let finished = false;
+  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), false), {
+    probeProcessBirth: () => ({ status: 'absent' }),
+  });
+
+  const result = await handler({
+    action: 'accept_handoff',
+    handoffId: 'handoff',
+    token: 'token',
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(finished, true);
+});
+
+test('handoff cleanup remains fenced when listener absence is ambiguous', async () => {
+  let finished = false;
+  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), true, false), {
+    probeListener: () => ({ status: 'unknown' }),
+  });
+
+  const result = await handler({
+    action: 'accept_handoff',
+    handoffId: 'handoff',
+    token: 'token',
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(finished, false);
+});
+
+test('handoff cleanup accepts confirmed listener absence', async () => {
+  let finished = false;
+  const handler = createSessionHandler(cleanupRuntime(() => (finished = true), true, false), {
+    probeListener: () => ({ status: 'absent' }),
+  });
+
+  const result = await handler({
+    action: 'accept_handoff',
+    handoffId: 'handoff',
+    token: 'token',
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(finished, true);
 });
 
 test('handoff cleanup resumes after a later resource fails', async () => {

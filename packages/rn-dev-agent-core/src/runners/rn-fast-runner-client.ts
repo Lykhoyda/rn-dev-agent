@@ -985,7 +985,11 @@ function defaultProcessAlive(pid: number): boolean {
   }
 }
 
-async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpProbeResult> {
+async function defaultHttpProbe(
+  port: number,
+  timeoutMs: number,
+  capabilityOverride?: string,
+): Promise<HttpProbeResult> {
   // Use the same IPv4 loopback as the /command client (postCommand). The prior
   // [::1] here meant the health probe and the command channel could resolve to
   // different stacks, so a healthy IPv4 listener looked dead over IPv6.
@@ -995,7 +999,8 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
   try {
     // fetchImpl (not bare fetch) so the _setFetchForTest seam covers the health
     // probe like every other client call — production default is globalThis.fetch.
-    const capability = runnerState?.port === port ? runnerState.capability : undefined;
+    const capability =
+      capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
     const res = await fetchImpl(url, {
       signal: controller.signal,
       headers: capability ? { authorization: `Bearer ${capability}` } : {},
@@ -1057,6 +1062,32 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function probeFastRunnerAuthority(input: {
+  port: number;
+  capability: string;
+  instanceId: string;
+  sessionId: string;
+  claimEpoch: number;
+  deviceId: string;
+  appId: string;
+}): Promise<boolean> {
+  try {
+    const result = await defaultHttpProbe(input.port, 2_000, input.capability);
+    return (
+      result.ok &&
+      result.status === 200 &&
+      result.bodyOk === true &&
+      result.instanceId === input.instanceId &&
+      result.sessionId === input.sessionId &&
+      result.claimEpoch === input.claimEpoch &&
+      result.deviceId === input.deviceId &&
+      result.appId === input.appId
+    );
+  } catch {
+    return false;
   }
 }
 

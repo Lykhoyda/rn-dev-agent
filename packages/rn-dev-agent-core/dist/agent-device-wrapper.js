@@ -121,11 +121,13 @@ function currentSnapshotAuthority(platform) {
         installGeneration: authority?.installGeneration ?? null,
         runnerInstanceId: authority?.runnerInstanceId ?? null,
         runnerClaim: authority?.runnerClaim ?? null,
+        deviceClaim: authority?.deviceClaim ?? null,
         appId: authority?.appId ?? session?.appId ?? null,
         artifactDigest: authority?.artifactDigest ?? null,
         runnerPid: authority?.runnerPid ?? null,
         runnerProcessBirth: authority?.runnerProcessBirth ?? null,
         runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
+        runnerPort: authority?.runnerPort ?? null,
     };
 }
 function snapshotAuthorityIsValid(receipt, platform) {
@@ -145,12 +147,22 @@ function snapshotAuthorityIsValid(receipt, platform) {
         receipt.installGeneration !== null &&
         receipt.runnerInstanceId !== null &&
         receipt.runnerClaim !== null &&
+        receipt.deviceClaim !== null &&
         receipt.appId !== null &&
         receipt.artifactDigest !== null &&
         receipt.runnerPid !== null &&
         receipt.runnerProcessBirth !== null &&
         receipt.runnerCapabilityHash !== null &&
+        receipt.runnerPort !== null &&
         snapshotAuthorityProvider?.validate(receipt));
+}
+export async function validateCachedSnapshotAuthority(platform) {
+    const snapshot = snapshotCache.get(platform);
+    if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform))
+        return false;
+    if (snapshot.authorityReceipt.sessionId === null)
+        return true;
+    return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
 }
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot

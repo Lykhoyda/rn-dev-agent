@@ -22,8 +22,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
-import { readProcessBirth } from '../session/process-birth.js';
-import { managedMetroListenerPid } from '../session/managed-metro.js';
+import {
+  probeProcessBirth,
+  type ProcessBirthProbe,
+} from '../session/process-birth.js';
+import {
+  probeManagedMetroListener,
+  type ManagedMetroListenerProbe,
+} from '../session/managed-metro.js';
 
 export interface SessionToolInput {
   action:
@@ -71,19 +77,27 @@ interface SessionHandlerDependencies {
   pinDevClient?: (status: SessionStatus) => Promise<BundleAuthorityBinding>;
   stopHandoffObserve?: (binding: Record<string, unknown>) => Promise<void>;
   stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
-  readProcessBirth?: typeof readProcessBirth;
-  pidForPort?: typeof managedMetroListenerPid;
+  probeProcessBirth?: (pid: number) => ProcessBirthProbe;
+  probeListener?: (port: number) => ManagedMetroListenerProbe;
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
   cleanupTimeoutMs?: number;
 }
 
-async function waitForStopped(
-  probe: () => boolean,
+async function waitForExactStopped(
+  probe: () => 'running' | 'stopped' | 'unknown',
   timeoutMs: number,
   message: string,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (probe()) {
+  while (true) {
+    const status = probe();
+    if (status === 'stopped') return;
+    if (status === 'unknown') {
+      throw new SessionAuthorityError(
+        'HANDOFF_NOT_AUTHORIZED',
+        `${message}; shutdown identity is unknown`,
+      );
+    }
     if (Date.now() >= deadline) {
       throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', message);
     }
@@ -93,8 +107,8 @@ async function waitForStopped(
 
 async function stopHandoffObserve(
   binding: Record<string, unknown>,
-  listenerPid: typeof managedMetroListenerPid = managedMetroListenerPid,
-  processBirth: typeof readProcessBirth = readProcessBirth,
+  listenerProbe: (port: number) => ManagedMetroListenerProbe = probeManagedMetroListener,
+  processProbe: (pid: number) => ProcessBirthProbe = probeProcessBirth,
   timeoutMs = 2_000,
 ): Promise<void> {
   const port = Number(binding.port);
@@ -116,9 +130,28 @@ async function stopHandoffObserve(
       'source Observe cleanup authority is incomplete',
     );
   }
-  const currentListener = listenerPid(port);
-  if (currentListener !== pid) return;
-  if (processBirth(pid)?.token !== expectedBirth) {
+  const currentListener = listenerProbe(port);
+  if (currentListener.status === 'unknown') {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'source Observe listener lookup is inconclusive',
+    );
+  }
+  if (currentListener.status === 'absent' || currentListener.pid !== pid) return;
+  const currentBirth = processProbe(pid);
+  if (currentBirth.status === 'unknown') {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'source Observe process identity is unavailable',
+    );
+  }
+  if (currentBirth.status === 'absent') {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'source Observe listener identity is internally inconsistent',
+    );
+  }
+  if (currentBirth.birth.token !== expectedBirth) {
     throw new SessionAuthorityError(
       'OBSERVE_AUTHORITY_MISMATCH',
       'source Observe listener PID was reused before cleanup completed',
@@ -137,8 +170,12 @@ async function stopHandoffObserve(
       'source Observe server refused fenced handoff cleanup',
     );
   }
-  await waitForStopped(
-    () => listenerPid(port) === pid,
+  await waitForExactStopped(
+    () => {
+      const observed = listenerProbe(port);
+      if (observed.status === 'unknown') return 'unknown';
+      return observed.status === 'listening' && observed.pid === pid ? 'running' : 'stopped';
+    },
     timeoutMs,
     'source Observe listener did not stop before the cleanup deadline',
   );
@@ -146,7 +183,7 @@ async function stopHandoffObserve(
 
 async function stopHandoffRunner(
   binding: Record<string, unknown>,
-  processBirth: typeof readProcessBirth = readProcessBirth,
+  processProbe: (pid: number) => ProcessBirthProbe = probeProcessBirth,
   signalProcess: (pid: number, signal: NodeJS.Signals) => void = process.kill,
   timeoutMs = 2_000,
 ): Promise<void> {
@@ -169,10 +206,23 @@ async function stopHandoffRunner(
       'source runner cleanup identity is incomplete',
     );
   }
-  if (processBirth(pid)?.token !== expectedBirth) return;
+  const current = processProbe(pid);
+  if (current.status === 'unknown') {
+    throw new SessionAuthorityError(
+      'RUNNER_ADOPTION_REQUIRED',
+      'source runner process identity is unavailable',
+    );
+  }
+  if (current.status === 'absent' || current.birth.token !== expectedBirth) return;
   signalProcess(pid, 'SIGTERM');
-  await waitForStopped(
-    () => processBirth(pid)?.token === expectedBirth,
+  await waitForExactStopped(
+    () => {
+      const observed = processProbe(pid);
+      if (observed.status === 'unknown') return 'unknown';
+      return observed.status === 'present' && observed.birth.token === expectedBirth
+        ? 'running'
+        : 'stopped';
+    },
     timeoutMs,
     'source runner process did not stop before the cleanup deadline',
   );
@@ -516,7 +566,7 @@ export function createSessionHandler(
           } else {
             await stopHandoffRunner(
               runnerCleanup,
-              dependencies.readProcessBirth,
+              dependencies.probeProcessBirth,
               dependencies.signalProcess,
               dependencies.cleanupTimeoutMs,
             );
@@ -549,8 +599,8 @@ export function createSessionHandler(
           } else {
             await stopHandoffObserve(
               observeCleanup,
-              dependencies.pidForPort,
-              dependencies.readProcessBirth,
+              dependencies.probeListener,
+              dependencies.probeProcessBirth,
               dependencies.cleanupTimeoutMs,
             );
           }

@@ -2,7 +2,6 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { closeSync, existsSync, openSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pidForPort } from '../cdp/metro-cwd.js';
 import { captureMetroBinding } from './metro-binding.js';
 import { readProcessBirth } from './process-birth.js';
 function parentPid(pid) {
@@ -38,6 +37,10 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
     return false;
 }
 export function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync) {
+    const probe = probeManagedMetroListener(port, platform, execute);
+    return probe.status === 'listening' ? probe.pid : null;
+}
+export function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync) {
     try {
         if (platform === 'win32') {
             const output = execute('powershell.exe', [
@@ -47,7 +50,9 @@ export function managedMetroListenerPid(port, platform = process.platform, execu
                 `(Get-NetTCPConnection -State Listen -LocalPort ${port} | Select-Object -First 1 -ExpandProperty OwningProcess)`,
             ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 });
             const pid = Number(String(output).trim());
-            return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+            return Number.isSafeInteger(pid) && pid > 0
+                ? { status: 'listening', pid }
+                : { status: 'absent' };
         }
         if (platform === 'linux') {
             const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
@@ -57,12 +62,24 @@ export function managedMetroListenerPid(port, platform = process.platform, execu
             });
             const match = /pid=(\d+)/.exec(String(output));
             const pid = Number(match?.[1]);
-            return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+            return Number.isSafeInteger(pid) && pid > 0
+                ? { status: 'listening', pid }
+                : { status: 'absent' };
         }
-        return pidForPort(port);
+        const output = execute('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 2_000,
+        });
+        const pid = Number(String(output).trim().split(/\s+/)[0]);
+        return Number.isSafeInteger(pid) && pid > 0
+            ? { status: 'listening', pid }
+            : { status: 'absent' };
     }
-    catch {
-        return null;
+    catch (error) {
+        return platform === 'darwin' && error.status === 1
+            ? { status: 'absent' }
+            : { status: 'unknown' };
     }
 }
 export function resolveManagedMetroCommand(appRoot, dependencies = {}) {

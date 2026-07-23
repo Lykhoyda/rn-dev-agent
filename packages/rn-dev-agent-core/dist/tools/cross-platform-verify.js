@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join, extname } from 'node:path';
-import { getCachedSnapshot } from '../agent-device-wrapper.js';
+import { getCachedSnapshot, validateCachedSnapshotAuthority, } from '../agent-device-wrapper.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 export function findElement(nodes, query, matchBy) {
@@ -54,7 +54,7 @@ export function discoverTestIDs(dir) {
     walk(dir);
     return [...ids].sort();
 }
-export function createCrossPlatformVerifyHandler() {
+export function createCrossPlatformVerifyHandler(dependencies = {}) {
     return async (args) => {
         let elements = args.elements;
         let discoveredCount = 0;
@@ -77,8 +77,13 @@ export function createCrossPlatformVerifyHandler() {
             return failResult('Provide elements[] or scanDir to discover testIDs from source.');
         }
         const matchBy = args.matchBy ?? 'any';
-        const iosSnap = getCachedSnapshot('ios');
-        const androidSnap = getCachedSnapshot('android');
+        const validateAuthority = dependencies.validateAuthority ?? validateCachedSnapshotAuthority;
+        const [iosValid, androidValid] = await Promise.all([
+            validateAuthority('ios'),
+            validateAuthority('android'),
+        ]);
+        const iosSnap = iosValid ? getCachedSnapshot('ios') : undefined;
+        const androidSnap = androidValid ? getCachedSnapshot('android') : undefined;
         if (!iosSnap && !androidSnap) {
             return failResult('No cached snapshots for either platform. Run device_snapshot on iOS and Android first, ' +
                 'then call this tool to compare.', {

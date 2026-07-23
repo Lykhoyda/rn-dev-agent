@@ -45,6 +45,19 @@ function fixture() {
   };
 }
 
+async function recordPlatformReceipt(registry, session, platform, receipt) {
+  const operation = registry.beginOperation(session, {
+    operationId: `snapshot-${platform}`,
+    tool: 'device_snapshot',
+    profile: 'CSIMDR',
+  });
+  await registry.runWithOperation(operation, async () => {
+    registry.recordPlatformAuthorityReceipt(session, platform, receipt);
+  });
+  registry.commitPlatformAuthorityReceipts(operation);
+  registry.endOperation(operation);
+}
+
 test('multi-resource claims are atomic and identify the conflicting axis', () => {
   const { registry, create } = fixture();
   const a = create('a');
@@ -646,10 +659,13 @@ test('opaque recovery handles authorize only their bounded transition', () => {
   );
 });
 
-test('persistent platform receipts reject exact authority replacement', () => {
+test('persistent platform receipts reject exact authority replacement', async () => {
   const { registry, create } = fixture();
   const owner = create('a');
-  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:runner-a' }]);
+  registry.claimResources(owner, [
+    { type: 'device', key: 'ios:device-a' },
+    { type: 'runner', key: 'ios:device-a:runner-a' },
+  ]);
   registry.updateBindings(owner, {
     state: 'ready',
     bindings: {
@@ -660,6 +676,7 @@ test('persistent platform receipts reject exact authority replacement', () => {
         artifactDigest: 'artifact-a',
       },
       runner: {
+        port: 9100,
         instanceId: 'runner-a',
         pid: 303,
         processBirth: 'runner-birth-a',
@@ -683,10 +700,30 @@ test('persistent platform receipts reject exact authority replacement', () => {
     runnerPid: 303,
     runnerProcessBirth: 'runner-birth-a',
     runnerCapabilityHash: createHash('sha256').update('runner-capability-a').digest('hex'),
+    runnerPort: 9100,
     runnerClaim: 'ios:device-a:runner-a',
+    deviceClaim: 'ios:device-a',
   };
-  registry.recordPlatformAuthorityReceipt(owner, 'ios', receipt);
+  const provisional = registry.beginOperation(owner, {
+    operationId: 'snapshot-provisional',
+    tool: 'device_snapshot',
+    profile: 'CSIMDR',
+  });
+  await registry.runWithOperation(provisional, async () => {
+    registry.recordPlatformAuthorityReceipt(owner, 'ios', receipt);
+  });
+  registry.cancelOperation(provisional);
+  registry.commitPlatformAuthorityReceipts(provisional);
+  assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), false);
+  assert.equal(registry.getClaim('runner-receipt', receipt.runnerClaim), null);
+  assert.equal(registry.getClaim('device-receipt', receipt.deviceClaim), null);
+
+  await recordPlatformReceipt(registry, owner, 'ios', receipt);
   assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), true);
+  assert.equal(
+    registry.getPlatformAuthorityProbe(owner, 'ios', receipt)?.capability,
+    'runner-capability-a',
+  );
 
   registry.replaceDeviceAuthority(owner, {
     device: { platform: 'ios', deviceId: 'device-b', appId: 'dev.example' },
@@ -694,11 +731,14 @@ test('persistent platform receipts reject exact authority replacement', () => {
   assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), false);
 });
 
-test('retained platform receipt claim blocks runner authority reuse', () => {
+test('retained platform receipt claims block runner and device authority reuse', async () => {
   const { registry, create } = fixture();
   const owner = create('a');
   const contender = create('b');
-  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:9100' }]);
+  registry.claimResources(owner, [
+    { type: 'device', key: 'ios:device-a' },
+    { type: 'runner', key: 'ios:device-a:9100' },
+  ]);
   registry.updateBindings(owner, {
     state: 'ready',
     bindings: {
@@ -709,6 +749,7 @@ test('retained platform receipt claim blocks runner authority reuse', () => {
         artifactDigest: 'artifact-a',
       },
       runner: {
+        port: 9100,
         instanceId: 'runner-a',
         pid: 303,
         processBirth: 'runner-birth-a',
@@ -732,9 +773,11 @@ test('retained platform receipt claim blocks runner authority reuse', () => {
     runnerPid: 303,
     runnerProcessBirth: 'runner-birth-a',
     runnerCapabilityHash: createHash('sha256').update('runner-capability-a').digest('hex'),
+    runnerPort: 9100,
     runnerClaim: 'ios:device-a:9100',
+    deviceClaim: 'ios:device-a',
   };
-  registry.recordPlatformAuthorityReceipt(owner, 'ios', receipt);
+  await recordPlatformReceipt(registry, owner, 'ios', receipt);
   registry.replaceDeviceAuthority(owner, {
     device: { platform: 'android', deviceId: 'device-b', appId: 'dev.example' },
   });
@@ -746,6 +789,10 @@ test('retained platform receipt claim blocks runner authority reuse', () => {
         { type: 'runner', key: 'ios:device-a:9100' },
       ]),
     /RUNNER_CLAIM_CONFLICT/,
+  );
+  assert.throws(
+    () => registry.claimResources(contender, [{ type: 'device', key: 'ios:device-a' }]),
+    /DEVICE_CLAIM_CONFLICT/,
   );
 });
 

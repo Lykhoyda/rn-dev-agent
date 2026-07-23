@@ -8,6 +8,11 @@ export interface ProcessBirth {
   token: string;
 }
 
+export type ProcessBirthProbe =
+  | { status: 'present'; birth: ProcessBirth }
+  | { status: 'absent' }
+  | { status: 'unknown' };
+
 interface ProcessBirthDependencies {
   platform?: NodeJS.Platform;
   read?: (path: string) => string;
@@ -30,18 +35,33 @@ export function readProcessBirth(
   pid: number,
   dependencies: ProcessBirthDependencies = {},
 ): ProcessBirth | null {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  const probe = probeProcessBirth(pid, dependencies);
+  return probe.status === 'present' ? probe.birth : null;
+}
+
+export function probeProcessBirth(
+  pid: number,
+  dependencies: ProcessBirthDependencies = {},
+): ProcessBirthProbe {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { status: 'unknown' };
 
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path: string) => readFileSync(path, 'utf8'));
   const run = dependencies.run ?? defaultRun;
 
-  try {
-    if (platform === 'darwin') return null;
+  if (platform === 'darwin') return { status: 'unknown' };
 
+  try {
     if (platform === 'linux') {
       const boot = read('/proc/sys/kernel/random/boot_id').trim();
-      const stat = read(`/proc/${pid}/stat`).trim();
+      let stat: string;
+      try {
+        stat = read(`/proc/${pid}/stat`).trim();
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT'
+          ? { status: 'absent' }
+          : { status: 'unknown' };
+      }
       const commandEnd = stat.lastIndexOf(')');
       const fields =
         commandEnd >= 0
@@ -51,26 +71,35 @@ export function readProcessBirth(
               .split(/\s+/)
           : [];
       const started = fields[19];
-      if (!boot || !started || !/^\d+$/.test(started)) return null;
-      return { pid, source: 'linux-proc', token: token([platform, boot, started]) };
+      if (!boot || !started || !/^\d+$/.test(started)) return { status: 'unknown' };
+      return {
+        status: 'present',
+        birth: { pid, source: 'linux-proc', token: token([platform, boot, started]) },
+      };
     }
 
     if (platform === 'win32') {
-      const script = `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`;
+      const script =
+        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
+        `if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
       const started = run('powershell.exe', [
         '-NoProfile',
         '-NonInteractive',
         '-Command',
         script,
       ]).trim();
-      if (!/^\d+$/.test(started)) return null;
-      return { pid, source: 'windows-powershell', token: token([platform, started]) };
+      if (started === 'ABSENT') return { status: 'absent' };
+      if (!/^\d+$/.test(started)) return { status: 'unknown' };
+      return {
+        status: 'present',
+        birth: { pid, source: 'windows-powershell', token: token([platform, started]) },
+      };
     }
   } catch {
-    return null;
+    return { status: 'unknown' };
   }
 
-  return null;
+  return { status: 'unknown' };
 }
 
 export function processBirthMatches(
