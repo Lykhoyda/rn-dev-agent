@@ -1,18 +1,18 @@
 ---
 title: "device_record"
-description: "Cross-platform screen recording for proof captures"
+description: "Record the exact authority-bound device for proof capture"
 ---
 
-Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path + the deviceId actually used); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. GH #173: when more than one simulator is booted (or more than one Android device connected), start refuses to auto-pick to avoid recording the wrong device — pass deviceId=&lt;UDID|serial&gt; to disambiguate; the response echoes the deviceId actually used so you can verify. Session-less.
+Record the exact authority-bound device for proof capture. Start validates that the claimed device is currently available and always forwards its literal identifier.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `action` | `unknown` | Yes |  |  |  |
-| `platform` | `unknown` | No |  |  | (start only) Force platform. Auto-detected from booted devices if omitted. |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
 | `outputPath` | `unknown` | No |  |  |  |
-| `deviceId` | `unknown` | No |  |  |  |
+| `deviceId` | `unknown` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
 | `gif` | `unknown` | No |  |  | (stop only) When true, also convert each saved recording to GIF via ffmpeg. |
 | `gifPath` | `unknown` | No |  |  |  |
 

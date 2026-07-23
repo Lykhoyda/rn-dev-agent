@@ -191,23 +191,26 @@ Call `cdp_status`. If it fails to connect:
 
 ### Step 0: Ensure Simulator, Device Session & Navigate to Feature
 
-First, verify the simulator is running and CDP is connected:
-1. Call `device_list` to check for booted simulators/emulators
+First, verify the exact authority session and use device enumeration only as
+diagnostic context:
+1. Call `rn_session(action="status")`. Require the intended worktree session.
+   Call `device_list` only to diagnose available simulators/emulators.
 2. If no device is booted, attempt auto-recovery:
    - Run `rn-ensure-running <platform>`
    - If exit 0: call `cdp_status` to confirm connection
    - If the script fails: tell the user to boot a simulator and run
      `/rn-dev-agent:setup` to verify all dependencies are installed.
      Do not skip verification without user consent.
-3. Call `cdp_status` to confirm CDP connection before proceeding.
+3. Call `cdp_status` to inspect passive CDP state before proceeding.
 
 Then, ensure a device session is open for `device_*` tools:
-4. Check if `/tmp/rn-dev-agent-session.json` exists (via bash `cat`).
-   If absent or stale (older than 30 minutes), open a fresh session:
+4. Inspect `rn_session status`; never read or trust the legacy `/tmp` session
+   file. If the device is not bound, bind one explicit UUID/serial and app ID,
+   then open the compatibility device session with those exact values:
    ```
-   device_snapshot(action="open", platform="<platform from cdp_status>")
+   device_snapshot(action="open", platform="<bound platform>",
+                   deviceId="<bound UUID or serial>", appId="<bound app ID>")
    ```
-   Auto-detect `appId` — the tool resolves it from `app.json` if omitted.
    This enables `device_screenshot`, `device_find`, `device_press`, and
    `device_scroll` for the rest of the verification and proof phases.
    **NEVER skip this step** — without a session, all `device_*` calls fail

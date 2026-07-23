@@ -73,6 +73,11 @@ struct Response: Codable {
   let runnerVersion: String?
   let capabilities: [String]?
   let commands: [String]?
+  let instanceId: String?
+  let sessionId: String?
+  let claimEpoch: Int?
+  let deviceId: String?
+  let appId: String?
   let data: DataPayload?
   let error: ErrorPayload?
 
@@ -84,7 +89,12 @@ struct Response: Codable {
     protocolVersion: Int? = nil,
     runnerVersion: String? = nil,
     capabilities: [String]? = nil,
-    commands: [String]? = nil
+    commands: [String]? = nil,
+    instanceId: String? = nil,
+    sessionId: String? = nil,
+    claimEpoch: Int? = nil,
+    deviceId: String? = nil,
+    appId: String? = nil
   ) {
     self.ok = ok
     self.v = RunnerProtocol.version
@@ -95,6 +105,11 @@ struct Response: Codable {
     self.runnerVersion = runnerVersion
     self.capabilities = capabilities
     self.commands = commands
+    self.instanceId = instanceId
+    self.sessionId = sessionId
+    self.claimEpoch = claimEpoch
+    self.deviceId = deviceId
+    self.appId = appId
   }
 }
 

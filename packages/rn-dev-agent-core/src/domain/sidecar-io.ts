@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { type ActionRuntimeState, freshRuntimeState } from './reusable-action.js';
+import { sessionStateDirectory } from '../session/runtime-paths.js';
 
 /** Return the canonical sidecar path for a given action YAML path. */
 export function sidecarPathFor(yamlFilePath: string): string {
@@ -27,7 +28,10 @@ export function sidecarPathFor(yamlFilePath: string): string {
   const parent = dirname(dir);
   const filename = yamlFilePath.replace(/\.ya?ml$/i, '.state.json');
   const base = filename.split(/[\\/]/).pop()!;
-  return join(parent, 'state', base);
+  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT
+    ? sessionStateDirectory(dirname(parent))
+    : join(parent, 'state');
+  return join(stateDirectory, base);
 }
 
 /**

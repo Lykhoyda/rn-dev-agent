@@ -1,16 +1,16 @@
 ---
 title: "device_accept_system_dialog"
-description: "Tap an OS-level system dialog button (outside the app accessibility tree) — e"
+description: "Tap an OS-level accept button through the capability-bound runner on the exact session device"
 ---
 
-Tap an OS-level system dialog button (outside the app accessibility tree) — e.g. "Open in App?", "Allow notifications", biometric prompts. On iOS with an open device session, the tap routes through the native rn-fast-runner, which sees SpringBoard-owned dialogs Maestro cannot; otherwise falls back to a Maestro label probe (SystemUI on Android, in-app alerts on iOS). Tries common accept labels by default (Allow, OK, Open, Continue, Yes). Call immediately after a permission trigger or deep link is expected to surface a system prompt.
+Tap an OS-level accept button through the capability-bound runner on the exact session device.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `label` | `unknown` | No |  |  |  |
-| `platform` | `unknown` | No |  |  |  |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
 | `timeoutMs` | `unknown` | No |  | min: 1000, max: 60000, integer | Maestro invocation timeout (default 15000ms). |
 
 ## Usage

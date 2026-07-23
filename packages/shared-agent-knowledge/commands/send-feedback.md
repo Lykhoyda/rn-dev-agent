@@ -75,7 +75,14 @@ This collects (all redacted):
   are the device backends; a leftover agent-device can interfere)
 - Last 20 telemetry events ONLY when fresh (<24h; tool name, result, latency — no params or paths), plus `telemetry_status` (`ok` / `stale (...)` / `none`). On current plugin versions `stale`/`none` is expected — per-tool-call telemetry capture was removed with the Experience Engine (GH #200); only legacy versions still write it.
 
-Also call `cdp_status` to get current CDP connection state (if available).
+Also call `rn_session` with `action: "status"` and reconcile its authority state
+with the collector's `authority` object. Compare exact values locally, but put
+only the sanitized authority state, own Metro allocated/bound booleans, and
+foreign-session count in the preview. If no exact session exists, show
+`authority: unknown`; never select the first live session.
+
+Call `cdp_status` only for passive CDP diagnostics (if available). It does not
+replace `rn_session` authority.
 
 Call `cdp_error_log` to check for recent JS errors (if connected).
 
@@ -95,7 +102,9 @@ Present the data in a clear format:
 - Plugin: 0.11.0, CDP Bridge: 0.7.0
 - OS: Darwin 25.3.0, Node: v22.x
 - iOS Simulators: 1 booted
-- Metro: running on 8081
+- Authority: ready
+- Metro: session allocated and bound
+- Other local sessions: 1
 - legacy agent-device: not installed
 - maestro-runner: 1.2.0
 
@@ -151,6 +160,8 @@ Body template:
 | OS | <os> |
 | Node.js | <node> |
 | Metro | <status> |
+| Session authority | <state or unknown> |
+| Other local sessions | <count only> |
 | iOS Simulators | <count> |
 | Android Emulators | <count> |
 | legacy agent-device | <"not installed" expected> |
@@ -218,6 +229,8 @@ The following IS included (safe):
 - OS type and version (not hostname)
 - Node.js version
 - Simulator/emulator count (not names or UDIDs)
+- Own session authority state and allocated/bound booleans
+- Count of other sessions (never their identities or ports)
 - Metro running status
 - Tool call names, pass/fail results, and latency
 - CDP connection status (connected/disconnected)

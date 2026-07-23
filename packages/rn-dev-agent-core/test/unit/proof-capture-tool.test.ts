@@ -110,8 +110,26 @@ function assertionResult(path: string, verified = true): ToolResult {
   });
 }
 
+function withAuthorityReceipt(result: ToolResult): ToolResult {
+  const parsed = JSON.parse(result.content[0]!.text);
+  parsed.meta = {
+    ...parsed.meta,
+    authorityReceipt: {
+      version: 1,
+      sessionId: 'session-test',
+      claimEpoch: 1,
+      authorityVersion: 1,
+      axes: [{ axis: 'C', identity: 'controller-test' }],
+    },
+  };
+  return {
+    ...result,
+    content: [{ ...result.content[0]!, text: JSON.stringify(parsed) }, ...result.content.slice(1)],
+  };
+}
+
 function resultHash(result: ToolResult): string {
-  return HASH(JSON.stringify(result));
+  return HASH(JSON.stringify(withAuthorityReceipt(result)));
 }
 
 function baseReadiness(): ProofReadiness {
@@ -365,6 +383,50 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     getGitInfo: () => gitImpl(),
     proofRootTracked: () => proofRootTracked,
     readiness: () => readinessImpl(),
+    authority: (runId) => ({
+      sessionId: 'session-test',
+      claimEpoch: 1,
+      authorityVersion: 2,
+      controller: {
+        instanceId: 'worker-test',
+        pid: 42,
+        birthDigest: HASH('controller-birth'),
+      },
+      source: {
+        sourceKey: HASH('source'),
+        worktreeKey: HASH('worktree'),
+        appRootKey: HASH('app-root'),
+        head: SOURCE_SHA,
+        dirtyDigest: HASH('dirty'),
+      },
+      install: {
+        artifactDigest: HASH('artifact'),
+        buildGeneration: 1,
+        appId: 'dev.rnproof.fixture',
+      },
+      metro: {
+        port: 8081,
+        instanceId: 'metro-test',
+        pid: 43,
+        birthDigest: HASH('metro-birth'),
+        buildGeneration: 1,
+      },
+      bundle: {
+        targetId: 'target-test',
+        connectionGeneration: 1,
+        markerDigest: HASH('marker'),
+        authorityScope: 'initial-bundle',
+        sourceFidelity: 'not-proven',
+      },
+      device: { platform: 'ios', deviceId: 'SIM-1' },
+      runner: {
+        instanceId: 'runner-test',
+        protocolVersion: 1,
+        capabilityDigest: HASH('runner-capability'),
+        processBirthDigest: HASH('runner-birth'),
+      },
+      proof: { runId },
+    }),
     record: async (args) => {
       recordCalls.push(structuredClone(args));
       return recordImpl(args);
@@ -440,7 +502,14 @@ function observe(
   status: 'PASS' | 'FAIL' = 'PASS',
 ): ProofObservation {
   harness.clock.value = atMs;
-  harness.monitor.record({ tool, params, status, latencyMs: 5, result });
+  const authoritativeResult = withAuthorityReceipt(result);
+  harness.monitor.record({
+    tool,
+    params,
+    status,
+    latencyMs: 5,
+    result: authoritativeResult,
+  });
   return harness.monitor.observations().at(-1)!;
 }
 
@@ -646,7 +715,7 @@ test('published proof schema is an object superset while handler schema stays br
 test('trackedTool preserves raw-shape registration and uses published object schema for proof', async () => {
   const source = await readFile(resolve(CORE_ROOT, 'src/index.ts'), 'utf8');
   const start = source.indexOf('function trackedTool(');
-  const end = source.indexOf('\n}\n\ntrackedTool(', start) + 2;
+  const end = source.indexOf('\n}\n\nasync function pinSessionDevClient', start) + 2;
   const trackedToolSource = source.slice(start, end);
   assert.match(trackedToolSource, /schema instanceof z\.ZodType/);
   assert.match(trackedToolSource, /server\.tool\(/);

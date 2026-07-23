@@ -25,7 +25,7 @@ The first positional arg is the action name (required). Subsequent args are
 passed through to `maestro-runner` verbatim:
 
 - `-e KEY=VALUE` — environment variable for `${KEY}` placeholders in the flow. Keys must match `[A-Z_][A-Z0-9_]*` (Maestro convention) — anything else is rejected by `cdp_run_action` / `maestro_run` (GH #116).
-- `--platform <ios|android>` — target device (auto-detected from booted device if omitted)
+- `--platform <ios|android>` — must match the current ready session; omitted values are filled from that session
 - `--no-auto-repair` — opt out of `cdp_repair_action` retry on `SELECTOR_NOT_FOUND` (default: auto-repair on)
 - `--dry-run` — print the resolved replay command without executing it (bash-only path; bypasses `cdp_run_action`)
 
@@ -74,22 +74,19 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
      Mention that destructive flows can create duplicate backend rows when
      replayed multiple times — suggest using a timestamp-suffixed TITLE
      parameter or running with `--dry-run` first.
-   - **Check `appId` matches the booted app**: read `appId:` from the flow
-     header; verify a device with that bundle is booted. If not, stop and
-     suggest running `$rn-dev-agent:setup` or booting the right simulator.
+   - Call `rn_session({action: "status"})`. Require one ready session, and
+     check the flow's `appId:` and optional platform against its exact app and
+     platform bindings. A mismatch is not repairable by choosing another
+     booted device; stop and rebind the intended session.
    - **Validate `-e` parameters cover the flow's `${VAR}` placeholders**:
      parse `${...}` from the flow body; report any unset placeholders and
      refuse to run unless the user confirms (Maestro will fail at runtime
      anyway — this catches it earlier with a clearer error).
 
-4. **Detect platform** if not passed:
-   ```bash
-   IOS_BOOTED=$(xcrun simctl list devices booted 2>/dev/null | grep -c Booted || true)
-   ANDROID_BOOTED=$(adb devices 2>/dev/null | grep -c "device$" || true)
-   ```
-   - If exactly one platform has a booted device, use it.
-   - If both are booted, stop and ask the user to pass `--platform`.
-   - If neither, stop and tell the user to boot a device.
+4. **Resolve platform from authority.** Use the exact ready session platform
+   when `--platform` is omitted. If it was supplied, require an exact match.
+   `device_list` may diagnose available hardware but never chooses the replay
+   target.
 
 5. **Build the call** to `cdp_run_action` from the parsed args. The action
    id is the inventory match's `flow` field (filename without `.yaml`).
@@ -97,7 +94,7 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
    ```js
    {
      actionId: "<flow-name>",
-     platform: "<ios|android>",          // omit to auto-detect
+     platform: "<ios|android>",          // omit to use the ready session
      params: { TITLE: "Buy milk", PRIORITY: "high", ... },
      autoRepair: !noAutoRepair,          // default true; --no-auto-repair flips to false
      trigger: "agent"                    // or "human" / "ci" based on context

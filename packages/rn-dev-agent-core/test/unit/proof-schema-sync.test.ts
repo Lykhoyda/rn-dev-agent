@@ -17,7 +17,7 @@ const sourceTreeSha = 'b'.repeat(40);
 const proofHeadSha = 'c'.repeat(40);
 
 const acceptedReceipt = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   runId: 'run-123',
   issue: { repository: 'Lykhoyda/rn-dev-agent', number: 123 },
   pullRequest: { number: 456, headSha: proofHeadSha },
@@ -44,6 +44,46 @@ const acceptedReceipt = {
     metroPort: 8_081,
     metroReady: true,
     pluginVersion: '0.70.0',
+  },
+  authority: {
+    sessionId: 'session-proof',
+    claimEpoch: 1,
+    authorityVersion: 2,
+    controller: { instanceId: 'worker-1', pid: 42, birthDigest: hash },
+    source: {
+      sourceKey: hash,
+      worktreeKey: hash,
+      appRootKey: hash,
+      head: proofHeadSha,
+      dirtyDigest: hash,
+    },
+    install: {
+      artifactDigest: hash,
+      buildGeneration: 1,
+      appId: 'com.example.proof',
+    },
+    metro: {
+      port: 8_081,
+      instanceId: 'metro-1',
+      pid: 43,
+      birthDigest: hash,
+      buildGeneration: 1,
+    },
+    bundle: {
+      targetId: 'target-1',
+      connectionGeneration: 1,
+      markerDigest: hash,
+      authorityScope: 'initial-bundle',
+      sourceFidelity: 'not-proven',
+    },
+    device: { platform: 'ios', deviceId: 'simulator-1' },
+    runner: {
+      instanceId: 'runner-1',
+      protocolVersion: 1,
+      capabilityDigest: hash,
+      processBirthDigest: hash,
+    },
+    proof: { runId: 'run-123' },
   },
   fixture: {
     name: 'external-consumer-app',

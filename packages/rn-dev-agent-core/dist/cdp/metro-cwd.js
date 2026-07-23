@@ -30,7 +30,7 @@ export function parseLsofCwd(stdout) {
     }
     return null;
 }
-function pidForPort(port, exec) {
+export function pidForPort(port, exec = defaultExec) {
     try {
         return parseLsofPid(exec('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN']));
     }

@@ -1,0 +1,69 @@
+---
+title: "Parallel session authority"
+description: "How rn-dev-agent binds one worktree, build, Metro, device, runner, Observe UI, and proof run without ambient target selection."
+sidebar:
+  order: 3
+---
+
+rn-dev-agent gives every supervised MCP process a fenced session before its worker starts. A successful mutating or verification tool call is bound to that session; diagnostics may enumerate ambient state but are explicitly non-authoritative.
+
+```text
+controller + source
+        │
+        ├── deterministic Metro and Observe port claims
+        ├── exact installed app on one UUID or serial
+        ├── signed initial-bundle Metro marker
+        ├── capability-authenticated native runner
+        └── session-scoped Observe, action, E2E, and proof state
+```
+
+## Requirements
+
+The authority registry uses Node's built-in `node:sqlite` `DatabaseSync`. Node 22 launches it with `--experimental-sqlite`; if the API cannot load, tools return `AUTHORITY_STORE_UNAVAILABLE`. There is no JSON registry fallback and no warning-only authoritative mode.
+
+The registry lives in a private user-local `v2` state root. Its SQLite database, WAL/SHM files, session secrets, runner state, and Observe bootstrap state refuse symlinks and use private permissions.
+
+## Session lifecycle
+
+Use `rn_session` for staged transitions:
+
+1. `status` reports the redacted session and migration readiness without mutating the app.
+2. `preview_integration` shows the reversible `package.json` and Metro-config edits.
+3. `apply_integration` applies them only with `confirmed: true`.
+4. `bind_device` claims one exact platform, UUID/serial, and app ID.
+5. Literal `pnpm ios` or `pnpm android` starts or validates package-local Metro on the allocated port, injects the exact device and port, and records the installed artifact receipt.
+6. `pin_dev_client` launches the exact Expo URL or bare RN app and accepts only the target carrying the signed initial-bundle marker.
+7. `prepare_handoff` / `accept_handoff` transfer a live owner explicitly. `adopt_stale` accepts only a conservatively proven dead owner.
+8. `release` fences operations and releases claims. Managed Metro cleanup requires its signed provenance and matching process-birth identity.
+
+When no matching live session or installed integration is available, the copied package adapter runs the original package script and user arguments unchanged. When a session exists, unsupported command shapes or conflicting explicit flags fail rather than falling through.
+
+## What each source identity proves
+
+Normal development uses a coarse Git worktree identity, or a declared root plus declared-manifest hash for non-Git apps. That identity remains stable while source files are edited. Strict proof additionally freezes the Git HEAD and dirty-content digest.
+
+The runtime marker proves that the **initial bundle** came from the claimed Metro instance, session, worktree, app, platform, and build generation. It does not claim Fast Refresh source fidelity. After HMR, the coarse session binding still holds, while `sourceFidelity` remains `not-proven`.
+
+## Tool authority
+
+All published tools have an exhaustive profile. Session-bound arguments omitted by legacy callers are filled only from the current session; a conflicting platform, device, app, port, or target returns a named authority error.
+
+Native runner operations use the exact install, Metro, device, and capability-authenticated runner identities. They do not require a live CDP debugger seat. CDP reads and mutations additionally require the exact signed bundle target.
+
+Every successful authoritative call receives a preflight/postflight authority receipt. If an axis changes during the handler, the outer result becomes `AUTHORITY_LOST_DURING_OPERATION`; a handler's apparent PASS is never preserved.
+
+## Observe, actions, proof, and feedback
+
+Observe uses its allocated port, random capability, and instance ID on every API, event-stream, state, and action request. A page from a crashed session cannot attach to a later listener.
+
+Mutable action sidecars, E2E runs, recordings, bundle state, and proof runtime state live under the session root. Canonical action YAML remains worktree knowledge. A shared `.rn-agent` symlink is materialized only when its complete corpus can be preserved; nested symlinks refuse migration.
+
+Strict proof receipts use schema v2 and include controller, source/dirty digest, install, Metro, initial-bundle marker, device, runner, proof, and per-event authority hashes. A worker replacement rejects an active proof rather than resuming it.
+
+The feedback collector reports only the current session's high-level authority, whether its allocated Metro is bound, and a count of other sessions. It never scans ports 8081/8082 as truth and never includes foreign ports, paths, PIDs, device IDs, app IDs, or capabilities.
+
+## Migration and threat boundary
+
+`rn_session status` reports store availability, registry schema 2, legacy-state detection, coarse handshake support, package integration, and strict enforcement. Legacy files are diagnostics only and are never trusted for mutation or adoption. A database from a newer schema is rejected without downgrade.
+
+This model prevents accidental cross-worktree targeting, stale-owner writes, and ambiguous local selection. It is not a security boundary against a hostile process already running as the same OS user.

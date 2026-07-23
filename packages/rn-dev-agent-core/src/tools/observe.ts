@@ -4,6 +4,7 @@ import type { ToolResult } from '../utils.js';
 import { ObservabilityServer } from '../observability/server.js';
 import type { E2eServerDeps, StateServerDeps } from '../observability/server.js';
 import type { MirrorManager } from '../observability/mirror/manager.js';
+import type { ObserveAuthority } from '../observability/server.js';
 import { recorder } from '../observability/recorder.js';
 import { resolveObservePort } from '../project-config.js';
 import { writeObserveState, removeObserveState } from '../observability/observe-state.js';
@@ -29,6 +30,13 @@ let server: ObservabilityServer | null = null;
 let e2eDeps: E2eServerDeps | undefined;
 let mirrorManager: MirrorManager | undefined;
 let stateDeps: StateServerDeps | undefined;
+let authorityDeps:
+  | {
+      resolve(): { port: number; authority: ObserveAuthority };
+      bind(input: { port: number; authority: ObserveAuthority }): void;
+      unbind(): void;
+    }
+  | undefined;
 
 export function setObserveE2eDeps(d: E2eServerDeps): void {
   e2eDeps = d;
@@ -40,6 +48,10 @@ export function setObserveStateDeps(d: StateServerDeps): void {
 
 export function setObserveMirror(m: MirrorManager): void {
   mirrorManager = m;
+}
+
+export function setObserveAuthorityDeps(deps: NonNullable<typeof authorityDeps>): void {
+  authorityDeps = deps;
 }
 
 let starting: Promise<{ url: string; port: number }> | null = null;
@@ -55,9 +67,19 @@ let starting: Promise<{ url: string; port: number }> | null = null;
 export async function startObserveServer(): Promise<{ url: string; port: number }> {
   if (starting) return starting;
   starting = (async () => {
-    if (!server) server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps);
-    const { port } = resolveObservePort();
+    const resolved = authorityDeps?.resolve();
+    if (!server) {
+      server = new ObservabilityServer(
+        recorder,
+        e2eDeps,
+        mirrorManager,
+        stateDeps,
+        resolved?.authority,
+      );
+    }
+    const port = resolved?.port ?? resolveObservePort().port;
     const res = await server.start(port);
+    if (resolved) authorityDeps?.bind({ port: res.port, authority: resolved.authority });
     writeObserveState(res.url, res.port);
     return res;
   })();
@@ -80,6 +102,7 @@ async function stopObserveServer(): Promise<void> {
   starting = null;
   await server?.stop();
   server = null;
+  authorityDeps?.unbind();
   removeObserveState();
 }
 

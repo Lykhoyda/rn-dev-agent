@@ -39,11 +39,34 @@ export function sqliteFlagForNode(version?: string): string[] {
  */
 export function workerSpawnArgs(
   workerPath: string,
+  sqliteWarningFilterPath: string,
   version?: string,
   forwardedArgs: readonly string[] = [],
 ): string[] {
   const diagnosticArgs = forwardedArgs.includes('--diagnostic-contract-probe')
     ? ['--diagnostic-contract-probe']
     : [];
-  return [...sqliteFlagForNode(version), workerPath, '--no-lock', ...diagnosticArgs];
+  return [
+    ...sqliteFlagForNode(version),
+    '--import',
+    sqliteWarningFilterPath,
+    workerPath,
+    '--no-lock',
+    ...diagnosticArgs,
+  ];
+}
+
+export function supervisorRelaunchArgs(
+  supervisorPath: string,
+  sqliteWarningFilterPath: string,
+  version?: string,
+  forwardedArgs: readonly string[] = [],
+): string[] {
+  return [
+    ...sqliteFlagForNode(version),
+    '--import',
+    sqliteWarningFilterPath,
+    supervisorPath,
+    ...forwardedArgs,
+  ];
 }

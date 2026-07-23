@@ -9,6 +9,7 @@
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { sessionStateDirectory } from '../session/runtime-paths.js';
 const _require = createRequire(import.meta.url);
 // ─── Schema ───────────────────────────────────────────────────────────────────
 const SCHEMA = `
@@ -98,7 +99,7 @@ export function openActionDb(projectRoot, opts = {}) {
     if (!Ctor)
         return null;
     try {
-        const dbPath = join(projectRoot, '.rn-agent', 'state', 'actions.db');
+        const dbPath = join(sessionStateDirectory(projectRoot), 'actions.db');
         mkdirSync(dirname(dbPath), { recursive: true });
         const db = new Ctor(dbPath);
         db.exec(SCHEMA);

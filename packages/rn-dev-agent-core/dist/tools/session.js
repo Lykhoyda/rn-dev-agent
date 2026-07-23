@@ -1,0 +1,285 @@
+import { authorityErrorMeta, SessionAuthorityError } from '../session/registry.js';
+import { failResult, okResult } from '../utils.js';
+import { verifyBuildReceipt } from '../session/build-receipt.js';
+import { captureInstalledArtifact, verifyInstalledArtifact, } from '../session/install-authority.js';
+import { captureMetroBinding } from '../session/metro-binding.js';
+import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, } from '../session/package-integration.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { stopFastRunner } from '../runners/rn-fast-runner-client.js';
+import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
+import { inspectSessionOwner } from '../session/process-owner.js';
+import { inspectAuthorityMigration } from '../session/migration-diagnostic.js';
+function authorityFailure(error) {
+    if (error instanceof SessionAuthorityError) {
+        return failResult(error.message, error.code, authorityErrorMeta(error));
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? 'SESSION_AUTHORITY_REQUIRED';
+    return failResult(message, code);
+}
+function required(value, name) {
+    if (value === undefined || value === '') {
+        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `${name} is required for this session transition`);
+    }
+    return value;
+}
+export function createSessionHandler(runtime, dependencies = {}) {
+    return async (input) => {
+        if (input.action === 'status') {
+            const authority = runtime.status();
+            return okResult({
+                authoritative: false,
+                authority,
+                migration: authority.available
+                    ? inspectAuthorityMigration(authority)
+                    : {
+                        rollout: 'strict-default',
+                        storeAvailable: authority.code !== 'AUTHORITY_STORE_UNAVAILABLE',
+                        strictEnforcement: true,
+                    },
+            });
+        }
+        try {
+            const { registry, session } = runtime.requireAvailable();
+            if (input.action === 'bind_device') {
+                const platform = required(input.platform, 'platform');
+                const deviceId = required(input.deviceId, 'deviceId');
+                const appId = required(input.appId, 'appId');
+                const status = registry.getSessionStatus(session.sessionId);
+                const signer = dependencies.getSignerCapability?.();
+                if (!status) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before device binding');
+                }
+                registry.claimResources(session, [{ type: 'device', key: `${platform}:${deviceId}` }]);
+                if (!input.buildReceipt) {
+                    registry.updateBindings(session, {
+                        state: 'device_claimed',
+                        bindings: {
+                            device: {
+                                platform,
+                                deviceId,
+                                appId,
+                                ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
+                            },
+                        },
+                    });
+                    return okResult({
+                        session: registry.getSessionStatus(session.sessionId),
+                        buildReceiptRequired: true,
+                    });
+                }
+                if (!signer) {
+                    throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'the session signer is unavailable for build receipt verification');
+                }
+                const receipt = verifyBuildReceipt(input.buildReceipt, signer, {
+                    sessionId: session.sessionId,
+                    sourceKey: status.sourceKey,
+                    worktreeKey: status.worktreeKey,
+                    appRootKey: status.appRootKey,
+                    platform,
+                    deviceId,
+                    appId,
+                    metroPort: Number(status.bindings.metroPort),
+                });
+                const observed = (dependencies.captureInstall ?? captureInstalledArtifact)({
+                    platform,
+                    deviceId,
+                    appId,
+                });
+                verifyInstalledArtifact(receipt, observed);
+                registry.updateBindings(session, {
+                    state: 'device_bound',
+                    bindings: {
+                        device: { platform, deviceId, appId },
+                        install: receipt,
+                    },
+                });
+                return okResult({ session: registry.getSessionStatus(session.sessionId) });
+            }
+            if (input.action === 'bind_metro') {
+                const port = required(input.metroPort, 'metroPort');
+                const pid = required(input.metroPid, 'metroPid');
+                const instanceId = required(input.metroInstanceId, 'metroInstanceId');
+                const buildGeneration = required(input.buildGeneration, 'buildGeneration');
+                const status = registry.getSessionStatus(session.sessionId);
+                if (status?.bindings.metroPort !== port) {
+                    throw new SessionAuthorityError('METRO_PORT_CLAIM_CONFLICT', 'requested Metro port does not match the session allocation');
+                }
+                const sourceRoot = String(status.source.contentRoot ?? '');
+                const metro = await (dependencies.captureMetro ?? captureMetroBinding)({
+                    port,
+                    pid,
+                    instanceId,
+                    sourceRoot,
+                    buildGeneration,
+                });
+                registry.claimResources(session, [{ type: 'metro-port', key: String(port) }]);
+                registry.updateBindings(session, {
+                    state: status.bindings.install ? 'device_bound' : 'metro_bound',
+                    bindings: { metro: { ...metro, mode: input.mode ?? 'external' } },
+                });
+                return okResult({ session: registry.getSessionStatus(session.sessionId) });
+            }
+            if (input.action === 'pin_dev_client') {
+                const status = registry.getSessionStatus(session.sessionId);
+                if (!status || !dependencies.pinDevClient) {
+                    throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'pinning integration is unavailable');
+                }
+                for (const requiredBinding of ['install', 'metro', 'device']) {
+                    if (!status.bindings[requiredBinding]) {
+                        throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', `${requiredBinding} must be bound before pinning`);
+                    }
+                }
+                const bundle = await dependencies.pinDevClient(status);
+                registry.claimResources(session, [
+                    { type: 'target', key: `${bundle.metroPort}:${bundle.targetId}` },
+                ]);
+                registry.updateBindings(session, {
+                    state: 'ready',
+                    bindings: { bundle },
+                });
+                return okResult({ session: registry.getSessionStatus(session.sessionId) });
+            }
+            if (input.action === 'prepare_handoff') {
+                const targetInstance = required(input.targetInstance, 'targetInstance');
+                return okResult(registry.prepareHandoff(session, { targetInstance }));
+            }
+            if (input.action === 'preview_integration' || input.action === 'apply_integration') {
+                const status = registry.getSessionStatus(session.sessionId);
+                const appRoot = String(status?.source.appRoot ?? '');
+                if (!status || !appRoot) {
+                    throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'session app root is unavailable for integration');
+                }
+                const packagePath = join(appRoot, 'package.json');
+                const metroConfigPath = ['metro.config.js', 'metro.config.cjs']
+                    .map((name) => join(appRoot, name))
+                    .find((path) => {
+                    try {
+                        readFileSync(path, 'utf8');
+                        return true;
+                    }
+                    catch {
+                        return false;
+                    }
+                });
+                if (!metroConfigPath) {
+                    throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'metro.config.js or metro.config.cjs is required for integration');
+                }
+                const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
+                const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+                let existing;
+                try {
+                    existing = JSON.parse(readFileSync(manifestPath, 'utf8'));
+                }
+                catch {
+                    existing = undefined;
+                }
+                const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ??
+                    join(dirname(fileURLToPath(import.meta.url)), '..', 'rn-session.js');
+                const preview = previewPackageIntegration(packageJson, existing, sessionCli);
+                const metroBefore = readFileSync(metroConfigPath, 'utf8');
+                const metroAfter = previewMetroIntegration(metroBefore);
+                if (input.action === 'preview_integration') {
+                    return okResult({
+                        confirmed: false,
+                        packagePath,
+                        before: packageJson,
+                        after: preview.packageJson,
+                        metroConfigPath,
+                        metroBefore,
+                        metroAfter,
+                        manifest: preview.manifest,
+                    });
+                }
+                if (input.confirmed !== true) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'apply_integration requires confirmed=true after reviewing preview_integration');
+                }
+                applyPackageIntegration({ appRoot, sessionCli });
+                return okResult({ applied: true, packagePath, manifestPath });
+            }
+            if (input.action === 'accept_handoff') {
+                const handoffId = required(input.handoffId, 'handoffId');
+                const token = required(input.token, 'token');
+                const status = registry.getSessionStatus(session.sessionId);
+                if (!status?.worker.instanceId) {
+                    throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'target worker identity is unavailable');
+                }
+                const priorSessionId = registry.getHandoffOwner(handoffId);
+                const priorStatus = priorSessionId ? registry.getSessionStatus(priorSessionId) : null;
+                const priorRunner = priorStatus?.bindings.runner;
+                if (priorRunner &&
+                    (typeof priorRunner.pid !== 'number' ||
+                        typeof priorRunner.processBirth !== 'string' ||
+                        inspectSessionOwner({
+                            sessionId: priorSessionId ?? 'unknown',
+                            pid: priorRunner.pid,
+                            token: priorRunner.processBirth,
+                        }) !== 'match')) {
+                    throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'prior runner process identity cannot be proven for capability rotation');
+                }
+                registry.acceptHandoffInto(session, {
+                    handoffId,
+                    token,
+                    targetInstance: status.worker.instanceId,
+                });
+                if (priorRunner?.platform === 'ios') {
+                    stopFastRunner(typeof priorRunner.deviceId === 'string' ? priorRunner.deviceId : undefined);
+                }
+                else if (priorRunner?.platform === 'android') {
+                    await stopAndroidRunner(typeof priorRunner.deviceId === 'string' ? priorRunner.deviceId : undefined);
+                }
+                return okResult({
+                    accepted: true,
+                    session: registry.getSessionStatus(session.sessionId),
+                    runnerCapabilityRotated: Boolean(priorRunner),
+                    nextAction: 'Reopen the exact device runner and pin the dev client before authoritative tools.',
+                });
+            }
+            if (input.action === 'adopt_stale') {
+                const priorSessionId = required(input.priorSessionId, 'priorSessionId');
+                const current = registry.getSessionStatus(session.sessionId);
+                const prior = registry.getSessionStatus(priorSessionId);
+                if (!current ||
+                    !prior ||
+                    current.sourceKey !== prior.sourceKey ||
+                    current.worktreeKey !== prior.worktreeKey ||
+                    current.appRootKey !== prior.appRootKey) {
+                    throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'stale session does not belong to this exact source worktree');
+                }
+                const transferable = prior.claims
+                    .filter((claim) => new Set(['source', 'metro-port', 'observe-port', 'device']).has(claim.type))
+                    .map(({ type, key }) => ({ type, key }));
+                registry.claimResources(session, transferable);
+                const metro = prior.bindings.metro;
+                const sameMetro = Number(metro?.port) === Number(current.bindings.metroPort);
+                registry.updateBindings(session, {
+                    state: sameMetro && prior.bindings.device ? 'device_bound' : 'source_bound',
+                    bindings: {
+                        adoptionRequired: null,
+                        ...(sameMetro ? { metro: prior.bindings.metro } : { metro: null }),
+                        ...(prior.bindings.device ? { device: prior.bindings.device } : {}),
+                        ...(prior.bindings.install ? { install: prior.bindings.install } : {}),
+                        bundle: null,
+                        runner: null,
+                    },
+                });
+                return okResult({
+                    adopted: true,
+                    priorSessionId: priorSessionId.slice(0, 12),
+                    session: registry.getSessionStatus(session.sessionId),
+                    runner: {
+                        adopted: false,
+                        reason: 'runner capability is never crash-adopted; reopen the exact device to bind a fresh runner',
+                    },
+                });
+            }
+            registry.releaseSession(session);
+            return okResult({ released: true, sessionId: session.sessionId });
+        }
+        catch (error) {
+            return authorityFailure(error);
+        }
+    };
+}

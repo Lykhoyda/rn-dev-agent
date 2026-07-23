@@ -43,6 +43,39 @@ export function targetMatchesSession(target, filters) {
     }
     return true;
 }
+export function createPassiveStatusHandler(getClient, authorityRuntime) {
+    return async (args) => {
+        if (args.resetArbiter) {
+            return failResult('cdp_status is passive; use an explicit recovery transition to reset the arbiter', 'INVALID_ARGUMENT');
+        }
+        const client = getClient();
+        const target = client.connectedTarget;
+        return okResult({
+            authoritative: false,
+            authority: authorityRuntime.status(),
+            metro: {
+                port: client.metroPort,
+                requestedPort: args.metroPort ?? null,
+                connected: client.isConnected,
+            },
+            cdp: {
+                connected: client.isConnected,
+                target: target
+                    ? {
+                        id: target.id,
+                        title: target.title,
+                        platform: target.platform ?? null,
+                        appId: targetBundleIdentity(target),
+                    }
+                    : null,
+                requestedPlatform: args.platform ?? null,
+            },
+            nextAction: client.isConnected
+                ? 'Use rn_session status to inspect bindings before authoritative tools.'
+                : 'Use rn_session bind_metro and cdp_connect with the claimed exact port.',
+        });
+    };
+}
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.

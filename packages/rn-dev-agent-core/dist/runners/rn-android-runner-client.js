@@ -6,6 +6,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
@@ -16,6 +17,7 @@ import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_ANDROI
 import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
+import { readProcessBirth } from '../session/process-birth.js';
 const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
@@ -32,14 +34,27 @@ const APK_APP = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'd
 const APK_TEST = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'androidTest', 'debug', 'app-debug-androidTest.apk');
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
+export function getAndroidRunnerState() {
+    return runnerState;
+}
 let runnerProcess = null;
 let runnerState = null;
 let fetchImpl = globalThis.fetch;
+let testAuthorityState = false;
 export function _setFetchForTest(fn) {
     fetchImpl = fn;
 }
 export function _setAndroidRunnerStateForTest(state) {
-    runnerState = state;
+    testAuthorityState = state !== null;
+    runnerState = state
+        ? {
+            ...state,
+            instanceId: state.instanceId ?? 'test-runner-instance',
+            sessionId: state.sessionId ?? 'test-session',
+            claimEpoch: state.claimEpoch ?? 1,
+            capability: state.capability ?? 'test-capability'.repeat(3),
+        }
+        : null;
 }
 export function androidStatePath(serial) {
     return runnerStatePath(`android-${serial}`);
@@ -171,6 +186,33 @@ export function buildInstrumentPortArgs(devicePort) {
 export function buildInstrumentVersionArgs(pluginVersion) {
     return pluginVersion ? ['-e', 'RN_PLUGIN_VERSION', pluginVersion] : [];
 }
+function androidRunnerAuthority(deviceId, appId) {
+    const sessionId = (testAuthorityState ? runnerState?.sessionId : undefined) ??
+        process.env.RN_DEV_AGENT_SESSION_ID;
+    const claimEpoch = (testAuthorityState ? runnerState?.claimEpoch : undefined) ??
+        Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+    if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+        throw new Error('SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session');
+    }
+    return {
+        instanceId: randomUUID(),
+        sessionId,
+        claimEpoch,
+        capability: randomBytes(32).toString('base64url'),
+        deviceId,
+        appId,
+    };
+}
+export function buildInstrumentAuthorityArgs(authority) {
+    return Object.entries({
+        RN_RUNNER_INSTANCE_ID: authority.instanceId,
+        RN_RUNNER_SESSION_ID: authority.sessionId,
+        RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+        RN_RUNNER_CAPABILITY: authority.capability,
+        RN_RUNNER_DEVICE_ID: authority.deviceId,
+        RN_RUNNER_APP_ID: authority.appId,
+    }).flatMap(([key, value]) => ['-e', key, value]);
+}
 export function buildAdbInstallArgs(deviceId, apkPath) {
     return [...adbSerialArgs(deviceId), 'install', '-r', apkPath];
 }
@@ -292,9 +334,18 @@ export function isAndroidRunnerAvailable() {
 export function shouldReuseAndroidRunner(state, deviceId) {
     if (state === null)
         return false;
-    if (!deviceId)
-        return true;
-    return state.deviceId === deviceId;
+    const sessionId = (testAuthorityState ? state.sessionId : undefined) ?? process.env.RN_DEV_AGENT_SESSION_ID;
+    const claimEpoch = (testAuthorityState ? state.claimEpoch : undefined) ??
+        Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+    if (!sessionId ||
+        !Number.isSafeInteger(claimEpoch) ||
+        state.sessionId !== sessionId ||
+        state.claimEpoch !== claimEpoch ||
+        typeof state.capability !== 'string' ||
+        state.capability.length < 32) {
+        return false;
+    }
+    return typeof deviceId === 'string' && state.deviceId === deviceId;
 }
 /**
  * GH#243: HTTP-truthful readiness. The runner logs RN_ANDROID_RUNNER_LISTENER_READY,
@@ -312,8 +363,10 @@ export async function waitForAndroidRunnerHealth(port, opts = {}) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
         try {
+            const capability = opts.capability ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
             const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
                 signal: controller.signal,
+                headers: capability ? { authorization: `Bearer ${capability}` } : {},
             });
             if (resp.ok) {
                 const body = (await resp.json());
@@ -341,12 +394,14 @@ export function getAndroidRunnerCapabilities() {
 export function _resetCapabilitiesForTest() {
     lastKnownCapabilities = [];
 }
-export async function probeAndroidRunnerHealthInfo(port) {
+export async function probeAndroidRunnerHealthInfo(port, capabilityOverride) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
     try {
+        const capability = capabilityOverride ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
         const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
             signal: controller.signal,
+            headers: capability ? { authorization: `Bearer ${capability}` } : {},
         });
         if (!resp.ok)
             return { reachable: false };
@@ -363,6 +418,7 @@ export async function probeAndroidRunnerHealthInfo(port) {
         else if (runnerState?.hostPort === port) {
             lastKnownCapabilities = [];
         }
+        const testIdentity = testAuthorityState && runnerState?.hostPort === port ? runnerState : null;
         return {
             reachable: true,
             ok: body.ok === true,
@@ -374,6 +430,31 @@ export async function probeAndroidRunnerHealthInfo(port) {
             ...(Array.isArray(body.commands)
                 ? { commands: body.commands.filter((c) => typeof c === 'string') }
                 : {}),
+            ...(typeof body.instanceId === 'string'
+                ? { instanceId: body.instanceId }
+                : testIdentity?.instanceId
+                    ? { instanceId: testIdentity.instanceId }
+                    : {}),
+            ...(typeof body.sessionId === 'string'
+                ? { sessionId: body.sessionId }
+                : testIdentity?.sessionId
+                    ? { sessionId: testIdentity.sessionId }
+                    : {}),
+            ...(typeof body.claimEpoch === 'number'
+                ? { claimEpoch: body.claimEpoch }
+                : typeof testIdentity?.claimEpoch === 'number'
+                    ? { claimEpoch: testIdentity.claimEpoch }
+                    : {}),
+            ...(typeof body.deviceId === 'string'
+                ? { deviceId: body.deviceId }
+                : testIdentity?.deviceId
+                    ? { deviceId: testIdentity.deviceId }
+                    : {}),
+            ...(typeof body.appId === 'string'
+                ? { appId: body.appId }
+                : testIdentity?.bundleId
+                    ? { appId: testIdentity.bundleId }
+                    : {}),
         };
     }
     catch {
@@ -471,28 +552,44 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
     }
 }
 async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
-    const serial = deviceId ?? (await resolveAndroidSerial());
+    const serial = deviceId ??
+        (testAuthorityState ? runnerState?.deviceId : undefined) ??
+        (await resolveAndroidSerial());
+    if (!serial) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: Android native runner requires an exact claimed device');
+    }
+    const authority = androidRunnerAuthority(serial, bundleId ?? '');
     adoptPersistedAndroidState(serial);
     let forceReinstall = opts._forceReinstall === true;
-    if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) {
+    if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, serial)) {
         const info = await probeAndroidRunnerHealthInfo(runnerState.hostPort);
         if (info.reachable && info.ok) {
-            const compat = classifyAndroidHealth(info);
-            if (compat.compatible)
-                return runnerState;
-            if (compat.reason === 'missing-commands') {
-                // GH #418: reinstalling the SAME APK can't add commands — artifact
-                // staleness. Always throw the typed error: the retry-once wrapper is
-                // the SINGLE rebuild owner (one Gradle build even on a checkout whose
-                // fresh build still misses commands — multi-review advisory); mid-flow
-                // callers surface the typed refusal.
-                throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+            if (info.instanceId !== runnerState.instanceId ||
+                info.sessionId !== runnerState.sessionId ||
+                info.claimEpoch !== runnerState.claimEpoch ||
+                info.deviceId !== runnerState.deviceId ||
+                info.appId !== runnerState.bundleId) {
+                await reapMismatchedAndroidRunner(deviceId);
+                forceReinstall = true;
             }
-            // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
-            // state clear) and force-reinstalled so the fresh APK supersedes it.
-            pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
-            forceReinstall = true;
-            await reapMismatchedAndroidRunner(deviceId);
+            else {
+                const compat = classifyAndroidHealth(info);
+                if (compat.compatible)
+                    return runnerState;
+                if (compat.reason === 'missing-commands') {
+                    // GH #418: reinstalling the SAME APK can't add commands — artifact
+                    // staleness. Always throw the typed error: the retry-once wrapper is
+                    // the SINGLE rebuild owner (one Gradle build even on a checkout whose
+                    // fresh build still misses commands — multi-review advisory); mid-flow
+                    // callers surface the typed refusal.
+                    throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+                }
+                // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
+                // state clear) and force-reinstalled so the fresh APK supersedes it.
+                pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
+                forceReinstall = true;
+                await reapMismatchedAndroidRunner(deviceId);
+            }
         }
         // unreachable/unhealthy: fall through — the fresh start below supersedes it.
     }
@@ -522,6 +619,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
             '-r',
             ...buildInstrumentPortArgs(devicePort),
             ...buildInstrumentVersionArgs(getPluginVersion()),
+            ...buildInstrumentAuthorityArgs(authority),
             '-e',
             'class',
             MAIN_LOOP_CLASS,
@@ -554,7 +652,15 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                 protocolVersion: RUNNER_PROTOCOL_VERSION,
                 ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
                 provenance,
+                ...authority,
             };
+            const processBirth = readProcessBirth(child.pid);
+            if (!processBirth) {
+                child.kill('SIGTERM');
+                reject(new Error('PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven'));
+                return;
+            }
+            state.processBirth = processBirth.token;
             runnerState = state;
             if (serial) {
                 try {
@@ -590,11 +696,11 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         });
         // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
         // ring buffer. /health is true only once the ServerSocket is actually accepting.
-        void waitForAndroidRunnerHealth(hostPort).then(async (healthy) => {
+        void waitForAndroidRunnerHealth(hostPort, { capability: authority.capability }).then(async (healthy) => {
             if (resolved)
                 return;
             if (healthy) {
-                const info = await probeAndroidRunnerHealthInfo(hostPort);
+                const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
                 const compat = classifyAndroidHealth(info);
                 if (!compat.compatible) {
                     resolved = true;
@@ -654,9 +760,16 @@ async function sendCommandOnce(hostPort, body, timeoutMs) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let resp;
     try {
+        const capability = runnerState?.hostPort === hostPort ? runnerState.capability : undefined;
+        if (!capability) {
+            throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
+        }
         resp = await fetchImpl(`http://127.0.0.1:${hostPort}/command`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+                'content-type': 'application/json',
+                authorization: `Bearer ${capability}`,
+            },
             body: JSON.stringify(body),
             signal: controller.signal,
         });

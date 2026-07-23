@@ -17,13 +17,11 @@ import {
 } from '../runners/rn-fast-runner-client.js';
 import {
   stopAndroidRunner,
-  resolveAndroidSerial,
   startAndroidRunner,
   runAndroid,
   consumePendingAndroidUpgradeNote,
 } from '../runners/rn-android-runner-client.js';
 import { launchApp } from './app-lifecycle.js';
-import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import {
   detectAndroidExternalRunner,
@@ -35,6 +33,7 @@ import { suppressIOSAutocorrect } from '../runners/suppress-ios-autocorrect.js';
 import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import type { ToolResult } from '../utils.js';
+import type { ToolErrorCode } from '../types.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
@@ -102,7 +101,7 @@ type SnapshotAction = 'open' | 'close' | 'snapshot';
 interface SnapshotArgs {
   action: SnapshotAction;
   appId?: string;
-  /** Explicit device UDID (iOS) or adb serial (Android). Auto-resolved when omitted. */
+  /** Exact authority-bound iOS UDID or Android serial. */
   deviceId?: string;
   platform?: string;
   sessionName?: string;
@@ -209,6 +208,12 @@ export function createDeviceSnapshotHandler(
     isAppRunning?: (platform: string, appId: string, deviceId: string) => Promise<boolean>;
     startAndroidRunner?: (deviceId: string, appId: string) => Promise<unknown>;
     launchAndroidApp?: (deviceId: string, appId: string) => Promise<void>;
+    bindRunner?: (
+      platform: 'ios' | 'android',
+      deviceId: string,
+      appId: string,
+    ) => Promise<void> | void;
+    unbindRunner?: () => Promise<void> | void;
   } = {},
 ): (args: SnapshotArgs) => Promise<ToolResult> {
   const probeAndroidUi =
@@ -286,14 +291,11 @@ export function createDeviceSnapshotHandler(
       const lockPlatform: 'ios' | 'android' = platform === 'android' ? 'android' : 'ios';
 
       // GH#202 Phase 2 Task 4: resolve device id NATIVELY (no agent-device).
-      const deviceId =
-        lockPlatform === 'android'
-          ? await resolveAndroidSerial(args.deviceId)
-          : await resolveIosUdid(args.deviceId);
+      const deviceId = args.deviceId?.trim();
       if (!deviceId) {
         return failResult(
-          `No booted ${platform} device found (or multiple booted — pass deviceId explicitly).`,
-          'NOT_CONNECTED',
+          `Exact ${platform} deviceId is required; ambient booted/first-device selection is diagnostic only.`,
+          'DEVICE_AUTHORITY_MISMATCH',
         );
       }
 
@@ -422,6 +424,17 @@ export function createDeviceSnapshotHandler(
         openedAt: new Date().toISOString(),
         appId,
       });
+      try {
+        await deps.bindRunner?.(lockPlatform, deviceId, appId);
+      } catch (error) {
+        clearActiveSession();
+        if (lockPlatform === 'ios') stopFastRunner(deviceId);
+        else await stopAndroidRunner(deviceId);
+        releaseDeviceLockForSession();
+        const message = error instanceof Error ? error.message : String(error);
+        const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
+        return failResult(message, code as ToolErrorCode);
+      }
 
       // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear
       // the wedge-recovery budget. Placed AFTER the device-lock conflict
@@ -555,7 +568,7 @@ export function createDeviceSnapshotHandler(
     }
 
     if (action === 'close') {
-      return closeDeviceSession({
+      const result = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
         clearActiveSession,
@@ -564,6 +577,8 @@ export function createDeviceSnapshotHandler(
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId,
       });
+      if (!result.isError) await deps.unbindRunner?.();
+      return result;
     }
 
     // action === 'snapshot'

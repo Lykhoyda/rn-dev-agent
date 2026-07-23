@@ -1,11 +1,11 @@
 ---
 title: "device_permission"
-description: "Grant, revoke, reset, or query app permissions on simulator/emulator"
+description: "Grant, revoke, reset, or query permissions for the authority-bound app on the exact claimed device"
 sidebar:
   order: 31
 ---
 
-Grant, revoke, reset, or query app permissions on simulator/emulator. Uses xcrun simctl privacy (iOS) and adb shell pm/dumpsys (Android). query returns current permission state (Android only — iOS returns "unknown"). Use before testing permission-gated flows to ensure correct starting state.
+Grant, revoke, reset, or query permissions for the authority-bound app on the exact claimed device.
 
 ## Parameters
 
@@ -13,11 +13,12 @@ Grant, revoke, reset, or query app permissions on simulator/emulator. Uses xcrun
 |------|------|----------|---------|-------------|-------------|
 | `action` | `unknown` | Yes |  |  |  |
 | `permission` | `unknown` | Yes |  |  |  |
-| `appId` | `string` | Yes |  |  | App bundle ID (e.g. "com.example.app") |
-| `platform` | `unknown` | No |  |  | Force platform: "ios" or "android". Auto-detected if omitted. |
+| `appId` | `unknown` | No |  |  | Authority-bound app identifier; normally injected by the session |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `deviceId` | `unknown` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
 
 ## Usage
 
 ```
-device_permission(action: <unknown>, permission: <unknown>, appId: <string>)
+device_permission(action: <unknown>, permission: <unknown>)
 ```

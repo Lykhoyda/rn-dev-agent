@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -8,7 +9,14 @@ import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-core.js';
 import { logger } from './logger.js';
-import { workerSpawnArgs } from './supervisor-args.js';
+import { inspectSessionOwner } from './session/process-owner.js';
+import { readProcessBirth } from './session/process-birth.js';
+import { resolveSourceIdentity } from './session/source-identity.js';
+import {
+  createSupervisorAuthority,
+  type SupervisorAuthority,
+} from './session/supervisor-authority.js';
+import { sqliteFlagForNode, supervisorRelaunchArgs, workerSpawnArgs } from './supervisor-args.js';
 
 // GH#264 Phase 5: the component that owns stdio with Claude Code must hold
 // ZERO network sockets — `lsof -ti tcp:8081 | xargs kill -9` (a documented
@@ -17,6 +25,39 @@ import { workerSpawnArgs } from './supervisor-args.js';
 // (./index.js); this process only pipes stdio, owns the single-instance
 // lock, and respawns the worker when it dies.
 const here = dirname(fileURLToPath(import.meta.url));
+const sqliteWarningFilterPath = join(here, 'sqlite-warning-filter.js');
+const supervisorFlag = sqliteFlagForNode();
+
+if (
+  supervisorFlag.length > 0 &&
+  !process.execArgv.includes('--experimental-sqlite') &&
+  process.env.RN_DEV_AGENT_SQLITE_RELAUNCHED !== '1'
+) {
+  const child = spawn(
+    process.execPath,
+    supervisorRelaunchArgs(
+      fileURLToPath(import.meta.url),
+      sqliteWarningFilterPath,
+      undefined,
+      process.argv.slice(2),
+    ),
+    {
+      stdio: 'inherit',
+      env: { ...process.env, RN_DEV_AGENT_SQLITE_RELAUNCHED: '1' },
+    },
+  );
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    process.on(signal, () => child.kill(signal));
+  }
+  const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => child.on('exit', (code, signal) => resolve({ code, signal })),
+  );
+  if (outcome.signal) {
+    process.removeAllListeners(outcome.signal);
+    process.kill(process.pid, outcome.signal);
+  }
+  process.exit(outcome.code ?? 1);
+}
 
 if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   // Escape hatch: legacy single-process bridge (debugging / bisecting).
@@ -39,6 +80,33 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     process.on('exit', () => lockfile?.release());
   }
 
+  let authority: SupervisorAuthority | null = null;
+  let authorityError: string | null = null;
+  try {
+    const declaredManifests = process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const source = resolveSourceIdentity(process.cwd(), {
+      declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
+      declaredManifests,
+    });
+    authority = createSupervisorAuthority({
+      source,
+      supervisorBirth: readProcessBirth(process.pid),
+      uid:
+        typeof process.getuid === 'function'
+          ? String(process.getuid())
+          : (process.env.USER ?? 'unknown'),
+      ownerStatus: inspectSessionOwner,
+    });
+  } catch (error) {
+    authorityError =
+      error instanceof Error
+        ? error.message
+        : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized';
+    process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}\n`);
+  }
+
   const core = new SupervisorCore({
     maxRespawns: Number(process.env.RN_BRIDGE_MAX_RESPAWNS ?? '3') || 3,
     logPath: logger.logFilePath,
@@ -59,16 +127,21 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   }
 
   function spawnWorker(): void {
+    const workerInstance = randomUUID();
     const child = spawn(
       process.execPath,
-      workerSpawnArgs(workerPath, undefined, process.argv.slice(2)),
+      workerSpawnArgs(workerPath, sqliteWarningFilterPath, undefined, process.argv.slice(2)),
       {
         stdio: ['pipe', 'pipe', 'inherit'],
         env: {
           ...process.env,
           RN_BRIDGE_SUPERVISED: '1',
+          RN_DEV_AGENT_SESSION_CLI: join(here, 'rn-session.js'),
           RN_BRIDGE_RESTARTS: String(core.restartCount),
           ...(core.lastExit ? { RN_BRIDGE_LAST_EXIT: core.lastExit } : {}),
+          ...(authority
+            ? authority.workerEnvironment(workerInstance)
+            : { RN_DEV_AGENT_AUTHORITY_ERROR: authorityError ?? 'AUTHORITY_STORE_UNAVAILABLE' }),
         },
       },
     );
@@ -115,7 +188,10 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     shutdownRequested = true;
     process.stderr.write(`rn-bridge-supervisor: shutdown (${why})\n`);
     const child = worker;
-    if (!child || child.exitCode !== null) process.exit(0);
+    if (!child || child.exitCode !== null) {
+      authority?.close();
+      process.exit(0);
+    }
     child.kill('SIGTERM');
     const force = setTimeout(() => {
       try {
@@ -125,7 +201,10 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       }
     }, 3000);
     force.unref();
-    child.on('exit', () => process.exit(0));
+    child.on('exit', () => {
+      authority?.close();
+      process.exit(0);
+    });
   }
 
   process.stdin.setEncoding('utf8');

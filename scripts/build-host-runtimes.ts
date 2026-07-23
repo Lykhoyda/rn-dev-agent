@@ -55,7 +55,13 @@ const esbuild = join(
   process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild',
 );
 
-const RUNTIME_ENTRIES = ['supervisor.js', 'index.js', 'learned-actions.js'];
+const RUNTIME_ENTRIES = [
+  'supervisor.js',
+  'index.js',
+  'learned-actions.js',
+  'sqlite-warning-filter.js',
+  'rn-session.js',
+];
 
 // Helper scripts the Claude package's hooks and skills invoke at runtime.
 // The SessionStart hook (hooks/detect-rn-project.sh) resolves them from

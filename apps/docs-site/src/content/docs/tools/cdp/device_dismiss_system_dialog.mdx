@@ -1,16 +1,16 @@
 ---
 title: "device_dismiss_system_dialog"
-description: "Tap an OS-level system dialog dismiss button — e"
+description: "Tap an OS-level dismiss button through the capability-bound runner on the exact session device"
 ---
 
-Tap an OS-level system dialog dismiss button — e.g. "Cancel", "Donu2019t Allow", "Deny", "Not Now". Same mechanism as device_accept_system_dialog (native rn-fast-runner path on iOS with a session, Maestro fallback) but for the negative action. Handles both ASCII and typographic apostrophes in "Donu2019t Allow".
+Tap an OS-level dismiss button through the capability-bound runner on the exact session device.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `label` | `unknown` | No |  |  |  |
-| `platform` | `unknown` | No |  |  |  |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
 | `timeoutMs` | `unknown` | No |  | min: 1000, max: 60000, integer | Maestro invocation timeout (default 15000ms). |
 
 ## Usage

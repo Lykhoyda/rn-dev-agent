@@ -12,6 +12,9 @@ test('GH#202 trackedTool composes arbiterWrap inside instrumentTool', () => {
     indexSrc,
     /import\s*\{[^}]*arbiterWrap[^}]*\}\s*from\s*['"]\.\/lifecycle\/device-arbiter\.js['"]/,
   );
-  // arbiterWrap(name, handler) is composed before instrumentTool sees the handler
-  assert.match(indexSrc, /instrumentTool\(\s*name\s*,\s*arbiterWrap\(\s*name\s*,/);
+  // Authority checks wrap arbitration, while instrumentation remains outermost.
+  assert.match(
+    indexSrc,
+    /instrumentTool\(\s*name\s*,\s*authorityGate\.wrap\(\s*name\s*,\s*arbiterWrap\(\s*name\s*,/,
+  );
 });

@@ -83,6 +83,245 @@
       "minItems": 3,
       "type": "array"
     },
+    "authority": {
+      "additionalProperties": false,
+      "properties": {
+        "authorityVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "bundle": {
+          "additionalProperties": false,
+          "properties": {
+            "authorityScope": {
+              "const": "initial-bundle",
+              "type": "string"
+            },
+            "connectionGeneration": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "markerDigest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "sourceFidelity": {
+              "const": "not-proven",
+              "type": "string"
+            },
+            "targetId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "targetId",
+            "connectionGeneration",
+            "markerDigest",
+            "authorityScope",
+            "sourceFidelity"
+          ],
+          "type": "object"
+        },
+        "claimEpoch": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "controller": {
+          "additionalProperties": false,
+          "properties": {
+            "birthDigest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "instanceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "pid": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "instanceId",
+            "pid",
+            "birthDigest"
+          ],
+          "type": "object"
+        },
+        "device": {
+          "additionalProperties": false,
+          "properties": {
+            "deviceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "platform": {
+              "enum": [
+                "ios",
+                "android"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "platform",
+            "deviceId"
+          ],
+          "type": "object"
+        },
+        "install": {
+          "additionalProperties": false,
+          "properties": {
+            "appId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "artifactDigest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "buildGeneration": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifactDigest",
+            "buildGeneration",
+            "appId"
+          ],
+          "type": "object"
+        },
+        "metro": {
+          "additionalProperties": false,
+          "properties": {
+            "birthDigest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "buildGeneration": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "instanceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "pid": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "port": {
+              "exclusiveMinimum": 0,
+              "maximum": 65535,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "port",
+            "instanceId",
+            "pid",
+            "birthDigest",
+            "buildGeneration"
+          ],
+          "type": "object"
+        },
+        "proof": {
+          "additionalProperties": false,
+          "properties": {
+            "runId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "runId"
+          ],
+          "type": "object"
+        },
+        "runner": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilityDigest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "instanceId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "processBirthDigest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "protocolVersion": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "instanceId",
+            "protocolVersion",
+            "capabilityDigest",
+            "processBirthDigest"
+          ],
+          "type": "object"
+        },
+        "sessionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "appRootKey": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "dirtyDigest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "head": {
+              "pattern": "^[0-9a-f]{7,64}$",
+              "type": "string"
+            },
+            "sourceKey": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "worktreeKey": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sourceKey",
+            "worktreeKey",
+            "appRootKey",
+            "head",
+            "dirtyDigest"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "sessionId",
+        "claimEpoch",
+        "authorityVersion",
+        "controller",
+        "source",
+        "install",
+        "metro",
+        "bundle",
+        "device",
+        "runner",
+        "proof"
+      ],
+      "type": "object"
+    },
     "candidateRuntime": {
       "additionalProperties": false,
       "properties": {
@@ -236,6 +475,10 @@
             "additionalProperties": false,
             "properties": {
               "argsHash": {
+                "type": "string"
+              },
+              "authorityReceiptHash": {
+                "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
               },
               "durationMs": {
@@ -509,7 +752,7 @@
       "type": "object"
     },
     "schemaVersion": {
-      "const": 1,
+      "const": 2,
       "type": "number"
     },
     "screenshots": {
@@ -624,6 +867,7 @@
     "git",
     "device",
     "runtime",
+    "authority",
     "fixture",
     "action",
     "storyboard",

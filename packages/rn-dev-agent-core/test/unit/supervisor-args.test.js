@@ -1,6 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { sqliteFlagForNode, workerSpawnArgs } from '../../dist/supervisor-args.js';
+import {
+  sqliteFlagForNode,
+  supervisorRelaunchArgs,
+  workerSpawnArgs,
+} from '../../dist/supervisor-args.js';
 
 // ── sqliteFlagForNode ─────────────────────────────────────────────────────────
 // Flag is required for 22.5 ≤ v < 23.6 (inclusive on both ends of the integers).
@@ -51,35 +55,64 @@ describe('sqliteFlagForNode', () => {
 // ── workerSpawnArgs ───────────────────────────────────────────────────────────
 
 describe('workerSpawnArgs', () => {
-  test('flag version: puts --experimental-sqlite BEFORE script, --no-lock AFTER', () => {
-    assert.deepEqual(workerSpawnArgs('/abs/dist/index.js', '22.6.0'), [
-      '--experimental-sqlite',
-      '/abs/dist/index.js',
-      '--no-lock',
-    ]);
+  test('flag version preloads the selective warning filter before the worker', () => {
+    assert.deepEqual(
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '22.6.0'),
+      [
+        '--experimental-sqlite',
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+      ],
+    );
   });
 
-  test('no-flag version: script + --no-lock, no node flag prepended', () => {
-    assert.deepEqual(workerSpawnArgs('/abs/dist/index.js', '24.0.0'), [
-      '/abs/dist/index.js',
-      '--no-lock',
-    ]);
+  test('default-on version still preloads the selective warning filter', () => {
+    assert.deepEqual(
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '24.0.0'),
+      ['--import', '/abs/dist/sqlite-warning-filter.js', '/abs/dist/index.js', '--no-lock'],
+    );
   });
 
   test('22.4.0 (below threshold): no flag', () => {
-    assert.deepEqual(workerSpawnArgs('/abs/dist/index.js', '22.4.0'), [
-      '/abs/dist/index.js',
-      '--no-lock',
-    ]);
+    assert.deepEqual(
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '22.4.0'),
+      ['--import', '/abs/dist/sqlite-warning-filter.js', '/abs/dist/index.js', '--no-lock'],
+    );
   });
 
   test('forwards only the read-only diagnostic contract mode to the worker', () => {
     assert.deepEqual(
-      workerSpawnArgs('/abs/dist/index.js', '24.0.0', [
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '24.0.0', [
         '--diagnostic-contract-probe',
         '--untrusted-worker-flag',
       ]),
-      ['/abs/dist/index.js', '--no-lock', '--diagnostic-contract-probe'],
+      [
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+        '--diagnostic-contract-probe',
+      ],
     );
   });
+});
+
+test('supervisor relaunch applies SQLite flags before preserving its arguments', () => {
+  assert.deepEqual(
+    supervisorRelaunchArgs(
+      '/abs/dist/supervisor.js',
+      '/abs/dist/sqlite-warning-filter.js',
+      '22.12.0',
+      ['--no-lock'],
+    ),
+    [
+      '--experimental-sqlite',
+      '--import',
+      '/abs/dist/sqlite-warning-filter.js',
+      '/abs/dist/supervisor.js',
+      '--no-lock',
+    ],
+  );
 });
