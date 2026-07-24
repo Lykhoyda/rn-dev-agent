@@ -98,10 +98,14 @@ test('controller probe uses the handoff-only lookup solely for cancellation', as
     supervisor: { pid: process.pid, token: processBirth.token },
     worker: { instanceId: 'worker', pid: process.pid, token: processBirth.token },
   };
+  let operationalAvailable = false;
   const registry = {
     getControllerBinding: () => {
       calls.push('operational');
-      throw new SessionAuthorityError('SESSION_OWNER_LOST', 'handoff is not operational');
+      if (!operationalAvailable) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'handoff is not operational');
+      }
+      return controller;
     },
     getHandoffCancellationControllerBinding: () => {
       calls.push('handoff-cancellation');
@@ -124,13 +128,32 @@ test('controller probe uses the handoff-only lookup solely for cancellation', as
 
   await probe({
     axis: 'C',
+    phase: 'preflight',
     status,
     tool: 'rn_session',
     args: { action: 'cancel_handoff' },
   });
+  operationalAvailable = true;
+  status.state = 'ready';
+  await probe({
+    axis: 'C',
+    phase: 'postflight',
+    status,
+    tool: 'rn_session',
+    args: { action: 'cancel_handoff' },
+  });
+  operationalAvailable = false;
+  status.state = 'handoff';
   await assert.rejects(
-    () => probe({ axis: 'C', status, tool: 'rn_session', args: { action: 'bind_metro' } }),
+    () =>
+      probe({
+        axis: 'C',
+        phase: 'preflight',
+        status,
+        tool: 'rn_session',
+        args: { action: 'bind_metro' },
+      }),
     (error) => error instanceof SessionAuthorityError && error.code === 'SESSION_OWNER_LOST',
   );
-  assert.deepEqual(calls, ['handoff-cancellation', 'operational']);
+  assert.deepEqual(calls, ['handoff-cancellation', 'operational', 'operational']);
 });

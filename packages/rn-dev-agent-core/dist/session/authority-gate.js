@@ -481,6 +481,7 @@ export function createAuthorityGate(runtime, dependencies) {
                             registry.verifyOperation(operation);
                             status = currentStatus;
                             optionalBefore.push(observation);
+                            optionalBundleRecoveryFailed = false;
                             optionalBundleClaimed = true;
                             return true;
                         },

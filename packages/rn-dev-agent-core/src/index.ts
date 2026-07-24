@@ -442,7 +442,8 @@ const localAuthorityProbe = createLocalAuthorityProbe({
   proofActive: (runId) => strictProofMonitor.ownsRun(runId),
 });
 const authorityGate = createAuthorityGate(authorityRuntime, {
-  probe: async ({ axis, status, tool, args }) => localAuthorityProbe({ axis, status, tool, args }),
+  probe: async ({ axis, phase, status, tool, args }) =>
+    localAuthorityProbe({ axis, phase, status, tool, args }),
   refreshRuntimeBinding: rebindSessionRuntime,
 });
 setObserveAuthorityDeps({

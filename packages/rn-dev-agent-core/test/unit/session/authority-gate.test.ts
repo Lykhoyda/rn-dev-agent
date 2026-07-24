@@ -388,6 +388,50 @@ test('reactive bundle admission verifies the refreshed target before replacing o
   assert.equal(status.bindings.bundle, null);
 });
 
+test('later verified bundle admission clears an earlier recovery failure', async () => {
+  const { calls, registry, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  status.bindings.bundle.connectionGeneration = 1;
+  let bundleProbes = 0;
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push('replace-binding');
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: operation.authorityVersion + 1 };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        bundleProbes += 1;
+        if (bundleProbes === 1 || bundleProbes === 3) {
+          throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: native attempt replaced the target');
+        }
+        if (bundleProbes === 2) {
+          throw new Error('BUNDLE_IDENTITY_MISMATCH: refreshed target was not ready');
+        }
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'target-b',
+      connectionGeneration: 2,
+    }),
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    assert.equal(await claimOptionalBundleAuthority(args), true);
+    return okResult({ transport: 'cdp-js' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityInvalidated, undefined);
+  assert.equal(status.bindings.bundle.targetId, 'target-b');
+  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), true);
+});
+
 test('native run-action invalidates an unrecoverable prior bundle without losing native proof', async () => {
   const { calls, registry, runtime, status } = fixture();
   status.bindings.bundle.targetId = 'target-a';

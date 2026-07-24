@@ -108,6 +108,7 @@ export function createLocalAuthorityProbe(
   dependencies: LocalAuthorityProbeDependencies,
 ): (input: {
   axis: AuthorityAxis;
+  phase: 'preflight' | 'postflight';
   status: SessionStatus;
   tool?: string;
   args?: Record<string, unknown>;
@@ -118,11 +119,11 @@ export function createLocalAuthorityProbe(
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
 
-  return async ({ axis, status, tool, args }) => {
+  return async ({ axis, phase, status, tool, args }) => {
     if (axis === 'C') {
       const { registry, session } = dependencies.runtime.requireAvailable();
       const controller =
-        tool === 'rn_session' && args?.action === 'cancel_handoff'
+        phase === 'preflight' && tool === 'rn_session' && args?.action === 'cancel_handoff'
           ? registry.getHandoffCancellationControllerBinding(session)
           : registry.getControllerBinding(session);
       const supervisor = inspectOwner({

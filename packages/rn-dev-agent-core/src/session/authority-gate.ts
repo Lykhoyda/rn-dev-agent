@@ -600,6 +600,7 @@ export function createAuthorityGate(
                 registry!.verifyOperation(operation!);
                 status = currentStatus;
                 optionalBefore.push(observation);
+                optionalBundleRecoveryFailed = false;
                 optionalBundleClaimed = true;
                 return true;
               },

@@ -69220,6 +69220,7 @@ function createAuthorityGate(runtime, dependencies) {
               registry2.verifyOperation(operation);
               status = currentStatus;
               optionalBefore.push(observation);
+              optionalBundleRecoveryFailed = false;
               optionalBundleClaimed = true;
               return true;
             }
@@ -69492,10 +69493,10 @@ function createLocalAuthorityProbe(dependencies) {
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
-  return async ({ axis, status, tool, args }) => {
+  return async ({ axis, phase, status, tool, args }) => {
     if (axis === "C") {
       const { registry: registry2, session } = dependencies.runtime.requireAvailable();
-      const controller = tool === "rn_session" && args?.action === "cancel_handoff" ? registry2.getHandoffCancellationControllerBinding(session) : registry2.getControllerBinding(session);
+      const controller = phase === "preflight" && tool === "rn_session" && args?.action === "cancel_handoff" ? registry2.getHandoffCancellationControllerBinding(session) : registry2.getControllerBinding(session);
       const supervisor = inspectOwner({
         sessionId: controller.sessionId,
         pid: controller.supervisor.pid,
@@ -70356,7 +70357,7 @@ var init_index = __esm({
       proofActive: (runId) => strictProofMonitor.ownsRun(runId)
     });
     authorityGate = createAuthorityGate(authorityRuntime, {
-      probe: async ({ axis, status, tool, args }) => localAuthorityProbe({ axis, status, tool, args }),
+      probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
       refreshRuntimeBinding: rebindSessionRuntime
     });
     setObserveAuthorityDeps({
