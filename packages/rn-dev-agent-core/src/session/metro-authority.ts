@@ -44,7 +44,7 @@ function mismatch(): Error {
   return new Error('BUNDLE_IDENTITY_MISMATCH: signed initial-bundle binding did not match');
 }
 
-export function createMetroAuthorityMarker(
+export function buildSignedMetroMarker(
   binding: MetroAuthorityBinding,
   signerCapability: string,
 ): MetroAuthorityMarker {

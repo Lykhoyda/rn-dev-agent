@@ -9,7 +9,7 @@ function signPayload(payload, signerCapability) {
 function mismatch() {
     return new Error('BUNDLE_IDENTITY_MISMATCH: signed initial-bundle binding did not match');
 }
-export function createMetroAuthorityMarker(binding, signerCapability) {
+export function buildSignedMetroMarker(binding, signerCapability) {
     const payload = {
         ...binding,
         authorityScope: 'initial-bundle',

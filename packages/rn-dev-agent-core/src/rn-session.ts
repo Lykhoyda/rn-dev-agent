@@ -4,10 +4,7 @@ import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
-import {
-  createMetroAuthorityMarker,
-  createMetroAuthorityModule,
-} from './session/metro-authority.js';
+import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
 import {
   startManagedMetro,
@@ -74,7 +71,7 @@ function writeMarker(
     signerCapability: string;
   },
 ): void {
-  const marker = createMetroAuthorityMarker(
+  const marker = buildSignedMetroMarker(
     {
       sessionId: status.sessionId,
       metroInstanceId: input.metroInstanceId,

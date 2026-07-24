@@ -7518,7 +7518,7 @@ function signPayload(payload, signerCapability) {
   const signingKey = createSecretKey(Buffer.from(signerCapability, "base64url"));
   return createHmac2("sha256", signingKey).update(serializePayload(payload)).digest("hex");
 }
-function createMetroAuthorityMarker(binding, signerCapability) {
+function buildSignedMetroMarker(binding, signerCapability) {
   const payload = {
     ...binding,
     authorityScope: "initial-bundle",
@@ -9719,7 +9719,7 @@ function readSigner(status) {
   return secret.signerCapability;
 }
 function writeMarker(status, input) {
-  const marker = createMetroAuthorityMarker({
+  const marker = buildSignedMetroMarker({
     sessionId: status.sessionId,
     metroInstanceId: input.metroInstanceId,
     worktreeKey: status.worktreeKey,

@@ -267,8 +267,8 @@ export class ObservabilityServer {
         return;
       }
       this.json(res, 200, out);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
 
@@ -333,6 +333,10 @@ export class ObservabilityServer {
     res.end(body);
   }
 
+  private internalError(res: ServerResponse): void {
+    this.json(res, 500, { error: 'internal server error' });
+  }
+
   private async e2eRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.e2e) {
       this.json(res, 501, { error: 'e2e not configured' });
@@ -365,8 +369,8 @@ export class ObservabilityServer {
     try {
       const result = await this.e2e.triggerRun(parsed.pattern);
       this.json(res, 200, result);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
 
@@ -378,8 +382,8 @@ export class ObservabilityServer {
     try {
       const runs = await this.e2e.listRuns();
       this.json(res, 200, runs);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
 
@@ -395,8 +399,8 @@ export class ObservabilityServer {
         return;
       }
       this.json(res, 200, run);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
 
@@ -408,8 +412,8 @@ export class ObservabilityServer {
     try {
       const actions = await this.e2e.listActions();
       this.json(res, 200, actions);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
 
@@ -457,8 +461,8 @@ export class ObservabilityServer {
         return;
       }
       this.json(res, 200, result);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
 }

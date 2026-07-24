@@ -420,7 +420,17 @@ test('network_body: CDP path not found in buffer', async () => {
 test('network_body: hook path success', async () => {
   const client = createMockClient({
     _networkMode: 'hook',
-    evaluate: async () => ({ value: JSON.stringify({ body: '{"data":"test"}' }) }),
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        return { result: { objectId: 'body-cache' } };
+      }
+      if (method === 'Runtime.callFunctionOn') {
+        assert.deepEqual(params.arguments, [{ value: 'hook-req1' }]);
+        assert.doesNotMatch(params.functionDeclaration, /hook-req1/);
+        return { result: { value: JSON.stringify({ body: '{"data":"test"}' }) } };
+      }
+      return {};
+    },
   });
   client.networkBufferManager.push(client.activeDeviceKey, {
     id: 'hook-req1',
@@ -438,7 +448,15 @@ test('network_body: hook path success', async () => {
 test('network_body: hook path cache miss returns failResult', async () => {
   const client = createMockClient({
     _networkMode: 'hook',
-    evaluate: async () => ({ value: JSON.stringify({ error: 'not_found' }) }),
+    send: async (method) => {
+      if (method === 'Runtime.evaluate') {
+        return { result: { objectId: 'body-cache' } };
+      }
+      if (method === 'Runtime.callFunctionOn') {
+        return { result: { value: JSON.stringify({ error: 'not_found' }) } };
+      }
+      return {};
+    },
   });
   client.networkBufferManager.push(client.activeDeviceKey, {
     id: 'hook-req2',
@@ -450,6 +468,29 @@ test('network_body: hook path cache miss returns failResult', async () => {
   const handler = createNetworkBodyHandler(() => client);
   const error = expectFail(await handler({ requestId: 'hook-req2' }));
   assert.match(error, /not in cache/);
+});
+
+test('network_body: hook path rejects code-shaped request IDs before CDP execution', async () => {
+  let sendCalls = 0;
+  const requestId = 'safe-id\\n});globalThis.pwned=true;//';
+  const client = createMockClient({
+    _networkMode: 'hook',
+    send: async () => {
+      sendCalls++;
+      return {};
+    },
+  });
+  client.networkBufferManager.push(client.activeDeviceKey, {
+    id: requestId,
+    method: 'GET',
+    url: 'https://api.example.com/data',
+    timestamp: '2026-04-13T00:00:00Z',
+    status: 200,
+  });
+  const handler = createNetworkBodyHandler(() => client);
+  const error = expectFail(await handler({ requestId }));
+  assert.match(error, /Invalid requestId shape/);
+  assert.equal(sendCalls, 0);
 });
 
 test('network_body: no network mode returns failResult', async () => {

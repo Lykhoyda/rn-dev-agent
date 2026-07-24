@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createMetroAuthorityMarker } from '../../../dist/session/metro-authority.js';
+import { buildSignedMetroMarker } from '../../../dist/session/metro-authority.js';
 import { pinExactDevClient } from '../../../dist/session/dev-client-authority.js';
 
 const expected = {
@@ -14,7 +14,7 @@ const expected = {
 
 test('dev-client pin opens only the declared URL on the exact device and binds its target', async () => {
   const calls = [];
-  const marker = createMetroAuthorityMarker(expected, 'signer');
+  const marker = buildSignedMetroMarker(expected, 'signer');
   const binding = await pinExactDevClient(
     {
       ...expected,
@@ -71,7 +71,7 @@ test('dev-client pin refuses any URL drift and never falls back to a picker row'
 
 test('bare RN pin launches the exact claimed app without inventing a dev-client URL', async () => {
   const calls = [];
-  const marker = createMetroAuthorityMarker(expected, 'signer');
+  const marker = buildSignedMetroMarker(expected, 'signer');
   const binding = await pinExactDevClient(
     {
       ...expected,
@@ -102,7 +102,7 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
 });
 
 test('dev-client pinning rejects a target not proven on the claimed device', async () => {
-  const marker = createMetroAuthorityMarker(expected, 'signer');
+  const marker = buildSignedMetroMarker(expected, 'signer');
   await assert.rejects(
     pinExactDevClient(
       {

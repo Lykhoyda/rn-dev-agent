@@ -53661,14 +53661,24 @@ function createNetworkBodyHandler(getClient2) {
       }
       await drainNetworkHookBuffer(client2);
       try {
-        const result = await client2.evaluate(`(function() { var c = globalThis.__RN_AGENT_RESPONSE_BODIES__; if (!c) return JSON.stringify({error:'no_cache'}); var b = c.get(${JSON.stringify(args.requestId)}); if (b === undefined) return JSON.stringify({error:'not_found'}); return JSON.stringify({body: b}); })()`);
-        if (result.error) {
-          return failResult(`Failed to read body from hook cache: ${result.error}`);
-        }
-        const parsed = JSON.parse(String(result.value));
-        if (parsed.error === "no_cache") {
+        const cache3 = await client2.send("Runtime.evaluate", {
+          expression: "globalThis.__RN_AGENT_RESPONSE_BODIES__",
+          returnByValue: false
+        });
+        const objectId = cache3.result?.objectId;
+        if (!objectId) {
           return failResult("Response body cache not available. The network hook may not have been injected yet.", { hint: "Make a request first, then query its body." });
         }
+        const result = await client2.send("Runtime.callFunctionOn", {
+          objectId,
+          functionDeclaration: 'function(requestId) { const body = this.get(requestId); return JSON.stringify(body === undefined ? { error: "not_found" } : { body }); }',
+          arguments: [{ value: args.requestId }],
+          returnByValue: true
+        });
+        if (result.exceptionDetails || typeof result.result?.value !== "string") {
+          return failResult("Failed to read body from hook cache");
+        }
+        const parsed = JSON.parse(result.result.value);
         if (parsed.error === "not_found") {
           return failResult(`Response body for ${args.requestId} not in cache. It may have been evicted (cache holds last 50 bodies) or the request failed.`);
         }
@@ -65806,8 +65816,8 @@ var init_server3 = __esm({
             return;
           }
           this.json(res, 200, out);
-        } catch (err) {
-          this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        } catch {
+          this.internalError(res);
         }
       }
       index(res) {
@@ -65860,6 +65870,9 @@ var init_server3 = __esm({
         res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         res.end(body);
       }
+      internalError(res) {
+        this.json(res, 500, { error: "internal server error" });
+      }
       async e2eRun(req, res) {
         if (!this.e2e) {
           this.json(res, 501, { error: "e2e not configured" });
@@ -65889,8 +65902,8 @@ var init_server3 = __esm({
         try {
           const result = await this.e2e.triggerRun(parsed.pattern);
           this.json(res, 200, result);
-        } catch (err) {
-          this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        } catch {
+          this.internalError(res);
         }
       }
       async e2eListRuns(res) {
@@ -65901,8 +65914,8 @@ var init_server3 = __esm({
         try {
           const runs = await this.e2e.listRuns();
           this.json(res, 200, runs);
-        } catch (err) {
-          this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        } catch {
+          this.internalError(res);
         }
       }
       async e2eLoadRun(id, res) {
@@ -65917,8 +65930,8 @@ var init_server3 = __esm({
             return;
           }
           this.json(res, 200, run);
-        } catch (err) {
-          this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        } catch {
+          this.internalError(res);
         }
       }
       async e2eListActions(res) {
@@ -65929,8 +65942,8 @@ var init_server3 = __esm({
         try {
           const actions = await this.e2e.listActions();
           this.json(res, 200, actions);
-        } catch (err) {
-          this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        } catch {
+          this.internalError(res);
         }
       }
       async e2eRunAction(req, res) {
@@ -65974,8 +65987,8 @@ var init_server3 = __esm({
             return;
           }
           this.json(res, 200, result);
-        } catch (err) {
-          this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        } catch {
+          this.internalError(res);
         }
       }
     };

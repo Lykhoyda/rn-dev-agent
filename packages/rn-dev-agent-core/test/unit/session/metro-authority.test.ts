@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { test } from 'node:test';
 import {
-  createMetroAuthorityMarker,
+  buildSignedMetroMarker,
   createMetroAuthorityModule,
   verifyMetroAuthorityMarker,
   withMetroAuthorityModule,
@@ -18,7 +18,7 @@ const binding = {
 };
 
 test('signed marker proves coarse initial-bundle binding without source fidelity', () => {
-  const marker = createMetroAuthorityMarker(binding, 'signer-secret');
+  const marker = buildSignedMetroMarker(binding, 'signer-secret');
   const verified = verifyMetroAuthorityMarker(marker, 'signer-secret');
 
   assert.deepEqual(verified, {
@@ -32,7 +32,7 @@ test('signed marker proves coarse initial-bundle binding without source fidelity
 });
 
 test('Fast Refresh leaves coarse binding valid without inventing source fidelity', () => {
-  const marker = createMetroAuthorityMarker(binding, 'signer-secret');
+  const marker = buildSignedMetroMarker(binding, 'signer-secret');
   const runtime = {
     authority: marker,
     hmrRevision: 'revision-1',
@@ -50,7 +50,7 @@ test('Fast Refresh leaves coarse binding valid without inventing source fidelity
 });
 
 test('marker rejects a foreign signer and foreign expected binding', () => {
-  const marker = createMetroAuthorityMarker(binding, 'signer-secret');
+  const marker = buildSignedMetroMarker(binding, 'signer-secret');
 
   assert.throws(
     () => verifyMetroAuthorityMarker(marker, 'foreign-secret'),
@@ -116,7 +116,7 @@ test('unsigned marker keeps Metro buildable but cannot manufacture authority', (
 });
 
 test('signed module is runtime-neutral for Hermes and bridgeless globals', () => {
-  const marker = createMetroAuthorityMarker(binding, 'signer-secret');
+  const marker = buildSignedMetroMarker(binding, 'signer-secret');
   const source = createMetroAuthorityModule(marker);
   const context = { globalThis: {} };
 

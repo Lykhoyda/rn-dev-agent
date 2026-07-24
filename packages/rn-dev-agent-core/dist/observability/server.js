@@ -247,8 +247,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, out);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     index(res) {
@@ -306,6 +306,9 @@ export class ObservabilityServer {
         res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(body);
     }
+    internalError(res) {
+        this.json(res, 500, { error: 'internal server error' });
+    }
     async e2eRun(req, res) {
         if (!this.e2e) {
             this.json(res, 501, { error: 'e2e not configured' });
@@ -337,8 +340,8 @@ export class ObservabilityServer {
             const result = await this.e2e.triggerRun(parsed.pattern);
             this.json(res, 200, result);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eListRuns(res) {
@@ -350,8 +353,8 @@ export class ObservabilityServer {
             const runs = await this.e2e.listRuns();
             this.json(res, 200, runs);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eLoadRun(id, res) {
@@ -367,8 +370,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, run);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eListActions(res) {
@@ -380,8 +383,8 @@ export class ObservabilityServer {
             const actions = await this.e2e.listActions();
             this.json(res, 200, actions);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eRunAction(req, res) {
@@ -427,8 +430,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, result);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
 }
