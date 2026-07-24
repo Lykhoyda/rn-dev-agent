@@ -3,7 +3,7 @@ import { failResult, okResult } from '../utils.js';
 import { verifyBuildReceipt } from '../session/build-receipt.js';
 import { captureInstallGeneration, } from '../session/install-authority.js';
 import { captureMetroBinding } from '../session/metro-binding.js';
-import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, readOptionalRegularFileNoFollow, readRegularFileNoFollow, restorePackageIntegrationFiles, } from '../session/package-integration.js';
+import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, readPackageIntegrationInputs, restorePackageIntegrationFiles, } from '../session/package-integration.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
@@ -239,7 +239,8 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', `${requiredBinding} must be bound before pinning`);
                     }
                 }
-                const priorTargetId = status.bindings.bundle?.targetId;
+                const priorTargetId = status.bindings.bundle
+                    ?.targetId;
                 if (input.force === true && typeof priorTargetId === 'string') {
                     registry.releaseResources(session, [
                         { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
@@ -282,23 +283,12 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'session app root is unavailable for integration');
                 }
                 const packagePath = join(appRoot, 'package.json');
-                const metroConfigCandidates = ['metro.config.js', 'metro.config.cjs'].map((name) => join(appRoot, name));
-                let metroConfig;
-                for (const path of metroConfigCandidates) {
-                    const contents = readOptionalRegularFileNoFollow(appRoot, path);
-                    if (contents !== undefined) {
-                        metroConfig = { path, contents };
-                        break;
-                    }
-                }
-                if (!metroConfig) {
-                    throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'metro.config.js or metro.config.cjs is required for integration');
-                }
+                const integrationInputs = readPackageIntegrationInputs(appRoot);
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
-                const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
+                const packageJson = JSON.parse(integrationInputs.packageJson);
                 let existing;
                 try {
-                    const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+                    const manifest = integrationInputs.manifest;
                     existing =
                         manifest === undefined
                             ? undefined
@@ -324,8 +314,8 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     return okResult({ restored: true, packagePath, manifestPath });
                 }
                 const preview = previewPackageIntegration(packageJson, existing, sessionCli);
-                const metroConfigPath = metroConfig.path;
-                const metroBefore = metroConfig.contents;
+                const metroConfigPath = integrationInputs.metroConfig.path;
+                const metroBefore = integrationInputs.metroConfig.contents;
                 const metroAfter = previewMetroIntegration(metroBefore);
                 if (input.action === 'preview_integration') {
                     return okResult({

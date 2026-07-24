@@ -53112,12 +53112,25 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
   }
 }
 function restartWorker(directory) {
+  const descendants = [...directory.children];
   stopWorker(directory.worker, "SIGKILL");
   if (directory.parent && directory.name) {
     directory.worker = startSubdirectoryWorker(directory.parent, directory.name, directory.identity, directory.realPath);
-    return;
+  } else {
+    directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
   }
-  directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
+  for (const descendant of descendants) {
+    rmSync8(descendant.worker.controlPath, { force: true, recursive: true });
+    descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
+    rebindDescendants(descendant);
+  }
+}
+function rebindDescendants(directory) {
+  for (const descendant of directory.children) {
+    rmSync8(descendant.worker.controlPath, { force: true, recursive: true });
+    descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
+    rebindDescendants(descendant);
+  }
 }
 function sendOperation(directory, request2, timeoutMs) {
   const sequence = ++directory.worker.sequence;
@@ -53170,15 +53183,24 @@ function runBoundOperation(directory, request2, dependencies = {}) {
     if (!result.ok)
       throwOperationFailure(result);
     if (request2.operation === "cas" && result.cleanupPending) {
-      const cleanup = sendOperation(directory, {
-        operation: "recover",
-        journal: request2.journal,
-        writes: request2.writes
-      }, dependencies.recoveryTimeoutMs ?? 5e3);
-      if (!cleanup.ok)
-        throwOperationFailure(cleanup);
-      if (!cleanup.committed) {
-        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+      try {
+        const cleanup = sendOperation(directory, {
+          operation: "recover",
+          failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
+          journal: request2.journal,
+          writes: request2.writes
+        }, dependencies.recoveryTimeoutMs ?? 5e3);
+        if (!cleanup.ok)
+          throwOperationFailure(cleanup);
+        if (!cleanup.committed) {
+          throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+        }
+        return { ...result, cleanupPending: false };
+      } catch (cleanupError) {
+        return {
+          ...result,
+          cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+        };
       }
     }
     return result;
@@ -53232,6 +53254,7 @@ function openValidatedDirectory(path, expected) {
     const identity2 = { dev: opened.dev, ino: opened.ino };
     worker = startWorker(path, identity2, realPath);
     return {
+      children: /* @__PURE__ */ new Set(),
       descriptor,
       identity: identity2,
       path,
@@ -53258,13 +53281,14 @@ function closeBoundDirectory(directory) {
     return;
   directory.closed = true;
   stopWorker(directory.worker);
+  directory.parent?.children.delete(directory);
   if (directory.descriptor !== void 0)
     closeSync3(directory.descriptor);
 }
 function assertBoundDirectoryCurrent(directory) {
   runBoundOperation(directory, { operation: "identity" });
 }
-function openBoundSubdirectory(parent, name, options = {}) {
+function openBoundSubdirectoryInternal(parent, name, options = {}) {
   const controlPath = mkdtempSync(join30(tmpdir10(), "rn-bound-directory-"));
   const childId = randomUUID5();
   let worker;
@@ -53276,14 +53300,20 @@ function openBoundSubdirectory(parent, name, options = {}) {
       name,
       publicPath: join30(parent.path, name),
       create: options.create ?? false,
-      mode: options.mode ?? 448
+      mode: options.mode ?? 448,
+      optional: options.optional ?? false
     });
+    if (result.directoryMissing) {
+      rmSync8(controlPath, { force: true, recursive: true });
+      return null;
+    }
     worker = bindWorker(controlPath, void 0, parent, childId);
     options.afterChildBind?.();
     if (!result.directoryIdentity) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output");
     }
     const directory = {
+      children: /* @__PURE__ */ new Set(),
       identity: {
         dev: BigInt(result.directoryIdentity.dev),
         ino: BigInt(result.directoryIdentity.ino)
@@ -53296,6 +53326,7 @@ function openBoundSubdirectory(parent, name, options = {}) {
       closed: false
     };
     runBoundOperation(parent, { operation: "child-identity", childId });
+    parent.children.add(directory);
     return directory;
   } catch (error2) {
     if (worker)
@@ -53315,6 +53346,12 @@ function openBoundSubdirectory(parent, name, options = {}) {
     throw error2;
   }
 }
+function openBoundSubdirectory(parent, name, options = {}) {
+  return openBoundSubdirectoryInternal(parent, name, options);
+}
+function openOptionalBoundSubdirectory(parent, name) {
+  return openBoundSubdirectoryInternal(parent, name, { optional: true });
+}
 function readBoundDirectoryFiles(directory, names) {
   const result = runBoundOperation(directory, { operation: "read", names });
   if (!result.snapshots || result.snapshots.length !== names.length) {
@@ -53328,7 +53365,7 @@ function readBoundDirectoryFiles(directory, names) {
 }
 function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
   const transactionId = randomUUID5();
-  runBoundOperation(directory, {
+  const result = runBoundOperation(directory, {
     operation: "cas",
     journal: `.rn-bound-${transactionId}.journal`,
     writes: writes.map((write, index) => ({
@@ -53344,6 +53381,14 @@ function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
     })),
     failCleanupAfterCommit: dependencies.failCleanupAfterCommit ?? false
   }, dependencies);
+  if (!result.committed) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory commit was not confirmed");
+  }
+  return {
+    committed: true,
+    cleanupPending: result.cleanupPending ?? false,
+    ...result.cleanupError ? { cleanupError: result.cleanupError } : {}
+  };
 }
 var WAIT_BUFFER, BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
@@ -53670,11 +53715,11 @@ function spawnChildWorker(request, directory) {
           dev: directory.dev.toString(),
           ino: directory.ino.toString(),
           publicPath: request.publicPath,
-          realPath: fs.realpathSync(request.name),
+          realPath: directory.realPath,
         },
       ],
       publicPath: request.publicPath,
-      realPath: fs.realpathSync(request.name),
+      realPath: directory.realPath,
     }),
   ).toString('base64url');
   const child = childProcess.spawn(
@@ -53725,16 +53770,35 @@ function execute(request) {
         if (error.code !== 'EEXIST') throw error;
       }
     }
-    const directory = fs.lstatSync(request.name, { bigint: true });
-    if (!directory.isDirectory() || directory.isSymbolicLink()) {
+    let before;
+    try {
+      before = fs.lstatSync(request.name, { bigint: true });
+    } catch (error) {
+      if (request.optional && error.code === 'ENOENT') {
+        return { directoryMissing: true };
+      }
+      throw error;
+    }
+    if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error('bound-directory child is not a directory');
     }
+    const realPath = fs.realpathSync(request.name);
+    const after = fs.lstatSync(request.name, { bigint: true });
+    if (
+      !after.isDirectory() ||
+      after.isSymbolicLink() ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino
+    ) {
+      throw new Error('bound-directory child changed while binding');
+    }
+    const directory = { dev: after.dev, ino: after.ino, realPath };
     spawnChildWorker(request, directory);
     return {
       directoryIdentity: {
         dev: directory.dev.toString(),
         ino: directory.ino.toString(),
-        realPath: fs.realpathSync(request.name),
+        realPath,
       },
     };
   }
@@ -53757,6 +53821,9 @@ function execute(request) {
     return applyBatch(request);
   }
   if (request.operation === 'recover') {
+    if (request.failCleanupRecovery) {
+      throw new Error('bound-directory cleanup recovery unavailable');
+    }
     return recoverTransaction(
       request.journal,
       request.writes,
@@ -69075,14 +69142,19 @@ function snapshotBoundFiles(directory, directoryPath, names) {
     path: join52(directoryPath, snapshot.name)
   }));
 }
-function casReplaceBoundBatch(directory, writes) {
-  casBoundDirectoryFiles(directory, writes.map((write) => ({
+function casReplaceBoundBatch(directory, writes, dependencies = {}) {
+  return casBoundDirectoryFiles(directory, writes.map((write) => ({
     expected: write.expected,
     expectedMode: write.expectedMode ?? write.snapshot.mode,
     mode: write.mode,
     name: write.snapshot.name,
     replacement: write.replacement
-  })));
+  })), dependencies);
+}
+function assertBoundCleanup(result) {
+  if (result.cleanupError) {
+    throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${result.cleanupError}`);
+  }
 }
 function assertNoSymlinkPath(root, candidate) {
   const child = relative3(root, candidate);
@@ -69134,11 +69206,48 @@ function readOptionalRegularFile(root, candidate) {
     throw error2;
   }
 }
-function readRegularFileNoFollow(root, candidate) {
-  return readRegularFile(root, candidate);
-}
 function readOptionalRegularFileNoFollow(root, candidate) {
   return readOptionalRegularFile(root, candidate);
+}
+function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
+  const appRoot = resolve8(appRootInput);
+  const app = openBoundDirectory(appRoot);
+  let agent = null;
+  let integration = null;
+  try {
+    const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
+      "package.json",
+      "metro.config.js",
+      "metro.config.cjs"
+    ]);
+    if (!packageSnapshot?.contents) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: package.json is unavailable");
+    }
+    const metroSnapshot = metroJsSnapshot?.contents ? metroJsSnapshot : metroCjsSnapshot;
+    if (!metroSnapshot?.contents) {
+      throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
+    }
+    dependencies.afterAppRead?.();
+    agent = openOptionalBoundSubdirectory(app, ".rn-agent");
+    if (agent) {
+      integration = openOptionalBoundSubdirectory(agent, "integration");
+    }
+    const manifest = integration ? readBoundDirectoryFiles(integration, ["rn-session-integration.json"])[0]?.contents : null;
+    return {
+      packageJson: packageSnapshot.contents.toString("utf8"),
+      metroConfig: {
+        contents: metroSnapshot.contents.toString("utf8"),
+        path: join52(appRoot, metroSnapshot.name)
+      },
+      ...manifest ? { manifest: manifest.toString("utf8") } : {}
+    };
+  } finally {
+    if (integration)
+      closeBoundDirectory(integration);
+    if (agent)
+      closeBoundDirectory(agent);
+    closeBoundDirectory(app);
+  }
 }
 function openIntegrationDirectories(appRoot) {
   const app = openBoundDirectory(appRoot);
@@ -69160,7 +69269,7 @@ function rollbackWrites(writes) {
   const errors = [];
   for (const write of [...writes].reverse()) {
     try {
-      casReplaceBoundBatch(write.directory, [
+      const result = casReplaceBoundBatch(write.directory, [
         {
           snapshot: write.snapshot,
           expected: write.written,
@@ -69169,6 +69278,7 @@ function rollbackWrites(writes) {
           mode: write.snapshot.mode
         }
       ]);
+      assertBoundCleanup(result);
     } catch (error2) {
       errors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
     }
@@ -69240,12 +69350,12 @@ function applyPackageIntegration(input, dependencies = {}) {
     ];
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceBoundBatch(directories.integration, outputs.map((output) => ({
+    const generatedResult = casReplaceBoundBatch(directories.integration, outputs.map((output) => ({
       snapshot: output.snapshot,
       expected: output.snapshot.contents,
       replacement: output.contents,
       mode: output.mode
-    })));
+    })), dependencies.boundOperationDependencies);
     for (const output of outputs) {
       applied.push({
         snapshot: output.snapshot,
@@ -69255,8 +69365,9 @@ function applyPackageIntegration(input, dependencies = {}) {
       });
       dependencies.afterWrite?.(output.snapshot.path);
     }
+    assertBoundCleanup(generatedResult);
     const metroOutput = Buffer.from(nextMetroSource);
-    casReplaceBoundBatch(directories.app, [
+    const metroResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: metroSnapshot,
         expected: metroSnapshot.contents,
@@ -69271,9 +69382,10 @@ function applyPackageIntegration(input, dependencies = {}) {
       directory: directories.app
     });
     dependencies.afterWrite?.(metroConfigPath);
+    assertBoundCleanup(metroResult);
     const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}
 `);
-    casReplaceBoundBatch(directories.app, [
+    const packageResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: packageSnapshot,
         expected: packageSnapshot.contents,
@@ -69288,6 +69400,7 @@ function applyPackageIntegration(input, dependencies = {}) {
       directory: directories.app
     });
     dependencies.afterWrite?.(packagePath);
+    assertBoundCleanup(packageResult);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
     return preview;
@@ -69336,7 +69449,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     dependencies.beforeCommit?.();
     const packageOutput = Buffer.from(`${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
 `);
-    casReplaceBoundBatch(directories.app, [
+    const packageResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: packageSnapshot,
         expected: packageSnapshot.contents,
@@ -69351,8 +69464,9 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
       directory: directories.app
     });
     dependencies.afterWrite?.(packagePath);
+    assertBoundCleanup(packageResult);
     const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
-    casReplaceBoundBatch(directories.app, [
+    const metroResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: metroSnapshot,
         expected: metroSnapshot.contents,
@@ -69367,14 +69481,15 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
       directory: directories.app
     });
     dependencies.afterWrite?.(metroConfigPath);
+    assertBoundCleanup(metroResult);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceBoundBatch(directories.integration, generatedSnapshots.map((snapshot) => ({
+    const generatedResult = casReplaceBoundBatch(directories.integration, generatedSnapshots.map((snapshot) => ({
       snapshot,
       expected: snapshot.contents,
       replacement: null,
       mode: snapshot.mode
-    })));
+    })), dependencies.boundOperationDependencies);
     for (const snapshot of generatedSnapshots) {
       applied.push({
         snapshot,
@@ -69382,6 +69497,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
         directory: directories.integration
       });
     }
+    assertBoundCleanup(generatedResult);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
   } catch (error2) {
@@ -69660,23 +69776,12 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
         const packagePath = join53(appRoot, "package.json");
-        const metroConfigCandidates = ["metro.config.js", "metro.config.cjs"].map((name) => join53(appRoot, name));
-        let metroConfig;
-        for (const path of metroConfigCandidates) {
-          const contents = readOptionalRegularFileNoFollow(appRoot, path);
-          if (contents !== void 0) {
-            metroConfig = { path, contents };
-            break;
-          }
-        }
-        if (!metroConfig) {
-          throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "metro.config.js or metro.config.cjs is required for integration");
-        }
+        const integrationInputs = readPackageIntegrationInputs(appRoot);
         const manifestPath = join53(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
-        const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
+        const packageJson = JSON.parse(integrationInputs.packageJson);
         let existing;
         try {
-          const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+          const manifest = integrationInputs.manifest;
           existing = manifest === void 0 ? void 0 : JSON.parse(manifest);
         } catch (error2) {
           if (!(error2 instanceof SyntaxError))
@@ -69697,8 +69802,8 @@ function createSessionHandler(runtime, dependencies = {}) {
           return okResult({ restored: true, packagePath, manifestPath });
         }
         const preview = previewPackageIntegration(packageJson, existing, sessionCli);
-        const metroConfigPath = metroConfig.path;
-        const metroBefore = metroConfig.contents;
+        const metroConfigPath = integrationInputs.metroConfig.path;
+        const metroBefore = integrationInputs.metroConfig.contents;
         const metroAfter = previewMetroIntegration(metroBefore);
         if (input.action === "preview_integration") {
           return okResult({

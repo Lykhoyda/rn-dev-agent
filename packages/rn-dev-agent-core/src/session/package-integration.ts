@@ -7,8 +7,11 @@ import {
   closeBoundDirectory,
   openBoundDirectory,
   openBoundSubdirectory,
+  openOptionalBoundSubdirectory,
   readBoundDirectoryFiles,
+  type BoundCasResult,
   type BoundDirectory,
+  type BoundOperationDependencies,
 } from './bound-directory.js';
 
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
@@ -354,8 +357,9 @@ function casReplaceBoundBatch(
     replacement: Buffer | null;
     mode: number;
   }>,
-): void {
-  casBoundDirectoryFiles(
+  dependencies: BoundOperationDependencies = {},
+): BoundCasResult {
+  return casBoundDirectoryFiles(
     directory,
     writes.map((write) => ({
       expected: write.expected,
@@ -364,7 +368,16 @@ function casReplaceBoundBatch(
       name: write.snapshot.name,
       replacement: write.replacement,
     })),
+    dependencies,
   );
+}
+
+function assertBoundCleanup(result: BoundCasResult): void {
+  if (result.cleanupError) {
+    throw new Error(
+      `SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${result.cleanupError}`,
+    );
+  }
 }
 
 export function assertNoSymlinkPath(root: string, candidate: string): void {
@@ -445,6 +458,56 @@ export function readOptionalRegularFileNoFollow(
   return readOptionalRegularFile(root, candidate);
 }
 
+export function readPackageIntegrationInputs(
+  appRootInput: string,
+  dependencies: { afterAppRead?: () => void } = {},
+): {
+  packageJson: string;
+  metroConfig: { contents: string; path: string };
+  manifest?: string;
+} {
+  const appRoot = resolve(appRootInput);
+  const app = openBoundDirectory(appRoot);
+  let agent: BoundDirectory | null = null;
+  let integration: BoundDirectory | null = null;
+  try {
+    const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
+      'package.json',
+      'metro.config.js',
+      'metro.config.cjs',
+    ]);
+    if (!packageSnapshot?.contents) {
+      throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: package.json is unavailable');
+    }
+    const metroSnapshot = metroJsSnapshot?.contents ? metroJsSnapshot : metroCjsSnapshot;
+    if (!metroSnapshot?.contents) {
+      throw new Error(
+        'BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required',
+      );
+    }
+    dependencies.afterAppRead?.();
+    agent = openOptionalBoundSubdirectory(app, '.rn-agent');
+    if (agent) {
+      integration = openOptionalBoundSubdirectory(agent, 'integration');
+    }
+    const manifest = integration
+      ? readBoundDirectoryFiles(integration, ['rn-session-integration.json'])[0]?.contents
+      : null;
+    return {
+      packageJson: packageSnapshot.contents.toString('utf8'),
+      metroConfig: {
+        contents: metroSnapshot.contents.toString('utf8'),
+        path: join(appRoot, metroSnapshot.name),
+      },
+      ...(manifest ? { manifest: manifest.toString('utf8') } : {}),
+    };
+  } finally {
+    if (integration) closeBoundDirectory(integration);
+    if (agent) closeBoundDirectory(agent);
+    closeBoundDirectory(app);
+  }
+}
+
 function openIntegrationDirectories(appRoot: string): {
   app: BoundDirectory;
   agent: BoundDirectory;
@@ -469,6 +532,7 @@ function openIntegrationDirectories(appRoot: string): {
 interface PackageIntegrationDependencies {
   beforeCommit?: () => void;
   afterWrite?: (path: string) => void;
+  boundOperationDependencies?: BoundOperationDependencies;
 }
 
 interface AppliedWrite {
@@ -482,7 +546,7 @@ function rollbackWrites(writes: readonly AppliedWrite[]): Error[] {
   const errors: Error[] = [];
   for (const write of [...writes].reverse()) {
     try {
-      casReplaceBoundBatch(write.directory, [
+      const result = casReplaceBoundBatch(write.directory, [
         {
           snapshot: write.snapshot,
           expected: write.written,
@@ -491,6 +555,7 @@ function rollbackWrites(writes: readonly AppliedWrite[]): Error[] {
           mode: write.snapshot.mode,
         },
       ]);
+      assertBoundCleanup(result);
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
     }
@@ -579,7 +644,7 @@ export function applyPackageIntegration(
     ];
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceBoundBatch(
+    const generatedResult = casReplaceBoundBatch(
       directories.integration,
       outputs.map((output) => ({
         snapshot: output.snapshot,
@@ -587,6 +652,7 @@ export function applyPackageIntegration(
         replacement: output.contents,
         mode: output.mode,
       })),
+      dependencies.boundOperationDependencies,
     );
     for (const output of outputs) {
       applied.push({
@@ -597,8 +663,9 @@ export function applyPackageIntegration(
       });
       dependencies.afterWrite?.(output.snapshot.path);
     }
+    assertBoundCleanup(generatedResult);
     const metroOutput = Buffer.from(nextMetroSource);
-    casReplaceBoundBatch(directories.app, [
+    const metroResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: metroSnapshot,
         expected: metroSnapshot.contents,
@@ -613,8 +680,9 @@ export function applyPackageIntegration(
       directory: directories.app,
     });
     dependencies.afterWrite?.(metroConfigPath);
+    assertBoundCleanup(metroResult);
     const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}\n`);
-    casReplaceBoundBatch(directories.app, [
+    const packageResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: packageSnapshot,
         expected: packageSnapshot.contents,
@@ -629,6 +697,7 @@ export function applyPackageIntegration(
       directory: directories.app,
     });
     dependencies.afterWrite?.(packagePath);
+    assertBoundCleanup(packageResult);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
     return preview;
@@ -690,7 +759,7 @@ export function restorePackageIntegrationFiles(
     const packageOutput = Buffer.from(
       `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}\n`,
     );
-    casReplaceBoundBatch(directories.app, [
+    const packageResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: packageSnapshot,
         expected: packageSnapshot.contents,
@@ -705,8 +774,9 @@ export function restorePackageIntegrationFiles(
       directory: directories.app,
     });
     dependencies.afterWrite?.(packagePath);
+    assertBoundCleanup(packageResult);
     const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
-    casReplaceBoundBatch(directories.app, [
+    const metroResult = casReplaceBoundBatch(directories.app, [
       {
         snapshot: metroSnapshot,
         expected: metroSnapshot.contents,
@@ -721,9 +791,10 @@ export function restorePackageIntegrationFiles(
       directory: directories.app,
     });
     dependencies.afterWrite?.(metroConfigPath);
+    assertBoundCleanup(metroResult);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceBoundBatch(
+    const generatedResult = casReplaceBoundBatch(
       directories.integration,
       generatedSnapshots.map((snapshot) => ({
         snapshot,
@@ -731,6 +802,7 @@ export function restorePackageIntegrationFiles(
         replacement: null,
         mode: snapshot.mode,
       })),
+      dependencies.boundOperationDependencies,
     );
     for (const snapshot of generatedSnapshots) {
       applied.push({
@@ -739,6 +811,7 @@ export function restorePackageIntegrationFiles(
         directory: directories.integration,
       });
     }
+    assertBoundCleanup(generatedResult);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
   } catch (error) {

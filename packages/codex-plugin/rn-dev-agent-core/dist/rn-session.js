@@ -10105,11 +10105,11 @@ function spawnChildWorker(request, directory) {
           dev: directory.dev.toString(),
           ino: directory.ino.toString(),
           publicPath: request.publicPath,
-          realPath: fs.realpathSync(request.name),
+          realPath: directory.realPath,
         },
       ],
       publicPath: request.publicPath,
-      realPath: fs.realpathSync(request.name),
+      realPath: directory.realPath,
     }),
   ).toString('base64url');
   const child = childProcess.spawn(
@@ -10160,16 +10160,35 @@ function execute(request) {
         if (error.code !== 'EEXIST') throw error;
       }
     }
-    const directory = fs.lstatSync(request.name, { bigint: true });
-    if (!directory.isDirectory() || directory.isSymbolicLink()) {
+    let before;
+    try {
+      before = fs.lstatSync(request.name, { bigint: true });
+    } catch (error) {
+      if (request.optional && error.code === 'ENOENT') {
+        return { directoryMissing: true };
+      }
+      throw error;
+    }
+    if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error('bound-directory child is not a directory');
     }
+    const realPath = fs.realpathSync(request.name);
+    const after = fs.lstatSync(request.name, { bigint: true });
+    if (
+      !after.isDirectory() ||
+      after.isSymbolicLink() ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino
+    ) {
+      throw new Error('bound-directory child changed while binding');
+    }
+    const directory = { dev: after.dev, ino: after.ino, realPath };
     spawnChildWorker(request, directory);
     return {
       directoryIdentity: {
         dev: directory.dev.toString(),
         ino: directory.ino.toString(),
-        realPath: fs.realpathSync(request.name),
+        realPath,
       },
     };
   }
@@ -10192,6 +10211,9 @@ function execute(request) {
     return applyBatch(request);
   }
   if (request.operation === 'recover') {
+    if (request.failCleanupRecovery) {
+      throw new Error('bound-directory cleanup recovery unavailable');
+    }
     return recoverTransaction(
       request.journal,
       request.writes,
@@ -10381,12 +10403,25 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
   }
 }
 function restartWorker(directory) {
+  const descendants = [...directory.children];
   stopWorker(directory.worker, "SIGKILL");
   if (directory.parent && directory.name) {
     directory.worker = startSubdirectoryWorker(directory.parent, directory.name, directory.identity, directory.realPath);
-    return;
+  } else {
+    directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
   }
-  directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
+  for (const descendant of descendants) {
+    rmSync(descendant.worker.controlPath, { force: true, recursive: true });
+    descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
+    rebindDescendants(descendant);
+  }
+}
+function rebindDescendants(directory) {
+  for (const descendant of directory.children) {
+    rmSync(descendant.worker.controlPath, { force: true, recursive: true });
+    descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
+    rebindDescendants(descendant);
+  }
 }
 function sendOperation(directory, request, timeoutMs) {
   const sequence = ++directory.worker.sequence;
@@ -10439,15 +10474,24 @@ function runBoundOperation(directory, request, dependencies = {}) {
     if (!result.ok)
       throwOperationFailure(result);
     if (request.operation === "cas" && result.cleanupPending) {
-      const cleanup = sendOperation(directory, {
-        operation: "recover",
-        journal: request.journal,
-        writes: request.writes
-      }, dependencies.recoveryTimeoutMs ?? 5e3);
-      if (!cleanup.ok)
-        throwOperationFailure(cleanup);
-      if (!cleanup.committed) {
-        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+      try {
+        const cleanup = sendOperation(directory, {
+          operation: "recover",
+          failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
+          journal: request.journal,
+          writes: request.writes
+        }, dependencies.recoveryTimeoutMs ?? 5e3);
+        if (!cleanup.ok)
+          throwOperationFailure(cleanup);
+        if (!cleanup.committed) {
+          throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+        }
+        return { ...result, cleanupPending: false };
+      } catch (cleanupError) {
+        return {
+          ...result,
+          cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+        };
       }
     }
     return result;
@@ -10501,6 +10545,7 @@ function openValidatedDirectory(path, expected) {
     const identity = { dev: opened.dev, ino: opened.ino };
     worker = startWorker(path, identity, realPath);
     return {
+      children: /* @__PURE__ */ new Set(),
       descriptor,
       identity,
       path,
@@ -10527,10 +10572,11 @@ function closeBoundDirectory(directory) {
     return;
   directory.closed = true;
   stopWorker(directory.worker);
+  directory.parent?.children.delete(directory);
   if (directory.descriptor !== void 0)
     closeSync2(directory.descriptor);
 }
-function openBoundSubdirectory(parent, name, options = {}) {
+function openBoundSubdirectoryInternal(parent, name, options = {}) {
   const controlPath = mkdtempSync(join6(tmpdir(), "rn-bound-directory-"));
   const childId = randomUUID();
   let worker;
@@ -10542,14 +10588,20 @@ function openBoundSubdirectory(parent, name, options = {}) {
       name,
       publicPath: join6(parent.path, name),
       create: options.create ?? false,
-      mode: options.mode ?? 448
+      mode: options.mode ?? 448,
+      optional: options.optional ?? false
     });
+    if (result.directoryMissing) {
+      rmSync(controlPath, { force: true, recursive: true });
+      return null;
+    }
     worker = bindWorker(controlPath, void 0, parent, childId);
     options.afterChildBind?.();
     if (!result.directoryIdentity) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output");
     }
     const directory = {
+      children: /* @__PURE__ */ new Set(),
       identity: {
         dev: BigInt(result.directoryIdentity.dev),
         ino: BigInt(result.directoryIdentity.ino)
@@ -10562,6 +10614,7 @@ function openBoundSubdirectory(parent, name, options = {}) {
       closed: false
     };
     runBoundOperation(parent, { operation: "child-identity", childId });
+    parent.children.add(directory);
     return directory;
   } catch (error) {
     if (worker)
@@ -10581,6 +10634,9 @@ function openBoundSubdirectory(parent, name, options = {}) {
     throw error;
   }
 }
+function openBoundSubdirectory(parent, name, options = {}) {
+  return openBoundSubdirectoryInternal(parent, name, options);
+}
 function readBoundDirectoryFiles(directory, names) {
   const result = runBoundOperation(directory, { operation: "read", names });
   if (!result.snapshots || result.snapshots.length !== names.length) {
@@ -10594,7 +10650,7 @@ function readBoundDirectoryFiles(directory, names) {
 }
 function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
   const transactionId = randomUUID();
-  runBoundOperation(directory, {
+  const result = runBoundOperation(directory, {
     operation: "cas",
     journal: `.rn-bound-${transactionId}.journal`,
     writes: writes.map((write, index) => ({
@@ -10610,11 +10666,19 @@ function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
     })),
     failCleanupAfterCommit: dependencies.failCleanupAfterCommit ?? false
   }, dependencies);
+  if (!result.committed) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory commit was not confirmed");
+  }
+  return {
+    committed: true,
+    cleanupPending: result.cleanupPending ?? false,
+    ...result.cleanupError ? { cleanupError: result.cleanupError } : {}
+  };
 }
 function writeBoundDirectoryFile(directory, name, contents, mode, dependencies = {}) {
   const [snapshot] = readBoundDirectoryFiles(directory, [name]);
   dependencies.beforeCommit?.();
-  casBoundDirectoryFiles(directory, [
+  return casBoundDirectoryFiles(directory, [
     {
       expected: snapshot.contents,
       expectedMode: snapshot.mode,

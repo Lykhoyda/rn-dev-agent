@@ -21,6 +21,7 @@ import {
   applyPackageIntegration,
   previewMetroIntegration,
   previewPackageIntegration,
+  readPackageIntegrationInputs,
   readRegularFileNoFollow,
   renderMetroIntegrationAdapter,
   renderProjectAdapter,
@@ -33,6 +34,7 @@ import {
   closeBoundDirectory,
   openBoundDirectory,
   openBoundSubdirectory,
+  readBoundDirectoryFiles,
   writeBoundDirectoryFile,
 } from '../../../dist/session/bound-directory.js';
 
@@ -390,6 +392,45 @@ test('bound child adoption rejects a newly symlinked parent ancestor', () => {
   }
 });
 
+test('bound app-worker recovery rebinds retained descendants', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-rebind-'));
+  const agentPath = join(root, '.rn-agent');
+  const integrationPath = join(agentPath, 'integration');
+  mkdirSync(integrationPath, { recursive: true });
+  writeFileSync(join(root, 'package.json'), 'before\n');
+  writeFileSync(join(integrationPath, 'authority-marker.js'), 'marker\n');
+  const app = openBoundDirectory(root);
+  const agent = openBoundSubdirectory(app, '.rn-agent');
+  const integration = openBoundSubdirectory(agent, 'integration');
+  try {
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          app,
+          [
+            {
+              expected: Buffer.from('before\n'),
+              mode: 0o600,
+              name: 'package.json',
+              replacement: Buffer.from('after\n'),
+            },
+          ],
+          { afterCaptureDelayMs: 5_000, timeoutMs: 1_000 },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(
+      readBoundDirectoryFiles(integration, ['authority-marker.js'])[0]?.contents?.toString('utf8'),
+      'marker\n',
+    );
+  } finally {
+    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
+    closeBoundDirectory(app);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('bounded CAS recovery restores a file captured during worker timeout', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-timeout-'));
   const markerPath = join(root, 'authority-marker.js');
@@ -579,6 +620,35 @@ test('committed bound CAS succeeds when artifact cleanup needs recovery', () => 
   }
 });
 
+test('bound CAS returns committed state when cleanup recovery remains unavailable', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-cleanup-pending-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const directory = openBoundDirectory(root);
+  try {
+    const result = casBoundDirectoryFiles(
+      directory,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          expectedMode: 0o600,
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      { failCleanupAfterCommit: true, failCleanupRecovery: true },
+    );
+    assert.equal(result.committed, true);
+    assert.equal(result.cleanupPending, true);
+    assert.match(result.cleanupError ?? '', /cleanup recovery unavailable/);
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('bound workers exit when their owner disconnects', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-owner-exit-'));
   const pidPath = join(root, 'worker.pid');
@@ -637,6 +707,66 @@ test('confirmed integration preserves concurrent package inputs', () => {
     assert.equal(readFileSync(packagePath, 'utf8'), packageBefore);
     assert.equal(readFileSync(metroPath, 'utf8'), concurrentMetro);
     assert.equal(existsSync(join(root, '.rn-agent')), true);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('integration pre-read rejects a newly symlinked agent ancestor', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-preread-root-'));
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-preread-external-'));
+  const externalAgent = join(externalRoot, '.rn-agent');
+  mkdirSync(join(externalAgent, 'integration'), { recursive: true });
+  writeFileSync(
+    join(externalAgent, 'integration', 'rn-session-integration.json'),
+    '{"version":1}\n',
+  );
+  writeFileSync(join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+  writeFileSync(join(root, 'metro.config.js'), 'module.exports = {};\n');
+  try {
+    assert.throws(
+      () =>
+        readPackageIntegrationInputs(root, {
+          afterAppRead: () => symlinkSync(externalAgent, join(root, '.rn-agent'), 'dir'),
+        }),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
+  }
+});
+
+test('integration rolls back committed files when cleanup remains pending', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cleanup-rollback-'));
+  const packageBefore = `${JSON.stringify(packageJson)}\n`;
+  const metroBefore = 'module.exports = {};\n';
+  writeFileSync(join(root, 'package.json'), packageBefore);
+  writeFileSync(join(root, 'metro.config.js'), metroBefore);
+  try {
+    assert.throws(
+      () =>
+        applyPackageIntegration(
+          { appRoot: root, sessionCli: join(root, 'rn-session.js') },
+          {
+            boundOperationDependencies: {
+              failCleanupAfterCommit: true,
+              failCleanupRecovery: true,
+            },
+          },
+        ),
+      /committed cleanup remains pending/,
+    );
+    assert.equal(readFileSync(join(root, 'package.json'), 'utf8'), packageBefore);
+    assert.equal(readFileSync(join(root, 'metro.config.js'), 'utf8'), metroBefore);
+    for (const name of [
+      'rn-session-integration.json',
+      'rn-session-adapter.cjs',
+      'rn-session-metro.cjs',
+      'authority-marker.js',
+    ]) {
+      assert.equal(existsSync(join(root, '.rn-agent', 'integration', name)), false);
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

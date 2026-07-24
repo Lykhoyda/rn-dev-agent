@@ -14,8 +14,7 @@ import {
   applyPackageIntegration,
   previewMetroIntegration,
   previewPackageIntegration,
-  readOptionalRegularFileNoFollow,
-  readRegularFileNoFollow,
+  readPackageIntegrationInputs,
   restorePackageIntegrationFiles,
   type PackageIntegrationManifest,
 } from '../session/package-integration.js';
@@ -406,9 +405,8 @@ export function createSessionHandler(
             );
           }
         }
-        const priorTargetId = (
-          status.bindings.bundle as { targetId?: unknown } | null | undefined
-        )?.targetId;
+        const priorTargetId = (status.bindings.bundle as { targetId?: unknown } | null | undefined)
+          ?.targetId;
         if (input.force === true && typeof priorTargetId === 'string') {
           registry.releaseResources(session, [
             { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
@@ -459,36 +457,17 @@ export function createSessionHandler(
           );
         }
         const packagePath = join(appRoot, 'package.json');
-        const metroConfigCandidates = ['metro.config.js', 'metro.config.cjs'].map((name) =>
-          join(appRoot, name),
-        );
-        let metroConfig: { path: string; contents: string } | undefined;
-        for (const path of metroConfigCandidates) {
-          const contents = readOptionalRegularFileNoFollow(appRoot, path);
-          if (contents !== undefined) {
-            metroConfig = { path, contents };
-            break;
-          }
-        }
-        if (!metroConfig) {
-          throw new SessionAuthorityError(
-            'BUNDLE_HANDSHAKE_UNAVAILABLE',
-            'metro.config.js or metro.config.cjs is required for integration',
-          );
-        }
+        const integrationInputs = readPackageIntegrationInputs(appRoot);
         const manifestPath = join(
           appRoot,
           '.rn-agent',
           'integration',
           'rn-session-integration.json',
         );
-        const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath)) as Record<
-          string,
-          unknown
-        >;
+        const packageJson = JSON.parse(integrationInputs.packageJson) as Record<string, unknown>;
         let existing: PackageIntegrationManifest | undefined;
         try {
-          const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+          const manifest = integrationInputs.manifest;
           existing =
             manifest === undefined
               ? undefined
@@ -519,8 +498,8 @@ export function createSessionHandler(
           return okResult({ restored: true, packagePath, manifestPath });
         }
         const preview = previewPackageIntegration(packageJson, existing, sessionCli);
-        const metroConfigPath = metroConfig.path;
-        const metroBefore = metroConfig.contents;
+        const metroConfigPath = integrationInputs.metroConfig.path;
+        const metroBefore = integrationInputs.metroConfig.contents;
         const metroAfter = previewMetroIntegration(metroBefore);
         if (input.action === 'preview_integration') {
           return okResult({
