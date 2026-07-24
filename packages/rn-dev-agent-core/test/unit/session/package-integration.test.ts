@@ -362,6 +362,60 @@ test('bound subdirectories reject a symlink back to the retained ancestor', () =
   }
 });
 
+test('bound CAS rolls back an ancestor switched and restored during mutation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-switch-'));
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-switch-external-'));
+  const agentPath = join(root, '.rn-agent');
+  const external = join(externalRoot, 'agent');
+  const integrationPath = join(agentPath, 'integration');
+  const markerPath = join(integrationPath, 'authority-marker.js');
+  mkdirSync(integrationPath, { recursive: true });
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const agent = openBoundDirectory(agentPath);
+  const integration = openBoundSubdirectory(agent, 'integration');
+  try {
+    const switcher = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const fs=require('node:fs');setTimeout(()=>{fs.renameSync(${JSON.stringify(
+          agentPath,
+        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
+          external,
+        )},${JSON.stringify(
+          agentPath,
+        )},'dir');setTimeout(()=>{fs.unlinkSync(${JSON.stringify(
+          agentPath,
+        )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)},100)`,
+      ],
+      { stdio: 'ignore' },
+    );
+    switcher.unref();
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          integration,
+          [
+            {
+              expected: Buffer.from('before\n'),
+              mode: 0o600,
+              name: 'authority-marker.js',
+              replacement: Buffer.from('after\n'),
+            },
+          ],
+          { afterCaptureDelayMs: 1_000 },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
+  } finally {
+    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
+    rmSync(root, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
+  }
+});
+
 test('bound child adoption rejects a newly symlinked parent ancestor', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-adoption-'));
   const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-adoption-external-'));

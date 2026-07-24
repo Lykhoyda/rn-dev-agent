@@ -9873,7 +9873,16 @@ function validateName(name) {
   }
 }
 
-function assertBoundDirectory() {
+function directoryStamp(stats) {
+  return {
+    ctimeNs: stats.ctimeNs.toString(),
+    dev: stats.dev.toString(),
+    ino: stats.ino.toString(),
+    mtimeNs: stats.mtimeNs.toString(),
+  };
+}
+
+function assertBoundDirectory(expectedGuard) {
   const current = fs.statSync('.', { bigint: true });
   if (
     !current.isDirectory() ||
@@ -9883,7 +9892,15 @@ function assertBoundDirectory() {
   ) {
     throw new Error('bound-directory identity changed');
   }
-  for (const ancestor of binding.ancestors) {
+  const guard = [];
+  const agentAncestorIndex = binding.ancestors.findIndex(
+    (ancestor) => path.basename(ancestor.publicPath) === '.rn-agent',
+  );
+  for (const [index, ancestor] of binding.ancestors.entries()) {
+    const guarded = agentAncestorIndex !== -1 && index >= agentAncestorIndex;
+    const parentBefore = guarded
+      ? fs.statSync(path.dirname(ancestor.publicPath), { bigint: true })
+      : null;
     const publicPath = fs.lstatSync(ancestor.publicPath, { bigint: true });
     if (
       !publicPath.isDirectory() ||
@@ -9894,7 +9911,19 @@ function assertBoundDirectory() {
     ) {
       throw new Error('bound-directory ancestor changed');
     }
+    if (!guarded) continue;
+    const parentAfter = fs.statSync(path.dirname(ancestor.publicPath), { bigint: true });
+    const beforeStamp = directoryStamp(parentBefore);
+    const afterStamp = directoryStamp(parentAfter);
+    if (JSON.stringify(beforeStamp) !== JSON.stringify(afterStamp)) {
+      throw new Error('bound-directory ancestor changed');
+    }
+    guard.push(afterStamp);
   }
+  if (expectedGuard && JSON.stringify(guard) !== JSON.stringify(expectedGuard)) {
+    throw new Error('bound-directory ancestor changed during operation');
+  }
+  return guard;
 }
 
 function readRegularFile(name) {
@@ -10321,7 +10350,7 @@ function discoverTransactions() {
   }
 }
 
-function applyBatch(request) {
+function applyBatch(request, ancestryGuard) {
   acquireTransactionLock();
   const pending = inspectTransactions();
   if (pending.length === 1) {
@@ -10337,6 +10366,7 @@ function applyBatch(request) {
   try {
     writeJournal(request.journal, journal, true);
     for (const write of request.writes) applyWrite(write);
+    assertBoundDirectory(ancestryGuard);
     journal.state = 'committed';
     writeJournal(request.journal, journal, false);
     try {
@@ -10405,13 +10435,15 @@ function spawnChildWorker(request, directory) {
 }
 
 function execute(request) {
-  assertBoundDirectory();
+  const ancestryGuard = assertBoundDirectory();
   if (request.operation === 'directory') {
     validateName(request.childId);
     validateName(request.name);
+    let created = false;
     if (request.create) {
       try {
         fs.mkdirSync(request.name, { mode: request.mode });
+        created = true;
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
       }
@@ -10442,6 +10474,12 @@ function execute(request) {
       throw new Error('bound-directory child changed while binding');
     }
     const directory = { dev: after.dev, ino: after.ino, realPath };
+    try {
+      assertBoundDirectory(ancestryGuard);
+    } catch (error) {
+      if (created) fs.rmdirSync(request.name);
+      throw error;
+    }
     spawnChildWorker(request, directory);
     return {
       directoryIdentity: {
@@ -10459,15 +10497,15 @@ function execute(request) {
     return {};
   }
   if (request.operation === 'read') {
-    return {
-      snapshots: request.names.map((name) => {
-        const snapshot = readRegularFile(name);
-        return snapshot ?? { contents: null, mode: 0o600, name };
-      }),
-    };
+    const snapshots = request.names.map((name) => {
+      const snapshot = readRegularFile(name);
+      return snapshot ?? { contents: null, mode: 0o600, name };
+    });
+    assertBoundDirectory(ancestryGuard);
+    return { snapshots };
   }
   if (request.operation === 'cas') {
-    return applyBatch(request);
+    return applyBatch(request, ancestryGuard);
   }
   if (request.operation === 'recover') {
     ensureTransactionLock();
