@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 export interface ProcessBirth {
   pid: number;
-  source: 'darwin-libproc' | 'linux-proc' | 'windows-powershell';
+  source: 'darwin-vmmap' | 'linux-proc' | 'windows-powershell';
   token: string;
 }
 
@@ -18,58 +18,6 @@ interface ProcessBirthDependencies {
   read?: (path: string) => string;
   run?: (command: string, args: readonly string[]) => string;
 }
-
-const DARWIN_PROCESS_BIRTH_SCRIPT = String.raw`
-import ctypes
-import errno
-import sys
-
-class ProcBsdInfo(ctypes.Structure):
-    _fields_ = [
-        ("flags", ctypes.c_uint32),
-        ("status", ctypes.c_uint32),
-        ("xstatus", ctypes.c_uint32),
-        ("pid", ctypes.c_uint32),
-        ("ppid", ctypes.c_uint32),
-        ("uid", ctypes.c_uint32),
-        ("gid", ctypes.c_uint32),
-        ("ruid", ctypes.c_uint32),
-        ("rgid", ctypes.c_uint32),
-        ("svuid", ctypes.c_uint32),
-        ("svgid", ctypes.c_uint32),
-        ("comm", ctypes.c_char * 16),
-        ("name", ctypes.c_char * 32),
-        ("nfiles", ctypes.c_uint32),
-        ("pgid", ctypes.c_uint32),
-        ("pjobc", ctypes.c_uint32),
-        ("e_tdev", ctypes.c_uint32),
-        ("e_tpgid", ctypes.c_uint32),
-        ("nice", ctypes.c_int32),
-        ("start_tvsec", ctypes.c_uint64),
-        ("start_tvusec", ctypes.c_uint64),
-    ]
-
-pid = int(sys.argv[1])
-info = ProcBsdInfo()
-libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-libproc.proc_pidinfo.argtypes = [
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_uint64,
-    ctypes.c_void_p,
-    ctypes.c_int,
-]
-libproc.proc_pidinfo.restype = ctypes.c_int
-size = ctypes.sizeof(info)
-result = libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), size)
-
-if result == 0:
-    print("ABSENT" if ctypes.get_errno() == errno.ESRCH else "UNKNOWN")
-elif result != size or info.pid != pid:
-    print("UNKNOWN")
-else:
-    print(f"{info.pid}:{info.start_tvsec}:{info.start_tvusec}")
-`;
 
 function defaultRun(command: string, args: readonly string[]): string {
   return execFileSync(command, [...args], {
@@ -103,16 +51,16 @@ export function probeProcessBirth(
 
   try {
     if (platform === 'darwin') {
-      const processInfo = run('/usr/bin/python3', [
-        '-I',
-        '-S',
-        '-c',
-        DARWIN_PROCESS_BIRTH_SCRIPT,
-        String(pid),
-      ]).trim();
-      if (processInfo === 'ABSENT') return { status: 'absent' };
-      const match = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
-      if (!match || Number(match[1]) !== pid || match[2] === '0' || Number(match[3]) > 999_999) {
+      const observedPid = run('/bin/ps', ['-p', String(pid), '-o', 'pid=']).trim();
+      if (observedPid.length === 0) return { status: 'absent' };
+      if (Number(observedPid) !== pid) return { status: 'unknown' };
+      const processInfo = run('/usr/bin/vmmap', ['-summary', String(pid)]);
+      const processMatch = /^Process:\s+.+\[(\d+)\]$/m.exec(processInfo);
+      const launchMatch =
+        /^Launch Time:\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4})$/m.exec(
+          processInfo,
+        );
+      if (!processMatch || Number(processMatch[1]) !== pid || !launchMatch) {
         return { status: 'unknown' };
       }
       const bootSession = run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
@@ -123,8 +71,8 @@ export function probeProcessBirth(
         status: 'present',
         birth: {
           pid,
-          source: 'darwin-libproc',
-          token: token([platform, bootSession.toLowerCase(), match[2], match[3]]),
+          source: 'darwin-vmmap',
+          token: token([platform, bootSession.toLowerCase(), launchMatch[1]]),
         },
       };
     }

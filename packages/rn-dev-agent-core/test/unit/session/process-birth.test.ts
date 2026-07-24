@@ -6,21 +6,17 @@ import {
   readProcessBirth,
 } from '../../../dist/session/process-birth.js';
 
-test('macOS second-resolution process identity fails conservative', () => {
-  const run = (command) => {
-    if (command === 'ps') return 'Wed Jul 23 09:41:08 2026\n';
-    if (command === 'sysctl') return '{ sec = 1784790000, usec = 0 } Wed Jul 23 09:00:00 2026\n';
-    throw new Error(`unexpected command ${command}`);
-  };
-
-  assert.equal(readProcessBirth(123, { platform: 'darwin', run }), null);
-});
-
-test('macOS process identity uses microsecond libproc birth and boot session', () => {
+test('macOS process identity uses shipped vmmap launch time and boot session', () => {
   const runForBoot = (bootSession) => (command, args) => {
-    if (command === '/usr/bin/python3') {
-      assert.equal(args.at(-1), '123');
-      return '123:1784818868:345678\n';
+    if (command === '/bin/ps') {
+      assert.deepEqual(args, ['-p', '123', '-o', 'pid=']);
+      return '123\n';
+    }
+    if (command === '/usr/bin/vmmap') {
+      assert.deepEqual(args, ['-summary', '123']);
+      return ['Process:         node [123]', 'Launch Time:     2026-07-23 09:41:08.345 +0200'].join(
+        '\n',
+      );
     }
     if (command === '/usr/sbin/sysctl') {
       assert.deepEqual(args, ['-n', 'kern.bootsessionuuid']);
@@ -37,7 +33,7 @@ test('macOS process identity uses microsecond libproc birth and boot session', (
     run: runForBoot('D9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
 
-  assert.equal(before?.source, 'darwin-libproc');
+  assert.equal(before?.source, 'darwin-vmmap');
   assert.match(before?.token ?? '', /^[a-f0-9]{64}$/);
   assert.notEqual(before?.token, after?.token);
 });
@@ -46,14 +42,14 @@ test('macOS process probes distinguish confirmed absence from unreadable identit
   assert.deepEqual(
     probeProcessBirth(123, {
       platform: 'darwin',
-      run: () => 'ABSENT\n',
+      run: (command) => (command === '/bin/ps' ? '' : assert.fail()),
     }),
     { status: 'absent' },
   );
   assert.deepEqual(
     probeProcessBirth(123, {
       platform: 'darwin',
-      run: () => '123:1784818868:1000000\n',
+      run: (command) => (command === '/bin/ps' ? '123\n' : 'unparseable\n'),
     }),
     { status: 'unknown' },
   );

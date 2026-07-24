@@ -1,4 +1,15 @@
-import { chmodSync, lstatSync, mkdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { getStateDir } from '../util/secure-state-file.js';
 
@@ -64,6 +75,46 @@ export function createAuthorityStateLayout(stateDir: string = getStateDir()): Au
     ensurePrivateDirectory(path);
   }
   return layout;
+}
+
+export function getBoundDirectoryJournalKey(
+  layout: AuthorityStateLayout = createAuthorityStateLayout(),
+): string {
+  const path = join(layout.root, 'bound-directory.key');
+  const temporary = join(layout.root, `.bound-directory.${randomUUID()}.key`);
+  try {
+    try {
+      writeFileSync(temporary, randomBytes(32), { flag: 'wx', mode: 0o600, flush: true });
+      try {
+        linkSync(temporary, path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+    const link = lstatSync(path);
+    const stat = statSync(path);
+    const key = readFileSync(path);
+    if (
+      link.isSymbolicLink() ||
+      !link.isFile() ||
+      key.length !== 32 ||
+      (typeof process.getuid === 'function' && stat.uid !== process.getuid())
+    ) {
+      fail('AUTHORITY_STATE_ROOT_UNSAFE', 'bound-directory journal key is invalid');
+    }
+    chmodSync(path, 0o600);
+    return key.toString('base64url');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('AUTHORITY_STATE_ROOT_UNSAFE')) {
+      throw error;
+    }
+    fail(
+      'AUTHORITY_STATE_ROOT_UNSAFE',
+      error instanceof Error ? error.message : 'bound-directory journal key is unavailable',
+    );
+  }
 }
 
 function writeSessionJson(

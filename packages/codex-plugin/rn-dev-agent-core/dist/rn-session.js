@@ -7364,8 +7364,8 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/rn-session.js
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { readFileSync as readFileSync7 } from "node:fs";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { readFileSync as readFileSync8 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
@@ -7623,57 +7623,6 @@ function pathMatchesRoot(servingCwd, projectRoot) {
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { readFileSync as readFileSync2 } from "node:fs";
-var DARWIN_PROCESS_BIRTH_SCRIPT = String.raw`
-import ctypes
-import errno
-import sys
-
-class ProcBsdInfo(ctypes.Structure):
-    _fields_ = [
-        ("flags", ctypes.c_uint32),
-        ("status", ctypes.c_uint32),
-        ("xstatus", ctypes.c_uint32),
-        ("pid", ctypes.c_uint32),
-        ("ppid", ctypes.c_uint32),
-        ("uid", ctypes.c_uint32),
-        ("gid", ctypes.c_uint32),
-        ("ruid", ctypes.c_uint32),
-        ("rgid", ctypes.c_uint32),
-        ("svuid", ctypes.c_uint32),
-        ("svgid", ctypes.c_uint32),
-        ("comm", ctypes.c_char * 16),
-        ("name", ctypes.c_char * 32),
-        ("nfiles", ctypes.c_uint32),
-        ("pgid", ctypes.c_uint32),
-        ("pjobc", ctypes.c_uint32),
-        ("e_tdev", ctypes.c_uint32),
-        ("e_tpgid", ctypes.c_uint32),
-        ("nice", ctypes.c_int32),
-        ("start_tvsec", ctypes.c_uint64),
-        ("start_tvusec", ctypes.c_uint64),
-    ]
-
-pid = int(sys.argv[1])
-info = ProcBsdInfo()
-libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-libproc.proc_pidinfo.argtypes = [
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_uint64,
-    ctypes.c_void_p,
-    ctypes.c_int,
-]
-libproc.proc_pidinfo.restype = ctypes.c_int
-size = ctypes.sizeof(info)
-result = libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), size)
-
-if result == 0:
-    print("ABSENT" if ctypes.get_errno() == errno.ESRCH else "UNKNOWN")
-elif result != size or info.pid != pid:
-    print("UNKNOWN")
-else:
-    print(f"{info.pid}:{info.start_tvsec}:{info.start_tvusec}")
-`;
 function defaultRun(command, args) {
   return execFileSync3(command, [...args], {
     encoding: "utf8",
@@ -7696,17 +7645,15 @@ function probeProcessBirth(pid, dependencies = {}) {
   const run = dependencies.run ?? defaultRun;
   try {
     if (platform === "darwin") {
-      const processInfo = run("/usr/bin/python3", [
-        "-I",
-        "-S",
-        "-c",
-        DARWIN_PROCESS_BIRTH_SCRIPT,
-        String(pid)
-      ]).trim();
-      if (processInfo === "ABSENT")
+      const observedPid = run("/bin/ps", ["-p", String(pid), "-o", "pid="]).trim();
+      if (observedPid.length === 0)
         return { status: "absent" };
-      const match = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
-      if (!match || Number(match[1]) !== pid || match[2] === "0" || Number(match[3]) > 999999) {
+      if (Number(observedPid) !== pid)
+        return { status: "unknown" };
+      const processInfo = run("/usr/bin/vmmap", ["-summary", String(pid)]);
+      const processMatch = /^Process:\s+.+\[(\d+)\]$/m.exec(processInfo);
+      const launchMatch = /^Launch Time:\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4})$/m.exec(processInfo);
+      if (!processMatch || Number(processMatch[1]) !== pid || !launchMatch) {
         return { status: "unknown" };
       }
       const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
@@ -7717,8 +7664,8 @@ function probeProcessBirth(pid, dependencies = {}) {
         status: "present",
         birth: {
           pid,
-          source: "darwin-libproc",
-          token: token([platform, bootSession.toLowerCase(), match[2], match[3]])
+          source: "darwin-vmmap",
+          token: token([platform, bootSession.toLowerCase(), launchMatch[1]])
         }
       };
     }
@@ -9707,7 +9654,8 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
-import { chmodSync as chmodSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync2, renameSync, statSync as statSync3, writeFileSync } from "node:fs";
+import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
+import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync, rmSync, statSync as statSync3, writeFileSync } from "node:fs";
 import { join as join5 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
@@ -9768,6 +9716,36 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
   }
   return layout;
 }
+function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
+  const path = join5(layout.root, "bound-directory.key");
+  const temporary = join5(layout.root, `.bound-directory.${randomUUID()}.key`);
+  try {
+    try {
+      writeFileSync(temporary, randomBytes2(32), { flag: "wx", mode: 384, flush: true });
+      try {
+        linkSync(temporary, path);
+      } catch (error) {
+        if (error.code !== "EEXIST")
+          throw error;
+      }
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+    const link = lstatSync3(path);
+    const stat = statSync3(path);
+    const key = readFileSync5(path);
+    if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      fail("AUTHORITY_STATE_ROOT_UNSAFE", "bound-directory journal key is invalid");
+    }
+    chmodSync2(path, 384);
+    return key.toString("base64url");
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
+      throw error;
+    }
+    fail("AUTHORITY_STATE_ROOT_UNSAFE", error instanceof Error ? error.message : "bound-directory journal key is unavailable");
+  }
+}
 function sessionRuntimeDirectory(layout, sessionId) {
   const path = join5(sessionDirectory(layout, sessionId), "runtime");
   ensurePrivateDirectory(path);
@@ -9775,13 +9753,13 @@ function sessionRuntimeDirectory(layout, sessionId) {
 }
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
-import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync7 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { closeSync as closeSync2, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync4, mkdtempSync, openSync as openSync2, readFileSync as readFileSync5, realpathSync as realpathSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { closeSync as closeSync2, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync4, mkdtempSync, openSync as openSync2, readFileSync as readFileSync6, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join6 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -9790,10 +9768,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const controlPath = process.argv[1];
+const lifecycleCapability = process.argv[2];
+const transactionLock = '.rn-bound-transaction.lock';
 process.on('disconnect', () => {
   try {
     fs.writeFileSync(path.join(controlPath, 'stopped'), '', { flag: 'wx', mode: 0o600 });
   } catch {}
+  try {
+    const lock = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+    if (lock.owner === lifecycleCapability) fs.unlinkSync(transactionLock);
+  } catch {
+    try {
+      fs.writeFileSync(path.join(controlPath, 'lock-retained'), '', {
+        flag: 'wx',
+        mode: 0o600,
+      });
+    } catch {}
+  }
   process.exit(0);
 });
 fs.writeFileSync(path.join(controlPath, 'monitor-ready'), '', { flag: 'wx', mode: 0o600 });
@@ -9823,6 +9814,7 @@ poll();
 `;
 var BOUND_DIRECTORY_WORKER = String.raw`
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
@@ -9832,12 +9824,18 @@ class ConflictError extends Error {}
 const controlPath = process.argv[1];
 const binding = JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8'));
 const childWorkers = new Map();
+const transactionLock = '.rn-bound-transaction.lock';
 process.on('disconnect', () => process.exit(0));
 process.channel?.unref();
 
 const lifecycleMonitor = childProcess.spawn(
   process.execPath,
-  ['-e', ${JSON.stringify(BOUND_DIRECTORY_LIFECYCLE_MONITOR)}, controlPath],
+  [
+    '-e',
+    ${JSON.stringify(BOUND_DIRECTORY_LIFECYCLE_MONITOR)},
+    controlPath,
+    binding.lifecycleCapability,
+  ],
   { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] },
 );
 lifecycleMonitor.on('error', () => {});
@@ -9965,11 +9963,97 @@ function removeOptional(name) {
   }
 }
 
+function signedPayload(value) {
+  const { signature, ...payload } = value;
+  return JSON.stringify(payload);
+}
+
+function sign(value) {
+  return crypto
+    .createHmac('sha256', Buffer.from(binding.journalKey, 'base64url'))
+    .update(signedPayload(value))
+    .digest('hex');
+}
+
+function authenticate(value) {
+  if (!value || typeof value.signature !== 'string') return false;
+  const expected = Buffer.from(sign(value), 'hex');
+  const actual = Buffer.from(value.signature, 'hex');
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function acquireTransactionLock() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const lock = {
+      controlPath,
+      owner: binding.lifecycleCapability,
+      version: 1,
+    };
+    lock.signature = sign(lock);
+    try {
+      fs.writeFileSync(transactionLock, JSON.stringify(lock), {
+        flag: 'wx',
+        mode: 0o600,
+        flush: true,
+      });
+      return;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let existing;
+      try {
+        existing = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+      } catch {
+        throw new Error('bound-directory transaction lock is invalid');
+      }
+      if (
+        existing.version !== 1 ||
+        typeof existing.controlPath !== 'string' ||
+        typeof existing.owner !== 'string' ||
+        !authenticate(existing)
+      ) {
+        throw new Error('bound-directory transaction lock is invalid');
+      }
+      if (!fs.existsSync(path.join(existing.controlPath, 'stopped'))) {
+        throw new Error('bound-directory transaction is active');
+      }
+      fs.unlinkSync(transactionLock);
+      fs.rmSync(existing.controlPath, { force: true, recursive: true });
+    }
+  }
+  throw new Error('bound-directory transaction lock is unavailable');
+}
+
+function releaseTransactionLock() {
+  let lock;
+  try {
+    lock = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (
+    lock.version !== 1 ||
+    lock.owner !== binding.lifecycleCapability ||
+    !authenticate(lock)
+  ) {
+    throw new Error('bound-directory transaction lock is invalid');
+  }
+  fs.unlinkSync(transactionLock);
+}
+
 function writeJournal(name, value, exclusive) {
   validateName(name);
+  value.signature = sign(value);
   const contents = JSON.stringify(value);
   if (exclusive) {
-    fs.writeFileSync(name, contents, { flag: 'wx', mode: 0o600, flush: true });
+    const temporary = name + '.initial';
+    removeOptional(temporary);
+    fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true });
+    try {
+      fs.linkSync(temporary, name);
+    } finally {
+      removeOptional(temporary);
+    }
     return;
   }
   const temporary = name + '.next';
@@ -10098,6 +10182,7 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   if (
     journal.version !== 1 ||
     journal.name !== journalName ||
+    !authenticate(journal) ||
     JSON.stringify(journal.writes) !== JSON.stringify(requestedWrites)
   ) {
     throw new Error('bound-directory transaction journal is invalid');
@@ -10105,6 +10190,7 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   if (journal.state === 'committed') {
     cleanupArtifacts(journal.writes);
     cleanupJournal(journalName);
+    releaseTransactionLock();
     return { committed: true };
   }
   if (journal.state !== 'applying') {
@@ -10112,23 +10198,35 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   }
   rollbackOwnedWrites(journal.writes, recoveryDelayAfterUnlinkMs);
   cleanupJournal(journalName);
+  releaseTransactionLock();
   return { committed: false };
 }
 
 function discoverTransactions() {
-  return fs
-    .readdirSync('.')
-    .filter((name) => /^\.rn-bound-([0-9a-f-]{36})\.journal$/.test(name))
-    .map((journalName) => {
-      const journal = readJournal(journalName);
+  acquireTransactionLock();
+  try {
+    const transactions = fs
+      .readdirSync('.')
+      .filter((name) => /^\.rn-bound-([0-9a-f-]{36})\.journal$/.test(name))
+      .map((journalName) => {
+      let journal;
+      try {
+        journal = readJournal(journalName);
+      } catch {
+        fs.renameSync(journalName, journalName + '.invalid-' + crypto.randomUUID());
+        return null;
+      }
       if (
         journal === null ||
         journal.version !== 1 ||
         journal.name !== journalName ||
+        typeof journal.owner !== 'string' ||
+        !authenticate(journal) ||
         (journal.state !== 'applying' && journal.state !== 'committed') ||
         !Array.isArray(journal.writes)
       ) {
-        throw new Error('bound-directory transaction journal is invalid');
+        fs.renameSync(journalName, journalName + '.invalid-' + crypto.randomUUID());
+        return null;
       }
       const transactionId = journalName.slice('.rn-bound-'.length, -'.journal'.length);
       if (journal.writes.length > 100) {
@@ -10155,18 +10253,32 @@ function discoverTransactions() {
         transactionId,
         writes: journal.writes,
       };
-    });
+      })
+      .filter((transaction) => transaction !== null);
+    if (transactions.length > 1) {
+      throw new Error('bound-directory has multiple pending transactions');
+    }
+    if (transactions.length === 0) releaseTransactionLock();
+    return transactions;
+  } catch (error) {
+    try {
+      releaseTransactionLock();
+    } catch {}
+    throw error;
+  }
 }
 
 function applyBatch(request) {
+  acquireTransactionLock();
   const journal = {
     version: 1,
     name: request.journal,
+    owner: binding.lifecycleCapability,
     state: 'applying',
     writes: request.writes,
   };
-  writeJournal(request.journal, journal, true);
   try {
+    writeJournal(request.journal, journal, true);
     for (const write of request.writes) applyWrite(write);
     journal.state = 'committed';
     writeJournal(request.journal, journal, false);
@@ -10175,6 +10287,8 @@ function applyBatch(request) {
         throw new Error('bound-directory cleanup unavailable');
       }
       cleanupArtifacts(request.writes);
+      cleanupJournal(request.journal);
+      releaseTransactionLock();
       return { committed: true };
     } catch {
       return { cleanupPending: true, committed: true };
@@ -10183,8 +10297,12 @@ function applyBatch(request) {
     try {
       recoverTransaction(request.journal, request.writes);
     } catch (recoveryError) {
+      try {
+        releaseTransactionLock();
+      } catch {}
       throw new AggregateError([error, recoveryError]);
     }
+    releaseTransactionLock();
     throw error;
   }
 }
@@ -10208,6 +10326,8 @@ function spawnChildWorker(request, directory) {
         },
       ],
       lifecycleCapability: request.lifecycleCapability,
+      controlPath: request.controlPath,
+      journalKey: binding.journalKey,
       publicPath: request.publicPath,
       realPath: directory.realPath,
     }),
@@ -10402,7 +10522,9 @@ function stopWorker(worker, signal = "SIGTERM") {
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
-      rmSync(worker.controlPath, { force: true, recursive: true });
+      if (!existsSync2(join6(worker.controlPath, "lock-retained"))) {
+        rmSync2(worker.controlPath, { force: true, recursive: true });
+      }
       return;
     }
   }
@@ -10416,7 +10538,9 @@ function stopWorker(worker, signal = "SIGTERM") {
   if (!waitForFile(stoppedPath, 1e4)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
-  rmSync(worker.controlPath, { force: true, recursive: true });
+  if (!existsSync2(join6(worker.controlPath, "lock-retained"))) {
+    rmSync2(worker.controlPath, { force: true, recursive: true });
+  }
 }
 function bindWorker(controlPath, child, owner, childId, lifecycleCapability = "") {
   const rejectWorker = (message) => {
@@ -10442,7 +10566,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
   }
   let ready = {};
   try {
-    ready = JSON.parse(readFileSync5(readyPath, "utf8"));
+    ready = JSON.parse(readFileSync6(readyPath, "utf8"));
   } catch {
     rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
@@ -10462,7 +10586,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
 }
 function startWorker(path, identity, realPath) {
   const controlPath = mkdtempSync(join6(tmpdir(), "rn-bound-directory-"));
-  const lifecycleCapability = randomUUID();
+  const lifecycleCapability = randomUUID2();
   const binding = Buffer.from(JSON.stringify({
     dev: identity.dev.toString(),
     ino: identity.ino.toString(),
@@ -10475,6 +10599,8 @@ function startWorker(path, identity, realPath) {
       }
     ],
     lifecycleCapability,
+    controlPath,
+    journalKey: getBoundDirectoryJournalKey(),
     publicPath: path,
     realPath
   })).toString("base64url");
@@ -10490,8 +10616,8 @@ function startWorker(path, identity, realPath) {
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
   const controlPath = mkdtempSync(join6(tmpdir(), "rn-bound-directory-"));
-  const childId = randomUUID();
-  const lifecycleCapability = randomUUID();
+  const childId = randomUUID2();
+  const lifecycleCapability = randomUUID2();
   let worker;
   let childStarted = false;
   try {
@@ -10525,7 +10651,7 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
           sequence: 0
         }, "SIGKILL");
       } else {
-        rmSync(controlPath, { force: true, recursive: true });
+        rmSync2(controlPath, { force: true, recursive: true });
       }
     } catch (cleanupError) {
       throw new AggregateError([
@@ -10546,7 +10672,7 @@ function restartWorker(directory) {
     directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
   }
   for (const descendant of descendants) {
-    rmSync(descendant.worker.controlPath, { force: true, recursive: true });
+    rmSync2(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
     rebindDescendants(descendant);
   }
@@ -10559,7 +10685,7 @@ function stopDescendantWorkers(directory) {
 }
 function rebindDescendants(directory) {
   for (const descendant of directory.children) {
-    rmSync(descendant.worker.controlPath, { force: true, recursive: true });
+    rmSync2(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
     rebindDescendants(descendant);
   }
@@ -10577,11 +10703,11 @@ function sendOperation(directory, request, timeoutMs) {
   }
   let result;
   try {
-    result = JSON.parse(readFileSync5(responsePath, "utf8"));
+    result = JSON.parse(readFileSync6(responsePath, "utf8"));
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output");
   } finally {
-    rmSync(responsePath, { force: true });
+    rmSync2(responsePath, { force: true });
   }
   return result;
 }
@@ -10823,8 +10949,8 @@ function closeBoundDirectories(directories, primaryError) {
 }
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
   const controlPath = mkdtempSync(join6(tmpdir(), "rn-bound-directory-"));
-  const childId = randomUUID();
-  const lifecycleCapability = randomUUID();
+  const childId = randomUUID2();
+  const lifecycleCapability = randomUUID2();
   let worker;
   let childStarted = false;
   try {
@@ -10841,7 +10967,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
     });
     childStarted = !result.directoryMissing;
     if (result.directoryMissing) {
-      rmSync(controlPath, { force: true, recursive: true });
+      rmSync2(controlPath, { force: true, recursive: true });
       return null;
     }
     worker = bindWorker(controlPath, void 0, parent, childId, lifecycleCapability);
@@ -10881,7 +11007,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
           sequence: 0
         }, "SIGKILL");
       } else {
-        rmSync(controlPath, { force: true, recursive: true });
+        rmSync2(controlPath, { force: true, recursive: true });
       }
     } catch (cleanupError) {
       throw new AggregateError([
@@ -10907,7 +11033,10 @@ function readBoundDirectoryFiles(directory, names) {
   }));
 }
 function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
-  const transactionId = randomUUID();
+  for (const transactionId2 of [...directory.pendingCleanups.keys()]) {
+    retryBoundDirectoryCleanup(directory, { transactionId: transactionId2 });
+  }
+  const transactionId = randomUUID2();
   const journal = `.rn-bound-${transactionId}.journal`;
   const serializedWrites = writes.map((write, index) => ({
     expected: write.expected?.toString("base64") ?? null,
@@ -10985,9 +11114,6 @@ function writeBoundDirectoryFile(directory, name, contents, mode, dependencies =
       replacement: contents
     }
   ]);
-  if (result.cleanupPending) {
-    throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${result.cleanupObligation?.transactionId ?? "unknown transaction"}: ${result.cleanupError ?? "cleanup unavailable"}`);
-  }
   return result;
 }
 
@@ -10998,7 +11124,7 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
     const exists = dependencies.exists ?? existsSync3;
     if (!exists(manifestPath))
       return void 0;
-    const readText = dependencies.readText ?? ((path) => readFileSync6(path, "utf8"));
+    const readText = dependencies.readText ?? ((path) => readFileSync7(path, "utf8"));
     return readText(manifestPath);
   }
   const agent = openBoundDirectory(join7(appRoot, ".rn-agent"));
@@ -11111,7 +11237,7 @@ function resolveStatus() {
   });
 }
 function readSigner(status) {
-  const secret = JSON.parse(readFileSync7(join8(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
+  const secret = JSON.parse(readFileSync8(join8(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
   if (typeof secret.signerCapability !== "string") {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session build signer is unavailable");
   }
@@ -11171,7 +11297,7 @@ async function ensureManagedMetro(status) {
     }
   }
   const signerCapability = readSigner(status);
-  const instanceId = randomUUID2();
+  const instanceId = randomUUID3();
   const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
   writeMarker(status, {
     platform: device.platform,
@@ -11250,7 +11376,7 @@ async function main() {
       }
       const signerCapability = readSigner(status);
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
-      const buildToken = randomUUID2();
+      const buildToken = randomUUID3();
       writeMarker(status, {
         platform,
         appId: device.appId,

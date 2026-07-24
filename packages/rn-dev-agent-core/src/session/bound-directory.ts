@@ -17,6 +17,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getBoundDirectoryJournalKey } from './state-root.js';
 
 interface BoundDirectoryWorker {
   child?: ChildProcess;
@@ -108,10 +109,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const controlPath = process.argv[1];
+const lifecycleCapability = process.argv[2];
+const transactionLock = '.rn-bound-transaction.lock';
 process.on('disconnect', () => {
   try {
     fs.writeFileSync(path.join(controlPath, 'stopped'), '', { flag: 'wx', mode: 0o600 });
   } catch {}
+  try {
+    const lock = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+    if (lock.owner === lifecycleCapability) fs.unlinkSync(transactionLock);
+  } catch {
+    try {
+      fs.writeFileSync(path.join(controlPath, 'lock-retained'), '', {
+        flag: 'wx',
+        mode: 0o600,
+      });
+    } catch {}
+  }
   process.exit(0);
 });
 fs.writeFileSync(path.join(controlPath, 'monitor-ready'), '', { flag: 'wx', mode: 0o600 });
@@ -143,6 +157,7 @@ poll();
 
 const BOUND_DIRECTORY_WORKER = String.raw`
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
@@ -152,12 +167,18 @@ class ConflictError extends Error {}
 const controlPath = process.argv[1];
 const binding = JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8'));
 const childWorkers = new Map();
+const transactionLock = '.rn-bound-transaction.lock';
 process.on('disconnect', () => process.exit(0));
 process.channel?.unref();
 
 const lifecycleMonitor = childProcess.spawn(
   process.execPath,
-  ['-e', ${JSON.stringify(BOUND_DIRECTORY_LIFECYCLE_MONITOR)}, controlPath],
+  [
+    '-e',
+    ${JSON.stringify(BOUND_DIRECTORY_LIFECYCLE_MONITOR)},
+    controlPath,
+    binding.lifecycleCapability,
+  ],
   { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] },
 );
 lifecycleMonitor.on('error', () => {});
@@ -285,11 +306,97 @@ function removeOptional(name) {
   }
 }
 
+function signedPayload(value) {
+  const { signature, ...payload } = value;
+  return JSON.stringify(payload);
+}
+
+function sign(value) {
+  return crypto
+    .createHmac('sha256', Buffer.from(binding.journalKey, 'base64url'))
+    .update(signedPayload(value))
+    .digest('hex');
+}
+
+function authenticate(value) {
+  if (!value || typeof value.signature !== 'string') return false;
+  const expected = Buffer.from(sign(value), 'hex');
+  const actual = Buffer.from(value.signature, 'hex');
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function acquireTransactionLock() {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const lock = {
+      controlPath,
+      owner: binding.lifecycleCapability,
+      version: 1,
+    };
+    lock.signature = sign(lock);
+    try {
+      fs.writeFileSync(transactionLock, JSON.stringify(lock), {
+        flag: 'wx',
+        mode: 0o600,
+        flush: true,
+      });
+      return;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let existing;
+      try {
+        existing = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+      } catch {
+        throw new Error('bound-directory transaction lock is invalid');
+      }
+      if (
+        existing.version !== 1 ||
+        typeof existing.controlPath !== 'string' ||
+        typeof existing.owner !== 'string' ||
+        !authenticate(existing)
+      ) {
+        throw new Error('bound-directory transaction lock is invalid');
+      }
+      if (!fs.existsSync(path.join(existing.controlPath, 'stopped'))) {
+        throw new Error('bound-directory transaction is active');
+      }
+      fs.unlinkSync(transactionLock);
+      fs.rmSync(existing.controlPath, { force: true, recursive: true });
+    }
+  }
+  throw new Error('bound-directory transaction lock is unavailable');
+}
+
+function releaseTransactionLock() {
+  let lock;
+  try {
+    lock = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (
+    lock.version !== 1 ||
+    lock.owner !== binding.lifecycleCapability ||
+    !authenticate(lock)
+  ) {
+    throw new Error('bound-directory transaction lock is invalid');
+  }
+  fs.unlinkSync(transactionLock);
+}
+
 function writeJournal(name, value, exclusive) {
   validateName(name);
+  value.signature = sign(value);
   const contents = JSON.stringify(value);
   if (exclusive) {
-    fs.writeFileSync(name, contents, { flag: 'wx', mode: 0o600, flush: true });
+    const temporary = name + '.initial';
+    removeOptional(temporary);
+    fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true });
+    try {
+      fs.linkSync(temporary, name);
+    } finally {
+      removeOptional(temporary);
+    }
     return;
   }
   const temporary = name + '.next';
@@ -418,6 +525,7 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   if (
     journal.version !== 1 ||
     journal.name !== journalName ||
+    !authenticate(journal) ||
     JSON.stringify(journal.writes) !== JSON.stringify(requestedWrites)
   ) {
     throw new Error('bound-directory transaction journal is invalid');
@@ -425,6 +533,7 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   if (journal.state === 'committed') {
     cleanupArtifacts(journal.writes);
     cleanupJournal(journalName);
+    releaseTransactionLock();
     return { committed: true };
   }
   if (journal.state !== 'applying') {
@@ -432,23 +541,35 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   }
   rollbackOwnedWrites(journal.writes, recoveryDelayAfterUnlinkMs);
   cleanupJournal(journalName);
+  releaseTransactionLock();
   return { committed: false };
 }
 
 function discoverTransactions() {
-  return fs
-    .readdirSync('.')
-    .filter((name) => /^\.rn-bound-([0-9a-f-]{36})\.journal$/.test(name))
-    .map((journalName) => {
-      const journal = readJournal(journalName);
+  acquireTransactionLock();
+  try {
+    const transactions = fs
+      .readdirSync('.')
+      .filter((name) => /^\.rn-bound-([0-9a-f-]{36})\.journal$/.test(name))
+      .map((journalName) => {
+      let journal;
+      try {
+        journal = readJournal(journalName);
+      } catch {
+        fs.renameSync(journalName, journalName + '.invalid-' + crypto.randomUUID());
+        return null;
+      }
       if (
         journal === null ||
         journal.version !== 1 ||
         journal.name !== journalName ||
+        typeof journal.owner !== 'string' ||
+        !authenticate(journal) ||
         (journal.state !== 'applying' && journal.state !== 'committed') ||
         !Array.isArray(journal.writes)
       ) {
-        throw new Error('bound-directory transaction journal is invalid');
+        fs.renameSync(journalName, journalName + '.invalid-' + crypto.randomUUID());
+        return null;
       }
       const transactionId = journalName.slice('.rn-bound-'.length, -'.journal'.length);
       if (journal.writes.length > 100) {
@@ -475,18 +596,32 @@ function discoverTransactions() {
         transactionId,
         writes: journal.writes,
       };
-    });
+      })
+      .filter((transaction) => transaction !== null);
+    if (transactions.length > 1) {
+      throw new Error('bound-directory has multiple pending transactions');
+    }
+    if (transactions.length === 0) releaseTransactionLock();
+    return transactions;
+  } catch (error) {
+    try {
+      releaseTransactionLock();
+    } catch {}
+    throw error;
+  }
 }
 
 function applyBatch(request) {
+  acquireTransactionLock();
   const journal = {
     version: 1,
     name: request.journal,
+    owner: binding.lifecycleCapability,
     state: 'applying',
     writes: request.writes,
   };
-  writeJournal(request.journal, journal, true);
   try {
+    writeJournal(request.journal, journal, true);
     for (const write of request.writes) applyWrite(write);
     journal.state = 'committed';
     writeJournal(request.journal, journal, false);
@@ -495,6 +630,8 @@ function applyBatch(request) {
         throw new Error('bound-directory cleanup unavailable');
       }
       cleanupArtifacts(request.writes);
+      cleanupJournal(request.journal);
+      releaseTransactionLock();
       return { committed: true };
     } catch {
       return { cleanupPending: true, committed: true };
@@ -503,8 +640,12 @@ function applyBatch(request) {
     try {
       recoverTransaction(request.journal, request.writes);
     } catch (recoveryError) {
+      try {
+        releaseTransactionLock();
+      } catch {}
       throw new AggregateError([error, recoveryError]);
     }
+    releaseTransactionLock();
     throw error;
   }
 }
@@ -528,6 +669,8 @@ function spawnChildWorker(request, directory) {
         },
       ],
       lifecycleCapability: request.lifecycleCapability,
+      controlPath: request.controlPath,
+      journalKey: binding.journalKey,
       publicPath: request.publicPath,
       realPath: directory.realPath,
     }),
@@ -726,7 +869,9 @@ function stopWorker(worker: BoundDirectoryWorker, signal: NodeJS.Signals = 'SIGT
       writeFileSync(join(worker.controlPath, 'stop'), '', { flag: 'wx', mode: 0o600 });
     } catch {}
     if (waitForFile(stoppedPath, 1_000)) {
-      rmSync(worker.controlPath, { force: true, recursive: true });
+      if (!existsSync(join(worker.controlPath, 'lock-retained'))) {
+        rmSync(worker.controlPath, { force: true, recursive: true });
+      }
       return;
     }
   }
@@ -745,7 +890,9 @@ function stopWorker(worker: BoundDirectoryWorker, signal: NodeJS.Signals = 'SIGT
       'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed',
     );
   }
-  rmSync(worker.controlPath, { force: true, recursive: true });
+  if (!existsSync(join(worker.controlPath, 'lock-retained'))) {
+    rmSync(worker.controlPath, { force: true, recursive: true });
+  }
 }
 
 function bindWorker(
@@ -831,6 +978,8 @@ function startWorker(
         },
       ],
       lifecycleCapability,
+      controlPath,
+      journalKey: getBoundDirectoryJournalKey(),
       publicPath: path,
       realPath,
     }),
@@ -1439,6 +1588,9 @@ export function casBoundDirectoryFiles(
   writes: readonly BoundFileWrite[],
   dependencies: BoundOperationDependencies = {},
 ): BoundCasResult {
+  for (const transactionId of [...directory.pendingCleanups.keys()]) {
+    retryBoundDirectoryCleanup(directory, { transactionId });
+  }
   const transactionId = randomUUID();
   const journal = `.rn-bound-${transactionId}.journal`;
   const serializedWrites = writes.map((write, index) => ({
@@ -1537,10 +1689,5 @@ export function writeBoundDirectoryFile(
       replacement: contents,
     },
   ]);
-  if (result.cleanupPending) {
-    throw new Error(
-      `SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${result.cleanupObligation?.transactionId ?? 'unknown transaction'}: ${result.cleanupError ?? 'cleanup unavailable'}`,
-    );
-  }
   return result;
 }

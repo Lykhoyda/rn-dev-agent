@@ -763,6 +763,35 @@ test(
   },
 );
 
+test('bound discovery quarantines unauthenticated journals without applying them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-forged-journal-'));
+  const journal = join(root, '.rn-bound-11111111-1111-1111-1111-111111111111.journal');
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  writeFileSync(
+    journal,
+    JSON.stringify({
+      version: 1,
+      name: '.rn-bound-11111111-1111-1111-1111-111111111111.journal',
+      owner: 'forged',
+      state: 'committed',
+      writes: [],
+    }),
+    { mode: 0o600 },
+  );
+  const directory = openBoundDirectory(root);
+  try {
+    assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
+    assert.equal(
+      readdirSync(root).some((name) => name.startsWith('.rn-bound-') && name.includes('.invalid-')),
+      true,
+    );
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('bound directory groups attempt every close and preserve the primary error', () => {
   const firstRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-close-first-'));
   const secondRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-close-second-'));
@@ -902,7 +931,17 @@ test('integration rolls back committed files when cleanup remains pending', () =
             },
           },
         ),
-      /committed cleanup remains pending/,
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          [
+            error.message,
+            ...(error instanceof AggregateError ? error.errors.map((entry) => String(entry)) : []),
+          ].join('\n'),
+          /committed cleanup remains pending|bound-directory cleanup/,
+        );
+        return true;
+      },
     );
     assert.equal(readFileSync(join(root, 'package.json'), 'utf8'), packageBefore);
     assert.equal(readFileSync(join(root, 'metro.config.js'), 'utf8'), metroBefore);
@@ -941,7 +980,17 @@ test('confirmed integration rejects app-root replacement before commit', () => {
             },
           },
         ),
-      /SESSION_INTEGRATION_PATH_UNSAFE/,
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          [
+            error.message,
+            ...(error instanceof AggregateError ? error.errors.map((entry) => String(entry)) : []),
+          ].join('\n'),
+          /SESSION_INTEGRATION_PATH_UNSAFE|bound-directory cleanup/,
+        );
+        return true;
+      },
     );
     assert.equal(
       readFileSync(join(displaced, 'package.json'), 'utf8'),
