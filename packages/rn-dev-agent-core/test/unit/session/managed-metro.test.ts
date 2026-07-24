@@ -597,7 +597,7 @@ test('managed Metro startup cleanup signals its group before listener birth is k
   assert.deepEqual(signals, [101]);
 });
 
-test('managed Metro startup cleanup retains an owned listener after launcher exit', async () => {
+test('managed Metro startup cleanup rejects an unproven listener after launcher exit', async () => {
   const child = {
     pid: 101,
     exitCode: null as number | null,
@@ -606,7 +606,7 @@ test('managed Metro startup cleanup retains an owned listener after launcher exi
   };
   let stopped = false;
   let captureAttempted = false;
-  const signals: Array<{ launcherPid: number; listenerPid: number }> = [];
+  let signalled = false;
 
   await assert.rejects(
     startManagedMetro(
@@ -634,8 +634,8 @@ test('managed Metro startup cleanup retains an owned listener after launcher exi
           captureAttempted = true;
           throw new Error('capture failed');
         },
-        signalTree: ({ launcherPid, listenerPid }) => {
-          signals.push({ launcherPid, listenerPid });
+        signalTree: () => {
+          signalled = true;
           stopped = true;
         },
         wait: async () => {
@@ -643,8 +643,8 @@ test('managed Metro startup cleanup retains an owned listener after launcher exi
         },
       },
     ),
-    /METRO_START_UNAVAILABLE/,
+    /METRO_START_CLEANUP_UNPROVEN/,
   );
 
-  assert.deepEqual(signals, [{ launcherPid: 101, listenerPid: 202 }]);
+  assert.equal(signalled, false);
 });

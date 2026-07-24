@@ -306,9 +306,61 @@ test('confirmed integration preserves concurrent package inputs', () => {
     );
     assert.equal(readFileSync(packagePath, 'utf8'), packageBefore);
     assert.equal(readFileSync(metroPath, 'utf8'), concurrentMetro);
-    assert.equal(existsSync(join(root, '.rn-agent')), false);
+    assert.equal(existsSync(join(root, '.rn-agent')), true);
   } finally {
     rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('confirmed integration keeps the shared .rn-agent corpus continuously available', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-shared-root-'));
+  try {
+    const sharedPath = join(root, '.rn-agent', 'actions', 'existing.yaml');
+    mkdirSync(join(root, '.rn-agent', 'actions'), { recursive: true });
+    writeFileSync(sharedPath, 'appId: example\n');
+    writeFileSync(join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+    writeFileSync(join(root, 'metro.config.js'), 'module.exports = {};\n');
+
+    applyPackageIntegration(
+      { appRoot: root, sessionCli: join(root, 'rn-session.js') },
+      { beforeCommit: () => assert.equal(readFileSync(sharedPath, 'utf8'), 'appId: example\n') },
+    );
+
+    assert.equal(readFileSync(sharedPath, 'utf8'), 'appId: example\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('integration rollback preserves edits made after its own write', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-rollback-cas-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const metroPath = join(root, 'metro.config.js');
+    const concurrentPackage = `${JSON.stringify({
+      ...packageJson,
+      concurrent: true,
+    })}\n`;
+    const concurrentMetro = 'module.exports = { concurrent: true };\n';
+    writeFileSync(packagePath, `${JSON.stringify(packageJson)}\n`);
+    writeFileSync(metroPath, 'module.exports = {};\n');
+
+    assert.throws(() =>
+      applyPackageIntegration(
+        { appRoot: root, sessionCli: join(root, 'rn-session.js') },
+        {
+          afterWrite: (path) => {
+            if (path !== metroPath) return;
+            writeFileSync(metroPath, concurrentMetro);
+            writeFileSync(packagePath, concurrentPackage);
+          },
+        },
+      ),
+    );
+    assert.equal(readFileSync(packagePath, 'utf8'), concurrentPackage);
+    assert.equal(readFileSync(metroPath, 'utf8'), concurrentMetro);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

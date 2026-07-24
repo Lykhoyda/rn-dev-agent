@@ -277,12 +277,10 @@ export async function startManagedMetro(
   const deadline = Date.now() + 20_000;
   let lastError: unknown = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
-  let ownedListenerPid: number | null = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) break;
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {
-      ownedListenerPid = pid;
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === 'present') {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
@@ -319,7 +317,6 @@ export async function startManagedMetro(
       port: input.port,
       launcher: { pid: child.pid, birth: launcherBirth.token },
       listener: listenerIdentity,
-      fallbackListenerPid: ownedListenerPid,
     },
     dependencies,
   );
@@ -363,7 +360,6 @@ async function stopManagedMetroProcesses(
     port: number;
     launcher: ManagedMetroProcessIdentity;
     listener: ManagedMetroProcessIdentity | null;
-    fallbackListenerPid?: number | null;
   },
   dependencies: Pick<
     ManagedMetroDependencies,
@@ -395,7 +391,7 @@ async function stopManagedMetroProcesses(
     initial.port.status === 'listening' &&
     (input.listener
       ? initial.port.pid !== input.listener.pid || initial.listener !== 'present'
-      : initial.port.pid !== input.fallbackListenerPid && initial.launcher !== 'present')
+      : initial.launcher !== 'present')
   ) {
     return false;
   }
@@ -409,7 +405,7 @@ async function stopManagedMetroProcesses(
   try {
     signalTree({
       launcherPid: input.launcher.pid,
-      listenerPid: input.listener?.pid ?? input.fallbackListenerPid ?? input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.launcher.pid,
       launcherPresent: initial.launcher === 'present',
       signal: 'SIGTERM',
     });

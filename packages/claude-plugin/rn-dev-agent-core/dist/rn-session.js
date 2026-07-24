@@ -8020,13 +8020,11 @@ async function startManagedMetro(input, dependencies = {}) {
   const deadline = Date.now() + 2e4;
   let lastError = null;
   let listenerIdentity = null;
-  let ownedListenerPid = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null)
       break;
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {
-      ownedListenerPid = pid;
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === "present") {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
@@ -8058,8 +8056,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const cleanupProven = await stopManagedMetroProcesses({
     port: input.port,
     launcher: { pid: child.pid, birth: launcherBirth.token },
-    listener: listenerIdentity,
-    fallbackListenerPid: ownedListenerPid
+    listener: listenerIdentity
   }, dependencies);
   if (!cleanupProven) {
     throw new Error("METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous");
@@ -8099,7 +8096,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   if (initial.launcher === "unknown" || initial.listener === "unknown" || initial.port.status === "unknown") {
     return false;
   }
-  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.port.pid !== input.fallbackListenerPid && initial.launcher !== "present")) {
+  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.launcher !== "present")) {
     return false;
   }
   if (initial.launcher === "stopped" && initial.listener === "stopped" && initial.port.status === "absent") {
@@ -8108,7 +8105,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   try {
     signalTree({
       launcherPid: input.launcher.pid,
-      listenerPid: input.listener?.pid ?? input.fallbackListenerPid ?? input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.launcher.pid,
       launcherPresent: initial.launcher === "present",
       signal: "SIGTERM"
     });
@@ -9852,7 +9849,7 @@ function projectPublicAuthorityStatus(status) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { chmodSync as chmodSync3, closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync4, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync6, readdirSync, renameSync as renameSync2, rmdirSync, rmSync, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, closeSync as closeSync2, constants, existsSync as existsSync3, fstatSync, linkSync, lstatSync as lstatSync4, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync6, renameSync as renameSync2, rmSync, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve3, sep as sep2 } from "node:path";
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var SENTINELS = {

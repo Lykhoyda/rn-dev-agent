@@ -4,18 +4,17 @@ import {
   chmodSync,
   closeSync,
   constants,
+  existsSync,
   fstatSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
-  readdirSync,
   renameSync,
-  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
-  type BigIntStats,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -335,22 +334,86 @@ process.exit(0);
 `;
 }
 
-function atomicWrite(path: string, contents: string, mode: number): void {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, contents, { encoding: 'utf8', mode });
-  chmodSync(temporary, mode);
-  renameSync(temporary, path);
-}
-
 interface FileSnapshot {
   path: string;
   contents: Buffer | null;
   mode: number;
 }
 
-function snapshotFiles(root: string, paths: readonly string[]): FileSnapshot[] {
+interface BoundDirectory {
+  descriptor: number;
+  path: string;
+  publicPath: string;
+  identity: { dev: bigint; ino: bigint };
+}
+
+function openBoundDirectory(path: string, publicPath = path): BoundDirectory {
+  const before = lstatSync(path, { bigint: true });
+  if (!before.isDirectory() || before.isSymbolicLink()) {
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory');
+  }
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0),
+  );
+  const opened = fstatSync(descriptor, { bigint: true });
+  const after = lstatSync(path, { bigint: true });
+  if (
+    !opened.isDirectory() ||
+    before.dev !== opened.dev ||
+    before.ino !== opened.ino ||
+    after.dev !== opened.dev ||
+    after.ino !== opened.ino
+  ) {
+    closeSync(descriptor);
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening');
+  }
+  return {
+    descriptor,
+    path,
+    publicPath,
+    identity: { dev: opened.dev, ino: opened.ino },
+  };
+}
+
+function assertBoundDirectoryCurrent(bound: BoundDirectory): void {
+  const current = lstatSync(bound.publicPath, { bigint: true });
+  if (
+    !current.isDirectory() ||
+    current.isSymbolicLink() ||
+    current.dev !== bound.identity.dev ||
+    current.ino !== bound.identity.ino
+  ) {
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed');
+  }
+}
+
+function assertNoSymlinkDescendants(root: string, candidate: string): void {
+  const child = relative(root, candidate);
+  if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes its directory');
+  }
+  let current = root;
+  for (const component of child.split(sep).filter(Boolean)) {
+    current = join(current, component);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked');
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') break;
+      throw error;
+    }
+  }
+}
+
+function snapshotFiles(
+  root: string,
+  paths: readonly string[],
+  isDescriptorRoot = false,
+): FileSnapshot[] {
   return paths.map((path) => {
-    const contents = readOptionalRegularFileNoFollow(root, path);
+    const contents = readOptionalRegularFile(root, path, isDescriptorRoot);
     return {
       path,
       contents: contents === undefined ? null : Buffer.from(contents),
@@ -359,16 +422,42 @@ function snapshotFiles(root: string, paths: readonly string[]): FileSnapshot[] {
   });
 }
 
-function restoreSnapshots(
-  snapshots: readonly FileSnapshot[],
-  writtenPaths = new Set(snapshots.map((snapshot) => snapshot.path)),
+function casReplace(
+  root: string,
+  snapshot: FileSnapshot,
+  expected: Buffer | null,
+  next: Buffer | null,
+  mode: number,
+  isDescriptorRoot = false,
 ): void {
-  for (const snapshot of [...snapshots].reverse()) {
-    if (!writtenPaths.has(snapshot.path)) continue;
-    if (snapshot.contents === null) {
-      rmSync(snapshot.path, { force: true });
+  const temporary = join(dirname(snapshot.path), `.${randomUUID()}.tmp`);
+  const captured = join(dirname(snapshot.path), `.${randomUUID()}.captured`);
+  if (next) {
+    writeFileSync(temporary, next, { flag: 'wx', mode });
+    chmodSync(temporary, mode);
+  }
+  try {
+    if (expected === null) {
+      if (readOptionalRegularFile(root, snapshot.path, isDescriptorRoot) !== undefined) {
+        throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
+      }
     } else {
-      atomicWrite(snapshot.path, snapshot.contents.toString('utf8'), snapshot.mode);
+      renameSync(snapshot.path, captured);
+      const observed = readRegularFile(root, captured, isDescriptorRoot);
+      if (!expected.equals(Buffer.from(observed))) {
+        linkSync(captured, snapshot.path);
+        throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
+      }
+    }
+    if (next) {
+      linkSync(temporary, snapshot.path);
+    }
+    if (expected !== null) rmSync(captured, { force: true });
+  } finally {
+    rmSync(temporary, { force: true });
+    if (existsSync(captured)) {
+      if (!existsSync(snapshot.path)) linkSync(captured, snapshot.path);
+      rmSync(captured, { force: true });
     }
   }
 }
@@ -395,11 +484,13 @@ export function assertNoSymlinkPath(root: string, candidate: string): void {
 function regularFileIdentity(
   root: string,
   candidate: string,
+  isDescriptorRoot = false,
 ): {
   dev: bigint;
   ino: bigint;
 } {
-  assertNoSymlinkPath(root, candidate);
+  if (isDescriptorRoot) assertNoSymlinkDescendants(root, candidate);
+  else assertNoSymlinkPath(root, candidate);
   const identity = lstatSync(candidate, { bigint: true });
   if (!identity.isFile()) {
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file');
@@ -407,15 +498,15 @@ function regularFileIdentity(
   return { dev: identity.dev, ino: identity.ino };
 }
 
-export function readRegularFileNoFollow(root: string, candidate: string): string {
-  const before = regularFileIdentity(root, candidate);
+function readRegularFile(root: string, candidate: string, isDescriptorRoot = false): string {
+  const before = regularFileIdentity(root, candidate, isDescriptorRoot);
   const descriptor = openSync(
     candidate,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
   );
   try {
     const opened = fstatSync(descriptor, { bigint: true });
-    const after = regularFileIdentity(root, candidate);
+    const after = regularFileIdentity(root, candidate, isDescriptorRoot);
     if (
       !opened.isFile() ||
       before.dev !== opened.dev ||
@@ -431,144 +522,88 @@ export function readRegularFileNoFollow(root: string, candidate: string): string
   }
 }
 
-export function readOptionalRegularFileNoFollow(
+function readOptionalRegularFile(
   root: string,
   candidate: string,
+  isDescriptorRoot = false,
 ): string | undefined {
   try {
-    return readRegularFileNoFollow(root, candidate);
+    return readRegularFile(root, candidate, isDescriptorRoot);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
 }
 
-interface AgentRootTransaction {
-  agentRoot: string;
-  boundRoot: string;
-  existed: boolean;
-  placeholder: { dev: bigint; ino: bigint };
+export function readRegularFileNoFollow(root: string, candidate: string): string {
+  return readRegularFile(root, candidate);
 }
 
-function beginAgentRootTransaction(appRoot: string): AgentRootTransaction {
+export function readOptionalRegularFileNoFollow(
+  root: string,
+  candidate: string,
+): string | undefined {
+  return readOptionalRegularFile(root, candidate);
+}
+
+function openIntegrationDirectories(appRoot: string): {
+  agent: BoundDirectory;
+  integration: BoundDirectory;
+} {
   const agentRoot = join(appRoot, '.rn-agent');
-  const boundRoot = join(appRoot, `.rn-agent-transaction-${randomUUID()}`);
-  let existed = false;
-  let identity: BigIntStats | undefined;
-  try {
-    identity = lstatSync(agentRoot, { bigint: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
-  if (identity) {
-    if (!identity.isDirectory() || identity.isSymbolicLink()) {
-      throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: .rn-agent is not a regular directory');
-    }
-    renameSync(agentRoot, boundRoot);
-    const bound = lstatSync(boundRoot, { bigint: true });
-    if (bound.dev !== identity.dev || bound.ino !== identity.ino || !bound.isDirectory()) {
-      let agentRootAbsent = false;
-      try {
-        lstatSync(agentRoot);
-      } catch (error) {
-        agentRootAbsent = (error as NodeJS.ErrnoException).code === 'ENOENT';
-      }
-      if (agentRootAbsent) {
-        renameSync(boundRoot, agentRoot);
-      }
-      throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: .rn-agent changed during transaction');
-    }
-    existed = true;
-  } else {
-    mkdirSync(boundRoot, { mode: 0o700 });
-  }
   try {
     mkdirSync(agentRoot, { mode: 0o700 });
   } catch (error) {
-    const conflictPath = `${agentRoot}-conflict-${randomUUID()}`;
-    try {
-      renameSync(agentRoot, conflictPath);
-      if (existed) renameSync(boundRoot, agentRoot);
-      else rmSync(boundRoot, { recursive: true, force: true });
-      const conflict = lstatSync(conflictPath);
-      if (
-        conflict.isSymbolicLink() ||
-        (conflict.isDirectory() && readdirSync(conflictPath).length === 0)
-      ) {
-        rmSync(conflictPath, { recursive: conflict.isDirectory(), force: true });
-      }
-    } catch (recoveryError) {
-      void recoveryError;
-    }
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
-  const placeholder = lstatSync(agentRoot, { bigint: true });
-  return {
-    agentRoot,
-    boundRoot,
-    existed,
-    placeholder: { dev: placeholder.dev, ino: placeholder.ino },
-  };
-}
-
-function clearAgentRootPlaceholder(transaction: AgentRootTransaction): void {
-  const current = lstatSync(transaction.agentRoot, { bigint: true });
-  if (
-    !current.isDirectory() ||
-    current.isSymbolicLink() ||
-    current.dev !== transaction.placeholder.dev ||
-    current.ino !== transaction.placeholder.ino ||
-    readdirSync(transaction.agentRoot).length !== 0
-  ) {
-    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: .rn-agent changed during transaction');
-  }
-  rmdirSync(transaction.agentRoot);
-}
-
-function commitAgentRootTransaction(transaction: AgentRootTransaction): void {
-  clearAgentRootPlaceholder(transaction);
-  renameSync(transaction.boundRoot, transaction.agentRoot);
-}
-
-function recoverAgentRootTransaction(transaction: AgentRootTransaction): void {
-  let conflictPath: string | null = null;
+  const agent = openBoundDirectory(agentRoot);
+  const integrationPath = join(agentRoot, 'integration');
   try {
-    clearAgentRootPlaceholder(transaction);
+    mkdirSync(integrationPath, { mode: 0o700 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      conflictPath = `${transaction.agentRoot}-conflict-${randomUUID()}`;
-      renameSync(transaction.agentRoot, conflictPath);
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      closeSync(agent.descriptor);
+      throw error;
     }
   }
-  if (transaction.existed) {
-    renameSync(transaction.boundRoot, transaction.agentRoot);
-  } else {
-    rmSync(transaction.boundRoot, { recursive: true, force: true });
-  }
-  if (conflictPath) {
-    const conflict = lstatSync(conflictPath);
-    if (
-      conflict.isSymbolicLink() ||
-      (conflict.isDirectory() && readdirSync(conflictPath).length === 0)
-    ) {
-      rmSync(conflictPath, { recursive: conflict.isDirectory(), force: true });
-    }
-  }
-}
-
-function assertSnapshotUnchanged(root: string, snapshot: FileSnapshot): void {
-  const current = readOptionalRegularFileNoFollow(root, snapshot.path);
-  if (
-    (snapshot.contents === null && current !== undefined) ||
-    (snapshot.contents !== null &&
-      (current === undefined || !snapshot.contents.equals(Buffer.from(current))))
-  ) {
-    throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
+  try {
+    const integration = openBoundDirectory(integrationPath, join(agentRoot, 'integration'));
+    return { agent, integration };
+  } catch (error) {
+    closeSync(agent.descriptor);
+    throw error;
   }
 }
 
 interface PackageIntegrationDependencies {
   beforeCommit?: () => void;
+  afterWrite?: (path: string) => void;
+}
+
+interface AppliedWrite {
+  root: string;
+  snapshot: FileSnapshot;
+  written: Buffer | null;
+  isDescriptorRoot?: boolean;
+}
+
+function rollbackWrites(writes: readonly AppliedWrite[]): Error[] {
+  const errors: Error[] = [];
+  for (const write of [...writes].reverse()) {
+    try {
+      casReplace(
+        write.root,
+        write.snapshot,
+        write.written,
+        write.snapshot.contents,
+        write.snapshot.mode,
+        write.isDescriptorRoot,
+      );
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  return errors;
 }
 
 export function applyPackageIntegration(
@@ -580,89 +615,103 @@ export function applyPackageIntegration(
 ): PackageIntegrationPreview {
   const appRoot = resolve(input.appRoot);
   const packagePath = join(appRoot, 'package.json');
-  let metroConfig: { path: string; contents: string } | undefined;
+  let metroConfigPath: string | undefined;
   for (const path of ['metro.config.js', 'metro.config.cjs'].map((name) => join(appRoot, name))) {
-    const contents = readOptionalRegularFileNoFollow(appRoot, path);
-    if (contents !== undefined) {
-      metroConfig = { path, contents };
+    if (readOptionalRegularFileNoFollow(appRoot, path) !== undefined) {
+      metroConfigPath = path;
       break;
     }
   }
-  if (!metroConfig) {
+  if (!metroConfigPath) {
     throw new Error(
       'BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required',
     );
   }
-  const metroConfigPath = metroConfig.path;
-  const transaction = beginAgentRootTransaction(appRoot);
-  const integrationRoot = join(transaction.boundRoot, 'integration');
-  const manifestPath = join(integrationRoot, 'rn-session-integration.json');
-  const adapterPath = join(transaction.boundRoot, 'integration', 'rn-session-adapter.cjs');
-  const metroAdapterPath = join(transaction.boundRoot, 'integration', 'rn-session-metro.cjs');
-  const authorityModulePath = join(transaction.boundRoot, 'integration', 'authority-marker.js');
-  let snapshots: FileSnapshot[] = [];
-  const writtenPaths = new Set<string>();
+  const directories = openIntegrationDirectories(appRoot);
+  const manifestPath = join(directories.integration.path, 'rn-session-integration.json');
+  const adapterPath = join(directories.integration.path, 'rn-session-adapter.cjs');
+  const metroAdapterPath = join(directories.integration.path, 'rn-session-metro.cjs');
+  const authorityModulePath = join(directories.integration.path, 'authority-marker.js');
+  const applied: AppliedWrite[] = [];
   try {
-    const packageSource = readRegularFileNoFollow(appRoot, packagePath);
-    const packageJson = JSON.parse(packageSource) as PackageJson;
-    const existing = (() => {
-      try {
-        const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
-        return manifest === undefined
-          ? undefined
-          : (JSON.parse(manifest) as PackageIntegrationManifest);
-      } catch (error) {
-        if (error instanceof SyntaxError) return undefined;
-        throw error;
-      }
-    })();
-    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
-    const nextMetroSource = previewMetroIntegration(metroConfig.contents);
-    preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
-    snapshots = snapshotFiles(appRoot, [
-      packagePath,
+    const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
+    const generated = snapshotFiles(directories.integration.path, [
       manifestPath,
       adapterPath,
       metroAdapterPath,
       authorityModulePath,
-      metroConfigPath,
     ]);
-    const packageSnapshot = snapshots.find((snapshot) => snapshot.path === packagePath);
-    const metroSnapshot = snapshots.find((snapshot) => snapshot.path === metroConfigPath);
-    if (
-      !packageSnapshot ||
-      !packageSnapshot.contents?.equals(Buffer.from(packageSource)) ||
-      !metroSnapshot ||
-      !metroSnapshot.contents?.equals(Buffer.from(metroConfig.contents))
-    ) {
+    if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
       throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
     }
+    const packageJson = JSON.parse(packageSnapshot.contents.toString('utf8')) as PackageJson;
+    let existing: PackageIntegrationManifest | undefined;
+    if (generated[0]?.contents) {
+      try {
+        existing = JSON.parse(generated[0].contents.toString('utf8')) as PackageIntegrationManifest;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+      }
+    }
+    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
+    const nextMetroSource = previewMetroIntegration(metroSnapshot.contents.toString('utf8'));
+    preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
     dependencies.beforeCommit?.();
-    mkdirSync(dirname(adapterPath), { recursive: true, mode: 0o700 });
-    atomicWrite(manifestPath, `${JSON.stringify(preview.manifest, null, 2)}\n`, 0o600);
-    writtenPaths.add(manifestPath);
-    atomicWrite(adapterPath, renderProjectAdapter(), 0o755);
-    writtenPaths.add(adapterPath);
-    atomicWrite(metroAdapterPath, renderMetroIntegrationAdapter(), 0o644);
-    writtenPaths.add(metroAdapterPath);
-    atomicWrite(
-      authorityModulePath,
-      "globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n",
-      0o600,
-    );
-    writtenPaths.add(authorityModulePath);
-    assertSnapshotUnchanged(appRoot, metroSnapshot);
-    atomicWrite(metroConfigPath, nextMetroSource, 0o644);
-    writtenPaths.add(metroConfigPath);
-    assertSnapshotUnchanged(appRoot, packageSnapshot);
-    atomicWrite(packagePath, `${JSON.stringify(preview.packageJson, null, 2)}\n`, 0o644);
-    writtenPaths.add(packagePath);
-    commitAgentRootTransaction(transaction);
+    const outputs: Array<{ snapshot: FileSnapshot; contents: Buffer; mode: number }> = [
+      {
+        snapshot: generated[0]!,
+        contents: Buffer.from(`${JSON.stringify(preview.manifest, null, 2)}\n`),
+        mode: 0o600,
+      },
+      { snapshot: generated[1]!, contents: Buffer.from(renderProjectAdapter()), mode: 0o755 },
+      {
+        snapshot: generated[2]!,
+        contents: Buffer.from(renderMetroIntegrationAdapter()),
+        mode: 0o644,
+      },
+      {
+        snapshot: generated[3]!,
+        contents: Buffer.from(
+          "globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n",
+        ),
+        mode: 0o600,
+      },
+    ];
+    for (const output of outputs) {
+      assertBoundDirectoryCurrent(directories.agent);
+      assertBoundDirectoryCurrent(directories.integration);
+      casReplace(
+        directories.integration.path,
+        output.snapshot,
+        output.snapshot.contents,
+        output.contents,
+        output.mode,
+      );
+      applied.push({
+        root: directories.integration.path,
+        snapshot: output.snapshot,
+        written: output.contents,
+      });
+      dependencies.afterWrite?.(output.snapshot.path);
+    }
+    const metroOutput = Buffer.from(nextMetroSource);
+    casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 0o644);
+    applied.push({ root: appRoot, snapshot: metroSnapshot, written: metroOutput });
+    dependencies.afterWrite?.(metroConfigPath);
+    const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}\n`);
+    casReplace(appRoot, packageSnapshot, packageSnapshot.contents, packageOutput, 0o644);
+    applied.push({ root: appRoot, snapshot: packageSnapshot, written: packageOutput });
+    dependencies.afterWrite?.(packagePath);
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
     return preview;
   } catch (error) {
-    restoreSnapshots(snapshots, writtenPaths);
-    recoverAgentRootTransaction(transaction);
+    const rollbackErrors = rollbackWrites(applied);
+    if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors]);
     throw error;
+  } finally {
+    closeSync(directories.integration.descriptor);
+    closeSync(directories.agent.descriptor);
   }
 }
 
@@ -672,13 +721,12 @@ export function restorePackageIntegrationFiles(
 ): void {
   const appRoot = resolve(input.appRoot);
   const packagePath = join(appRoot, 'package.json');
-  const transaction = beginAgentRootTransaction(appRoot);
-  const manifestPath = join(transaction.boundRoot, 'integration', 'rn-session-integration.json');
-  let snapshots: FileSnapshot[] = [];
-  const writtenPaths = new Set<string>();
+  const directories = openIntegrationDirectories(appRoot);
+  const manifestPath = join(directories.integration.path, 'rn-session-integration.json');
+  const applied: AppliedWrite[] = [];
   try {
     const manifest = JSON.parse(
-      readRegularFileNoFollow(appRoot, manifestPath),
+      readRegularFile(directories.integration.path, manifestPath),
     ) as PackageIntegrationManifest;
     const metroConfig =
       manifest.metroConfig === undefined ? 'metro.config.js' : manifest.metroConfig;
@@ -690,37 +738,46 @@ export function restorePackageIntegrationFiles(
     const metroConfigPath = join(appRoot, metroConfig);
     const generated = [
       manifestPath,
-      join(transaction.boundRoot, 'integration', 'rn-session-adapter.cjs'),
-      join(transaction.boundRoot, 'integration', 'rn-session-metro.cjs'),
-      join(transaction.boundRoot, 'integration', 'authority-marker.js'),
+      join(directories.integration.path, 'rn-session-adapter.cjs'),
+      join(directories.integration.path, 'rn-session-metro.cjs'),
+      join(directories.integration.path, 'authority-marker.js'),
     ];
-    snapshots = snapshotFiles(appRoot, [packagePath, metroConfigPath, ...generated]);
-    const packageSnapshot = snapshots.find((snapshot) => snapshot.path === packagePath);
-    const metroSnapshot = snapshots.find((snapshot) => snapshot.path === metroConfigPath);
+    const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
+    const generatedSnapshots = snapshotFiles(directories.integration.path, generated);
     if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
       throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
     }
     const packageJson = JSON.parse(packageSnapshot.contents.toString('utf8')) as PackageJson;
     const metroSource = metroSnapshot.contents.toString('utf8');
     dependencies.beforeCommit?.();
-    assertSnapshotUnchanged(appRoot, packageSnapshot);
-    atomicWrite(
-      packagePath,
+    const packageOutput = Buffer.from(
       `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}\n`,
-      0o644,
     );
-    writtenPaths.add(packagePath);
-    assertSnapshotUnchanged(appRoot, metroSnapshot);
-    atomicWrite(metroConfigPath, restoreMetroIntegration(metroSource), 0o644);
-    writtenPaths.add(metroConfigPath);
-    for (const path of generated) {
-      rmSync(path, { force: true });
-      writtenPaths.add(path);
+    casReplace(appRoot, packageSnapshot, packageSnapshot.contents, packageOutput, 0o644);
+    applied.push({ root: appRoot, snapshot: packageSnapshot, written: packageOutput });
+    dependencies.afterWrite?.(packagePath);
+    const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
+    casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 0o644);
+    applied.push({ root: appRoot, snapshot: metroSnapshot, written: metroOutput });
+    dependencies.afterWrite?.(metroConfigPath);
+    for (const snapshot of generatedSnapshots) {
+      assertBoundDirectoryCurrent(directories.agent);
+      assertBoundDirectoryCurrent(directories.integration);
+      casReplace(directories.integration.path, snapshot, snapshot.contents, null, snapshot.mode);
+      applied.push({
+        root: directories.integration.path,
+        snapshot,
+        written: null,
+      });
     }
-    commitAgentRootTransaction(transaction);
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
   } catch (error) {
-    restoreSnapshots(snapshots, writtenPaths);
-    recoverAgentRootTransaction(transaction);
+    const rollbackErrors = rollbackWrites(applied);
+    if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors]);
     throw error;
+  } finally {
+    closeSync(directories.integration.descriptor);
+    closeSync(directories.agent.descriptor);
   }
 }
