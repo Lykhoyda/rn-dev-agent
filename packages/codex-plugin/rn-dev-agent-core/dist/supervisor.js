@@ -53298,6 +53298,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
       throwOperationFailure(result);
     if (request2.operation === "cas" && result.cleanupPending) {
       try {
+        dependencies.beforeCleanupRecovery?.();
         const cleanup = sendOperation(directory, {
           operation: "recover",
           failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
@@ -53664,7 +53665,7 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
   }
   directory.pendingCleanups.delete(obligation.transactionId);
 }
-var WAIT_BUFFER, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_WORKER;
+var WAIT_BUFFER, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_ANCESTRY_MONITOR, BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
   "packages/rn-dev-agent-core/dist/session/bound-directory.js"() {
     "use strict";
@@ -53721,6 +53722,53 @@ function poll() {
 
 poll();
 `;
+    BOUND_DIRECTORY_ANCESTRY_MONITOR = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const { workerData } = require('node:worker_threads');
+
+const state = new Int32Array(workerData.stateBuffer);
+const watchers = [];
+
+function fail() {
+  Atomics.store(state, 2, 1);
+  Atomics.add(state, 1, 1);
+  Atomics.notify(state, 1);
+}
+
+try {
+  for (const ancestor of workerData.ancestors) {
+    const watchedName = path.basename(ancestor.publicPath);
+    const watcher = fs.watch(path.dirname(ancestor.publicPath), (eventType, filename) => {
+      if (eventType !== 'rename' || (filename !== null && String(filename) !== watchedName)) {
+        return;
+      }
+      let valid = false;
+      try {
+        const current = fs.lstatSync(ancestor.publicPath, { bigint: true });
+        valid =
+          current.isDirectory() &&
+          !current.isSymbolicLink() &&
+          current.dev.toString() === ancestor.dev &&
+          current.ino.toString() === ancestor.ino &&
+          fs.realpathSync(ancestor.publicPath) === ancestor.realPath;
+      } catch {}
+      if (!valid) {
+        Atomics.add(state, 1, 1);
+        Atomics.notify(state, 1);
+      }
+    });
+    watcher.on('error', fail);
+    watchers.push(watcher);
+  }
+  Atomics.store(state, 0, 1);
+  Atomics.notify(state, 0);
+} catch {
+  fail();
+  Atomics.store(state, 0, -1);
+  Atomics.notify(state, 0);
+}
+`;
     BOUND_DIRECTORY_WORKER = String.raw`
 const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
@@ -53729,6 +53777,7 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 
 class ConflictError extends Error {}
+class AncestryError extends Error {}
 
 const controlPath = process.argv[1];
 const binding = JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8'));
@@ -53760,6 +53809,34 @@ const terminationWatchdog = new Worker(${JSON.stringify(BOUND_DIRECTORY_TERMINAT
 });
 terminationWatchdog.on('error', () => process.exit(1));
 terminationWatchdog.unref();
+const agentAncestorIndex = binding.ancestors.findIndex(
+  (ancestor) => path.basename(ancestor.publicPath) === '.rn-agent',
+);
+const monitoredAncestors =
+  agentAncestorIndex === -1
+    ? []
+    : binding.ancestors.slice(agentAncestorIndex);
+const ancestryState = new Int32Array(new SharedArrayBuffer(12));
+if (monitoredAncestors.length > 0) {
+  const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
+    eval: true,
+    workerData: {
+      ancestors: monitoredAncestors,
+      stateBuffer: ancestryState.buffer,
+    },
+  });
+  ancestryMonitor.on('error', () => {
+    Atomics.store(ancestryState, 2, 1);
+    Atomics.add(ancestryState, 1, 1);
+  });
+  ancestryMonitor.unref();
+  if (
+    Atomics.wait(ancestryState, 0, 0, 5_000) === 'timed-out' ||
+    Atomics.load(ancestryState, 0) !== 1
+  ) {
+    process.exit(1);
+  }
+}
 
 function wait(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -53777,16 +53854,12 @@ function validateName(name) {
   }
 }
 
-function directoryStamp(stats) {
-  return {
-    ctimeNs: stats.ctimeNs.toString(),
-    dev: stats.dev.toString(),
-    ino: stats.ino.toString(),
-    mtimeNs: stats.mtimeNs.toString(),
-  };
-}
-
-function assertBoundDirectory(expectedGuard) {
+function assertBoundDirectory(expectedGuard, settle = false) {
+  if (settle && monitoredAncestors.length > 0) wait(5);
+  if (Atomics.load(ancestryState, 2) !== 0) {
+    throw new AncestryError('bound-directory ancestry monitor failed');
+  }
+  const guardBefore = Atomics.load(ancestryState, 1);
   const current = fs.statSync('.', { bigint: true });
   if (
     !current.isDirectory() ||
@@ -53794,17 +53867,9 @@ function assertBoundDirectory(expectedGuard) {
     current.ino.toString() !== binding.ino ||
     fs.realpathSync('.') !== binding.realPath
   ) {
-    throw new Error('bound-directory identity changed');
+    throw new AncestryError('bound-directory identity changed');
   }
-  const guard = [];
-  const agentAncestorIndex = binding.ancestors.findIndex(
-    (ancestor) => path.basename(ancestor.publicPath) === '.rn-agent',
-  );
-  for (const [index, ancestor] of binding.ancestors.entries()) {
-    const guarded = agentAncestorIndex !== -1 && index >= agentAncestorIndex;
-    const parentBefore = guarded
-      ? fs.statSync(path.dirname(ancestor.publicPath), { bigint: true })
-      : null;
+  for (const ancestor of binding.ancestors) {
     const publicPath = fs.lstatSync(ancestor.publicPath, { bigint: true });
     if (
       !publicPath.isDirectory() ||
@@ -53813,21 +53878,14 @@ function assertBoundDirectory(expectedGuard) {
       publicPath.ino.toString() !== ancestor.ino ||
       fs.realpathSync(ancestor.publicPath) !== ancestor.realPath
     ) {
-      throw new Error('bound-directory ancestor changed');
+      throw new AncestryError('bound-directory ancestor changed');
     }
-    if (!guarded) continue;
-    const parentAfter = fs.statSync(path.dirname(ancestor.publicPath), { bigint: true });
-    const beforeStamp = directoryStamp(parentBefore);
-    const afterStamp = directoryStamp(parentAfter);
-    if (JSON.stringify(beforeStamp) !== JSON.stringify(afterStamp)) {
-      throw new Error('bound-directory ancestor changed');
-    }
-    guard.push(afterStamp);
   }
-  if (expectedGuard && JSON.stringify(guard) !== JSON.stringify(expectedGuard)) {
-    throw new Error('bound-directory ancestor changed during operation');
+  const guardAfter = Atomics.load(ancestryState, 1);
+  if (guardBefore !== guardAfter || (expectedGuard !== undefined && guardAfter !== expectedGuard)) {
+    throw new AncestryError('bound-directory ancestor changed during operation');
   }
-  return guard;
+  return guardAfter;
 }
 
 function readRegularFile(name) {
@@ -54148,10 +54206,12 @@ function recoverTransaction(
   requestedWrites,
   recoveryDelayAfterUnlinkMs = 0,
   releaseLock = true,
+  ancestryGuard,
 ) {
   const journal = readJournal(journalName);
   if (journal === null) {
     const committed = allReplacementsPresent(requestedWrites);
+    assertBoundDirectory(ancestryGuard, true);
     if (releaseLock) releaseTransactionLock();
     return { committed };
   }
@@ -54165,6 +54225,7 @@ function recoverTransaction(
   }
   if (journal.state === 'committed') {
     cleanupArtifacts(journal.writes);
+    assertBoundDirectory(ancestryGuard, true);
     cleanupJournal(journalName);
     if (releaseLock) releaseTransactionLock();
     return { committed: true };
@@ -54173,6 +54234,7 @@ function recoverTransaction(
     throw new Error('bound-directory transaction state is invalid');
   }
   rollbackOwnedWrites(journal.writes, recoveryDelayAfterUnlinkMs);
+  assertBoundDirectory(ancestryGuard, true);
   cleanupJournal(journalName);
   if (releaseLock) releaseTransactionLock();
   return { committed: false };
@@ -54239,17 +54301,32 @@ function inspectTransactions() {
   return transactions;
 }
 
-function discoverTransactions() {
-  if (transactionJournalNames().length === 0) return [];
-  acquireTransactionLock();
+function discoverTransactions(ancestryGuard) {
+  if (transactionJournalNames().length === 0) {
+    const lock = readTransactionLock();
+    if (
+      lock === null ||
+      !validateTransactionLock(lock) ||
+      lock.owner !== binding.lifecycleCapability
+    ) {
+      return [];
+    }
+    assertBoundDirectory(ancestryGuard, true);
+    releaseTransactionLock();
+    return [];
+  }
+  ensureTransactionLock();
   try {
     const transactions = inspectTransactions();
+    assertBoundDirectory(ancestryGuard, true);
     if (transactions.length === 0) releaseTransactionLock();
     return transactions;
   } catch (error) {
-    try {
-      releaseTransactionLock();
-    } catch {}
+    if (!(error instanceof AncestryError)) {
+      try {
+        releaseTransactionLock();
+      } catch {}
+    }
     throw error;
   }
 }
@@ -54258,7 +54335,9 @@ function applyBatch(request, ancestryGuard) {
   acquireTransactionLock();
   const pending = inspectTransactions();
   if (pending.length === 1) {
-    recoverTransaction(pending[0].journal, pending[0].writes, 0, false);
+    recoverTransaction(pending[0].journal, pending[0].writes, 0, false, ancestryGuard);
+  } else {
+    assertBoundDirectory(ancestryGuard, true);
   }
   const journal = {
     version: 1,
@@ -54270,7 +54349,7 @@ function applyBatch(request, ancestryGuard) {
   try {
     writeJournal(request.journal, journal, true);
     for (const write of request.writes) applyWrite(write);
-    assertBoundDirectory(ancestryGuard);
+    assertBoundDirectory(ancestryGuard, true);
     journal.state = 'committed';
     writeJournal(request.journal, journal, false);
     try {
@@ -54286,7 +54365,13 @@ function applyBatch(request, ancestryGuard) {
     }
   } catch (error) {
     try {
-      recoverTransaction(request.journal, request.writes);
+      recoverTransaction(
+        request.journal,
+        request.writes,
+        0,
+        true,
+        assertBoundDirectory(),
+      );
     } catch (recoveryError) {
       throw new AggregateError([error, recoveryError]);
     }
@@ -54379,7 +54464,7 @@ function execute(request) {
     }
     const directory = { dev: after.dev, ino: after.ino, realPath };
     try {
-      assertBoundDirectory(ancestryGuard);
+      assertBoundDirectory(ancestryGuard, true);
     } catch (error) {
       if (created) fs.rmdirSync(request.name);
       throw error;
@@ -54405,7 +54490,7 @@ function execute(request) {
       const snapshot = readRegularFile(name);
       return snapshot ?? { contents: null, mode: 0o600, name };
     });
-    assertBoundDirectory(ancestryGuard);
+    assertBoundDirectory(ancestryGuard, true);
     return { snapshots };
   }
   if (request.operation === 'cas') {
@@ -54421,10 +54506,12 @@ function execute(request) {
       request.journal,
       request.writes,
       request.recoveryDelayAfterUnlinkMs,
+      true,
+      ancestryGuard,
     );
   }
   if (request.operation === 'discover') {
-    return { transactions: discoverTransactions() };
+    return { transactions: discoverTransactions(ancestryGuard) };
   }
   if (request.operation === 'identity') return {};
   throw new Error('invalid bound-directory operation');

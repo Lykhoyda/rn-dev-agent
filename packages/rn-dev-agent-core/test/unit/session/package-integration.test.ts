@@ -416,6 +416,115 @@ test('bound CAS rolls back an ancestor switched and restored during mutation', (
   }
 });
 
+test('bound CAS tolerates unrelated ancestor-directory churn', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-unrelated-churn-'));
+  const agentPath = join(root, '.rn-agent');
+  const integrationPath = join(agentPath, 'integration');
+  const markerPath = join(integrationPath, 'authority-marker.js');
+  const rootChurnPath = join(root, 'unrelated-root');
+  const agentChurnPath = join(agentPath, 'unrelated-agent');
+  mkdirSync(integrationPath, { recursive: true });
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const agent = openBoundDirectory(agentPath);
+  const integration = openBoundSubdirectory(agent, 'integration');
+  try {
+    const churn = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const fs=require('node:fs');setTimeout(()=>{fs.writeFileSync(${JSON.stringify(
+          rootChurnPath,
+        )},'root');fs.writeFileSync(${JSON.stringify(
+          agentChurnPath,
+        )},'agent');setTimeout(()=>{fs.unlinkSync(${JSON.stringify(
+          rootChurnPath,
+        )});fs.unlinkSync(${JSON.stringify(agentChurnPath)})},100)},100)`,
+      ],
+      { stdio: 'ignore' },
+    );
+    churn.unref();
+    const result = casBoundDirectoryFiles(
+      integration,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      { afterCaptureDelayMs: 1_000 },
+    );
+    assert.equal(result.committed, true);
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+  } finally {
+    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bound recovery retains cleanup after a transient ancestor switch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-recovery-switch-'));
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-recovery-switch-external-'));
+  const agentPath = join(root, '.rn-agent');
+  const external = join(externalRoot, 'agent');
+  const integrationPath = join(agentPath, 'integration');
+  const markerPath = join(integrationPath, 'authority-marker.js');
+  mkdirSync(integrationPath, { recursive: true });
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const agent = openBoundDirectory(agentPath);
+  const integration = openBoundSubdirectory(agent, 'integration');
+  try {
+    const result = casBoundDirectoryFiles(
+      integration,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          expectedMode: 0o600,
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      {
+        beforeCleanupRecovery: () => {
+          const switcher = spawn(
+            process.execPath,
+            [
+              '-e',
+              `const fs=require('node:fs');setTimeout(()=>{fs.renameSync(${JSON.stringify(
+                agentPath,
+              )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
+                external,
+              )},${JSON.stringify(
+                agentPath,
+              )},'dir');setTimeout(()=>{fs.unlinkSync(${JSON.stringify(
+                agentPath,
+              )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)},100)`,
+            ],
+            { stdio: 'ignore' },
+          );
+          switcher.unref();
+        },
+        cleanupRecoveryDelayMs: 1_000,
+        failCleanupAfterCommit: true,
+      },
+    );
+    assert.equal(result.committed, true);
+    assert.equal(result.cleanupPending, true);
+    assert.match(result.cleanupError ?? '', /ancestor changed/);
+    assert.match(result.cleanupObligation?.transactionId ?? '', /^[0-9a-f-]{36}$/);
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+    assert.equal(readdirSync(integrationPath).some((name) => name.endsWith('.journal')), true);
+  } finally {
+    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
+    rmSync(root, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
+  }
+});
+
 test('bound child adoption rejects a newly symlinked parent ancestor', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-adoption-'));
   const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-adoption-external-'));
