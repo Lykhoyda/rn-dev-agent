@@ -28,8 +28,10 @@ import {
   restorePackageIntegration,
 } from '../../../dist/session/package-integration.js';
 import {
+  casBoundDirectoryFiles,
   closeBoundDirectory,
   openBoundDirectory,
+  openBoundSubdirectory,
   writeBoundDirectoryFile,
 } from '../../../dist/session/bound-directory.js';
 
@@ -316,6 +318,70 @@ test('signed marker writes retain the bound integration directory', () => {
       readFileSync(join(root, '.rn-agent', 'integration-original', 'authority-marker.js'), 'utf8'),
       'before\n',
     );
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bound subdirectories reject a symlink back to the retained ancestor', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-root-'));
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-root-external-'));
+  const external = join(externalRoot, 'agent');
+  const agentPath = join(root, '.rn-agent');
+  const integrationPath = join(agentPath, 'integration');
+  mkdirSync(integrationPath, { recursive: true });
+  const markerPath = join(integrationPath, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n');
+  const agent = openBoundDirectory(agentPath);
+  const integration = openBoundSubdirectory(agent, 'integration');
+  try {
+    assert.throws(
+      () =>
+        writeBoundDirectoryFile(integration, 'authority-marker.js', Buffer.from('after\n'), 0o600, {
+          beforeCommit: () => {
+            renameSync(agentPath, external);
+            symlinkSync(external, agentPath, 'dir');
+          },
+        }),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(
+      readFileSync(join(external, 'integration', 'authority-marker.js'), 'utf8'),
+      'before\n',
+    );
+  } finally {
+    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
+    rmSync(root, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
+  }
+});
+
+test('bounded CAS recovery restores a file captured during worker timeout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-timeout-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n');
+  const directory = openBoundDirectory(root);
+  try {
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          directory,
+          [
+            {
+              expected: Buffer.from('before\n'),
+              mode: 0o600,
+              name: 'authority-marker.js',
+              replacement: Buffer.from('after\n'),
+            },
+          ],
+          { afterCaptureDelayMs: 5_000, timeoutMs: 1_000 },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
+    assert.deepEqual(readdirSync(root), ['authority-marker.js']);
   } finally {
     closeBoundDirectory(directory);
     rmSync(root, { force: true, recursive: true });

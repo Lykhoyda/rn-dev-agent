@@ -1,11 +1,23 @@
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+
+interface BoundDirectoryRoot {
+  descriptor: number;
+  identity: { dev: bigint; ino: bigint };
+  path: string;
+  realPath: string;
+  references: number;
+}
 
 export interface BoundDirectory {
   descriptor: number;
   identity: { dev: bigint; ino: bigint };
   path: string;
+  root: BoundDirectoryRoot;
+  segments: string[];
+  closed: boolean;
 }
 
 export interface BoundFileSnapshot {
@@ -30,10 +42,14 @@ interface BoundOperationResult {
   snapshots?: Array<{ contents: string | null; mode: number; name: string }>;
 }
 
+export interface BoundOperationDependencies {
+  afterCaptureDelayMs?: number;
+  timeoutMs?: number;
+}
+
 const BOUND_DIRECTORY_WORKER = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 
 class ConflictError extends Error {}
 
@@ -107,10 +123,20 @@ function removeOptional(name) {
   }
 }
 
+function sameContents(snapshot, expected) {
+  return (
+    snapshot !== null &&
+    expected !== null &&
+    expected.equals(Buffer.from(snapshot.contents, 'base64'))
+  );
+}
+
 function casReplace(write) {
   validateName(write.name);
-  const temporary = '.' + crypto.randomUUID() + '.tmp';
-  const captured = '.' + crypto.randomUUID() + '.captured';
+  validateName(write.temporary);
+  validateName(write.captured);
+  const temporary = write.temporary;
+  const captured = write.captured;
   const expected =
     write.expected === null ? null : Buffer.from(write.expected, 'base64');
   const replacement =
@@ -132,6 +158,14 @@ function casReplace(write) {
           throw new ConflictError('bound-directory input changed before commit');
         }
         throw error;
+      }
+      if (write.afterCaptureDelayMs > 0) {
+        Atomics.wait(
+          new Int32Array(new SharedArrayBuffer(4)),
+          0,
+          0,
+          write.afterCaptureDelayMs,
+        );
       }
       const observed = readRegularFile(captured);
       if (
@@ -162,6 +196,52 @@ function casReplace(write) {
   }
 }
 
+function restoreExpected(write) {
+  validateName(write.name);
+  validateName(write.temporary);
+  validateName(write.captured);
+  validateName(write.rollbackTemporary);
+  validateName(write.rollbackCaptured);
+  const expected =
+    write.expected === null ? null : Buffer.from(write.expected, 'base64');
+  const replacement =
+    write.replacement === null ? null : Buffer.from(write.replacement, 'base64');
+  const target = readRegularFile(write.name);
+  const captured = readRegularFile(write.captured);
+  if (
+    (expected === null && target === null) ||
+    sameContents(target, expected)
+  ) {
+    removeOptional(write.temporary);
+    removeOptional(write.captured);
+    removeOptional(write.rollbackTemporary);
+    removeOptional(write.rollbackCaptured);
+    return;
+  }
+  if (target === null && sameContents(captured, expected)) {
+    fs.linkSync(write.captured, write.name);
+    removeOptional(write.temporary);
+    removeOptional(write.captured);
+    removeOptional(write.rollbackTemporary);
+    removeOptional(write.rollbackCaptured);
+    return;
+  }
+  if (target !== null && !sameContents(target, replacement)) {
+    throw new ConflictError('bound-directory input changed during recovery');
+  }
+  casReplace({
+    expected: target === null ? null : write.replacement,
+    mode: write.originalMode,
+    name: write.name,
+    replacement: write.expected,
+    temporary: write.rollbackTemporary,
+    captured: write.rollbackCaptured,
+    afterCaptureDelayMs: 0,
+  });
+  removeOptional(write.temporary);
+  removeOptional(write.captured);
+}
+
 function applyBatch(writes) {
   const applied = [];
   try {
@@ -178,6 +258,9 @@ function applyBatch(writes) {
           mode: write.originalMode,
           name: write.name,
           replacement: write.expected,
+          temporary: write.rollbackTemporary,
+          captured: write.rollbackCaptured,
+          afterCaptureDelayMs: 0,
         });
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError);
@@ -190,20 +273,37 @@ function applyBatch(writes) {
   }
 }
 
-function assertIdentity(expected) {
+function enterBoundDirectory(binding) {
   const current = fs.statSync('.', { bigint: true });
   if (
     !current.isDirectory() ||
-    current.dev.toString() !== expected.dev ||
-    current.ino.toString() !== expected.ino
+    current.dev.toString() !== binding.rootIdentity.dev ||
+    current.ino.toString() !== binding.rootIdentity.ino ||
+    fs.realpathSync('.') !== binding.rootRealPath
   ) {
     throw new Error('bound-directory identity changed');
+  }
+  for (const segment of binding.segments) {
+    validateName(segment);
+    const child = fs.lstatSync(segment, { bigint: true });
+    if (!child.isDirectory() || child.isSymbolicLink()) {
+      throw new Error('bound-directory child is not a directory');
+    }
+    process.chdir(segment);
+  }
+  const bound = fs.statSync('.', { bigint: true });
+  if (
+    !bound.isDirectory() ||
+    bound.dev.toString() !== binding.identity.dev ||
+    bound.ino.toString() !== binding.identity.ino
+  ) {
+    throw new Error('bound-directory child identity changed');
   }
 }
 
 try {
   const request = JSON.parse(fs.readFileSync(0, 'utf8'));
-  assertIdentity(request.identity);
+  enterBoundDirectory(request.binding);
   let directoryIdentity;
   let snapshots;
   if (request.operation === 'directory') {
@@ -230,6 +330,9 @@ try {
     });
   } else if (request.operation === 'cas') {
     applyBatch(request.writes);
+  } else if (request.operation === 'recover') {
+    for (const write of [...request.writes].reverse()) restoreExpected(write);
+  } else if (request.operation === 'identity') {
   } else {
     throw new Error('invalid bound-directory operation');
   }
@@ -259,32 +362,67 @@ function sameIdentity(
 function runBoundOperation(
   directory: BoundDirectory,
   request: Record<string, unknown>,
+  dependencies: BoundOperationDependencies = {},
 ): BoundOperationResult {
-  const retained = fstatSync(directory.descriptor, { bigint: true });
+  if (directory.closed) {
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound directory is closed');
+  }
+  const retained = fstatSync(directory.root.descriptor, { bigint: true });
   if (
     !retained.isDirectory() ||
-    retained.dev !== directory.identity.dev ||
-    retained.ino !== directory.identity.ino
+    retained.dev !== directory.root.identity.dev ||
+    retained.ino !== directory.root.identity.ino
   ) {
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed');
   }
+  const binding = {
+    rootIdentity: {
+      dev: retained.dev.toString(),
+      ino: retained.ino.toString(),
+    },
+    rootRealPath: directory.root.realPath,
+    segments: directory.segments,
+    identity: {
+      dev: directory.identity.dev.toString(),
+      ino: directory.identity.ino.toString(),
+    },
+  };
+  const input = JSON.stringify({ ...request, binding });
   let output: string;
   try {
     output = execFileSync(process.execPath, ['-e', BOUND_DIRECTORY_WORKER], {
-      cwd: directory.path,
+      cwd: directory.root.path,
       encoding: 'utf8',
-      input: JSON.stringify({
-        ...request,
-        identity: {
-          dev: retained.dev.toString(),
-          ino: retained.ino.toString(),
-        },
-      }),
+      input,
       maxBuffer: 16 * 1024 * 1024,
-      ...(request.operation === 'cas' ? {} : { timeout: 5_000 }),
+      timeout: dependencies.timeoutMs ?? 5_000,
     });
   } catch {
-    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable');
+    let recoveryFailed = false;
+    if (request.operation === 'cas') {
+      try {
+        const recoveryOutput = execFileSync(process.execPath, ['-e', BOUND_DIRECTORY_WORKER], {
+          cwd: directory.root.path,
+          encoding: 'utf8',
+          input: JSON.stringify({
+            operation: 'recover',
+            writes: request.writes,
+            binding,
+          }),
+          maxBuffer: 16 * 1024 * 1024,
+          timeout: 5_000,
+        });
+        const recovery = JSON.parse(recoveryOutput) as BoundOperationResult;
+        recoveryFailed = !recovery.ok;
+      } catch {
+        recoveryFailed = true;
+      }
+    }
+    throw new Error(
+      recoveryFailed
+        ? 'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory recovery failed'
+        : 'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable',
+    );
   }
   let result: BoundOperationResult;
   try {
@@ -304,10 +442,7 @@ function runBoundOperation(
   return result;
 }
 
-export function openBoundDirectory(
-  path: string,
-  expectedIdentity?: { dev: bigint; ino: bigint },
-): BoundDirectory {
+export function openBoundDirectory(path: string): BoundDirectory {
   let descriptor: number | undefined;
   try {
     const before = lstatSync(path, { bigint: true });
@@ -320,20 +455,26 @@ export function openBoundDirectory(
     );
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync(path, { bigint: true });
-    if (
-      !opened.isDirectory() ||
-      !sameIdentity(before, opened) ||
-      !sameIdentity(after, opened) ||
-      (expectedIdentity !== undefined && !sameIdentity(expectedIdentity, opened))
-    ) {
+    const realPath = realpathSync(path);
+    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened)) {
       throw new Error(
         'SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening',
       );
     }
-    return {
+    const root: BoundDirectoryRoot = {
       descriptor,
       identity: { dev: opened.dev, ino: opened.ino },
       path,
+      realPath,
+      references: 1,
+    };
+    return {
+      descriptor,
+      identity: root.identity,
+      path,
+      root,
+      segments: [],
+      closed: false,
     };
   } catch (error) {
     if (descriptor !== undefined) closeSync(descriptor);
@@ -345,19 +486,14 @@ export function openBoundDirectory(
 }
 
 export function closeBoundDirectory(directory: BoundDirectory): void {
-  closeSync(directory.descriptor);
+  if (directory.closed) return;
+  directory.closed = true;
+  directory.root.references -= 1;
+  if (directory.root.references === 0) closeSync(directory.root.descriptor);
 }
 
 export function assertBoundDirectoryCurrent(directory: BoundDirectory): void {
-  const current = lstatSync(directory.path, { bigint: true });
-  if (
-    !current.isDirectory() ||
-    current.isSymbolicLink() ||
-    current.dev !== directory.identity.dev ||
-    current.ino !== directory.identity.ino
-  ) {
-    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed');
-  }
+  runBoundOperation(directory, { operation: 'identity' });
 }
 
 export function openBoundSubdirectory(
@@ -376,10 +512,18 @@ export function openBoundSubdirectory(
       'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output',
     );
   }
-  return openBoundDirectory(join(parent.path, name), {
-    dev: BigInt(result.directoryIdentity.dev),
-    ino: BigInt(result.directoryIdentity.ino),
-  });
+  parent.root.references += 1;
+  return {
+    descriptor: parent.root.descriptor,
+    identity: {
+      dev: BigInt(result.directoryIdentity.dev),
+      ino: BigInt(result.directoryIdentity.ino),
+    },
+    path: join(parent.path, name),
+    root: parent.root,
+    segments: [...parent.segments, name],
+    closed: false,
+  };
 }
 
 export function readBoundDirectoryFiles(
@@ -402,17 +546,28 @@ export function readBoundDirectoryFiles(
 export function casBoundDirectoryFiles(
   directory: BoundDirectory,
   writes: readonly BoundFileWrite[],
+  dependencies: BoundOperationDependencies = {},
 ): void {
-  runBoundOperation(directory, {
-    operation: 'cas',
-    writes: writes.map((write) => ({
-      expected: write.expected?.toString('base64') ?? null,
-      mode: write.mode,
-      name: write.name,
-      originalMode: write.expectedMode ?? write.mode,
-      replacement: write.replacement?.toString('base64') ?? null,
-    })),
-  });
+  const transactionId = randomUUID();
+  runBoundOperation(
+    directory,
+    {
+      operation: 'cas',
+      writes: writes.map((write, index) => ({
+        expected: write.expected?.toString('base64') ?? null,
+        mode: write.mode,
+        name: write.name,
+        originalMode: write.expectedMode ?? write.mode,
+        replacement: write.replacement?.toString('base64') ?? null,
+        temporary: `.${transactionId}-${index}.tmp`,
+        captured: `.${transactionId}-${index}.captured`,
+        rollbackTemporary: `.${transactionId}-${index}.rollback.tmp`,
+        rollbackCaptured: `.${transactionId}-${index}.rollback.captured`,
+        afterCaptureDelayMs: dependencies.afterCaptureDelayMs ?? 0,
+      })),
+    },
+    dependencies,
+  );
 }
 
 export function writeBoundDirectoryFile(

@@ -52990,33 +52990,64 @@ var init_action_state_store = __esm({
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { execFileSync as execFileSync11 } from "node:child_process";
-import { closeSync as closeSync3, constants, fstatSync, lstatSync as lstatSync8, openSync as openSync3 } from "node:fs";
+import { randomUUID as randomUUID5 } from "node:crypto";
+import { closeSync as closeSync3, constants, fstatSync, lstatSync as lstatSync8, openSync as openSync3, realpathSync as realpathSync4 } from "node:fs";
 import { join as join30 } from "node:path";
 function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
-function runBoundOperation(directory, request2) {
-  const retained = fstatSync(directory.descriptor, { bigint: true });
-  if (!retained.isDirectory() || retained.dev !== directory.identity.dev || retained.ino !== directory.identity.ino) {
+function runBoundOperation(directory, request2, dependencies = {}) {
+  if (directory.closed) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory is closed");
+  }
+  const retained = fstatSync(directory.root.descriptor, { bigint: true });
+  if (!retained.isDirectory() || retained.dev !== directory.root.identity.dev || retained.ino !== directory.root.identity.ino) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed");
   }
+  const binding = {
+    rootIdentity: {
+      dev: retained.dev.toString(),
+      ino: retained.ino.toString()
+    },
+    rootRealPath: directory.root.realPath,
+    segments: directory.segments,
+    identity: {
+      dev: directory.identity.dev.toString(),
+      ino: directory.identity.ino.toString()
+    }
+  };
+  const input = JSON.stringify({ ...request2, binding });
   let output;
   try {
     output = execFileSync11(process.execPath, ["-e", BOUND_DIRECTORY_WORKER], {
-      cwd: directory.path,
+      cwd: directory.root.path,
       encoding: "utf8",
-      input: JSON.stringify({
-        ...request2,
-        identity: {
-          dev: retained.dev.toString(),
-          ino: retained.ino.toString()
-        }
-      }),
+      input,
       maxBuffer: 16 * 1024 * 1024,
-      ...request2.operation === "cas" ? {} : { timeout: 5e3 }
+      timeout: dependencies.timeoutMs ?? 5e3
     });
   } catch {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable");
+    let recoveryFailed = false;
+    if (request2.operation === "cas") {
+      try {
+        const recoveryOutput = execFileSync11(process.execPath, ["-e", BOUND_DIRECTORY_WORKER], {
+          cwd: directory.root.path,
+          encoding: "utf8",
+          input: JSON.stringify({
+            operation: "recover",
+            writes: request2.writes,
+            binding
+          }),
+          maxBuffer: 16 * 1024 * 1024,
+          timeout: 5e3
+        });
+        const recovery = JSON.parse(recoveryOutput);
+        recoveryFailed = !recovery.ok;
+      } catch {
+        recoveryFailed = true;
+      }
+    }
+    throw new Error(recoveryFailed ? "SESSION_INTEGRATION_PATH_UNSAFE: bound-directory recovery failed" : "SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable");
   }
   let result;
   try {
@@ -53030,7 +53061,7 @@ function runBoundOperation(directory, request2) {
   }
   return result;
 }
-function openBoundDirectory(path, expectedIdentity) {
+function openBoundDirectory(path) {
   let descriptor;
   try {
     const before = lstatSync8(path, { bigint: true });
@@ -53040,13 +53071,24 @@ function openBoundDirectory(path, expectedIdentity) {
     descriptor = openSync3(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync8(path, { bigint: true });
-    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expectedIdentity !== void 0 && !sameIdentity(expectedIdentity, opened)) {
+    const realPath = realpathSync4(path);
+    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
-    return {
+    const root = {
       descriptor,
       identity: { dev: opened.dev, ino: opened.ino },
-      path
+      path,
+      realPath,
+      references: 1
+    };
+    return {
+      descriptor,
+      identity: root.identity,
+      path,
+      root,
+      segments: [],
+      closed: false
     };
   } catch (error2) {
     if (descriptor !== void 0)
@@ -53058,13 +53100,15 @@ function openBoundDirectory(path, expectedIdentity) {
   }
 }
 function closeBoundDirectory(directory) {
-  closeSync3(directory.descriptor);
+  if (directory.closed)
+    return;
+  directory.closed = true;
+  directory.root.references -= 1;
+  if (directory.root.references === 0)
+    closeSync3(directory.root.descriptor);
 }
 function assertBoundDirectoryCurrent(directory) {
-  const current = lstatSync8(directory.path, { bigint: true });
-  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== directory.identity.dev || current.ino !== directory.identity.ino) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed");
-  }
+  runBoundOperation(directory, { operation: "identity" });
 }
 function openBoundSubdirectory(parent, name, options = {}) {
   const result = runBoundOperation(parent, {
@@ -53076,10 +53120,18 @@ function openBoundSubdirectory(parent, name, options = {}) {
   if (!result.directoryIdentity) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output");
   }
-  return openBoundDirectory(join30(parent.path, name), {
-    dev: BigInt(result.directoryIdentity.dev),
-    ino: BigInt(result.directoryIdentity.ino)
-  });
+  parent.root.references += 1;
+  return {
+    descriptor: parent.root.descriptor,
+    identity: {
+      dev: BigInt(result.directoryIdentity.dev),
+      ino: BigInt(result.directoryIdentity.ino)
+    },
+    path: join30(parent.path, name),
+    root: parent.root,
+    segments: [...parent.segments, name],
+    closed: false
+  };
 }
 function readBoundDirectoryFiles(directory, names) {
   const result = runBoundOperation(directory, { operation: "read", names });
@@ -53092,17 +53144,23 @@ function readBoundDirectoryFiles(directory, names) {
     name: snapshot.name
   }));
 }
-function casBoundDirectoryFiles(directory, writes) {
+function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
+  const transactionId = randomUUID5();
   runBoundOperation(directory, {
     operation: "cas",
-    writes: writes.map((write) => ({
+    writes: writes.map((write, index) => ({
       expected: write.expected?.toString("base64") ?? null,
       mode: write.mode,
       name: write.name,
       originalMode: write.expectedMode ?? write.mode,
-      replacement: write.replacement?.toString("base64") ?? null
+      replacement: write.replacement?.toString("base64") ?? null,
+      temporary: `.${transactionId}-${index}.tmp`,
+      captured: `.${transactionId}-${index}.captured`,
+      rollbackTemporary: `.${transactionId}-${index}.rollback.tmp`,
+      rollbackCaptured: `.${transactionId}-${index}.rollback.captured`,
+      afterCaptureDelayMs: dependencies.afterCaptureDelayMs ?? 0
     }))
-  });
+  }, dependencies);
 }
 var BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
@@ -53111,7 +53169,6 @@ var init_bound_directory = __esm({
     BOUND_DIRECTORY_WORKER = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 
 class ConflictError extends Error {}
 
@@ -53185,10 +53242,20 @@ function removeOptional(name) {
   }
 }
 
+function sameContents(snapshot, expected) {
+  return (
+    snapshot !== null &&
+    expected !== null &&
+    expected.equals(Buffer.from(snapshot.contents, 'base64'))
+  );
+}
+
 function casReplace(write) {
   validateName(write.name);
-  const temporary = '.' + crypto.randomUUID() + '.tmp';
-  const captured = '.' + crypto.randomUUID() + '.captured';
+  validateName(write.temporary);
+  validateName(write.captured);
+  const temporary = write.temporary;
+  const captured = write.captured;
   const expected =
     write.expected === null ? null : Buffer.from(write.expected, 'base64');
   const replacement =
@@ -53210,6 +53277,14 @@ function casReplace(write) {
           throw new ConflictError('bound-directory input changed before commit');
         }
         throw error;
+      }
+      if (write.afterCaptureDelayMs > 0) {
+        Atomics.wait(
+          new Int32Array(new SharedArrayBuffer(4)),
+          0,
+          0,
+          write.afterCaptureDelayMs,
+        );
       }
       const observed = readRegularFile(captured);
       if (
@@ -53240,6 +53315,52 @@ function casReplace(write) {
   }
 }
 
+function restoreExpected(write) {
+  validateName(write.name);
+  validateName(write.temporary);
+  validateName(write.captured);
+  validateName(write.rollbackTemporary);
+  validateName(write.rollbackCaptured);
+  const expected =
+    write.expected === null ? null : Buffer.from(write.expected, 'base64');
+  const replacement =
+    write.replacement === null ? null : Buffer.from(write.replacement, 'base64');
+  const target = readRegularFile(write.name);
+  const captured = readRegularFile(write.captured);
+  if (
+    (expected === null && target === null) ||
+    sameContents(target, expected)
+  ) {
+    removeOptional(write.temporary);
+    removeOptional(write.captured);
+    removeOptional(write.rollbackTemporary);
+    removeOptional(write.rollbackCaptured);
+    return;
+  }
+  if (target === null && sameContents(captured, expected)) {
+    fs.linkSync(write.captured, write.name);
+    removeOptional(write.temporary);
+    removeOptional(write.captured);
+    removeOptional(write.rollbackTemporary);
+    removeOptional(write.rollbackCaptured);
+    return;
+  }
+  if (target !== null && !sameContents(target, replacement)) {
+    throw new ConflictError('bound-directory input changed during recovery');
+  }
+  casReplace({
+    expected: target === null ? null : write.replacement,
+    mode: write.originalMode,
+    name: write.name,
+    replacement: write.expected,
+    temporary: write.rollbackTemporary,
+    captured: write.rollbackCaptured,
+    afterCaptureDelayMs: 0,
+  });
+  removeOptional(write.temporary);
+  removeOptional(write.captured);
+}
+
 function applyBatch(writes) {
   const applied = [];
   try {
@@ -53256,6 +53377,9 @@ function applyBatch(writes) {
           mode: write.originalMode,
           name: write.name,
           replacement: write.expected,
+          temporary: write.rollbackTemporary,
+          captured: write.rollbackCaptured,
+          afterCaptureDelayMs: 0,
         });
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError);
@@ -53268,20 +53392,37 @@ function applyBatch(writes) {
   }
 }
 
-function assertIdentity(expected) {
+function enterBoundDirectory(binding) {
   const current = fs.statSync('.', { bigint: true });
   if (
     !current.isDirectory() ||
-    current.dev.toString() !== expected.dev ||
-    current.ino.toString() !== expected.ino
+    current.dev.toString() !== binding.rootIdentity.dev ||
+    current.ino.toString() !== binding.rootIdentity.ino ||
+    fs.realpathSync('.') !== binding.rootRealPath
   ) {
     throw new Error('bound-directory identity changed');
+  }
+  for (const segment of binding.segments) {
+    validateName(segment);
+    const child = fs.lstatSync(segment, { bigint: true });
+    if (!child.isDirectory() || child.isSymbolicLink()) {
+      throw new Error('bound-directory child is not a directory');
+    }
+    process.chdir(segment);
+  }
+  const bound = fs.statSync('.', { bigint: true });
+  if (
+    !bound.isDirectory() ||
+    bound.dev.toString() !== binding.identity.dev ||
+    bound.ino.toString() !== binding.identity.ino
+  ) {
+    throw new Error('bound-directory child identity changed');
   }
 }
 
 try {
   const request = JSON.parse(fs.readFileSync(0, 'utf8'));
-  assertIdentity(request.identity);
+  enterBoundDirectory(request.binding);
   let directoryIdentity;
   let snapshots;
   if (request.operation === 'directory') {
@@ -53308,6 +53449,9 @@ try {
     });
   } else if (request.operation === 'cas') {
     applyBatch(request.writes);
+  } else if (request.operation === 'recover') {
+    for (const write of [...request.writes].reverse()) restoreExpected(write);
+  } else if (request.operation === 'identity') {
   } else {
     throw new Error('invalid bound-directory operation');
   }
@@ -61765,9 +61909,9 @@ var init_proof_receipt = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash11, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID6 } from "node:crypto";
 import { execFileSync as execFileSync12 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync5, existsSync as existsSync26, fsyncSync, lstatSync as lstatSync9, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync23, realpathSync as realpathSync4, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync5, existsSync as existsSync26, fsyncSync, lstatSync as lstatSync9, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync23, realpathSync as realpathSync5, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename5, dirname as dirname14, extname, isAbsolute as isAbsolute4, join as join36, relative as relative2, resolve as resolve7, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
@@ -61796,7 +61940,7 @@ function hashBytes(bytes) {
 }
 function realpathOrSelf(path) {
   try {
-    return realpathSync4(path);
+    return realpathSync5(path);
   } catch {
     return path;
   }
@@ -61804,7 +61948,7 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync4(candidateRoot);
+    root = realpathSync5(candidateRoot);
   } catch {
     return null;
   }
@@ -61813,7 +61957,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
       continue;
     let arg;
     try {
-      arg = realpathSync4(authorityArg);
+      arg = realpathSync5(authorityArg);
     } catch {
       continue;
     }
@@ -61859,7 +62003,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     if (!value || !isAbsolute4(value))
       return value ? null : "";
     try {
-      return realpathSync4(value);
+      return realpathSync5(value);
     } catch {
       return null;
     }
@@ -61881,7 +62025,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync4(candidateRoot);
+    const root = realpathSync5(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -61894,7 +62038,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync4(artifactPath);
+      const resolvedArtifactPath = realpathSync5(artifactPath);
       const artifactRelativePath = relative2(root, resolvedArtifactPath).split(sep5).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
@@ -61914,7 +62058,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot) {
-  const root = realpathSync4(resolve7(candidateRoot));
+  const root = realpathSync5(resolve7(candidateRoot));
   const sha = execFileSync12("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -62168,7 +62312,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname14(path);
   mkdirSync16(directory, { recursive: true, mode: 448 });
-  const temporary = resolve7(directory, `.${randomUUID5()}.proof-receipt.tmp`);
+  const temporary = resolve7(directory, `.${randomUUID6()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync5(temporary, "wx", 384);
@@ -68301,7 +68445,7 @@ var init_build_adapter = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID7 } from "node:crypto";
 import { chmodSync as chmodSync5, closeSync as closeSync6, constants as constants3, existsSync as existsSync33, fstatSync as fstatSync3, linkSync, lstatSync as lstatSync11, mkdirSync as mkdirSync21, openSync as openSync6, readFileSync as readFileSync34, renameSync as renameSync11, rmSync as rmSync8, statSync as statSync13, writeFileSync as writeFileSync21 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute5, join as join52, relative as relative3, resolve as resolve8, sep as sep6 } from "node:path";
 function renderMetroIntegrationAdapter() {
@@ -68579,8 +68723,8 @@ function snapshotFiles(root, paths) {
   });
 }
 function casReplace(root, snapshot, expected, next, mode) {
-  const temporary = join52(dirname18(snapshot.path), `.${randomUUID6()}.tmp`);
-  const captured = join52(dirname18(snapshot.path), `.${randomUUID6()}.captured`);
+  const temporary = join52(dirname18(snapshot.path), `.${randomUUID7()}.tmp`);
+  const captured = join52(dirname18(snapshot.path), `.${randomUUID7()}.captured`);
   if (next) {
     writeFileSync21(temporary, next, { flag: "wx", mode });
     chmodSync5(temporary, mode);
@@ -69574,7 +69718,7 @@ var init_tool_profiles = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
-import { randomUUID as randomUUID7 } from "node:crypto";
+import { randomUUID as randomUUID8 } from "node:crypto";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -69778,7 +69922,7 @@ function createAuthorityGate(runtime, dependencies) {
           } : tool === "rn_session" && args.action === "prepare_handoff" ? { before: [...profile.axes], after: [] } : { before: [...profile.axes], after: [...profile.axes] };
           requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
           operation2 = registry3.beginOperation(available.session, {
-            operationId: randomUUID7(),
+            operationId: randomUUID8(),
             tool,
             profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
           });
@@ -69867,7 +70011,7 @@ function createAuthorityGate(runtime, dependencies) {
         requireCompleteAxes(status, profile);
         bindSessionArguments(status, profile, args);
         operation = registry2.beginOperation(available.session, {
-          operationId: randomUUID7(),
+          operationId: randomUUID8(),
           tool,
           profile: profile.axes.join("")
         });
@@ -70556,7 +70700,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID9 } from "node:crypto";
 import { readFileSync as readFileSync35, rmSync as rmSync9 } from "node:fs";
 import { execFile as execFile26 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
@@ -71158,7 +71302,7 @@ var init_index = __esm({
           authority: {
             sessionId: status.sessionId,
             claimEpoch: status.claimEpoch,
-            instanceId: randomUUID8(),
+            instanceId: randomUUID9(),
             capability: secret.observeCapability
           }
         };
@@ -72232,7 +72376,7 @@ var init_index = __esm({
 // packages/rn-dev-agent-core/dist/supervisor.js
 init_lockfile();
 init_parent_watch();
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 import { spawn as spawn7 } from "node:child_process";
 import { readFileSync as readFileSync36 } from "node:fs";
 import { dirname as dirname21, join as join55 } from "node:path";
@@ -72642,7 +72786,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
         closeAuthorityAndExit2(action.kind === "shutdown" ? 0 : action.code);
     }
   }, spawnWorker2 = function() {
-    const workerInstance = randomUUID9();
+    const workerInstance = randomUUID10();
     const child = spawn7(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, void 0, process.argv.slice(2)), {
       stdio: ["pipe", "pipe", "inherit"],
       env: {
