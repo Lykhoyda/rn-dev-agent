@@ -10677,6 +10677,8 @@ function execute(request) {
       before = fs.lstatSync(request.name, { bigint: true });
     } catch (error) {
       if (request.optional && error.code === 'ENOENT') {
+        if (request.optionalMissingDelayMs) wait(request.optionalMissingDelayMs);
+        assertBoundDirectory(ancestryGuard, true);
         return { directoryMissing: true };
       }
       throw error;
@@ -10720,6 +10722,7 @@ function execute(request) {
     if (!child || child.exitCode !== null || child.signalCode !== null) {
       throw new Error('bound-directory child worker is unavailable');
     }
+    assertBoundDirectory(ancestryGuard, true);
     return {};
   }
   if (request.operation === 'read') {
@@ -10751,7 +10754,10 @@ function execute(request) {
     if (request.discoveryQuarantineDelayMs) wait(request.discoveryQuarantineDelayMs);
     return { transactions: discoverTransactions(ancestryGuard) };
   }
-  if (request.operation === 'identity') return {};
+  if (request.operation === 'identity') {
+    assertBoundDirectory(ancestryGuard, true);
+    return {};
+  }
   throw new Error('invalid bound-directory operation');
 }
 
@@ -11298,7 +11304,8 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       publicPath: join6(parent.path, name),
       create: options.create ?? false,
       mode: options.mode ?? 448,
-      optional: options.optional ?? false
+      optional: options.optional ?? false,
+      optionalMissingDelayMs: options.optionalMissingDelayMs ?? 0
     });
     childStarted = !result.directoryMissing;
     if (result.directoryMissing) {

@@ -1020,6 +1020,8 @@ function execute(request) {
       before = fs.lstatSync(request.name, { bigint: true });
     } catch (error) {
       if (request.optional && error.code === 'ENOENT') {
+        if (request.optionalMissingDelayMs) wait(request.optionalMissingDelayMs);
+        assertBoundDirectory(ancestryGuard, true);
         return { directoryMissing: true };
       }
       throw error;
@@ -1063,6 +1065,7 @@ function execute(request) {
     if (!child || child.exitCode !== null || child.signalCode !== null) {
       throw new Error('bound-directory child worker is unavailable');
     }
+    assertBoundDirectory(ancestryGuard, true);
     return {};
   }
   if (request.operation === 'read') {
@@ -1094,7 +1097,10 @@ function execute(request) {
     if (request.discoveryQuarantineDelayMs) wait(request.discoveryQuarantineDelayMs);
     return { transactions: discoverTransactions(ancestryGuard) };
   }
-  if (request.operation === 'identity') return {};
+  if (request.operation === 'identity') {
+    assertBoundDirectory(ancestryGuard, true);
+    return {};
+  }
   throw new Error('invalid bound-directory operation');
 }
 
@@ -1806,6 +1812,7 @@ function openBoundSubdirectoryInternal(
     discoveryQuarantineDelayMs?: number;
     mode?: number;
     optional?: boolean;
+    optionalMissingDelayMs?: number;
   } = {},
 ): BoundDirectory | null {
   const controlPath = mkdtempSync(join(tmpdir(), 'rn-bound-directory-'));
@@ -1824,6 +1831,7 @@ function openBoundSubdirectoryInternal(
       create: options.create ?? false,
       mode: options.mode ?? 0o700,
       optional: options.optional ?? false,
+      optionalMissingDelayMs: options.optionalMissingDelayMs ?? 0,
     });
     childStarted = !result.directoryMissing;
     if (result.directoryMissing) {
@@ -1905,8 +1913,14 @@ export function openBoundSubdirectory(
 export function openOptionalBoundSubdirectory(
   parent: BoundDirectory,
   name: string,
+  dependencies: { optionalMissingDelayMs?: number } = {},
 ): BoundDirectory | null {
-  return openBoundSubdirectoryInternal(parent, name, { optional: true });
+  return openBoundSubdirectoryInternal(parent, name, {
+    optional: true,
+    ...(dependencies.optionalMissingDelayMs === undefined
+      ? {}
+      : { optionalMissingDelayMs: dependencies.optionalMissingDelayMs }),
+  });
 }
 
 export function readBoundDirectoryFiles(
