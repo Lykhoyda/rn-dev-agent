@@ -1,5 +1,4 @@
 import { createBuildLaunchPlan } from './build-adapter.js';
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -18,6 +17,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  assertBoundDirectoryCurrent,
+  casBoundDirectoryFiles,
+  closeBoundDirectory,
+  ensureBoundSubdirectory,
+  openBoundDirectory,
+  readBoundDirectoryFiles,
+  type BoundDirectory,
+} from './bound-directory.js';
 
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
@@ -341,264 +349,8 @@ interface FileSnapshot {
   mode: number;
 }
 
-interface BoundDirectory {
-  descriptor: number;
-  path: string;
-  publicPath: string;
-  identity: { dev: bigint; ino: bigint };
-}
-
 interface DescriptorFileSnapshot extends FileSnapshot {
   name: string;
-}
-
-interface DescriptorOperationResult {
-  ok: boolean;
-  code?: 'CONFLICT' | 'UNSAFE';
-  message?: string;
-  contents?: string | null;
-  mode?: number;
-}
-
-const DESCRIPTOR_OPERATION = String.raw`
-import base64
-import json
-import os
-import stat
-import sys
-import uuid
-
-class ConflictError(Exception):
-    pass
-
-request = json.load(sys.stdin)
-directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-
-def validate_name(name):
-    if not isinstance(name, str) or not name or os.path.basename(name) != name:
-        raise ValueError("invalid integration filename")
-
-def open_integration(create):
-    if create:
-        try:
-            os.mkdir("integration", 0o700, dir_fd=3)
-        except FileExistsError:
-            pass
-    return os.open("integration", directory_flags, dir_fd=3)
-
-def read_file(directory, name):
-    validate_name(name)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    try:
-        descriptor = os.open(name, flags, dir_fd=directory)
-    except FileNotFoundError:
-        return None
-    try:
-        identity = os.fstat(descriptor)
-        if not stat.S_ISREG(identity.st_mode):
-            raise ValueError("integration input is not a regular file")
-        chunks = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        return {
-            "contents": base64.b64encode(b"".join(chunks)).decode("ascii"),
-            "mode": stat.S_IMODE(identity.st_mode),
-        }
-    finally:
-        os.close(descriptor)
-
-def exists(directory, name):
-    try:
-        os.stat(name, dir_fd=directory, follow_symlinks=False)
-        return True
-    except FileNotFoundError:
-        return False
-
-def unlink_optional(directory, name):
-    try:
-        os.unlink(name, dir_fd=directory)
-    except FileNotFoundError:
-        pass
-
-def cas(directory, name, expected, replacement, mode):
-    validate_name(name)
-    temporary = "." + str(uuid.uuid4()) + ".tmp"
-    captured = "." + str(uuid.uuid4()) + ".captured"
-    replacement_bytes = None if replacement is None else base64.b64decode(replacement)
-    expected_bytes = None if expected is None else base64.b64decode(expected)
-    if replacement_bytes is not None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(temporary, flags, mode, dir_fd=directory)
-        try:
-            view = memoryview(replacement_bytes)
-            while view:
-                written = os.write(descriptor, view)
-                view = view[written:]
-            os.fchmod(descriptor, mode)
-        finally:
-            os.close(descriptor)
-    try:
-        if expected_bytes is None:
-            if read_file(directory, name) is not None:
-                raise ConflictError("integration input changed before commit")
-        else:
-            try:
-                os.rename(name, captured, src_dir_fd=directory, dst_dir_fd=directory)
-            except FileNotFoundError as error:
-                raise ConflictError("integration input changed before commit") from error
-            observed = read_file(directory, captured)
-            if observed is None or base64.b64decode(observed["contents"]) != expected_bytes:
-                os.link(
-                    captured,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-                raise ConflictError("integration input changed before commit")
-        if replacement_bytes is not None:
-            try:
-                os.link(
-                    temporary,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-            except FileExistsError as error:
-                raise ConflictError("integration input changed before commit") from error
-        if expected_bytes is not None:
-            unlink_optional(directory, captured)
-    finally:
-        unlink_optional(directory, temporary)
-        if exists(directory, captured):
-            if not exists(directory, name):
-                os.link(
-                    captured,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-            unlink_optional(directory, captured)
-
-try:
-    operation = request.get("operation")
-    directory = open_integration(operation == "ensure")
-    try:
-        if operation == "ensure":
-            result = {"ok": True}
-        elif operation == "read":
-            snapshot = read_file(directory, request.get("name"))
-            result = {
-                "ok": True,
-                "contents": None if snapshot is None else snapshot["contents"],
-                "mode": 0o600 if snapshot is None else snapshot["mode"],
-            }
-        elif operation == "cas":
-            cas(
-                directory,
-                request.get("name"),
-                request.get("expected"),
-                request.get("replacement"),
-                request.get("mode"),
-            )
-            result = {"ok": True}
-        else:
-            raise ValueError("invalid descriptor operation")
-    finally:
-        os.close(directory)
-except ConflictError as error:
-    result = {"ok": False, "code": "CONFLICT", "message": str(error)}
-except Exception as error:
-    result = {"ok": False, "code": "UNSAFE", "message": str(error)}
-
-json.dump(result, sys.stdout)
-`;
-
-function runDescriptorOperation(
-  directory: BoundDirectory,
-  request: Record<string, unknown>,
-): DescriptorOperationResult {
-  if (process.platform === 'win32') {
-    throw new Error(
-      'SESSION_INTEGRATION_PATH_UNSAFE: descriptor-relative integration is unavailable',
-    );
-  }
-  let output: string;
-  try {
-    output = execFileSync('python3', ['-c', DESCRIPTOR_OPERATION], {
-      encoding: 'utf8',
-      input: JSON.stringify(request),
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ['pipe', 'pipe', 'pipe', directory.descriptor],
-      timeout: 5_000,
-    });
-  } catch {
-    throw new Error(
-      'SESSION_INTEGRATION_PATH_UNSAFE: descriptor-relative integration is unavailable',
-    );
-  }
-  let result: DescriptorOperationResult;
-  try {
-    result = JSON.parse(output) as DescriptorOperationResult;
-  } catch {
-    throw new Error(
-      'SESSION_INTEGRATION_PATH_UNSAFE: descriptor-relative integration returned invalid output',
-    );
-  }
-  if (!result.ok) {
-    const prefix =
-      result.code === 'CONFLICT'
-        ? 'SESSION_INTEGRATION_CONFLICT'
-        : 'SESSION_INTEGRATION_PATH_UNSAFE';
-    throw new Error(`${prefix}: ${result.message ?? 'descriptor-relative integration failed'}`);
-  }
-  return result;
-}
-
-function openBoundDirectory(path: string, publicPath = path): BoundDirectory {
-  const before = lstatSync(path, { bigint: true });
-  if (!before.isDirectory() || before.isSymbolicLink()) {
-    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory');
-  }
-  const descriptor = openSync(
-    path,
-    constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0),
-  );
-  const opened = fstatSync(descriptor, { bigint: true });
-  const after = lstatSync(path, { bigint: true });
-  if (
-    !opened.isDirectory() ||
-    before.dev !== opened.dev ||
-    before.ino !== opened.ino ||
-    after.dev !== opened.dev ||
-    after.ino !== opened.ino
-  ) {
-    closeSync(descriptor);
-    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening');
-  }
-  return {
-    descriptor,
-    path,
-    publicPath,
-    identity: { dev: opened.dev, ino: opened.ino },
-  };
-}
-
-function assertBoundDirectoryCurrent(bound: BoundDirectory): void {
-  const current = lstatSync(bound.publicPath, { bigint: true });
-  if (
-    !current.isDirectory() ||
-    current.isSymbolicLink() ||
-    current.dev !== bound.identity.dev ||
-    current.ino !== bound.identity.ino
-  ) {
-    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed');
-  }
 }
 
 function snapshotFiles(root: string, paths: readonly string[]): FileSnapshot[] {
@@ -656,31 +408,31 @@ function snapshotIntegrationFiles(
   integrationPath: string,
   names: readonly string[],
 ): DescriptorFileSnapshot[] {
-  return names.map((name) => {
-    const result = runDescriptorOperation(directory, { operation: 'read', name });
-    return {
-      name,
-      path: join(integrationPath, name),
-      contents: result.contents === null ? null : Buffer.from(result.contents!, 'base64'),
-      mode: result.mode ?? 0o600,
-    };
-  });
+  return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
+    ...snapshot,
+    path: join(integrationPath, snapshot.name),
+  }));
 }
 
-function casReplaceIntegration(
+function casReplaceIntegrationBatch(
   directory: BoundDirectory,
-  snapshot: DescriptorFileSnapshot,
-  expected: Buffer | null,
-  next: Buffer | null,
-  mode: number,
+  writes: ReadonlyArray<{
+    snapshot: DescriptorFileSnapshot;
+    expected: Buffer | null;
+    replacement: Buffer | null;
+    mode: number;
+  }>,
 ): void {
-  runDescriptorOperation(directory, {
-    operation: 'cas',
-    name: snapshot.name,
-    expected: expected?.toString('base64') ?? null,
-    replacement: next?.toString('base64') ?? null,
-    mode,
-  });
+  casBoundDirectoryFiles(
+    directory,
+    writes.map((write) => ({
+      expected: write.expected,
+      expectedMode: write.snapshot.mode,
+      mode: write.mode,
+      name: write.snapshot.name,
+      replacement: write.replacement,
+    })),
+  );
 }
 
 export function assertNoSymlinkPath(root: string, candidate: string): void {
@@ -741,10 +493,7 @@ function readRegularFile(root: string, candidate: string): string {
   }
 }
 
-function readOptionalRegularFile(
-  root: string,
-  candidate: string,
-): string | undefined {
+function readOptionalRegularFile(root: string, candidate: string): string | undefined {
   try {
     return readRegularFile(root, candidate);
   } catch (error) {
@@ -766,7 +515,7 @@ export function readOptionalRegularFileNoFollow(
 
 function openIntegrationDirectories(appRoot: string): {
   agent: BoundDirectory;
-  integrationPath: string;
+  integration: BoundDirectory;
 } {
   const agentRoot = join(appRoot, '.rn-agent');
   try {
@@ -777,10 +526,11 @@ function openIntegrationDirectories(appRoot: string): {
   const agent = openBoundDirectory(agentRoot);
   const integrationPath = join(agentRoot, 'integration');
   try {
-    runDescriptorOperation(agent, { operation: 'ensure' });
-    return { agent, integrationPath };
+    ensureBoundSubdirectory(agent, 'integration');
+    const integration = openBoundDirectory(integrationPath);
+    return { agent, integration };
   } catch (error) {
-    closeSync(agent.descriptor);
+    closeBoundDirectory(agent);
     throw error;
   }
 }
@@ -802,13 +552,14 @@ function rollbackWrites(writes: readonly AppliedWrite[]): Error[] {
   for (const write of [...writes].reverse()) {
     try {
       if (write.directory) {
-        casReplaceIntegration(
-          write.directory,
-          write.snapshot as DescriptorFileSnapshot,
-          write.written,
-          write.snapshot.contents,
-          write.snapshot.mode,
-        );
+        casReplaceIntegrationBatch(write.directory, [
+          {
+            snapshot: write.snapshot as DescriptorFileSnapshot,
+            expected: write.written,
+            replacement: write.snapshot.contents,
+            mode: write.snapshot.mode,
+          },
+        ]);
       } else {
         casReplace(
           write.root,
@@ -857,8 +608,8 @@ export function applyPackageIntegration(
   try {
     const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
     const generated = snapshotIntegrationFiles(
-      directories.agent,
-      directories.integrationPath,
+      directories.integration,
+      directories.integration.path,
       generatedNames,
     );
     if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
@@ -901,20 +652,23 @@ export function applyPackageIntegration(
         mode: 0o600,
       },
     ];
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+    casReplaceIntegrationBatch(
+      directories.integration,
+      outputs.map((output) => ({
+        snapshot: output.snapshot,
+        expected: output.snapshot.contents,
+        replacement: output.contents,
+        mode: output.mode,
+      })),
+    );
     for (const output of outputs) {
-      assertBoundDirectoryCurrent(directories.agent);
-      casReplaceIntegration(
-        directories.agent,
-        output.snapshot,
-        output.snapshot.contents,
-        output.contents,
-        output.mode,
-      );
       applied.push({
-        root: directories.integrationPath,
+        root: directories.integration.path,
         snapshot: output.snapshot,
         written: output.contents,
-        directory: directories.agent,
+        directory: directories.integration,
       });
       dependencies.afterWrite?.(output.snapshot.path);
     }
@@ -927,13 +681,15 @@ export function applyPackageIntegration(
     applied.push({ root: appRoot, snapshot: packageSnapshot, written: packageOutput });
     dependencies.afterWrite?.(packagePath);
     assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
     return preview;
   } catch (error) {
     const rollbackErrors = rollbackWrites(applied);
     if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors]);
     throw error;
   } finally {
-    closeSync(directories.agent.descriptor);
+    closeBoundDirectory(directories.integration);
+    closeBoundDirectory(directories.agent);
   }
 }
 
@@ -953,8 +709,8 @@ export function restorePackageIntegrationFiles(
   const applied: AppliedWrite[] = [];
   try {
     const generatedSnapshots = snapshotIntegrationFiles(
-      directories.agent,
-      directories.integrationPath,
+      directories.integration,
+      directories.integration.path,
       generatedNames,
     );
     if (!generatedSnapshots[0]?.contents) {
@@ -988,22 +744,33 @@ export function restorePackageIntegrationFiles(
     casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 0o644);
     applied.push({ root: appRoot, snapshot: metroSnapshot, written: metroOutput });
     dependencies.afterWrite?.(metroConfigPath);
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+    casReplaceIntegrationBatch(
+      directories.integration,
+      generatedSnapshots.map((snapshot) => ({
+        snapshot,
+        expected: snapshot.contents,
+        replacement: null,
+        mode: snapshot.mode,
+      })),
+    );
     for (const snapshot of generatedSnapshots) {
-      assertBoundDirectoryCurrent(directories.agent);
-      casReplaceIntegration(directories.agent, snapshot, snapshot.contents, null, snapshot.mode);
       applied.push({
-        root: directories.integrationPath,
+        root: directories.integration.path,
         snapshot,
         written: null,
-        directory: directories.agent,
+        directory: directories.integration,
       });
     }
     assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
   } catch (error) {
     const rollbackErrors = rollbackWrites(applied);
     if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors]);
     throw error;
   } finally {
-    closeSync(directories.agent.descriptor);
+    closeBoundDirectory(directories.integration);
+    closeBoundDirectory(directories.agent);
   }
 }

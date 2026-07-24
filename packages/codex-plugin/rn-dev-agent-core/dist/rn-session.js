@@ -3997,10 +3997,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep3, value } = collItem;
+        const { start, key, sep: sep2, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep3?.[0],
+          next: key ?? sep2?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4014,7 +4014,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep3) {
+          if (!keyProps.anchor && !keyProps.tag && !sep2) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -4038,7 +4038,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep3 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep2 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4054,7 +4054,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep3, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep2, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4145,7 +4145,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep3 = "";
+        let sep2 = "";
         for (const token2 of end) {
           const { source, type } = token2;
           switch (type) {
@@ -4159,13 +4159,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep3 + cb;
-              sep3 = "";
+                comment += sep2 + cb;
+              sep2 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep3 += source;
+                sep2 += source;
               hasSpace = true;
               break;
             default:
@@ -4208,18 +4208,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep3, value } = collItem;
+        const { start, key, sep: sep2, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep3?.[0],
+          next: key ?? sep2?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep3 && !value) {
+          if (!props.anchor && !props.tag && !sep2 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -4273,8 +4273,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep3 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep3, null, props, onError);
+        if (!isMap && !sep2 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep2, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4286,7 +4286,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep3 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep2 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4297,8 +4297,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep3)
-                for (const st of sep3) {
+              if (sep2)
+                for (const st of sep2) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4315,7 +4315,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep3, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep2, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4495,7 +4495,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep3 = "";
+      let sep2 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -4512,24 +4512,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep3 + indent.slice(trimIndent) + content;
-          sep3 = "\n";
+          value += sep2 + indent.slice(trimIndent) + content;
+          sep2 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep3 === " ")
-            sep3 = "\n";
-          else if (!prevMoreIndented && sep3 === "\n")
-            sep3 = "\n\n";
-          value += sep3 + indent.slice(trimIndent) + content;
-          sep3 = "\n";
+          if (sep2 === " ")
+            sep2 = "\n";
+          else if (!prevMoreIndented && sep2 === "\n")
+            sep2 = "\n\n";
+          value += sep2 + indent.slice(trimIndent) + content;
+          sep2 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep3 === "\n")
+          if (sep2 === "\n")
             value += "\n";
           else
-            sep3 = "\n";
+            sep2 = "\n";
         } else {
-          value += sep3 + content;
-          sep3 = " ";
+          value += sep2 + content;
+          sep2 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4711,25 +4711,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep3 = " ";
+      let sep2 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep3 === "\n")
-            res += sep3;
+          if (sep2 === "\n")
+            res += sep2;
           else
-            sep3 = "\n";
+            sep2 = "\n";
         } else {
-          res += sep3 + match[1];
-          sep3 = " ";
+          res += sep2 + match[1];
+          sep2 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep3 + (match?.[1] ?? "");
+      return res + sep2 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5539,14 +5539,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep3, value }) {
+    function stringifyItem({ start, key, sep: sep2, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep3)
-        for (const st of sep3)
+      if (sep2)
+        for (const st of sep2)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6713,18 +6713,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep3;
+          let sep2;
           if (scalar.end) {
-            sep3 = scalar.end;
-            sep3.push(this.sourceToken);
+            sep2 = scalar.end;
+            sep2.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep3 = [this.sourceToken];
+            sep2 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep3 }]
+            items: [{ start, key: scalar, sep: sep2 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -6877,15 +6877,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep3 = it.sep;
-                  sep3.push(this.sourceToken);
+                  const sep2 = it.sep;
+                  sep2.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep3 }]
+                    items: [{ start: start2, key, sep: sep2 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7079,13 +7079,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep3 = fc.end.splice(1, fc.end.length);
-            sep3.push(this.sourceToken);
+            const sep2 = fc.end.splice(1, fc.end.length);
+            sep2.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep3 }]
+              items: [{ start, key: fc, sep: sep2 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -7365,8 +7365,8 @@ var require_dist = __commonJS({
 
 // packages/rn-dev-agent-core/dist/rn-session.js
 import { randomUUID } from "node:crypto";
-import { chmodSync as chmodSync4, readFileSync as readFileSync7, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join8 } from "node:path";
+import { readFileSync as readFileSync6 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -7954,7 +7954,7 @@ async function stopSpawnedProcessGroup(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
   let signalFailed = false;
   try {
     signalTree({
@@ -8016,7 +8016,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
   const deadline = Date.now() + 2e4;
   let lastError = null;
   let listenerIdentity = null;
@@ -8085,7 +8085,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -9612,7 +9612,7 @@ var SessionRegistry = class {
         if (Date.now() >= deadline) {
           throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
         }
-        await new Promise((resolve4) => setTimeout(resolve4, retryDelayMs));
+        await new Promise((resolve3) => setTimeout(resolve3, retryDelayMs));
       }
     }
   }
@@ -9848,190 +9848,323 @@ function projectPublicAuthorityStatus(status) {
   };
 }
 
-// packages/rn-dev-agent-core/dist/session/package-integration.js
-import { chmodSync as chmodSync3, closeSync as closeSync2, constants, existsSync as existsSync3, fstatSync, linkSync, lstatSync as lstatSync4, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync6, renameSync as renameSync2, rmSync, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve3, sep as sep2 } from "node:path";
-var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
-var SENTINELS = {
-  ios: `node ${ADAPTER} ios`,
-  android: `node ${ADAPTER} android`
-};
-var DESCRIPTOR_OPERATION = String.raw`
-import base64
-import json
-import os
-import stat
-import sys
-import uuid
+// packages/rn-dev-agent-core/dist/session/bound-directory.js
+import { execFileSync as execFileSync7 } from "node:child_process";
+import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync4, openSync as openSync2 } from "node:fs";
+var BOUND_DIRECTORY_WORKER = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
 
-class ConflictError(Exception):
-    pass
+class ConflictError extends Error {}
 
-request = json.load(sys.stdin)
-directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-
-def validate_name(name):
-    if not isinstance(name, str) or not name or os.path.basename(name) != name:
-        raise ValueError("invalid integration filename")
-
-def open_integration(create):
-    if create:
-        try:
-            os.mkdir("integration", 0o700, dir_fd=3)
-        except FileExistsError:
-            pass
-    return os.open("integration", directory_flags, dir_fd=3)
-
-def read_file(directory, name):
-    validate_name(name)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    try:
-        descriptor = os.open(name, flags, dir_fd=directory)
-    except FileNotFoundError:
-        return None
-    try:
-        identity = os.fstat(descriptor)
-        if not stat.S_ISREG(identity.st_mode):
-            raise ValueError("integration input is not a regular file")
-        chunks = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        return {
-            "contents": base64.b64encode(b"".join(chunks)).decode("ascii"),
-            "mode": stat.S_IMODE(identity.st_mode),
-        }
-    finally:
-        os.close(descriptor)
-
-def exists(directory, name):
-    try:
-        os.stat(name, dir_fd=directory, follow_symlinks=False)
-        return True
-    except FileNotFoundError:
-        return False
-
-def unlink_optional(directory, name):
-    try:
-        os.unlink(name, dir_fd=directory)
-    except FileNotFoundError:
-        pass
-
-def cas(directory, name, expected, replacement, mode):
-    validate_name(name)
-    temporary = "." + str(uuid.uuid4()) + ".tmp"
-    captured = "." + str(uuid.uuid4()) + ".captured"
-    replacement_bytes = None if replacement is None else base64.b64decode(replacement)
-    expected_bytes = None if expected is None else base64.b64decode(expected)
-    if replacement_bytes is not None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(temporary, flags, mode, dir_fd=directory)
-        try:
-            view = memoryview(replacement_bytes)
-            while view:
-                written = os.write(descriptor, view)
-                view = view[written:]
-            os.fchmod(descriptor, mode)
-        finally:
-            os.close(descriptor)
-    try:
-        if expected_bytes is None:
-            if read_file(directory, name) is not None:
-                raise ConflictError("integration input changed before commit")
-        else:
-            try:
-                os.rename(name, captured, src_dir_fd=directory, dst_dir_fd=directory)
-            except FileNotFoundError as error:
-                raise ConflictError("integration input changed before commit") from error
-            observed = read_file(directory, captured)
-            if observed is None or base64.b64decode(observed["contents"]) != expected_bytes:
-                os.link(
-                    captured,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-                raise ConflictError("integration input changed before commit")
-        if replacement_bytes is not None:
-            try:
-                os.link(
-                    temporary,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-            except FileExistsError as error:
-                raise ConflictError("integration input changed before commit") from error
-        if expected_bytes is not None:
-            unlink_optional(directory, captured)
-    finally:
-        unlink_optional(directory, temporary)
-        if exists(directory, captured):
-            if not exists(directory, name):
-                os.link(
-                    captured,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-            unlink_optional(directory, captured)
-
-try:
-    operation = request.get("operation")
-    directory = open_integration(operation == "ensure")
-    try:
-        if operation == "ensure":
-            result = {"ok": True}
-        elif operation == "read":
-            snapshot = read_file(directory, request.get("name"))
-            result = {
-                "ok": True,
-                "contents": None if snapshot is None else snapshot["contents"],
-                "mode": 0o600 if snapshot is None else snapshot["mode"],
-            }
-        elif operation == "cas":
-            cas(
-                directory,
-                request.get("name"),
-                request.get("expected"),
-                request.get("replacement"),
-                request.get("mode"),
-            )
-            result = {"ok": True}
-        else:
-            raise ValueError("invalid descriptor operation")
-    finally:
-        os.close(directory)
-except ConflictError as error:
-    result = {"ok": False, "code": "CONFLICT", "message": str(error)}
-except Exception as error:
-    result = {"ok": False, "code": "UNSAFE", "message": str(error)}
-
-json.dump(result, sys.stdout)
-`;
-function assertNoSymlinkPath(root, candidate) {
-  const child = relative2(root, candidate);
-  if (child === ".." || child.startsWith(`..${sep2}`) || isAbsolute2(child)) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
+function validateName(name) {
+  if (
+    typeof name !== 'string' ||
+    name.length === 0 ||
+    name === '.' ||
+    name === '..' ||
+    path.basename(name) !== name
+  ) {
+    throw new Error('invalid bound-directory filename');
   }
-  let current = root;
-  for (const component of [root, ...child.split(sep2).filter(Boolean)]) {
-    current = component === root ? root : join7(current, component);
-    try {
-      if (lstatSync4(current).isSymbolicLink()) {
-        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
+}
+
+function readRegularFile(name) {
+  validateName(name);
+  let before;
+  try {
+    before = fs.lstatSync(name, { bigint: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!before.isFile() || before.isSymbolicLink()) {
+    throw new Error('bound-directory input is not a regular file');
+  }
+  const descriptor = fs.openSync(
+    name,
+    fs.constants.O_RDONLY |
+      (fs.constants.O_NOFOLLOW || 0) |
+      (fs.constants.O_NONBLOCK || 0),
+  );
+  try {
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    const after = fs.lstatSync(name, { bigint: true });
+    if (
+      !opened.isFile() ||
+      before.dev !== opened.dev ||
+      before.ino !== opened.ino ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino
+    ) {
+      throw new Error('bound-directory input changed while opening');
+    }
+    return {
+      contents: fs.readFileSync(descriptor).toString('base64'),
+      mode: Number(opened.mode & 0o777n),
+      name,
+    };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function exists(name) {
+  try {
+    fs.lstatSync(name);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function removeOptional(name) {
+  try {
+    fs.unlinkSync(name);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+function casReplace(write) {
+  validateName(write.name);
+  const temporary = '.' + crypto.randomUUID() + '.tmp';
+  const captured = '.' + crypto.randomUUID() + '.captured';
+  const expected =
+    write.expected === null ? null : Buffer.from(write.expected, 'base64');
+  const replacement =
+    write.replacement === null ? null : Buffer.from(write.replacement, 'base64');
+  if (replacement !== null) {
+    fs.writeFileSync(temporary, replacement, { flag: 'wx', mode: write.mode });
+    fs.chmodSync(temporary, write.mode);
+  }
+  try {
+    if (expected === null) {
+      if (readRegularFile(write.name) !== null) {
+        throw new ConflictError('bound-directory input changed before commit');
       }
-    } catch (error) {
-      if (error.code === "ENOENT")
-        break;
-      throw error;
+    } else {
+      try {
+        fs.renameSync(write.name, captured);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          throw new ConflictError('bound-directory input changed before commit');
+        }
+        throw error;
+      }
+      const observed = readRegularFile(captured);
+      if (
+        observed === null ||
+        !expected.equals(Buffer.from(observed.contents, 'base64'))
+      ) {
+        fs.linkSync(captured, write.name);
+        throw new ConflictError('bound-directory input changed before commit');
+      }
+    }
+    if (replacement !== null) {
+      try {
+        fs.linkSync(temporary, write.name);
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          throw new ConflictError('bound-directory input changed before commit');
+        }
+        throw error;
+      }
+    }
+    if (expected !== null) removeOptional(captured);
+  } finally {
+    removeOptional(temporary);
+    if (exists(captured)) {
+      if (!exists(write.name)) fs.linkSync(captured, write.name);
+      removeOptional(captured);
     }
   }
+}
+
+function applyBatch(writes) {
+  const applied = [];
+  try {
+    for (const write of writes) {
+      casReplace(write);
+      applied.push(write);
+    }
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const write of applied.reverse()) {
+      try {
+        casReplace({
+          expected: write.replacement,
+          mode: write.originalMode,
+          name: write.name,
+          replacement: write.expected,
+        });
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError([error, ...rollbackErrors]);
+    }
+    throw error;
+  }
+}
+
+function assertIdentity(expected) {
+  const current = fs.statSync('.', { bigint: true });
+  if (
+    !current.isDirectory() ||
+    current.dev.toString() !== expected.dev ||
+    current.ino.toString() !== expected.ino
+  ) {
+    throw new Error('bound-directory identity changed');
+  }
+}
+
+try {
+  const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+  assertIdentity(request.identity);
+  let snapshots;
+  if (request.operation === 'mkdir') {
+    validateName(request.name);
+    try {
+      fs.mkdirSync(request.name, { mode: request.mode });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    const directory = fs.lstatSync(request.name);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) {
+      throw new Error('bound-directory child is not a directory');
+    }
+  } else if (request.operation === 'read') {
+    snapshots = request.names.map((name) => {
+      const snapshot = readRegularFile(name);
+      return snapshot ?? { contents: null, mode: 0o600, name };
+    });
+  } else if (request.operation === 'cas') {
+    applyBatch(request.writes);
+  } else {
+    throw new Error('invalid bound-directory operation');
+  }
+  process.stdout.write(JSON.stringify({ ok: true, snapshots }));
+} catch (error) {
+  const conflict =
+    error instanceof ConflictError ||
+    (error instanceof AggregateError &&
+      error.errors.some((entry) => entry instanceof ConflictError));
+  process.stdout.write(
+    JSON.stringify({
+      ok: false,
+      code: conflict ? 'CONFLICT' : 'UNSAFE',
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
+}
+`;
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function runBoundOperation(directory, request) {
+  const retained = fstatSync(directory.descriptor, { bigint: true });
+  if (!retained.isDirectory() || retained.dev !== directory.identity.dev || retained.ino !== directory.identity.ino) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed");
+  }
+  let output;
+  try {
+    output = execFileSync7(process.execPath, ["-e", BOUND_DIRECTORY_WORKER], {
+      cwd: directory.path,
+      encoding: "utf8",
+      input: JSON.stringify({
+        ...request,
+        identity: {
+          dev: retained.dev.toString(),
+          ino: retained.ino.toString()
+        }
+      }),
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 5e3
+    });
+  } catch {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable");
+  }
+  let result;
+  try {
+    result = JSON.parse(output);
+  } catch {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output");
+  }
+  if (!result.ok) {
+    const prefix = result.code === "CONFLICT" ? "SESSION_INTEGRATION_CONFLICT" : "SESSION_INTEGRATION_PATH_UNSAFE";
+    throw new Error(`${prefix}: ${result.message ?? "bound-directory operation failed"}`);
+  }
+  return result;
+}
+function openBoundDirectory(path) {
+  let descriptor;
+  try {
+    const before = lstatSync4(path, { bigint: true });
+    if (!before.isDirectory() || before.isSymbolicLink()) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
+    }
+    descriptor = openSync2(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    const opened = fstatSync(descriptor, { bigint: true });
+    const after = lstatSync4(path, { bigint: true });
+    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened)) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
+    }
+    return {
+      descriptor,
+      identity: { dev: opened.dev, ino: opened.ino },
+      path
+    };
+  } catch (error) {
+    if (descriptor !== void 0)
+      closeSync2(descriptor);
+    if (error instanceof Error && error.message.includes("SESSION_INTEGRATION_PATH_UNSAFE")) {
+      throw error;
+    }
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is unavailable");
+  }
+}
+function closeBoundDirectory(directory) {
+  closeSync2(directory.descriptor);
+}
+function readBoundDirectoryFiles(directory, names) {
+  const result = runBoundOperation(directory, { operation: "read", names });
+  if (!result.snapshots || result.snapshots.length !== names.length) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory read returned invalid output");
+  }
+  return result.snapshots.map((snapshot) => ({
+    contents: snapshot.contents === null ? null : Buffer.from(snapshot.contents, "base64"),
+    mode: snapshot.mode,
+    name: snapshot.name
+  }));
+}
+function casBoundDirectoryFiles(directory, writes) {
+  runBoundOperation(directory, {
+    operation: "cas",
+    writes: writes.map((write) => ({
+      expected: write.expected?.toString("base64") ?? null,
+      mode: write.mode,
+      name: write.name,
+      originalMode: write.expectedMode ?? write.mode,
+      replacement: write.replacement?.toString("base64") ?? null
+    }))
+  });
+}
+function writeBoundDirectoryFile(directory, name, contents, mode, dependencies = {}) {
+  const [snapshot] = readBoundDirectoryFiles(directory, [name]);
+  dependencies.beforeCommit?.();
+  casBoundDirectoryFiles(directory, [
+    {
+      expected: snapshot.contents,
+      expectedMode: snapshot.mode,
+      mode,
+      name,
+      replacement: contents
+    }
+  ]);
 }
 
 // packages/rn-dev-agent-core/dist/rn-session.js
@@ -10060,7 +10193,7 @@ function resolveStatus() {
   });
 }
 function readSigner(status) {
-  const secret = JSON.parse(readFileSync7(join8(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
+  const secret = JSON.parse(readFileSync6(join7(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
   if (typeof secret.signerCapability !== "string") {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session build signer is unavailable");
   }
@@ -10076,17 +10209,12 @@ function writeMarker(status, input) {
     platform: input.platform,
     buildGeneration: input.buildGeneration
   }, input.signerCapability);
-  const markerPath = join8(appRoot, ".rn-agent", "integration", "authority-marker.js");
-  assertNoSymlinkPath(appRoot, markerPath);
-  const temporary = `${markerPath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync3(temporary, createMetroAuthorityModule(marker), {
-    encoding: "utf8",
-    mode: 384
-  });
-  chmodSync4(temporary, 384);
-  assertNoSymlinkPath(appRoot, markerPath);
-  assertNoSymlinkPath(appRoot, temporary);
-  renameSync3(temporary, markerPath);
+  const integration = openBoundDirectory(join7(appRoot, ".rn-agent", "integration"));
+  try {
+    writeBoundDirectoryFile(integration, "authority-marker.js", Buffer.from(createMetroAuthorityModule(marker)), 384);
+  } finally {
+    closeBoundDirectory(integration);
+  }
 }
 async function ensureManagedMetro(status) {
   const device = status.bindings.device;

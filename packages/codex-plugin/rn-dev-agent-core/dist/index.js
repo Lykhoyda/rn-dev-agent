@@ -424,11 +424,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants3);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -445,10 +445,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants3);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -509,8 +509,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants3) {
-        this.code = optimizeExpr(this.code, names, constants3);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -539,12 +539,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants3))
+          if (n.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -597,12 +597,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants3);
-        if (!(super.optimizeNames(names, constants3) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants3);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -625,10 +625,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants3);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -664,10 +664,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants3);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -709,11 +709,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants4) {
         var _a, _b;
-        super.optimizeNames(names, constants3);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants3);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
+        super.optimizeNames(names, constants4);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -1014,7 +1014,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants3) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1029,14 +1029,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants3[n.str];
+        const c = constants4[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -66017,10 +66017,326 @@ function createBuildLaunchPlan(input) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { execFileSync as execFileSync13 } from "node:child_process";
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { chmodSync as chmodSync4, closeSync as closeSync5, constants as constants2, existsSync as existsSync33, fstatSync as fstatSync2, linkSync, lstatSync as lstatSync7, mkdirSync as mkdirSync20, openSync as openSync5, readFileSync as readFileSync33, renameSync as renameSync9, rmSync as rmSync7, statSync as statSync11, writeFileSync as writeFileSync20 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync6, constants as constants3, existsSync as existsSync33, fstatSync as fstatSync3, linkSync, lstatSync as lstatSync8, mkdirSync as mkdirSync20, openSync as openSync6, readFileSync as readFileSync33, renameSync as renameSync9, rmSync as rmSync7, statSync as statSync11, writeFileSync as writeFileSync20 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute4, join as join48, relative as relative2, resolve as resolve6, sep as sep6 } from "node:path";
+
+// packages/rn-dev-agent-core/dist/session/bound-directory.js
+import { execFileSync as execFileSync13 } from "node:child_process";
+import { closeSync as closeSync5, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync7, openSync as openSync5 } from "node:fs";
+var BOUND_DIRECTORY_WORKER = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+class ConflictError extends Error {}
+
+function validateName(name) {
+  if (
+    typeof name !== 'string' ||
+    name.length === 0 ||
+    name === '.' ||
+    name === '..' ||
+    path.basename(name) !== name
+  ) {
+    throw new Error('invalid bound-directory filename');
+  }
+}
+
+function readRegularFile(name) {
+  validateName(name);
+  let before;
+  try {
+    before = fs.lstatSync(name, { bigint: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!before.isFile() || before.isSymbolicLink()) {
+    throw new Error('bound-directory input is not a regular file');
+  }
+  const descriptor = fs.openSync(
+    name,
+    fs.constants.O_RDONLY |
+      (fs.constants.O_NOFOLLOW || 0) |
+      (fs.constants.O_NONBLOCK || 0),
+  );
+  try {
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    const after = fs.lstatSync(name, { bigint: true });
+    if (
+      !opened.isFile() ||
+      before.dev !== opened.dev ||
+      before.ino !== opened.ino ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino
+    ) {
+      throw new Error('bound-directory input changed while opening');
+    }
+    return {
+      contents: fs.readFileSync(descriptor).toString('base64'),
+      mode: Number(opened.mode & 0o777n),
+      name,
+    };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function exists(name) {
+  try {
+    fs.lstatSync(name);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function removeOptional(name) {
+  try {
+    fs.unlinkSync(name);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+function casReplace(write) {
+  validateName(write.name);
+  const temporary = '.' + crypto.randomUUID() + '.tmp';
+  const captured = '.' + crypto.randomUUID() + '.captured';
+  const expected =
+    write.expected === null ? null : Buffer.from(write.expected, 'base64');
+  const replacement =
+    write.replacement === null ? null : Buffer.from(write.replacement, 'base64');
+  if (replacement !== null) {
+    fs.writeFileSync(temporary, replacement, { flag: 'wx', mode: write.mode });
+    fs.chmodSync(temporary, write.mode);
+  }
+  try {
+    if (expected === null) {
+      if (readRegularFile(write.name) !== null) {
+        throw new ConflictError('bound-directory input changed before commit');
+      }
+    } else {
+      try {
+        fs.renameSync(write.name, captured);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          throw new ConflictError('bound-directory input changed before commit');
+        }
+        throw error;
+      }
+      const observed = readRegularFile(captured);
+      if (
+        observed === null ||
+        !expected.equals(Buffer.from(observed.contents, 'base64'))
+      ) {
+        fs.linkSync(captured, write.name);
+        throw new ConflictError('bound-directory input changed before commit');
+      }
+    }
+    if (replacement !== null) {
+      try {
+        fs.linkSync(temporary, write.name);
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          throw new ConflictError('bound-directory input changed before commit');
+        }
+        throw error;
+      }
+    }
+    if (expected !== null) removeOptional(captured);
+  } finally {
+    removeOptional(temporary);
+    if (exists(captured)) {
+      if (!exists(write.name)) fs.linkSync(captured, write.name);
+      removeOptional(captured);
+    }
+  }
+}
+
+function applyBatch(writes) {
+  const applied = [];
+  try {
+    for (const write of writes) {
+      casReplace(write);
+      applied.push(write);
+    }
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const write of applied.reverse()) {
+      try {
+        casReplace({
+          expected: write.replacement,
+          mode: write.originalMode,
+          name: write.name,
+          replacement: write.expected,
+        });
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError([error, ...rollbackErrors]);
+    }
+    throw error;
+  }
+}
+
+function assertIdentity(expected) {
+  const current = fs.statSync('.', { bigint: true });
+  if (
+    !current.isDirectory() ||
+    current.dev.toString() !== expected.dev ||
+    current.ino.toString() !== expected.ino
+  ) {
+    throw new Error('bound-directory identity changed');
+  }
+}
+
+try {
+  const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+  assertIdentity(request.identity);
+  let snapshots;
+  if (request.operation === 'mkdir') {
+    validateName(request.name);
+    try {
+      fs.mkdirSync(request.name, { mode: request.mode });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    const directory = fs.lstatSync(request.name);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) {
+      throw new Error('bound-directory child is not a directory');
+    }
+  } else if (request.operation === 'read') {
+    snapshots = request.names.map((name) => {
+      const snapshot = readRegularFile(name);
+      return snapshot ?? { contents: null, mode: 0o600, name };
+    });
+  } else if (request.operation === 'cas') {
+    applyBatch(request.writes);
+  } else {
+    throw new Error('invalid bound-directory operation');
+  }
+  process.stdout.write(JSON.stringify({ ok: true, snapshots }));
+} catch (error) {
+  const conflict =
+    error instanceof ConflictError ||
+    (error instanceof AggregateError &&
+      error.errors.some((entry) => entry instanceof ConflictError));
+  process.stdout.write(
+    JSON.stringify({
+      ok: false,
+      code: conflict ? 'CONFLICT' : 'UNSAFE',
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
+}
+`;
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function runBoundOperation(directory, request2) {
+  const retained = fstatSync2(directory.descriptor, { bigint: true });
+  if (!retained.isDirectory() || retained.dev !== directory.identity.dev || retained.ino !== directory.identity.ino) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed");
+  }
+  let output;
+  try {
+    output = execFileSync13(process.execPath, ["-e", BOUND_DIRECTORY_WORKER], {
+      cwd: directory.path,
+      encoding: "utf8",
+      input: JSON.stringify({
+        ...request2,
+        identity: {
+          dev: retained.dev.toString(),
+          ino: retained.ino.toString()
+        }
+      }),
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 5e3
+    });
+  } catch {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable");
+  }
+  let result;
+  try {
+    result = JSON.parse(output);
+  } catch {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output");
+  }
+  if (!result.ok) {
+    const prefix = result.code === "CONFLICT" ? "SESSION_INTEGRATION_CONFLICT" : "SESSION_INTEGRATION_PATH_UNSAFE";
+    throw new Error(`${prefix}: ${result.message ?? "bound-directory operation failed"}`);
+  }
+  return result;
+}
+function openBoundDirectory(path) {
+  let descriptor;
+  try {
+    const before = lstatSync7(path, { bigint: true });
+    if (!before.isDirectory() || before.isSymbolicLink()) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
+    }
+    descriptor = openSync5(path, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const opened = fstatSync2(descriptor, { bigint: true });
+    const after = lstatSync7(path, { bigint: true });
+    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened)) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
+    }
+    return {
+      descriptor,
+      identity: { dev: opened.dev, ino: opened.ino },
+      path
+    };
+  } catch (error2) {
+    if (descriptor !== void 0)
+      closeSync5(descriptor);
+    if (error2 instanceof Error && error2.message.includes("SESSION_INTEGRATION_PATH_UNSAFE")) {
+      throw error2;
+    }
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is unavailable");
+  }
+}
+function closeBoundDirectory(directory) {
+  closeSync5(directory.descriptor);
+}
+function assertBoundDirectoryCurrent(directory) {
+  const current = lstatSync7(directory.path, { bigint: true });
+  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== directory.identity.dev || current.ino !== directory.identity.ino) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed");
+  }
+}
+function ensureBoundSubdirectory(directory, name, mode = 448) {
+  runBoundOperation(directory, { operation: "mkdir", name, mode });
+}
+function readBoundDirectoryFiles(directory, names) {
+  const result = runBoundOperation(directory, { operation: "read", names });
+  if (!result.snapshots || result.snapshots.length !== names.length) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory read returned invalid output");
+  }
+  return result.snapshots.map((snapshot) => ({
+    contents: snapshot.contents === null ? null : Buffer.from(snapshot.contents, "base64"),
+    mode: snapshot.mode,
+    name: snapshot.name
+  }));
+}
+function casBoundDirectoryFiles(directory, writes) {
+  runBoundOperation(directory, {
+    operation: "cas",
+    writes: writes.map((write) => ({
+      expected: write.expected?.toString("base64") ?? null,
+      mode: write.mode,
+      name: write.name,
+      originalMode: write.expectedMode ?? write.mode,
+      replacement: write.replacement?.toString("base64") ?? null
+    }))
+  });
+}
+
+// packages/rn-dev-agent-core/dist/session/package-integration.js
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
@@ -66294,217 +66610,6 @@ if (session) {
 process.exit(0);
 `;
 }
-var DESCRIPTOR_OPERATION = String.raw`
-import base64
-import json
-import os
-import stat
-import sys
-import uuid
-
-class ConflictError(Exception):
-    pass
-
-request = json.load(sys.stdin)
-directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-
-def validate_name(name):
-    if not isinstance(name, str) or not name or os.path.basename(name) != name:
-        raise ValueError("invalid integration filename")
-
-def open_integration(create):
-    if create:
-        try:
-            os.mkdir("integration", 0o700, dir_fd=3)
-        except FileExistsError:
-            pass
-    return os.open("integration", directory_flags, dir_fd=3)
-
-def read_file(directory, name):
-    validate_name(name)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    try:
-        descriptor = os.open(name, flags, dir_fd=directory)
-    except FileNotFoundError:
-        return None
-    try:
-        identity = os.fstat(descriptor)
-        if not stat.S_ISREG(identity.st_mode):
-            raise ValueError("integration input is not a regular file")
-        chunks = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        return {
-            "contents": base64.b64encode(b"".join(chunks)).decode("ascii"),
-            "mode": stat.S_IMODE(identity.st_mode),
-        }
-    finally:
-        os.close(descriptor)
-
-def exists(directory, name):
-    try:
-        os.stat(name, dir_fd=directory, follow_symlinks=False)
-        return True
-    except FileNotFoundError:
-        return False
-
-def unlink_optional(directory, name):
-    try:
-        os.unlink(name, dir_fd=directory)
-    except FileNotFoundError:
-        pass
-
-def cas(directory, name, expected, replacement, mode):
-    validate_name(name)
-    temporary = "." + str(uuid.uuid4()) + ".tmp"
-    captured = "." + str(uuid.uuid4()) + ".captured"
-    replacement_bytes = None if replacement is None else base64.b64decode(replacement)
-    expected_bytes = None if expected is None else base64.b64decode(expected)
-    if replacement_bytes is not None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(temporary, flags, mode, dir_fd=directory)
-        try:
-            view = memoryview(replacement_bytes)
-            while view:
-                written = os.write(descriptor, view)
-                view = view[written:]
-            os.fchmod(descriptor, mode)
-        finally:
-            os.close(descriptor)
-    try:
-        if expected_bytes is None:
-            if read_file(directory, name) is not None:
-                raise ConflictError("integration input changed before commit")
-        else:
-            try:
-                os.rename(name, captured, src_dir_fd=directory, dst_dir_fd=directory)
-            except FileNotFoundError as error:
-                raise ConflictError("integration input changed before commit") from error
-            observed = read_file(directory, captured)
-            if observed is None or base64.b64decode(observed["contents"]) != expected_bytes:
-                os.link(
-                    captured,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-                raise ConflictError("integration input changed before commit")
-        if replacement_bytes is not None:
-            try:
-                os.link(
-                    temporary,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-            except FileExistsError as error:
-                raise ConflictError("integration input changed before commit") from error
-        if expected_bytes is not None:
-            unlink_optional(directory, captured)
-    finally:
-        unlink_optional(directory, temporary)
-        if exists(directory, captured):
-            if not exists(directory, name):
-                os.link(
-                    captured,
-                    name,
-                    src_dir_fd=directory,
-                    dst_dir_fd=directory,
-                    follow_symlinks=False,
-                )
-            unlink_optional(directory, captured)
-
-try:
-    operation = request.get("operation")
-    directory = open_integration(operation == "ensure")
-    try:
-        if operation == "ensure":
-            result = {"ok": True}
-        elif operation == "read":
-            snapshot = read_file(directory, request.get("name"))
-            result = {
-                "ok": True,
-                "contents": None if snapshot is None else snapshot["contents"],
-                "mode": 0o600 if snapshot is None else snapshot["mode"],
-            }
-        elif operation == "cas":
-            cas(
-                directory,
-                request.get("name"),
-                request.get("expected"),
-                request.get("replacement"),
-                request.get("mode"),
-            )
-            result = {"ok": True}
-        else:
-            raise ValueError("invalid descriptor operation")
-    finally:
-        os.close(directory)
-except ConflictError as error:
-    result = {"ok": False, "code": "CONFLICT", "message": str(error)}
-except Exception as error:
-    result = {"ok": False, "code": "UNSAFE", "message": str(error)}
-
-json.dump(result, sys.stdout)
-`;
-function runDescriptorOperation(directory, request2) {
-  if (process.platform === "win32") {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: descriptor-relative integration is unavailable");
-  }
-  let output;
-  try {
-    output = execFileSync13("python3", ["-c", DESCRIPTOR_OPERATION], {
-      encoding: "utf8",
-      input: JSON.stringify(request2),
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["pipe", "pipe", "pipe", directory.descriptor],
-      timeout: 5e3
-    });
-  } catch {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: descriptor-relative integration is unavailable");
-  }
-  let result;
-  try {
-    result = JSON.parse(output);
-  } catch {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: descriptor-relative integration returned invalid output");
-  }
-  if (!result.ok) {
-    const prefix = result.code === "CONFLICT" ? "SESSION_INTEGRATION_CONFLICT" : "SESSION_INTEGRATION_PATH_UNSAFE";
-    throw new Error(`${prefix}: ${result.message ?? "descriptor-relative integration failed"}`);
-  }
-  return result;
-}
-function openBoundDirectory(path, publicPath = path) {
-  const before = lstatSync7(path, { bigint: true });
-  if (!before.isDirectory() || before.isSymbolicLink()) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
-  }
-  const descriptor = openSync5(path, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
-  const opened = fstatSync2(descriptor, { bigint: true });
-  const after = lstatSync7(path, { bigint: true });
-  if (!opened.isDirectory() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
-    closeSync5(descriptor);
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
-  }
-  return {
-    descriptor,
-    path,
-    publicPath,
-    identity: { dev: opened.dev, ino: opened.ino }
-  };
-}
-function assertBoundDirectoryCurrent(bound) {
-  const current = lstatSync7(bound.publicPath, { bigint: true });
-  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== bound.identity.dev || current.ino !== bound.identity.ino) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed");
-  }
-}
 function snapshotFiles(root, paths) {
   return paths.map((path) => {
     const contents = readOptionalRegularFile(root, path);
@@ -66550,24 +66655,19 @@ function casReplace(root, snapshot, expected, next, mode) {
   }
 }
 function snapshotIntegrationFiles(directory, integrationPath, names) {
-  return names.map((name) => {
-    const result = runDescriptorOperation(directory, { operation: "read", name });
-    return {
-      name,
-      path: join48(integrationPath, name),
-      contents: result.contents === null ? null : Buffer.from(result.contents, "base64"),
-      mode: result.mode ?? 384
-    };
-  });
+  return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
+    ...snapshot,
+    path: join48(integrationPath, snapshot.name)
+  }));
 }
-function casReplaceIntegration(directory, snapshot, expected, next, mode) {
-  runDescriptorOperation(directory, {
-    operation: "cas",
-    name: snapshot.name,
-    expected: expected?.toString("base64") ?? null,
-    replacement: next?.toString("base64") ?? null,
-    mode
-  });
+function casReplaceIntegrationBatch(directory, writes) {
+  casBoundDirectoryFiles(directory, writes.map((write) => ({
+    expected: write.expected,
+    expectedMode: write.snapshot.mode,
+    mode: write.mode,
+    name: write.snapshot.name,
+    replacement: write.replacement
+  })));
 }
 function assertNoSymlinkPath(root, candidate) {
   const child = relative2(root, candidate);
@@ -66578,7 +66678,7 @@ function assertNoSymlinkPath(root, candidate) {
   for (const component of [root, ...child.split(sep6).filter(Boolean)]) {
     current = component === root ? root : join48(current, component);
     try {
-      if (lstatSync7(current).isSymbolicLink()) {
+      if (lstatSync8(current).isSymbolicLink()) {
         throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
       }
     } catch (error2) {
@@ -66590,7 +66690,7 @@ function assertNoSymlinkPath(root, candidate) {
 }
 function regularFileIdentity(root, candidate) {
   assertNoSymlinkPath(root, candidate);
-  const identity2 = lstatSync7(candidate, { bigint: true });
+  const identity2 = lstatSync8(candidate, { bigint: true });
   if (!identity2.isFile()) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file");
   }
@@ -66598,16 +66698,16 @@ function regularFileIdentity(root, candidate) {
 }
 function readRegularFile(root, candidate) {
   const before = regularFileIdentity(root, candidate);
-  const descriptor = openSync5(candidate, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+  const descriptor = openSync6(candidate, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   try {
-    const opened = fstatSync2(descriptor, { bigint: true });
+    const opened = fstatSync3(descriptor, { bigint: true });
     const after = regularFileIdentity(root, candidate);
     if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
     }
     return readFileSync33(descriptor, "utf8");
   } finally {
-    closeSync5(descriptor);
+    closeSync6(descriptor);
   }
 }
 function readOptionalRegularFile(root, candidate) {
@@ -66636,10 +66736,11 @@ function openIntegrationDirectories(appRoot) {
   const agent = openBoundDirectory(agentRoot);
   const integrationPath = join48(agentRoot, "integration");
   try {
-    runDescriptorOperation(agent, { operation: "ensure" });
-    return { agent, integrationPath };
+    ensureBoundSubdirectory(agent, "integration");
+    const integration = openBoundDirectory(integrationPath);
+    return { agent, integration };
   } catch (error2) {
-    closeSync5(agent.descriptor);
+    closeBoundDirectory(agent);
     throw error2;
   }
 }
@@ -66648,7 +66749,14 @@ function rollbackWrites(writes) {
   for (const write of [...writes].reverse()) {
     try {
       if (write.directory) {
-        casReplaceIntegration(write.directory, write.snapshot, write.written, write.snapshot.contents, write.snapshot.mode);
+        casReplaceIntegrationBatch(write.directory, [
+          {
+            snapshot: write.snapshot,
+            expected: write.written,
+            replacement: write.snapshot.contents,
+            mode: write.snapshot.mode
+          }
+        ]);
       } else {
         casReplace(write.root, write.snapshot, write.written, write.snapshot.contents, write.snapshot.mode);
       }
@@ -66681,7 +66789,7 @@ function applyPackageIntegration(input, dependencies = {}) {
   const applied = [];
   try {
     const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
-    const generated = snapshotIntegrationFiles(directories.agent, directories.integrationPath, generatedNames);
+    const generated = snapshotIntegrationFiles(directories.integration, directories.integration.path, generatedNames);
     if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
       throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
     }
@@ -66718,14 +66826,20 @@ function applyPackageIntegration(input, dependencies = {}) {
         mode: 384
       }
     ];
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+    casReplaceIntegrationBatch(directories.integration, outputs.map((output) => ({
+      snapshot: output.snapshot,
+      expected: output.snapshot.contents,
+      replacement: output.contents,
+      mode: output.mode
+    })));
     for (const output of outputs) {
-      assertBoundDirectoryCurrent(directories.agent);
-      casReplaceIntegration(directories.agent, output.snapshot, output.snapshot.contents, output.contents, output.mode);
       applied.push({
-        root: directories.integrationPath,
+        root: directories.integration.path,
         snapshot: output.snapshot,
         written: output.contents,
-        directory: directories.agent
+        directory: directories.integration
       });
       dependencies.afterWrite?.(output.snapshot.path);
     }
@@ -66739,6 +66853,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     applied.push({ root: appRoot, snapshot: packageSnapshot, written: packageOutput });
     dependencies.afterWrite?.(packagePath);
     assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
     return preview;
   } catch (error2) {
     const rollbackErrors = rollbackWrites(applied);
@@ -66746,7 +66861,8 @@ function applyPackageIntegration(input, dependencies = {}) {
       throw new AggregateError([error2, ...rollbackErrors]);
     throw error2;
   } finally {
-    closeSync5(directories.agent.descriptor);
+    closeBoundDirectory(directories.integration);
+    closeBoundDirectory(directories.agent);
   }
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
@@ -66761,7 +66877,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
   ];
   const applied = [];
   try {
-    const generatedSnapshots = snapshotIntegrationFiles(directories.agent, directories.integrationPath, generatedNames);
+    const generatedSnapshots = snapshotIntegrationFiles(directories.integration, directories.integration.path, generatedNames);
     if (!generatedSnapshots[0]?.contents) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration manifest is missing");
     }
@@ -66787,24 +66903,32 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 420);
     applied.push({ root: appRoot, snapshot: metroSnapshot, written: metroOutput });
     dependencies.afterWrite?.(metroConfigPath);
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+    casReplaceIntegrationBatch(directories.integration, generatedSnapshots.map((snapshot) => ({
+      snapshot,
+      expected: snapshot.contents,
+      replacement: null,
+      mode: snapshot.mode
+    })));
     for (const snapshot of generatedSnapshots) {
-      assertBoundDirectoryCurrent(directories.agent);
-      casReplaceIntegration(directories.agent, snapshot, snapshot.contents, null, snapshot.mode);
       applied.push({
-        root: directories.integrationPath,
+        root: directories.integration.path,
         snapshot,
         written: null,
-        directory: directories.agent
+        directory: directories.integration
       });
     }
     assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
   } catch (error2) {
     const rollbackErrors = rollbackWrites(applied);
     if (rollbackErrors.length > 0)
       throw new AggregateError([error2, ...rollbackErrors]);
     throw error2;
   } finally {
-    closeSync5(directories.agent.descriptor);
+    closeBoundDirectory(directories.integration);
+    closeBoundDirectory(directories.agent);
   }
 }
 
@@ -68185,7 +68309,7 @@ init_process_birth();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash13 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { lstatSync as lstatSync8, readFileSync as readFileSync34, readlinkSync, realpathSync as realpathSync4 } from "node:fs";
+import { lstatSync as lstatSync9, readFileSync as readFileSync34, readlinkSync, realpathSync as realpathSync4 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join50, relative as relative3, resolve as resolve7 } from "node:path";
 function digest(parts) {
   const hash = createHash13("sha256");
@@ -68272,7 +68396,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   for (const entry of untracked) {
     const file = resolve7(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
-    const stat2 = lstatSync8(file);
+    const stat2 = lstatSync9(file);
     if (stat2.isFile()) {
       dirtyParts.push(entry, "file", readFileSync34(file));
       continue;

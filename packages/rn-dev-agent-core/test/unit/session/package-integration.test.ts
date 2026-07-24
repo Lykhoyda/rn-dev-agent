@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -26,6 +27,11 @@ import {
   restorePackageIntegrationFiles,
   restorePackageIntegration,
 } from '../../../dist/session/package-integration.js';
+import {
+  closeBoundDirectory,
+  openBoundDirectory,
+  writeBoundDirectoryFile,
+} from '../../../dist/session/bound-directory.js';
 
 const packageJson = {
   name: 'fixture-app',
@@ -255,7 +261,6 @@ test('confirmed integration rejects a symlinked .rn-agent ancestor before writin
 
 test('confirmed integration never mutates through a replaced integration ancestor', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-swap-'));
-  const external = mkdtempSync(join(tmpdir(), 'rn-session-apply-swap-external-'));
   try {
     const packagePath = join(root, 'package.json');
     const metroPath = join(root, 'metro.config.js');
@@ -270,19 +275,50 @@ test('confirmed integration never mutates through a replaced integration ancesto
           { appRoot: root, sessionCli: join(root, 'rn-session.js') },
           {
             beforeCommit: () => {
-              rmSync(join(root, '.rn-agent', 'integration'), { recursive: true });
-              symlinkSync(external, join(root, '.rn-agent', 'integration'));
+              renameSync(
+                join(root, '.rn-agent', 'integration'),
+                join(root, '.rn-agent', 'integration-original'),
+              );
+              mkdirSync(join(root, '.rn-agent', 'integration'));
             },
           },
         ),
       /SESSION_INTEGRATION_PATH_UNSAFE/,
     );
-    assert.deepEqual(readdirSync(external), []);
+    assert.deepEqual(readdirSync(join(root, '.rn-agent', 'integration')), []);
     assert.equal(readFileSync(packagePath, 'utf8'), packageBefore);
     assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
   } finally {
     rmSync(root, { force: true, recursive: true });
-    rmSync(external, { force: true, recursive: true });
+  }
+});
+
+test('signed marker writes retain the bound integration directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-marker-swap-'));
+  const integrationPath = join(root, '.rn-agent', 'integration');
+  mkdirSync(integrationPath, { recursive: true });
+  const markerPath = join(integrationPath, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n');
+  const directory = openBoundDirectory(integrationPath);
+  try {
+    assert.throws(
+      () =>
+        writeBoundDirectoryFile(directory, 'authority-marker.js', Buffer.from('after\n'), 0o600, {
+          beforeCommit: () => {
+            renameSync(integrationPath, join(root, '.rn-agent', 'integration-original'));
+            mkdirSync(integrationPath);
+          },
+        }),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.deepEqual(readdirSync(integrationPath), []);
+    assert.equal(
+      readFileSync(join(root, '.rn-agent', 'integration-original', 'authority-marker.js'), 'utf8'),
+      'before\n',
+    );
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
   }
 });
 

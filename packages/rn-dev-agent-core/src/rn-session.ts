@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
@@ -17,7 +17,11 @@ import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
-import { assertNoSymlinkPath } from './session/package-integration.js';
+import {
+  closeBoundDirectory,
+  openBoundDirectory,
+  writeBoundDirectoryFile,
+} from './session/bound-directory.js';
 
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -94,22 +98,17 @@ function writeMarker(
     },
     input.signerCapability,
   );
-  const markerPath = join(
-    appRoot,
-    '.rn-agent',
-    'integration',
-    'authority-marker.js',
-  );
-  assertNoSymlinkPath(appRoot, markerPath);
-  const temporary = `${markerPath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(temporary, createMetroAuthorityModule(marker), {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
-  chmodSync(temporary, 0o600);
-  assertNoSymlinkPath(appRoot, markerPath);
-  assertNoSymlinkPath(appRoot, temporary);
-  renameSync(temporary, markerPath);
+  const integration = openBoundDirectory(join(appRoot, '.rn-agent', 'integration'));
+  try {
+    writeBoundDirectoryFile(
+      integration,
+      'authority-marker.js',
+      Buffer.from(createMetroAuthorityModule(marker)),
+      0o600,
+    );
+  } finally {
+    closeBoundDirectory(integration);
+  }
 }
 
 async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Promise<void> {
