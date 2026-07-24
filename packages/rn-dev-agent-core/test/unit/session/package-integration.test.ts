@@ -384,9 +384,9 @@ test('bound CAS rolls back an ancestor switched and restored during mutation', (
           external,
         )},${JSON.stringify(
           agentPath,
-        )},'dir');setTimeout(()=>{fs.unlinkSync(${JSON.stringify(
+        )},'dir');fs.unlinkSync(${JSON.stringify(
           agentPath,
-        )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)},100)`,
+        )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)`,
       ],
       { stdio: 'ignore' },
     );
@@ -499,9 +499,9 @@ test('bound recovery retains cleanup after a transient ancestor switch', () => {
                 external,
               )},${JSON.stringify(
                 agentPath,
-              )},'dir');setTimeout(()=>{fs.unlinkSync(${JSON.stringify(
+              )},'dir');fs.unlinkSync(${JSON.stringify(
                 agentPath,
-              )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)},100)`,
+              )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)`,
             ],
             { stdio: 'ignore' },
           );
@@ -1019,6 +1019,58 @@ test('bound discovery quarantines unauthenticated journals without applying them
   } finally {
     closeBoundDirectory(directory);
     rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bound discovery preserves an invalid journal across a fast ancestor swap', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-discovery-switch-'));
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-discovery-switch-external-'));
+  const agentPath = join(root, '.rn-agent');
+  const external = join(externalRoot, 'agent');
+  const integrationPath = join(agentPath, 'integration');
+  const journalPath = join(
+    integrationPath,
+    '.rn-bound-11111111-1111-1111-1111-111111111111.journal',
+  );
+  mkdirSync(integrationPath, { recursive: true });
+  writeFileSync(journalPath, '{', { mode: 0o600 });
+  const agent = openBoundDirectory(agentPath);
+  try {
+    assert.throws(
+      () =>
+        openBoundSubdirectory(agent, 'integration', {
+          afterChildBind: () => {
+            const switcher = spawn(
+              process.execPath,
+              [
+                '-e',
+                `const fs=require('node:fs');setTimeout(()=>{fs.renameSync(${JSON.stringify(
+                  agentPath,
+                )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
+                  external,
+                )},${JSON.stringify(
+                  agentPath,
+                )},'dir');fs.unlinkSync(${JSON.stringify(
+                  agentPath,
+                )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)`,
+              ],
+              { stdio: 'ignore' },
+            );
+            switcher.unref();
+          },
+          discoveryQuarantineDelayMs: 1_000,
+        }),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(readFileSync(journalPath, 'utf8'), '{');
+    assert.deepEqual(
+      readdirSync(integrationPath).filter((name) => name.includes('.invalid-')),
+      [],
+    );
+  } finally {
+    closeBoundDirectory(agent);
+    rmSync(root, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
   }
 });
 

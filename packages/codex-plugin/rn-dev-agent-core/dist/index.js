@@ -49835,20 +49835,7 @@ try {
   for (const ancestor of workerData.ancestors) {
     const watchedName = path.basename(ancestor.publicPath);
     const watcher = fs.watch(path.dirname(ancestor.publicPath), (eventType, filename) => {
-      if (eventType !== 'rename' || (filename !== null && String(filename) !== watchedName)) {
-        return;
-      }
-      let valid = false;
-      try {
-        const current = fs.lstatSync(ancestor.publicPath, { bigint: true });
-        valid =
-          current.isDirectory() &&
-          !current.isSymbolicLink() &&
-          current.dev.toString() === ancestor.dev &&
-          current.ino.toString() === ancestor.ino &&
-          fs.realpathSync(ancestor.publicPath) === ancestor.realPath;
-      } catch {}
-      if (!valid) {
+      if (eventType === 'rename' && (filename === null || String(filename) === watchedName)) {
         Atomics.add(state, 1, 1);
         Atomics.notify(state, 1);
       }
@@ -49910,7 +49897,7 @@ const agentAncestorIndex = binding.ancestors.findIndex(
 const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
-    : binding.ancestors.slice(agentAncestorIndex);
+    : [binding.ancestors[agentAncestorIndex]];
 const ancestryState = new Int32Array(new SharedArrayBuffer(12));
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
@@ -50342,13 +50329,14 @@ function transactionJournalNames() {
 }
 
 function inspectTransactions() {
+  const invalidJournals = [];
   const transactions = transactionJournalNames()
       .map((journalName) => {
       let journal;
       try {
         journal = readJournal(journalName);
       } catch {
-        fs.renameSync(journalName, journalName + '.invalid-' + crypto.randomUUID());
+        invalidJournals.push(journalName);
         return null;
       }
       if (
@@ -50360,7 +50348,7 @@ function inspectTransactions() {
         (journal.state !== 'applying' && journal.state !== 'committed') ||
         !Array.isArray(journal.writes)
       ) {
-        fs.renameSync(journalName, journalName + '.invalid-' + crypto.randomUUID());
+        invalidJournals.push(journalName);
         return null;
       }
       const transactionId = journalName.slice('.rn-bound-'.length, -'.journal'.length);
@@ -50393,7 +50381,21 @@ function inspectTransactions() {
   if (transactions.length > 1) {
     throw new Error('bound-directory has multiple pending transactions');
   }
-  return transactions;
+  return { invalidJournals, transactions };
+}
+
+function quarantineInvalidTransactions(journalNames) {
+  return journalNames.map((journal) => {
+    const quarantine = journal + '.invalid-' + crypto.randomUUID();
+    fs.renameSync(journal, quarantine);
+    return { journal, quarantine };
+  });
+}
+
+function restoreQuarantinedTransactions(quarantined) {
+  for (const entry of [...quarantined].reverse()) {
+    fs.renameSync(entry.quarantine, entry.journal);
+  }
 }
 
 function discoverTransactions(ancestryGuard) {
@@ -50411,13 +50413,23 @@ function discoverTransactions(ancestryGuard) {
     return [];
   }
   ensureTransactionLock();
+  let quarantined = [];
   try {
-    const transactions = inspectTransactions();
+    const inspection = inspectTransactions();
     assertBoundDirectory(ancestryGuard, true);
-    if (transactions.length === 0) releaseTransactionLock();
-    return transactions;
+    quarantined = quarantineInvalidTransactions(inspection.invalidJournals);
+    assertBoundDirectory(ancestryGuard, true);
+    if (inspection.transactions.length === 0) releaseTransactionLock();
+    return inspection.transactions;
   } catch (error) {
-    if (!(error instanceof AncestryError)) {
+    if (error instanceof AncestryError) {
+      try {
+        const rollbackGuard = assertBoundDirectory();
+        restoreQuarantinedTransactions(quarantined);
+        assertBoundDirectory(rollbackGuard, true);
+        releaseTransactionLock();
+      } catch {}
+    } else {
       try {
         releaseTransactionLock();
       } catch {}
@@ -50428,7 +50440,12 @@ function discoverTransactions(ancestryGuard) {
 
 function applyBatch(request, ancestryGuard) {
   acquireTransactionLock();
-  const pending = inspectTransactions();
+  const inspection = inspectTransactions();
+  if (inspection.invalidJournals.length > 0) {
+    releaseTransactionLock();
+    throw new Error('bound-directory transaction journal is invalid');
+  }
+  const pending = inspection.transactions;
   if (pending.length === 1) {
     recoverTransaction(pending[0].journal, pending[0].writes, 0, false, ancestryGuard);
   } else {
@@ -50606,6 +50623,7 @@ function execute(request) {
     );
   }
   if (request.operation === 'discover') {
+    if (request.discoveryQuarantineDelayMs) wait(request.discoveryQuarantineDelayMs);
     return { transactions: discoverTransactions(ancestryGuard) };
   }
   if (request.operation === 'identity') return {};
@@ -50995,8 +51013,11 @@ function runBoundOperation(directory, request2, dependencies = {}) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable");
   }
 }
-function recoverDiscoveredTransactions(directory) {
-  const result = runBoundOperation(directory, { operation: "discover" });
+function recoverDiscoveredTransactions(directory, discoveryQuarantineDelayMs = 0) {
+  const result = runBoundOperation(directory, {
+    operation: "discover",
+    discoveryQuarantineDelayMs
+  });
   if (!result.transactions) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory discovery returned invalid output");
   }
@@ -51171,7 +51192,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       worker,
       closed: false
     };
-    recoverDiscoveredTransactions(directory);
+    recoverDiscoveredTransactions(directory, options.discoveryQuarantineDelayMs);
     runBoundOperation(parent, { operation: "child-identity", childId });
     parent.children.add(directory);
     return directory;
