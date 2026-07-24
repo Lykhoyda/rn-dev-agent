@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
-import { probeManagedMetroListener, } from '../session/managed-metro.js';
+import { probeManagedMetroListener, stopManagedMetro, } from '../session/managed-metro.js';
 function sameMetroAuthority(current, next) {
     return (current?.port === next.port &&
         current.pid === next.pid &&
@@ -418,6 +418,21 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         reason: 'runner capability is never crash-adopted; reopen the exact device to bind a fresh runner',
                     },
                 });
+            }
+            const status = registry.getSessionStatus(session.sessionId);
+            const metro = status?.bindings.metro;
+            if (metro?.mode === 'managed') {
+                const signerCapability = dependencies.getSignerCapability?.();
+                if (!signerCapability) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'managed Metro release requires the session signer capability');
+                }
+                const stopped = (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+                    sessionId: session.sessionId,
+                    signerCapability,
+                });
+                if (!stopped) {
+                    throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'managed Metro could not be stopped with exact process authority');
+                }
             }
             registry.releaseSession(session);
             return okResult({ released: true, sessionId: session.sessionId });

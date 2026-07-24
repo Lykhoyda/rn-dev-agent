@@ -36,40 +36,68 @@ export function createSupervisorAuthority(input) {
         },
         source: { ...input.source },
     });
-    const metroPort = registry.allocatePort({
+    const rollbackInitialization = (error) => {
+        let failure = error;
+        try {
+            const status = registry.getSessionStatus(session.sessionId);
+            if (status?.state === 'blocked') {
+                registry.discardBlockedSession(session);
+            }
+            else if (status && status.state !== 'released' && status.state !== 'stale') {
+                registry.cancelActiveOperationForSession(session);
+                registry.releaseSession(session);
+            }
+        }
+        catch (rollbackError) {
+            failure = new AggregateError([error, rollbackError], 'SESSION_INITIALIZATION_ROLLBACK_FAILED: failed to release partial session claims');
+        }
+        finally {
+            registry.close();
+        }
+        throw failure;
+    };
+    const initialize = (operation) => {
+        try {
+            return operation();
+        }
+        catch (error) {
+            return rollbackInitialization(error);
+        }
+    };
+    const metroPort = initialize(() => registry.allocatePort({
         service: 'metro',
         worktreeKey: input.source.worktreeKey,
         uid: input.uid,
         base: 8081,
         span: 200,
-    });
-    const observePort = registry.allocatePort({
+    }));
+    const observePort = initialize(() => registry.allocatePort({
         service: 'observe',
         worktreeKey: input.source.worktreeKey,
         uid: input.uid,
         base: 7333,
         span: 200,
-    });
-    let adoptionRequired;
-    try {
-        registry.claimResources(session, [
-            { type: 'source', key: input.source.worktreeKey },
-            { type: 'metro-port', key: String(metroPort) },
-            { type: 'observe-port', key: String(observePort) },
-        ], { allowReclaim: false });
-    }
-    catch (error) {
-        if (error instanceof Error && 'holder' in error) {
-            adoptionRequired = error.holder;
+    }));
+    const adoptionRequired = initialize(() => {
+        try {
+            registry.claimResources(session, [
+                { type: 'source', key: input.source.worktreeKey },
+                { type: 'metro-port', key: String(metroPort) },
+                { type: 'observe-port', key: String(observePort) },
+            ], { allowReclaim: false });
+            return undefined;
         }
-        else {
+        catch (error) {
+            if (error instanceof Error && 'holder' in error) {
+                return error.holder;
+            }
             throw error;
         }
-    }
+    });
     const sharedKnowledge = adoptionRequired
         ? { migrated: false }
-        : ensureSharedKnowledgeRoot(input.source.appRoot);
-    registry.updateBindings(session, {
+        : initialize(() => ensureSharedKnowledgeRoot(input.source.appRoot));
+    initialize(() => registry.updateBindings(session, {
         state: adoptionRequired ? 'blocked' : 'source_bound',
         bindings: {
             metroPort,
@@ -84,13 +112,13 @@ export function createSupervisorAuthority(input) {
                 }
                 : {}),
         },
-    });
-    const secretPath = writeSessionSecret(layout, sessionId, {
+    }));
+    const secretPath = initialize(() => writeSessionSecret(layout, sessionId, {
         signerCapability,
         observeCapability,
         recoveryCapability,
-    });
-    writeSessionPublicReceipt(layout, sessionId, {
+    }));
+    initialize(() => writeSessionPublicReceipt(layout, sessionId, {
         sessionId,
         claimEpoch: session.claimEpoch,
         sourceKind: input.source.kind,
@@ -99,16 +127,16 @@ export function createSupervisorAuthority(input) {
         metroPort,
         observePort,
         sharedKnowledgeMigrated: sharedKnowledge.migrated,
-    });
+    }));
     let heartbeat = null;
     if (input.startHeartbeat !== false) {
-        heartbeat = setInterval(() => {
+        heartbeat = initialize(() => setInterval(() => {
             void registry.renewSessionWithRetry(session).catch(() => {
                 if (heartbeat)
                     clearInterval(heartbeat);
                 heartbeat = null;
             });
-        }, input.heartbeatMs ?? 5_000);
+        }, input.heartbeatMs ?? 5_000));
         heartbeat.unref();
     }
     return {
@@ -137,6 +165,9 @@ export function createSupervisorAuthority(input) {
             try {
                 const status = registry.getSessionStatus(session.sessionId);
                 if (status) {
+                    if (RELEASABLE_SESSION_STATES.has(status.state)) {
+                        registry.cancelActiveOperationForSession(session);
+                    }
                     stopManagedMetro(status.bindings.metro, {
                         sessionId,
                         signerCapability,

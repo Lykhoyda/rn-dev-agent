@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -220,6 +229,25 @@ test('confirmed integration writes package and Metro sentinels together', () => 
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('confirmed integration rejects a symlinked .rn-agent ancestor before writing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-symlink-'));
+  const external = mkdtempSync(join(tmpdir(), 'rn-session-integration-external-'));
+  try {
+    writeFileSync(join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+    writeFileSync(join(root, 'metro.config.js'), 'module.exports = { serializer: {} };\n');
+    symlinkSync(external, join(root, '.rn-agent'));
+
+    assert.throws(
+      () => applyPackageIntegration({ appRoot: root, sessionCli: join(root, 'rn-session.js') }),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(existsSync(join(external, 'integration')), false);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+    rmSync(external, { force: true, recursive: true });
   }
 });
 

@@ -2172,6 +2172,25 @@ export class SessionRegistry {
     this.#pendingPlatformReceipts.delete(operation.operationId);
   }
 
+  cancelActiveOperationForSession(session: SessionRef): void {
+    const operationIds = this.#transaction(() => {
+      this.#requireSession(session);
+      const rows = this.#database
+        .prepare(
+          `SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .all(session.sessionId, session.claimEpoch) as Array<{ operation_id?: unknown }>;
+      this.#database
+        .prepare('DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?')
+        .run(session.sessionId, session.claimEpoch);
+      return rows.map((row) => String(row.operation_id));
+    });
+    for (const operationId of operationIds) {
+      this.#pendingPlatformReceipts.delete(operationId);
+    }
+  }
+
   verifyOperation(operation: OperationRef): void {
     const session = asSession(
       this.#database

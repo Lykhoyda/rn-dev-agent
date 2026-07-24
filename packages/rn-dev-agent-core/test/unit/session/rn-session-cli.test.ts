@@ -62,3 +62,47 @@ test('package-local CLI resolves one exact worktree session for literal build sc
     sessionId: 'session-cli',
   });
 });
+
+test('package-local CLI rejects an explicit session from another worktree', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-foreign-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'state');
+  execFileSync('git', ['init', '-q', appRoot]);
+  execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+  execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+  writeFileSync(join(appRoot, 'package.json'), '{}\n');
+  execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+  execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = stateHome;
+  const source = resolveSourceIdentity(appRoot);
+  const layout = createAuthorityStateLayout();
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+  registry.createSession({
+    sessionId: 'foreign-session',
+    sourceKey: source.sourceKey,
+    worktreeKey: 'foreign-worktree',
+    appRootKey: source.appRootKey,
+    supervisor: { pid: process.pid, token: 'fixture' },
+    source: { ...source, worktreeKey: 'foreign-worktree' },
+  });
+  registry.close();
+
+  const result = spawnSync(process.execPath, [cliPath, 'status'], {
+    cwd: appRoot,
+    env: {
+      ...process.env,
+      XDG_STATE_HOME: stateHome,
+      RN_DEV_AGENT_SESSION_ID: 'foreign-session',
+    },
+    encoding: 'utf8',
+  });
+
+  if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = previousStateHome;
+  rmSync(root, { force: true, recursive: true });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /explicit session belongs to a different canonical worktree/);
+});

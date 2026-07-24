@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
@@ -359,6 +359,25 @@ function restoreSnapshots(snapshots: readonly FileSnapshot[]): void {
   }
 }
 
+function assertNoSymlinkPath(root: string, candidate: string): void {
+  const child = relative(root, candidate);
+  if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root');
+  }
+  let current = root;
+  for (const component of [root, ...child.split(sep).filter(Boolean)]) {
+    current = component === root ? root : join(current, component);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked');
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') break;
+      throw error;
+    }
+  }
+}
+
 export function applyPackageIntegration(input: {
   appRoot: string;
   sessionCli: string;
@@ -384,14 +403,15 @@ export function applyPackageIntegration(input: {
   }
   const metroAdapterPath = join(appRoot, METRO_ADAPTER);
   const authorityModulePath = join(appRoot, AUTHORITY_MODULE);
-  for (const path of [packagePath, integrationRoot, metroConfigPath]) {
-    try {
-      if (lstatSync(path).isSymbolicLink()) {
-        throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked');
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
+  for (const path of [
+    packagePath,
+    manifestPath,
+    adapterPath,
+    metroAdapterPath,
+    authorityModulePath,
+    metroConfigPath,
+  ]) {
+    assertNoSymlinkPath(appRoot, path);
   }
   const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as PackageJson;
   const existing = (() => {

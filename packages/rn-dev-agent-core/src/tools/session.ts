@@ -25,6 +25,8 @@ import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
   probeManagedMetroListener,
+  stopManagedMetro,
+  type ManagedMetroBinding,
   type ManagedMetroListenerProbe,
 } from '../session/managed-metro.js';
 
@@ -77,6 +79,7 @@ interface SessionHandlerDependencies {
   probeProcessBirth?: (pid: number) => ProcessBirthProbe;
   probeListener?: (port: number) => ManagedMetroListenerProbe;
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  stopManagedMetro?: typeof stopManagedMetro;
   cleanupTimeoutMs?: number;
 }
 
@@ -651,6 +654,27 @@ export function createSessionHandler(
         });
       }
 
+      const status = registry.getSessionStatus(session.sessionId);
+      const metro = status?.bindings.metro as Partial<ManagedMetroBinding> | null | undefined;
+      if (metro?.mode === 'managed') {
+        const signerCapability = dependencies.getSignerCapability?.();
+        if (!signerCapability) {
+          throw new SessionAuthorityError(
+            'SESSION_AUTHORITY_REQUIRED',
+            'managed Metro release requires the session signer capability',
+          );
+        }
+        const stopped = (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+          sessionId: session.sessionId,
+          signerCapability,
+        });
+        if (!stopped) {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'managed Metro could not be stopped with exact process authority',
+          );
+        }
+      }
       registry.releaseSession(session);
       return okResult({ released: true, sessionId: session.sessionId });
     } catch (error) {

@@ -46,6 +46,7 @@ export function isAgentDeviceRunnerSentinel(nodes: RunnerLeakNode[] | null | und
 export interface RecoveryContext {
   platform?: string;
   appId?: string;
+  deviceId?: string;
   sessionName?: string;
   alreadyRecovered?: boolean;
 }
@@ -53,6 +54,7 @@ export interface RecoveryContext {
 export interface OpenSessionArgs {
   appId: string;
   platform: string;
+  deviceId?: string;
   sessionName?: string;
   attachOnly: boolean;
 }
@@ -194,6 +196,7 @@ async function attemptRecoveryCycle(
   const reopenResult = await deps.openSession({
     appId: ctx.appId!,
     platform: 'ios',
+    ...(ctx.deviceId ? { deviceId: ctx.deviceId } : {}),
     sessionName: ctx.sessionName,
     attachOnly,
   });

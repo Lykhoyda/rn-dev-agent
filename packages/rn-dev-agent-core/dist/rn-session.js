@@ -31,6 +31,11 @@ function resolveStatus() {
             : 'multiple live sessions match this worktree; set RN_DEV_AGENT_SESSION_ID');
     }
     const status = candidates[0];
+    if (explicit &&
+        (status.worktreeKey !== source.worktreeKey || status.appRootKey !== source.appRootKey)) {
+        registry.close();
+        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'explicit session belongs to a different canonical worktree or app root');
+    }
     return Object.assign(status, {
         closeRegistry: () => registry.close(),
         registry,

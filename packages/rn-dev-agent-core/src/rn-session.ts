@@ -41,6 +41,16 @@ function resolveStatus() {
     );
   }
   const status = candidates[0]!;
+  if (
+    explicit &&
+    (status.worktreeKey !== source.worktreeKey || status.appRootKey !== source.appRootKey)
+  ) {
+    registry.close();
+    throw new SessionAuthorityError(
+      'SESSION_AUTHORITY_REQUIRED',
+      'explicit session belongs to a different canonical worktree or app root',
+    );
+  }
   return Object.assign(status, {
     closeRegistry: () => registry.close(),
     registry,

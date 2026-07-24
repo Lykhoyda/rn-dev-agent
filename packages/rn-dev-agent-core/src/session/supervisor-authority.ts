@@ -69,81 +69,121 @@ export function createSupervisorAuthority(input: {
     },
     source: { ...input.source },
   });
-  const metroPort = registry.allocatePort({
-    service: 'metro',
-    worktreeKey: input.source.worktreeKey,
-    uid: input.uid,
-    base: 8081,
-    span: 200,
-  });
-  const observePort = registry.allocatePort({
-    service: 'observe',
-    worktreeKey: input.source.worktreeKey,
-    uid: input.uid,
-    base: 7333,
-    span: 200,
-  });
-  let adoptionRequired: { sessionId: string; claimEpoch: number } | undefined;
-  try {
-    registry.claimResources(
-      session,
-      [
-        { type: 'source', key: input.source.worktreeKey },
-        { type: 'metro-port', key: String(metroPort) },
-        { type: 'observe-port', key: String(observePort) },
-      ],
-      { allowReclaim: false },
-    );
-  } catch (error) {
-    if (error instanceof Error && 'holder' in error) {
-      adoptionRequired = (error as { holder?: { sessionId: string; claimEpoch: number } }).holder;
-    } else {
+  const rollbackInitialization = (error: unknown): never => {
+    let failure = error;
+    try {
+      const status = registry.getSessionStatus(session.sessionId);
+      if (status?.state === 'blocked') {
+        registry.discardBlockedSession(session);
+      } else if (status && status.state !== 'released' && status.state !== 'stale') {
+        registry.cancelActiveOperationForSession(session);
+        registry.releaseSession(session);
+      }
+    } catch (rollbackError) {
+      failure = new AggregateError(
+        [error, rollbackError],
+        'SESSION_INITIALIZATION_ROLLBACK_FAILED: failed to release partial session claims',
+      );
+    } finally {
+      registry.close();
+    }
+    throw failure;
+  };
+  const initialize = <T>(operation: () => T): T => {
+    try {
+      return operation();
+    } catch (error) {
+      return rollbackInitialization(error);
+    }
+  };
+  const metroPort = initialize(() =>
+    registry.allocatePort({
+      service: 'metro',
+      worktreeKey: input.source.worktreeKey,
+      uid: input.uid,
+      base: 8081,
+      span: 200,
+    }),
+  );
+  const observePort = initialize(() =>
+    registry.allocatePort({
+      service: 'observe',
+      worktreeKey: input.source.worktreeKey,
+      uid: input.uid,
+      base: 7333,
+      span: 200,
+    }),
+  );
+  const adoptionRequired = initialize(() => {
+    try {
+      registry.claimResources(
+        session,
+        [
+          { type: 'source', key: input.source.worktreeKey },
+          { type: 'metro-port', key: String(metroPort) },
+          { type: 'observe-port', key: String(observePort) },
+        ],
+        { allowReclaim: false },
+      );
+      return undefined;
+    } catch (error) {
+      if (error instanceof Error && 'holder' in error) {
+        return (error as { holder?: { sessionId: string; claimEpoch: number } }).holder;
+      }
       throw error;
     }
-  }
+  });
   const sharedKnowledge = adoptionRequired
     ? { migrated: false }
-    : ensureSharedKnowledgeRoot(input.source.appRoot);
-  registry.updateBindings(session, {
-    state: adoptionRequired ? 'blocked' : 'source_bound',
-    bindings: {
+    : initialize(() => ensureSharedKnowledgeRoot(input.source.appRoot));
+  initialize(() =>
+    registry.updateBindings(session, {
+      state: adoptionRequired ? 'blocked' : 'source_bound',
+      bindings: {
+        metroPort,
+        observePort,
+        ...(adoptionRequired
+          ? {
+              recoveryCapabilityHash: createHash('sha256').update(recoveryCapability).digest('hex'),
+              adoptionRequired: {
+                sessionId: adoptionRequired.sessionId,
+                claimEpoch: adoptionRequired.claimEpoch,
+              },
+            }
+          : {}),
+      },
+    }),
+  );
+  const secretPath = initialize(() =>
+    writeSessionSecret(layout, sessionId, {
+      signerCapability,
+      observeCapability,
+      recoveryCapability,
+    }),
+  );
+  initialize(() =>
+    writeSessionPublicReceipt(layout, sessionId, {
+      sessionId,
+      claimEpoch: session.claimEpoch,
+      sourceKind: input.source.kind,
+      sourceKey: input.source.sourceKey.slice(0, 12),
+      worktreeKey: input.source.worktreeKey.slice(0, 12),
       metroPort,
       observePort,
-      ...(adoptionRequired
-        ? {
-            recoveryCapabilityHash: createHash('sha256').update(recoveryCapability).digest('hex'),
-            adoptionRequired: {
-              sessionId: adoptionRequired.sessionId,
-              claimEpoch: adoptionRequired.claimEpoch,
-            },
-          }
-        : {}),
-    },
-  });
-  const secretPath = writeSessionSecret(layout, sessionId, {
-    signerCapability,
-    observeCapability,
-    recoveryCapability,
-  });
-  writeSessionPublicReceipt(layout, sessionId, {
-    sessionId,
-    claimEpoch: session.claimEpoch,
-    sourceKind: input.source.kind,
-    sourceKey: input.source.sourceKey.slice(0, 12),
-    worktreeKey: input.source.worktreeKey.slice(0, 12),
-    metroPort,
-    observePort,
-    sharedKnowledgeMigrated: sharedKnowledge.migrated,
-  });
+      sharedKnowledgeMigrated: sharedKnowledge.migrated,
+    }),
+  );
 
   let heartbeat: NodeJS.Timeout | null = null;
   if (input.startHeartbeat !== false) {
-    heartbeat = setInterval(() => {
-      void registry.renewSessionWithRetry(session).catch(() => {
-        if (heartbeat) clearInterval(heartbeat);
-        heartbeat = null;
-      });
-    }, input.heartbeatMs ?? 5_000);
+    heartbeat = initialize(() =>
+      setInterval(() => {
+        void registry.renewSessionWithRetry(session).catch(() => {
+          if (heartbeat) clearInterval(heartbeat);
+          heartbeat = null;
+        });
+      }, input.heartbeatMs ?? 5_000),
+    );
     heartbeat.unref();
   }
 
@@ -172,6 +212,9 @@ export function createSupervisorAuthority(input: {
       try {
         const status = registry.getSessionStatus(session.sessionId);
         if (status) {
+          if (RELEASABLE_SESSION_STATES.has(status.state)) {
+            registry.cancelActiveOperationForSession(session);
+          }
           stopManagedMetro(status.bindings.metro as Partial<ManagedMetroBinding> | undefined, {
             sessionId,
             signerCapability,

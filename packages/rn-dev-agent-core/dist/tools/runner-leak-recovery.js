@@ -110,6 +110,7 @@ async function attemptRecoveryCycle(ctx, deps, attachOnly, sleep) {
     const reopenResult = await deps.openSession({
         appId: ctx.appId,
         platform: 'ios',
+        ...(ctx.deviceId ? { deviceId: ctx.deviceId } : {}),
         sessionName: ctx.sessionName,
         attachOnly,
     });

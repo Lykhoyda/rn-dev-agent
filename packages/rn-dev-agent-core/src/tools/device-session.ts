@@ -594,7 +594,12 @@ export function createDeviceSnapshotHandler(
     if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
       const session = getActiveSession();
       const recovery = await recoverFromRunnerLeak(
-        { platform: session?.platform, appId: session?.appId, sessionName: session?.name },
+        {
+          platform: session?.platform,
+          appId: session?.appId,
+          deviceId: session?.deviceId,
+          sessionName: session?.name,
+        },
         {
           // B130 (D659): the recovery close must also clear the local session
           // state (activeSession → null, ref-map → empty, fast-runner stopped)
@@ -610,8 +615,8 @@ export function createDeviceSnapshotHandler(
             await stopAndroidRunner(session?.deviceId);
             return okResult({ closed: true });
           },
-          openSession: ({ appId, platform, attachOnly }) =>
-            reopenSessionForRecovery(appId, platform, attachOnly),
+          openSession: ({ appId, platform, deviceId, attachOnly }) =>
+            reopenSessionForRecovery(appId, platform, attachOnly, deviceId),
           resnapshot: () => rawSnapshot(),
           parseNodes: parseSnapshotNodes,
           // GH #186: non-destructive reacquire tried before the destructive
@@ -763,6 +768,7 @@ export async function reopenSessionForRecovery(
   appId: string,
   platform: string,
   attachOnly: boolean,
+  deviceId?: string,
 ): Promise<ToolResult> {
   // Always mint a fresh recovery name (Gemini G3): reusing the original
   // session name risks silently re-attaching to the corrupted session.
@@ -777,6 +783,7 @@ export async function reopenSessionForRecovery(
   return createDeviceSnapshotHandler()({
     action: 'open',
     appId,
+    deviceId,
     platform: platform as SnapshotArgs['platform'],
     attachOnly,
     sessionName: recoveryName,

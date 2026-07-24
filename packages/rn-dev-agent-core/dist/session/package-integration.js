@@ -1,6 +1,6 @@
 import { createBuildLaunchPlan } from './build-adapter.js';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
 const AUTHORITY_MODULE = '.rn-agent/integration/authority-marker.js';
@@ -300,6 +300,26 @@ function restoreSnapshots(snapshots) {
         }
     }
 }
+function assertNoSymlinkPath(root, candidate) {
+    const child = relative(root, candidate);
+    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+        throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root');
+    }
+    let current = root;
+    for (const component of [root, ...child.split(sep).filter(Boolean)]) {
+        current = component === root ? root : join(current, component);
+        try {
+            if (lstatSync(current).isSymbolicLink()) {
+                throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked');
+            }
+        }
+        catch (error) {
+            if (error.code === 'ENOENT')
+                break;
+            throw error;
+        }
+    }
+}
 export function applyPackageIntegration(input) {
     const appRoot = resolve(input.appRoot);
     const packagePath = join(appRoot, 'package.json');
@@ -321,16 +341,15 @@ export function applyPackageIntegration(input) {
     }
     const metroAdapterPath = join(appRoot, METRO_ADAPTER);
     const authorityModulePath = join(appRoot, AUTHORITY_MODULE);
-    for (const path of [packagePath, integrationRoot, metroConfigPath]) {
-        try {
-            if (lstatSync(path).isSymbolicLink()) {
-                throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked');
-            }
-        }
-        catch (error) {
-            if (error.code !== 'ENOENT')
-                throw error;
-        }
+    for (const path of [
+        packagePath,
+        manifestPath,
+        adapterPath,
+        metroAdapterPath,
+        authorityModulePath,
+        metroConfigPath,
+    ]) {
+        assertNoSymlinkPath(appRoot, path);
     }
     const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
     const existing = (() => {

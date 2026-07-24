@@ -111,7 +111,7 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
-import { pinExactDevClient } from './session/dev-client-authority.js';
+import { boundConnectConflict, pinExactDevClient } from './session/dev-client-authority.js';
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
 import { proveTargetDeviceAssociation } from './session/target-device-authority.js';
 import { strictProofSourceIdentity } from './session/source-identity.js';
@@ -660,11 +660,9 @@ async function connectBoundSession(args) {
     if (!status.available) {
         return failResult(status.reason, status.code);
     }
-    const currentTarget = status.bindings.bundle?.targetId;
-    if (typeof args.targetId === 'string' &&
-        (typeof currentTarget !== 'string' || args.targetId !== currentTarget)) {
-        return failResult('targetId is not the target already proven by this session', 'CDP_TARGET_AUTHORITY_MISMATCH');
-    }
+    const conflict = boundConnectConflict(status, args);
+    if (conflict)
+        return failResult(conflict.message, conflict.code);
     return sessionHandler({ action: 'pin_dev_client' });
 }
 async function disconnectBoundSession() {

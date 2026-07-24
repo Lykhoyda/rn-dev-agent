@@ -189,7 +189,12 @@ export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFe
 
   const session = getActiveSession();
   const recovery = await recoverFromRunnerLeak(
-    { platform: session?.platform, appId: session?.appId, sessionName: session?.name },
+    {
+      platform: session?.platform,
+      appId: session?.appId,
+      deviceId: session?.deviceId,
+      sessionName: session?.name,
+    },
     {
       closeSession: async () => {
         clearActiveSession();
@@ -197,8 +202,8 @@ export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFe
         await stopAndroidRunner(session?.deviceId);
         return okResult({ closed: true });
       },
-      openSession: ({ appId, platform, attachOnly }) =>
-        reopenSessionForRecovery(appId, platform, attachOnly),
+      openSession: ({ appId, platform, deviceId, attachOnly }) =>
+        reopenSessionForRecovery(appId, platform, attachOnly, deviceId),
       resnapshot: () => runNative(['snapshot', '-i']),
       parseNodes: parseSnapshotEnvelope,
     },

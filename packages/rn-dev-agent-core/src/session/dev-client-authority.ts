@@ -1,5 +1,7 @@
 import type { MetroAuthorityBinding, MetroAuthorityMarker } from './metro-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+import type { SessionStatus } from './registry.js';
+import type { ToolErrorCode } from '../types.js';
 
 interface PinDevClientInput extends MetroAuthorityBinding {
   deviceId: string;
@@ -31,6 +33,54 @@ export interface BundleAuthorityBinding extends MetroAuthorityBinding {
   connectionGeneration: number;
   authorityScope: 'initial-bundle';
   sourceFidelity: 'not-proven';
+}
+
+export function boundConnectConflict(
+  status: Pick<SessionStatus, 'bindings'>,
+  request: {
+    metroPort?: unknown;
+    platform?: unknown;
+    targetId?: unknown;
+    bundleId?: unknown;
+  },
+): { code: ToolErrorCode; message: string } | null {
+  const device = status.bindings.device as
+    | { platform?: unknown; appId?: unknown }
+    | null
+    | undefined;
+  const bundle = status.bindings.bundle as { targetId?: unknown } | null | undefined;
+  if (typeof request.metroPort === 'number' && request.metroPort !== status.bindings.metroPort) {
+    return {
+      code: 'METRO_AUTHORITY_MISMATCH',
+      message: 'metroPort does not match the authority-bound Metro port',
+    };
+  }
+  if (typeof request.platform === 'string' && request.platform.toLowerCase() !== device?.platform) {
+    return {
+      code: 'DEVICE_AUTHORITY_MISMATCH',
+      message: 'platform does not match the authority-bound device',
+    };
+  }
+  if (
+    typeof request.bundleId === 'string' &&
+    (typeof device?.appId !== 'string' ||
+      request.bundleId.toLowerCase() !== device.appId.toLowerCase())
+  ) {
+    return {
+      code: 'DEVICE_AUTHORITY_MISMATCH',
+      message: 'bundleId does not match the authority-bound app',
+    };
+  }
+  if (
+    typeof request.targetId === 'string' &&
+    (typeof bundle?.targetId !== 'string' || request.targetId !== bundle.targetId)
+  ) {
+    return {
+      code: 'CDP_TARGET_AUTHORITY_MISMATCH',
+      message: 'targetId is not the target already proven by this session',
+    };
+  }
+  return null;
 }
 
 export async function pinExactDevClient(

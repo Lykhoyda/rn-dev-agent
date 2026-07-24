@@ -1,4 +1,36 @@
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+export function boundConnectConflict(status, request) {
+    const device = status.bindings.device;
+    const bundle = status.bindings.bundle;
+    if (typeof request.metroPort === 'number' && request.metroPort !== status.bindings.metroPort) {
+        return {
+            code: 'METRO_AUTHORITY_MISMATCH',
+            message: 'metroPort does not match the authority-bound Metro port',
+        };
+    }
+    if (typeof request.platform === 'string' && request.platform.toLowerCase() !== device?.platform) {
+        return {
+            code: 'DEVICE_AUTHORITY_MISMATCH',
+            message: 'platform does not match the authority-bound device',
+        };
+    }
+    if (typeof request.bundleId === 'string' &&
+        (typeof device?.appId !== 'string' ||
+            request.bundleId.toLowerCase() !== device.appId.toLowerCase())) {
+        return {
+            code: 'DEVICE_AUTHORITY_MISMATCH',
+            message: 'bundleId does not match the authority-bound app',
+        };
+    }
+    if (typeof request.targetId === 'string' &&
+        (typeof bundle?.targetId !== 'string' || request.targetId !== bundle.targetId)) {
+        return {
+            code: 'CDP_TARGET_AUTHORITY_MISMATCH',
+            message: 'targetId is not the target already proven by this session',
+        };
+    }
+    return null;
+}
 export async function pinExactDevClient(input, dependencies) {
     if (input.devClientUrl !== input.expectedDevClientUrl) {
         throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint');

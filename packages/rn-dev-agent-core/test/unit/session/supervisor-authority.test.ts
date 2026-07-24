@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createSupervisorAuthority } from '../../../dist/session/supervisor-authority.js';
+import { openSessionRegistry } from '../../../dist/session/registry.js';
+import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
 
 const roots = [];
 
@@ -78,6 +80,52 @@ test('supervisor refuses to manufacture authority without process-birth proof', 
   );
 });
 
+test('supervisor initialization releases claims when shared knowledge setup fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-supervisor-init-rollback-'));
+  roots.push(root);
+  const stateDir = join(root, 'state');
+  const project = join(root, 'project');
+  const corpus = join(root, 'corpus');
+  mkdirSync(project);
+  mkdirSync(corpus);
+  mkdirSync(join(root, 'foreign'));
+  symlinkSync(join(root, 'foreign'), join(corpus, 'nested-link'));
+  symlinkSync(corpus, join(project, '.rn-agent'));
+
+  assert.throws(
+    () =>
+      createSupervisorAuthority({
+        stateDir,
+        sessionId: 'failed-initialization',
+        source: {
+          kind: 'git',
+          contentRoot: project,
+          appRoot: project,
+          sourceKey: 'source-key',
+          worktreeKey: 'worktree-key',
+          appRootKey: 'app-key',
+          head: 'abc123',
+        },
+        supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+        uid: '501',
+        startHeartbeat: false,
+        ownerStatus: () => 'match',
+      }),
+    /SHARED_KNOWLEDGE_ROOT_UNSAFE/,
+  );
+
+  const registry = openSessionRegistry(createAuthorityStateLayout(stateDir).registry, {
+    ownerStatus: () => 'match',
+  });
+  try {
+    const status = registry.getSessionStatus('failed-initialization');
+    assert.equal(status?.state, 'released');
+    assert.deepEqual(status?.claims, []);
+  } finally {
+    registry.close();
+  }
+});
+
 test('supervisor close is idempotent after the session was already released', () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
@@ -100,6 +148,45 @@ test('supervisor close is idempotent after the session was already released', ()
 
   authority.registry.releaseSession(authority.session);
   assert.doesNotThrow(() => authority.close());
+});
+
+test('supervisor close cancels an interrupted operation before releasing claims', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  const authority = createSupervisorAuthority({
+    stateDir,
+    source: {
+      kind: 'git',
+      contentRoot: '/repo',
+      appRoot: '/repo',
+      sourceKey: 'source-key',
+      worktreeKey: 'worktree-key',
+      appRootKey: 'app-key',
+      head: 'abc123',
+    },
+    supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+    uid: '501',
+    startHeartbeat: false,
+    ownerStatus: () => 'match',
+  });
+  authority.registry.beginOperation(authority.session, {
+    operationId: 'interrupted-operation',
+    tool: 'device_snapshot',
+    profile: 'CSIMDR',
+  });
+
+  assert.doesNotThrow(() => authority.close());
+
+  const registry = openSessionRegistry(authority.layout.registry, {
+    ownerStatus: () => 'match',
+  });
+  try {
+    const status = registry.getSessionStatus(authority.session.sessionId);
+    assert.equal(status?.state, 'released');
+    assert.deepEqual(status?.claims, []);
+  } finally {
+    registry.close();
+  }
 });
 
 test('a supervisor without the source claim stays blocked and exposes the full adoption ID', () => {

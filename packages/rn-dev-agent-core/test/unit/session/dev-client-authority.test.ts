@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildSignedMetroMarker } from '../../../dist/session/metro-authority.js';
-import { pinExactDevClient } from '../../../dist/session/dev-client-authority.js';
+import {
+  boundConnectConflict,
+  pinExactDevClient,
+} from '../../../dist/session/dev-client-authority.js';
 
 const expected = {
   sessionId: 'session-a',
@@ -124,5 +127,39 @@ test('dev-client pinning rejects a target not proven on the claimed device', asy
       },
     ),
     /CDP_TARGET_AUTHORITY_MISMATCH/,
+  );
+});
+
+test('bound connect rejects every explicit target dimension that contradicts the session', () => {
+  const status = {
+    bindings: {
+      metroPort: 8341,
+      device: { platform: 'ios', appId: 'com.example.app' },
+      bundle: { targetId: 'target-a' },
+    },
+  };
+
+  assert.equal(boundConnectConflict(status, {}), null);
+  assert.equal(boundConnectConflict(status, { metroPort: 8082 })?.code, 'METRO_AUTHORITY_MISMATCH');
+  assert.equal(
+    boundConnectConflict(status, { platform: 'android' })?.code,
+    'DEVICE_AUTHORITY_MISMATCH',
+  );
+  assert.equal(
+    boundConnectConflict(status, { bundleId: 'com.foreign.app' })?.code,
+    'DEVICE_AUTHORITY_MISMATCH',
+  );
+  assert.equal(
+    boundConnectConflict(status, { targetId: 'target-b' })?.code,
+    'CDP_TARGET_AUTHORITY_MISMATCH',
+  );
+  assert.equal(
+    boundConnectConflict(status, {
+      metroPort: 8341,
+      platform: 'IOS',
+      bundleId: 'COM.EXAMPLE.APP',
+      targetId: 'target-a',
+    }),
+    null,
   );
 });

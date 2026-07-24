@@ -399,3 +399,79 @@ test('an exactly idempotent Metro rebind preserves bundle authority and ready st
   assert.equal(Object.hasOwn(update.bindings, 'bundle'), false);
   assert.deepEqual(update.releaseResources, []);
 });
+
+test('session release stops its managed Metro before releasing claims', async () => {
+  const calls: string[] = [];
+  const status = {
+    sessionId: 'session-a',
+    bindings: {
+      metro: {
+        mode: 'managed',
+        launcherPid: 123,
+        launcherBirth: 'birth',
+        instanceId: 'metro-a',
+        managementProof: 'proof',
+      },
+    },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => calls.push('release'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: (_binding, authority) => {
+        assert.deepEqual(authority, {
+          sessionId: 'session-a',
+          signerCapability: 'signer',
+        });
+        calls.push('stop-metro');
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'release' });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls, ['stop-metro', 'release']);
+});
+
+test('session release retains claims when managed Metro shutdown is not proven', async () => {
+  let released = false;
+  const status = {
+    sessionId: 'session-a',
+    bindings: { metro: { mode: 'managed' } },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => {
+            released = true;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: () => false,
+    },
+  );
+
+  const result = await handler({ action: 'release' });
+
+  assert.equal(result.isError, true);
+  assert.equal(released, false);
+  assert.match(result.content[0].text, /METRO_AUTHORITY_MISMATCH/);
+});

@@ -9126,6 +9126,18 @@ var SessionRegistry = class {
     });
     this.#pendingPlatformReceipts.delete(operation.operationId);
   }
+  cancelActiveOperationForSession(session) {
+    const operationIds = this.#transaction(() => {
+      this.#requireSession(session);
+      const rows = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
+      this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      return rows.map((row) => String(row.operation_id));
+    });
+    for (const operationId of operationIds) {
+      this.#pendingPlatformReceipts.delete(operationId);
+    }
+  }
   verifyOperation(operation) {
     const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
            FROM sessions WHERE session_id = ?`).get(operation.sessionId));
@@ -9705,6 +9717,10 @@ function resolveStatus() {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", candidates.length === 0 ? "no live session matches this canonical worktree" : "multiple live sessions match this worktree; set RN_DEV_AGENT_SESSION_ID");
   }
   const status = candidates[0];
+  if (explicit && (status.worktreeKey !== source.worktreeKey || status.appRootKey !== source.appRootKey)) {
+    registry.close();
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "explicit session belongs to a different canonical worktree or app root");
+  }
   return Object.assign(status, {
     closeRegistry: () => registry.close(),
     registry,
