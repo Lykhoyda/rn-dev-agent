@@ -13,6 +13,16 @@ import {
   type AuthorityStateLayout,
 } from './state-root.js';
 
+const RELEASABLE_SESSION_STATES = new Set([
+  'active',
+  'source_bound',
+  'metro_bound',
+  'device_claimed',
+  'device_bound',
+  'runtime_bound',
+  'ready',
+]);
+
 export interface SupervisorAuthority {
   layout: AuthorityStateLayout;
   registry: SessionRegistry;
@@ -169,7 +179,7 @@ export function createSupervisorAuthority(input: {
         }
         if (status?.state === 'blocked') {
           registry.discardBlockedSession(session);
-        } else if (status?.state !== 'handoff_cleanup') {
+        } else if (status && RELEASABLE_SESSION_STATES.has(status.state)) {
           registry.releaseSession(session);
         }
       } finally {

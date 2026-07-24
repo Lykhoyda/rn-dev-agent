@@ -5,6 +5,7 @@ import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { captureInstallGeneration } from './install-authority.js';
 import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
+import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { readProcessBirth } from './process-birth.js';
 import { SessionAuthorityError, type SessionStatus } from './registry.js';
@@ -192,6 +193,7 @@ export function createLocalAuthorityProbe(
         !Number.isSafeInteger(port) ||
         !Number.isSafeInteger(pid) ||
         !birth ||
+        metroListenerPid(port) !== pid ||
         inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== 'match'
       ) {
         throw new SessionAuthorityError(

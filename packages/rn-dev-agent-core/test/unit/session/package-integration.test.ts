@@ -47,6 +47,14 @@ test('integration preview is idempotent for its own sentinel scripts', () => {
   assert.deepEqual(second, first);
 });
 
+test('integration preview refreshes the session CLI without replacing original scripts', () => {
+  const first = previewPackageIntegration(packageJson, undefined, '/old/rn-session.js');
+  const second = previewPackageIntegration(first.packageJson, first.manifest, '/new/rn-session.js');
+
+  assert.equal(second.manifest.sessionCli, '/new/rn-session.js');
+  assert.deepEqual(second.manifest.originalScripts, first.manifest.originalScripts);
+});
+
 test('Metro integration composes object and promise configs and is reversible', async () => {
   const original = 'const base = { serializer: {} };\nmodule.exports = base;\n';
   const integrated = previewMetroIntegration(original);

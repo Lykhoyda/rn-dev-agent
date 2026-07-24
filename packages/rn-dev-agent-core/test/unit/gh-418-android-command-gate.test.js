@@ -5,7 +5,9 @@
 // the same stale APK and never runs Gradle).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
+  AndroidAuthorityStaleError,
   probeAndroidRunnerHealthInfo,
   resolveAndroidInstallAction,
   invalidateAndroidRunnerApks,
@@ -17,6 +19,11 @@ import {
   classifyRunnerCompatibility,
   REQUIRED_ANDROID_COMMANDS,
 } from '../../dist/runners/protocol.js';
+
+const runnerSource = readFileSync(
+  new URL('../../src/runners/rn-android-runner-client.ts', import.meta.url),
+  'utf8',
+);
 
 test('gh-418 android: probe parses commands array (non-strings filtered)', async () => {
   _setFetchForTest(async () => ({
@@ -52,6 +59,15 @@ test('gh-418 android: AndroidCommandsStaleError message carries the typed prefix
   assert.match(err.message, /dismissKeyboard/);
   assert.match(err.message, /device_snapshot action=open/);
   assert.deepEqual(err.missing, ['dismissKeyboard']);
+});
+
+test('Android authority upgrades force-reinstall the current artifact once', () => {
+  const err = new AndroidAuthorityStaleError();
+  assert.ok(err.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'));
+  assert.match(
+    runnerSource,
+    /err instanceof AndroidAuthorityStaleError[\s\S]*?_forceReinstall: true[\s\S]*?return state/,
+  );
 });
 
 test('gh-418 android: invalidation deletes exactly the paths the apksExist check reads', () => {

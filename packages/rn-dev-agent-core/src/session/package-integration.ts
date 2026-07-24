@@ -128,7 +128,10 @@ export function previewPackageIntegration(
     packageJson.scripts?.ios === SENTINELS.ios &&
     packageJson.scripts?.android === SENTINELS.android
   ) {
-    return { packageJson, manifest: existing };
+    return {
+      packageJson,
+      manifest: sessionCli ? { ...existing, sessionCli: resolve(sessionCli) } : existing,
+    };
   }
 
   const ios = packageJson.scripts?.ios;

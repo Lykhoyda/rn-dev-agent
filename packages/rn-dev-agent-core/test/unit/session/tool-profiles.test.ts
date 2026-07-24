@@ -26,6 +26,15 @@ test('native runner operations do not require a live CDP bundle seat', () => {
   assert.ok(authorityProfileFor('cdp_interact').axes.includes('B'));
 });
 
+test('hybrid action execution requires both live bundle and runner authority', () => {
+  for (const tool of ['cdp_auto_login', 'cdp_run_action', 'cdp_run_e2e_suite']) {
+    const profile = authorityProfileFor(tool);
+    assert.equal(profile.liveBundleProbe, true);
+    assert.equal(profile.axes.includes('B'), true);
+    assert.equal(profile.axes.includes('R'), true);
+  }
+});
+
 test('diagnostics are explicitly non-verdict and arbitrary evaluate is mutating', () => {
   assert.equal(authorityProfileFor('cdp_status').kind, 'diagnostic');
   assert.equal(authorityProfileFor('device_list').kind, 'diagnostic');

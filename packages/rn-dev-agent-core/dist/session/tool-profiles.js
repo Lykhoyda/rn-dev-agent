@@ -18,10 +18,7 @@ const nativeRead = [
     'device_snapshot',
 ];
 const nativeMutation = [
-    'cdp_auto_login',
-    'cdp_run_action',
     'cdp_repair_action',
-    'cdp_run_e2e_suite',
     'device_accept_system_dialog',
     'device_back',
     'device_batch',
@@ -43,6 +40,7 @@ const nativeMutation = [
     'maestro_run',
     'maestro_test_all',
 ];
+const hybridMutation = ['cdp_auto_login', 'cdp_run_action', 'cdp_run_e2e_suite'];
 const cdpRead = [
     'cdp_component_state',
     'cdp_component_tree',
@@ -120,6 +118,12 @@ add(nativeMutation, {
     axes: ['C', 'S', 'I', 'M', 'D', 'R'],
     mutation: true,
     liveBundleProbe: false,
+});
+add(hybridMutation, {
+    kind: 'authoritative',
+    axes: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
+    mutation: true,
+    liveBundleProbe: true,
 });
 add(cdpRead, {
     kind: 'authoritative',

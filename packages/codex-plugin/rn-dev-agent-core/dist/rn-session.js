@@ -7535,6 +7535,9 @@ function createMetroAuthorityModule(marker) {
 `;
 }
 
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+import { execFileSync as execFileSync4 } from "node:child_process";
+
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { realpathSync } from "node:fs";
@@ -7760,84 +7763,6 @@ function probeProcessBirth(pid, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
-async function fetchMetroStatus(port) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2e3);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/status`, {
-      signal: controller.signal
-    });
-    if (!response.ok)
-      throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function captureMetroBinding(input, dependencies = {}) {
-  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
-  if (!birth) {
-    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
-  }
-  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
-  if (!status.includes("packager-status:running")) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
-  }
-  const servingRoot = (dependencies.servingRoot ?? cwdForPort)(input.port);
-  if (!servingRoot || !pathMatchesRoot(servingRoot, input.sourceRoot)) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
-  }
-  return {
-    port: input.port,
-    pid: input.pid,
-    birth: birth.token,
-    instanceId: input.instanceId,
-    servingRoot,
-    buildGeneration: input.buildGeneration
-  };
-}
-
-// packages/rn-dev-agent-core/dist/session/managed-metro.js
-import { execFileSync as execFileSync4, spawn } from "node:child_process";
-import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync as readFileSync3 } from "node:fs";
-import { join as join2 } from "node:path";
-function parentPid(pid) {
-  try {
-    const output = process.platform === "win32" ? execFileSync4("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`
-    ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 }) : execFileSync4("ps", ["-p", String(pid), "-o", "ppid="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 2e3
-    });
-    const parsed = Number(output.trim());
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function listenerOwnedByLauncher(listenerPid, launcherPid) {
-  let current = listenerPid;
-  const visited = /* @__PURE__ */ new Set();
-  while (current && !visited.has(current)) {
-    if (current === launcherPid)
-      return true;
-    visited.add(current);
-    current = parentPid(current);
-  }
-  return false;
-}
-function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync4) {
-  const probe = probeManagedMetroListener(port, platform, execute);
-  return probe.status === "listening" ? probe.pid : null;
-}
 function numericListener(output, emptyStatus) {
   const value = String(output).trim();
   if (!value)
@@ -7850,7 +7775,7 @@ function numericListener(output, emptyStatus) {
   const [pid] = pids;
   return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
 }
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync4) {
+function probeMetroListener(port, platform = process.platform, execute = execFileSync4) {
   try {
     if (platform === "win32") {
       const output = execute("powershell.exe", [
@@ -7887,6 +7812,91 @@ function probeManagedMetroListener(port, platform = process.platform, execute = 
     const failure = error;
     return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
   }
+}
+function metroListenerPid(port, platform = process.platform, execute = execFileSync4) {
+  const probe = probeMetroListener(port, platform, execute);
+  return probe.status === "listening" ? probe.pid : null;
+}
+async function fetchMetroStatus(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: controller.signal
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function captureMetroBinding(input, dependencies = {}) {
+  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
+  if (!birth) {
+    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
+  }
+  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
+  if (!status.includes("packager-status:running")) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
+  }
+  const servingRoot = (dependencies.servingRoot ?? cwdForPort)(input.port);
+  if (!servingRoot || !pathMatchesRoot(servingRoot, input.sourceRoot)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
+  }
+  return {
+    port: input.port,
+    pid: input.pid,
+    birth: birth.token,
+    instanceId: input.instanceId,
+    servingRoot,
+    buildGeneration: input.buildGeneration
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/managed-metro.js
+import { execFileSync as execFileSync5, spawn } from "node:child_process";
+import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { closeSync, existsSync, openSync, readFileSync as readFileSync3 } from "node:fs";
+import { join as join2 } from "node:path";
+function parentPid(pid) {
+  try {
+    const output = process.platform === "win32" ? execFileSync5("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 }) : execFileSync5("ps", ["-p", String(pid), "-o", "ppid="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    });
+    const parsed = Number(output.trim());
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function listenerOwnedByLauncher(listenerPid, launcherPid) {
+  let current = listenerPid;
+  const visited = /* @__PURE__ */ new Set();
+  while (current && !visited.has(current)) {
+    if (current === launcherPid)
+      return true;
+    visited.add(current);
+    current = parentPid(current);
+  }
+  return false;
+}
+function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync5) {
+  return metroListenerPid(port, platform, execute);
 }
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync;
@@ -9426,7 +9436,7 @@ function openSessionRegistry(path, dependencies) {
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4 } from "node:crypto";
-import { execFileSync as execFileSync5 } from "node:child_process";
+import { execFileSync as execFileSync6 } from "node:child_process";
 import { readFileSync as readFileSync4, realpathSync as realpathSync2 } from "node:fs";
 import { isAbsolute, join as join3, relative, resolve as resolve2 } from "node:path";
 function digest2(parts) {
@@ -9438,7 +9448,7 @@ function digest2(parts) {
   return hash.digest("hex");
 }
 function defaultGit(root, args) {
-  return execFileSync5("git", ["-C", root, ...args], {
+  return execFileSync6("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3

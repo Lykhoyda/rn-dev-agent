@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { captureInstallGeneration } from './install-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { readProcessBirth } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
@@ -137,6 +138,7 @@ export function createLocalAuthorityProbe(dependencies) {
             if (!Number.isSafeInteger(port) ||
                 !Number.isSafeInteger(pid) ||
                 !birth ||
+                metroListenerPid(port) !== pid ||
                 inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== 'match') {
                 throw new SessionAuthorityError('METRO_INSTANCE_CHANGED', 'Metro process identity no longer matches the bound instance');
             }

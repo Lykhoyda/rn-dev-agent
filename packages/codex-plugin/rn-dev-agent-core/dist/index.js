@@ -22337,6 +22337,7 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
 var rn_android_runner_client_exports = {};
 __export(rn_android_runner_client_exports, {
+  AndroidAuthorityStaleError: () => AndroidAuthorityStaleError,
   AndroidCommandsStaleError: () => AndroidCommandsStaleError,
   _androidRunnerApkPathsForTest: () => _androidRunnerApkPathsForTest,
   _resetCapabilitiesForTest: () => _resetCapabilitiesForTest2,
@@ -22740,6 +22741,14 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
   try {
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
+    if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
+      await reapMismatchedAndroidRunner(deviceId);
+      const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+        _forceReinstall: true
+      });
+      pendingUpgradeNote = "runner upgraded (authority identity mismatch)";
+      return state;
+    }
     if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
       await reapMismatchedAndroidRunner(deviceId);
       invalidateAndroidRunnerApks();
@@ -22892,7 +22901,7 @@ ${diag.trim()}` : ""}`));
         })) {
           resolved = true;
           child.kill("SIGTERM");
-          reject(new Error("RUNNER_OWNERSHIP_MISMATCH: fresh Android runner health identity is foreign"));
+          reject(new AndroidAuthorityStaleError());
           return;
         }
         const compat = classifyAndroidHealth(info);
@@ -23170,7 +23179,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -23207,6 +23216,11 @@ var init_rn_android_runner_client = __esm({
       constructor(missing, bundleId) {
         super(`RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands (missing: ${missing.join(", ") || "unknown"}). Re-open the device session (device_snapshot action=open appId=${bundleId ?? "<your.app.id>"} platform=android) to rebuild it.`);
         this.missing = missing;
+      }
+    };
+    AndroidAuthorityStaleError = class extends Error {
+      constructor() {
+        super("RUNNER_OWNERSHIP_MISMATCH: installed Android runner lacks current authority identity");
       }
     };
     RUNNER_APK_PATHS = [APK_APP, APK_TEST];
@@ -57541,6 +57555,7 @@ var proofEventSchema = external_exports.object({
   argsHash: external_exports.string().optional(),
   authorityReceiptHash: sha256Schema.optional()
 }).strict();
+var acceptedProofEventSchema = proofEventSchema.extend({ authorityReceiptHash: sha256Schema }).strict();
 var proofIssueSchema = external_exports.object({
   repository: external_exports.string().min(1),
   number: external_exports.number().int().positive()
@@ -57674,6 +57689,7 @@ var proofEventTraceSchema = external_exports.object({
   allowedTools: external_exports.array(external_exports.string().min(1)).min(1),
   observed: external_exports.array(proofEventSchema)
 }).strict();
+var acceptedProofEventTraceSchema = proofEventTraceSchema.extend({ observed: external_exports.array(acceptedProofEventSchema) }).strict();
 var proofFrameMatchSchema = external_exports.object({
   stepId: kebabIdSchema,
   screenshotSha256: sha256Schema,
@@ -57724,7 +57740,7 @@ var acceptedEvidenceShape = {
   video: proofVideoSchema,
   screenshots: external_exports.array(proofScreenshotSchema).min(3),
   assertions: external_exports.array(acceptedProofAssertionSchema).min(3),
-  eventTrace: proofEventTraceSchema,
+  eventTrace: acceptedProofEventTraceSchema,
   frameMatches: external_exports.array(proofFrameMatchSchema).min(3),
   contactSheet: proofContactSheetSchema,
   errorBaseline: proofErrorBaselineSchema.extend({ clean: external_exports.literal(true) }).strict(),
@@ -65712,6 +65728,61 @@ function verifyBuildReceipt(receipt2, capability, expected) {
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
 init_metro_cwd();
 init_process_birth();
+import { execFileSync as execFileSync12 } from "node:child_process";
+function numericListener(output, emptyStatus) {
+  const value = String(output).trim();
+  if (!value)
+    return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: "unknown" };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+}
+function probeMetroListener(port, platform = process.platform, execute = execFileSync12) {
+  try {
+    if (platform === "win32") {
+      const output = execute("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
+    }
+    if (platform === "linux") {
+      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const value = String(output).trim();
+      if (!value)
+        return { status: "absent" };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+    }
+    if (platform === "darwin") {
+      const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 2e3
+      });
+      return numericListener(output, "unknown");
+    }
+    return { status: "unknown" };
+  } catch (error2) {
+    const failure = error2;
+    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
+  }
+}
+function metroListenerPid(port, platform = process.platform, execute = execFileSync12) {
+  const probe = probeMetroListener(port, platform, execute);
+  return probe.status === "listening" ? probe.pid : null;
+}
 async function fetchMetroStatus(port) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2e3);
@@ -65729,6 +65800,10 @@ async function fetchMetroStatus(port) {
 async function captureMetroBinding(input, dependencies = {}) {
   if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
     throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
   }
   const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
   if (!birth) {
@@ -65900,7 +65975,10 @@ function parseSupportedScript(script, platform) {
 }
 function previewPackageIntegration(packageJson, existing, sessionCli) {
   if (existing && packageJson.scripts?.ios === SENTINELS.ios && packageJson.scripts?.android === SENTINELS.android) {
-    return { packageJson, manifest: existing };
+    return {
+      packageJson,
+      manifest: sessionCli ? { ...existing, sessionCli: resolve6(sessionCli) } : existing
+    };
   }
   const ios = packageJson.scripts?.ios;
   const android = packageJson.scripts?.android;
@@ -66208,57 +66286,10 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 init_process_birth();
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
-import { execFileSync as execFileSync12, spawn as spawn6 } from "node:child_process";
+import { execFileSync as execFileSync13, spawn as spawn6 } from "node:child_process";
 init_process_birth();
-function numericListener(output, emptyStatus) {
-  const value = String(output).trim();
-  if (!value)
-    return { status: emptyStatus };
-  const candidates = value.split(/\s+/);
-  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
-    return { status: "unknown" };
-  }
-  const pids = new Set(candidates.map(Number));
-  const [pid] = pids;
-  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-}
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync12) {
-  try {
-    if (platform === "win32") {
-      const output = execute("powershell.exe", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
-      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
-      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
-    }
-    if (platform === "linux") {
-      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2e3
-      });
-      const value = String(output).trim();
-      if (!value)
-        return { status: "absent" };
-      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
-      const [pid] = pids;
-      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-    }
-    if (platform === "darwin") {
-      const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 2e3
-      });
-      return numericListener(output, "unknown");
-    }
-    return { status: "unknown" };
-  } catch (error2) {
-    const failure = error2;
-    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
-  }
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync13) {
+  return probeMetroListener(port, platform, execute);
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
@@ -66714,10 +66745,7 @@ var nativeRead = [
   "device_snapshot"
 ];
 var nativeMutation = [
-  "cdp_auto_login",
-  "cdp_run_action",
   "cdp_repair_action",
-  "cdp_run_e2e_suite",
   "device_accept_system_dialog",
   "device_back",
   "device_batch",
@@ -66739,6 +66767,7 @@ var nativeMutation = [
   "maestro_run",
   "maestro_test_all"
 ];
+var hybridMutation = ["cdp_auto_login", "cdp_run_action", "cdp_run_e2e_suite"];
 var cdpRead = [
   "cdp_component_state",
   "cdp_component_tree",
@@ -66816,6 +66845,12 @@ add(nativeMutation, {
   axes: ["C", "S", "I", "M", "D", "R"],
   mutation: true,
   liveBundleProbe: false
+});
+add(hybridMutation, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "B", "D", "R"],
+  mutation: true,
+  liveBundleProbe: true
 });
 add(cdpRead, {
   kind: "authoritative",
@@ -67242,7 +67277,7 @@ function createAuthorityGate(runtime, dependencies) {
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 init_metro_cwd();
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 import { createHash as createHash14 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
@@ -67277,7 +67312,7 @@ init_process_birth();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash13 } from "node:crypto";
-import { execFileSync as execFileSync13 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 import { readFileSync as readFileSync35, realpathSync as realpathSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join50, relative as relative2, resolve as resolve7 } from "node:path";
 function digest(parts) {
@@ -67289,7 +67324,7 @@ function digest(parts) {
   return hash.digest("hex");
 }
 function defaultGit(root, args) {
-  return execFileSync13("git", ["-C", root, ...args], {
+  return execFileSync14("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -67412,7 +67447,7 @@ async function defaultFetchJson(url, init) {
 }
 function defaultDeviceExists(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync14("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -67420,7 +67455,7 @@ function defaultDeviceExists(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync14("adb", ["devices"], {
+  const output = execFileSync15("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -67488,7 +67523,7 @@ function createLocalAuthorityProbe(dependencies) {
       const port = Number(metro.port);
       const pid = Number(metro.pid);
       const birth = String(metro.birth ?? "");
-      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== "match") {
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || metroListenerPid(port) !== pid || inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== "match") {
         throw new SessionAuthorityError("METRO_INSTANCE_CHANGED", "Metro process identity no longer matches the bound instance");
       }
       const statusText = await fetchText(`http://127.0.0.1:${port}/status`);

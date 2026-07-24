@@ -78,6 +78,30 @@ test('supervisor refuses to manufacture authority without process-birth proof', 
   );
 });
 
+test('supervisor close is idempotent after the session was already released', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  const authority = createSupervisorAuthority({
+    stateDir,
+    source: {
+      kind: 'git',
+      contentRoot: '/repo',
+      appRoot: '/repo',
+      sourceKey: 'source-key',
+      worktreeKey: 'worktree-key',
+      appRootKey: 'app-key',
+      head: 'abc123',
+    },
+    supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+    uid: '501',
+    startHeartbeat: false,
+    ownerStatus: () => 'match',
+  });
+
+  authority.registry.releaseSession(authority.session);
+  assert.doesNotThrow(() => authority.close());
+});
+
 test('a supervisor without the source claim stays blocked and exposes the full adoption ID', () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);

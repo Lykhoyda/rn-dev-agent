@@ -499,7 +499,8 @@
               "tool",
               "ok",
               "ts",
-              "durationMs"
+              "durationMs",
+              "authorityReceiptHash"
             ],
             "type": "object"
           },

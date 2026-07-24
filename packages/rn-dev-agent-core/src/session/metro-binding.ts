@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { readProcessBirth, type ProcessBirth } from './process-birth.js';
 
@@ -14,6 +15,91 @@ interface MetroBindingDependencies {
   readBirth?: (pid: number) => ProcessBirth | null;
   fetchStatus?: (port: number) => Promise<string>;
   servingRoot?: (port: number) => string | null;
+  listenerPid?: (port: number) => number | null;
+}
+
+export type MetroListenerProbe =
+  | { status: 'listening'; pid: number }
+  | { status: 'absent' }
+  | { status: 'unknown' };
+
+function numericListener(output: unknown, emptyStatus: 'absent' | 'unknown'): MetroListenerProbe {
+  const value = String(output).trim();
+  if (!value) return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: 'unknown' };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0
+    ? { status: 'listening', pid }
+    : { status: 'unknown' };
+}
+
+export function probeMetroListener(
+  port: number,
+  platform: NodeJS.Platform = process.platform,
+  execute: typeof execFileSync = execFileSync,
+): MetroListenerProbe {
+  try {
+    if (platform === 'win32') {
+      const output = execute(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); ` +
+            `if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`,
+        ],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
+      );
+      return String(output).trim() === 'ABSENT'
+        ? { status: 'absent' }
+        : numericListener(output, 'unknown');
+    }
+    if (platform === 'linux') {
+      const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 2_000,
+      });
+      const value = String(output).trim();
+      if (!value) return { status: 'absent' };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0
+        ? { status: 'listening', pid }
+        : { status: 'unknown' };
+    }
+    if (platform === 'darwin') {
+      const output = execute('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 2_000,
+      });
+      return numericListener(output, 'unknown');
+    }
+    return { status: 'unknown' };
+  } catch (error) {
+    const failure = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    return platform === 'darwin' &&
+      failure.status === 1 &&
+      !String(failure.stdout ?? '').trim() &&
+      !String(failure.stderr ?? '').trim()
+      ? { status: 'absent' }
+      : { status: 'unknown' };
+  }
+}
+
+export function metroListenerPid(
+  port: number,
+  platform: NodeJS.Platform = process.platform,
+  execute: typeof execFileSync = execFileSync,
+): number | null {
+  const probe = probeMetroListener(port, platform, execute);
+  return probe.status === 'listening' ? probe.pid : null;
 }
 
 async function fetchMetroStatus(port: number): Promise<string> {
@@ -51,6 +137,10 @@ export async function captureMetroBinding(
     input.buildGeneration < 1
   ) {
     throw new Error('METRO_AUTHORITY_MISMATCH: Metro binding is incomplete');
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error('METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener');
   }
   const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
   if (!birth) {

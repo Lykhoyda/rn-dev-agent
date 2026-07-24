@@ -129,9 +129,30 @@ const acceptedReceipt = {
   eventTrace: {
     allowedTools: ['cdp_run_action', 'proof_step', 'device_screenshot', 'expect_visible_by_testid'],
     observed: [
-      { tool: 'cdp_run_action', ok: true, ts: 1_000, durationMs: 1_000, argsHash: hash },
-      { tool: 'proof_step', ok: true, ts: 2_000, durationMs: 100, argsHash: hash },
-      { tool: 'device_screenshot', ok: true, ts: 3_000, durationMs: 100, argsHash: hash },
+      {
+        tool: 'cdp_run_action',
+        ok: true,
+        ts: 1_000,
+        durationMs: 1_000,
+        argsHash: hash,
+        authorityReceiptHash: hash,
+      },
+      {
+        tool: 'proof_step',
+        ok: true,
+        ts: 2_000,
+        durationMs: 100,
+        argsHash: hash,
+        authorityReceiptHash: hash,
+      },
+      {
+        tool: 'device_screenshot',
+        ok: true,
+        ts: 3_000,
+        durationMs: 100,
+        argsHash: hash,
+        authorityReceiptHash: hash,
+      },
     ],
   },
   frameMatches: ['start', 'form', 'result'].map((stepId, index) => ({
@@ -222,6 +243,28 @@ test('accepted receipts reject failed assertions in Zod and JSON Schema', () => 
     {
       zod: finalProofReceiptSchema.safeParse(failedAssertionReceipt).success,
       jsonSchema: validate(failedAssertionReceipt),
+    },
+    { zod: false, jsonSchema: false },
+    JSON.stringify(validate.errors),
+  );
+});
+
+test('accepted receipts require every observed event to carry authority', () => {
+  const validate = loadValidator();
+  const missingAuthorityReceipt = {
+    ...acceptedReceipt,
+    eventTrace: {
+      ...acceptedReceipt.eventTrace,
+      observed: acceptedReceipt.eventTrace.observed.map(
+        ({ authorityReceiptHash: _authorityReceiptHash, ...event }) => event,
+      ),
+    },
+  };
+
+  assert.deepEqual(
+    {
+      zod: finalProofReceiptSchema.safeParse(missingAuthorityReceipt).success,
+      jsonSchema: validate(missingAuthorityReceipt),
     },
     { zod: false, jsonSchema: false },
     JSON.stringify(validate.errors),

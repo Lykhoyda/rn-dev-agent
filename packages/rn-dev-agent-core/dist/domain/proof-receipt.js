@@ -51,6 +51,9 @@ export const proofEventSchema = z
     authorityReceiptHash: sha256Schema.optional(),
 })
     .strict();
+export const acceptedProofEventSchema = proofEventSchema
+    .extend({ authorityReceiptHash: sha256Schema })
+    .strict();
 export const proofIssueSchema = z
     .object({
     repository: z.string().min(1),
@@ -239,6 +242,9 @@ export const proofEventTraceSchema = z
     observed: z.array(proofEventSchema),
 })
     .strict();
+export const acceptedProofEventTraceSchema = proofEventTraceSchema
+    .extend({ observed: z.array(acceptedProofEventSchema) })
+    .strict();
 export const proofFrameMatchSchema = z
     .object({
     stepId: kebabIdSchema,
@@ -297,7 +303,7 @@ const acceptedEvidenceShape = {
     video: proofVideoSchema,
     screenshots: z.array(proofScreenshotSchema).min(3),
     assertions: z.array(acceptedProofAssertionSchema).min(3),
-    eventTrace: proofEventTraceSchema,
+    eventTrace: acceptedProofEventTraceSchema,
     frameMatches: z.array(proofFrameMatchSchema).min(3),
     contactSheet: proofContactSheetSchema,
     errorBaseline: proofErrorBaselineSchema.extend({ clean: z.literal(true) }).strict(),

@@ -2,7 +2,13 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { closeSync, existsSync, openSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { captureMetroBinding, type MetroBinding } from './metro-binding.js';
+import {
+  captureMetroBinding,
+  metroListenerPid,
+  probeMetroListener,
+  type MetroBinding,
+  type MetroListenerProbe,
+} from './metro-binding.js';
 import { readProcessBirth, type ProcessBirth } from './process-birth.js';
 
 export interface ManagedMetroBinding extends MetroBinding {
@@ -69,83 +75,17 @@ export function managedMetroListenerPid(
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
 ): number | null {
-  const probe = probeManagedMetroListener(port, platform, execute);
-  return probe.status === 'listening' ? probe.pid : null;
+  return metroListenerPid(port, platform, execute);
 }
 
-export type ManagedMetroListenerProbe =
-  | { status: 'listening'; pid: number }
-  | { status: 'absent' }
-  | { status: 'unknown' };
-
-function numericListener(output: unknown, emptyStatus: 'absent' | 'unknown') {
-  const value = String(output).trim();
-  if (!value) return { status: emptyStatus } as ManagedMetroListenerProbe;
-  const candidates = value.split(/\s+/);
-  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
-    return { status: 'unknown' } as const;
-  }
-  const pids = new Set(candidates.map(Number));
-  const [pid] = pids;
-  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0
-    ? ({ status: 'listening', pid } as const)
-    : ({ status: 'unknown' } as const);
-}
+export type ManagedMetroListenerProbe = MetroListenerProbe;
 
 export function probeManagedMetroListener(
   port: number,
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
 ): ManagedMetroListenerProbe {
-  try {
-    if (platform === 'win32') {
-      const output = execute(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); ` +
-            `if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`,
-        ],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
-      );
-      return String(output).trim() === 'ABSENT'
-        ? { status: 'absent' }
-        : numericListener(output, 'unknown');
-    }
-    if (platform === 'linux') {
-      const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 2_000,
-      });
-      const value = String(output).trim();
-      if (!value) return { status: 'absent' };
-      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
-      const [pid] = pids;
-      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0
-        ? { status: 'listening', pid }
-        : { status: 'unknown' };
-    }
-    if (platform === 'darwin') {
-      const output = execute('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 2_000,
-      });
-      return numericListener(output, 'unknown');
-    }
-    return { status: 'unknown' };
-  } catch (error) {
-    const failure = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
-    return platform === 'darwin' &&
-      failure.status === 1 &&
-      !String(failure.stdout ?? '').trim() &&
-      !String(failure.stderr ?? '').trim()
-      ? { status: 'absent' }
-      : { status: 'unknown' };
-  }
+  return probeMetroListener(port, platform, execute);
 }
 
 export function resolveManagedMetroCommand(

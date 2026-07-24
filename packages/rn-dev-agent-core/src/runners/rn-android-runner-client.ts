@@ -748,6 +748,12 @@ export class AndroidCommandsStaleError extends Error {
   }
 }
 
+export class AndroidAuthorityStaleError extends Error {
+  constructor() {
+    super('RUNNER_OWNERSHIP_MISMATCH: installed Android runner lacks current authority identity');
+  }
+}
+
 // GH #418: deleting the APKs is the artifact invalidation — apksExist flips
 // false, so resolveAndroidInstallAction returns 'build-then-install' (Gradle).
 // The invalidation and the install-action check share RUNNER_APK_PATHS so
@@ -799,6 +805,14 @@ export async function startAndroidRunner(
   try {
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
+    if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
+      await reapMismatchedAndroidRunner(deviceId);
+      const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+        _forceReinstall: true,
+      });
+      pendingUpgradeNote = 'runner upgraded (authority identity mismatch)';
+      return state;
+    }
     if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
       // Killing the local adb child does NOT free the device-side
       // UiAutomation slot (#237) — reap through the slot-release path so the
@@ -1008,11 +1022,7 @@ async function startAndroidRunnerAttempt(
           ) {
             resolved = true;
             child.kill('SIGTERM');
-            reject(
-              new Error(
-                'RUNNER_OWNERSHIP_MISMATCH: fresh Android runner health identity is foreign',
-              ),
-            );
+            reject(new AndroidAuthorityStaleError());
             return;
           }
           const compat = classifyAndroidHealth(info);

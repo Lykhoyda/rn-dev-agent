@@ -57,6 +57,10 @@ export const proofEventSchema = z
   })
   .strict();
 
+export const acceptedProofEventSchema = proofEventSchema
+  .extend({ authorityReceiptHash: sha256Schema })
+  .strict();
+
 export const proofIssueSchema = z
   .object({
     repository: z.string().min(1),
@@ -262,6 +266,10 @@ export const proofEventTraceSchema = z
   })
   .strict();
 
+export const acceptedProofEventTraceSchema = proofEventTraceSchema
+  .extend({ observed: z.array(acceptedProofEventSchema) })
+  .strict();
+
 export const proofFrameMatchSchema = z
   .object({
     stepId: kebabIdSchema,
@@ -325,7 +333,7 @@ const acceptedEvidenceShape = {
   video: proofVideoSchema,
   screenshots: z.array(proofScreenshotSchema).min(3),
   assertions: z.array(acceptedProofAssertionSchema).min(3),
-  eventTrace: proofEventTraceSchema,
+  eventTrace: acceptedProofEventTraceSchema,
   frameMatches: z.array(proofFrameMatchSchema).min(3),
   contactSheet: proofContactSheetSchema,
   errorBaseline: proofErrorBaselineSchema.extend({ clean: z.literal(true) }).strict(),
@@ -373,6 +381,7 @@ export type ProofStage = z.infer<typeof proofStageSchema>;
 export type StoryboardStep = z.infer<typeof storyboardStepSchema>;
 export type Storyboard = z.infer<typeof storyboardSchema>;
 export type ProofEvent = z.infer<typeof proofEventSchema>;
+export type AcceptedProofEvent = z.infer<typeof acceptedProofEventSchema>;
 export type ProofIssue = z.infer<typeof proofIssueSchema>;
 export type ProofPullRequest = z.infer<typeof proofPullRequestSchema>;
 export type AcceptanceMapping = z.infer<typeof acceptanceMappingSchema>;
