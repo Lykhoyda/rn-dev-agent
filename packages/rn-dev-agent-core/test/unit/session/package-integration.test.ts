@@ -359,6 +359,37 @@ test('bound subdirectories reject a symlink back to the retained ancestor', () =
   }
 });
 
+test('bound child adoption rejects a newly symlinked parent ancestor', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-adoption-'));
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-adoption-external-'));
+  const external = join(externalRoot, 'agent');
+  const agentPath = join(root, '.rn-agent');
+  const integrationPath = join(agentPath, 'integration');
+  mkdirSync(integrationPath, { recursive: true });
+  writeFileSync(join(integrationPath, 'authority-marker.js'), 'before\n');
+  const agent = openBoundDirectory(agentPath);
+  try {
+    assert.throws(
+      () =>
+        openBoundSubdirectory(agent, 'integration', {
+          afterChildBind: () => {
+            renameSync(agentPath, external);
+            symlinkSync(external, agentPath, 'dir');
+          },
+        }),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(
+      readFileSync(join(external, 'integration', 'authority-marker.js'), 'utf8'),
+      'before\n',
+    );
+  } finally {
+    closeBoundDirectory(agent);
+    rmSync(root, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
+  }
+});
+
 test('bounded CAS recovery restores a file captured during worker timeout', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-timeout-'));
   const markerPath = join(root, 'authority-marker.js');
@@ -497,6 +528,94 @@ test('bound CAS rejects concurrent mode changes', () => {
   }
 });
 
+test('bound CAS can change mode when the expected mode is omitted', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-mode-change-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o644 });
+  const directory = openBoundDirectory(root);
+  try {
+    casBoundDirectoryFiles(directory, [
+      {
+        expected: Buffer.from('before\n'),
+        mode: 0o600,
+        name: 'authority-marker.js',
+        replacement: Buffer.from('after\n'),
+      },
+    ]);
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+    if (process.platform !== 'win32') {
+      assert.equal(statSync(markerPath).mode & 0o777, 0o600);
+    }
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('committed bound CAS succeeds when artifact cleanup needs recovery', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-committed-cleanup-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const directory = openBoundDirectory(root);
+  try {
+    casBoundDirectoryFiles(
+      directory,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          expectedMode: 0o600,
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      { failCleanupAfterCommit: true },
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+    assert.deepEqual(readdirSync(root), ['authority-marker.js']);
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bound workers exit when their owner disconnects', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-owner-exit-'));
+  const pidPath = join(root, 'worker.pid');
+  try {
+    const moduleUrl = pathToFileURL(
+      join(process.cwd(), 'packages/rn-dev-agent-core/dist/session/bound-directory.js'),
+    ).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        "const {writeFileSync}=await import('node:fs');const {openBoundDirectory}=await import(process.argv[1]);const directory=openBoundDirectory(process.argv[2]);writeFileSync(process.argv[3],String(directory.worker.pid));process.exit(0);",
+        moduleUrl,
+        root,
+        pidPath,
+      ],
+      { encoding: 'utf8', timeout: 5_000 },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const workerPid = Number(readFileSync(pidPath, 'utf8'));
+    const deadline = Date.now() + 3_000;
+    let alive = true;
+    while (alive && Date.now() < deadline) {
+      try {
+        process.kill(workerPid, 0);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      } catch {
+        alive = false;
+      }
+    }
+    assert.equal(alive, false);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('confirmed integration preserves concurrent package inputs', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-conflict-'));
   try {
@@ -522,6 +641,34 @@ test('confirmed integration preserves concurrent package inputs', () => {
     rmSync(root, { force: true, recursive: true });
   }
 });
+
+test(
+  'confirmed integration preserves concurrent Metro mode changes',
+  { skip: process.platform === 'win32' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-mode-conflict-'));
+    try {
+      const packagePath = join(root, 'package.json');
+      const metroPath = join(root, 'metro.config.js');
+      const metroBefore = 'module.exports = { serializer: {} };\n';
+      writeFileSync(packagePath, `${JSON.stringify(packageJson)}\n`);
+      writeFileSync(metroPath, metroBefore, { mode: 0o644 });
+
+      assert.throws(
+        () =>
+          applyPackageIntegration(
+            { appRoot: root, sessionCli: join(root, 'rn-session.js') },
+            { beforeCommit: () => chmodSync(metroPath, 0o600) },
+          ),
+        /SESSION_INTEGRATION_CONFLICT/,
+      );
+      assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
+      assert.equal(statSync(metroPath).mode & 0o777, 0o600);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  },
+);
 
 test('confirmed integration keeps the shared .rn-agent corpus continuously available', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-shared-root-'));
