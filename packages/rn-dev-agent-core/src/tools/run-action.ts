@@ -525,8 +525,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
 
       if (atRisk) {
         const candidate = getReplayDeps(args);
-        const replayDeps =
-          candidate && (await claimBundleAuthority(args)) ? candidate : null;
+        const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
         const probe = replayDeps ? firstReplayTestId(action.body, args.params ?? {}) : null;
         if (replayDeps && probe) {
           const tProbe = Date.now();
@@ -737,8 +736,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       let cdpJsFallback: CdpJsFallbackSkip | undefined;
       if (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN') {
         const candidate = getReplayDeps(args);
-        const replayDeps =
-          candidate && (await claimBundleAuthority(args)) ? candidate : null;
+        const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
         const probe = !replayDeps
           ? null
           : failure.kind === 'SELECTOR_NOT_FOUND'

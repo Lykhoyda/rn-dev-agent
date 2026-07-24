@@ -1210,11 +1210,7 @@ export class SessionRegistry {
       this.#database
         .prepare('UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?')
         .run(now, handoffId);
-      this.#advanceActiveOperationFence(
-        session,
-        row.authority_version,
-        row.authority_version + 1,
-      );
+      this.#advanceActiveOperationFence(session, row.authority_version, row.authority_version + 1);
     });
   }
 

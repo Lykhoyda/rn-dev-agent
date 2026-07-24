@@ -125,10 +125,9 @@ adb devices 2>/dev/null | grep -v "List"
 If none: check `$ANDROID_HOME/emulator/emulator -list-avds`
 
 ### 7. Metro dev server
-```bash
-curl -s http://127.0.0.1:8081/status 2>/dev/null
-```
-Should return `packager-status:running`. If not: suggest `npx expo start` or `npx react-native start`
+Call `rn_session(action="status")`, then inspect the bound Metro with
+`cdp_status`. If an integrated session has no running Metro, suggest literal
+`pnpm ios` or `pnpm android`.
 
 ### 8. CDP connection
 Call `cdp_status` MCP tool. Should return `ok: true` with `cdp.connected: true`.
@@ -304,7 +303,7 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] **iOS targets**: `packages/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app` exists (pre-built once via `xcodebuild build-for-testing`)
 - [ ] `~/.maestro-runner/bin/maestro-runner --version` works (or `command -v maestro-runner`)
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
-- [ ] `curl -s http://127.0.0.1:8081/status` returns `packager-status:running`
+- [ ] `rn_session(action="status")` and `cdp_status` report the bound Metro
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` AND `capabilities.helpersInjected: true`
 - [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
 - [ ] idb row is `OK`, `INSTALLING (background)`, or `MISSING` with the manual command — never blocks setup (mirror falls back to simctl)

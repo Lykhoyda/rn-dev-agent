@@ -467,11 +467,9 @@ export function readProofCandidateHeadArtifacts(
         return null;
       }
       execFileSync('git', ['-C', root, 'ls-files', '--error-unmatch', artifactRelativePath]);
-      const headBytes = execFileSync(
-        'git',
-        ['-C', root, 'show', `HEAD:${artifactRelativePath}`],
-        { maxBuffer: 128 * 1024 * 1024 },
-      );
+      const headBytes = execFileSync('git', ['-C', root, 'show', `HEAD:${artifactRelativePath}`], {
+        maxBuffer: 128 * 1024 * 1024,
+      });
       const artifactBytes = readFileSync(resolvedArtifactPath);
       if (hashBytes(artifactBytes) !== hashBytes(headBytes)) return null;
       verifiedBytes.push(artifactBytes);

@@ -170,7 +170,7 @@ Then, once connected, gather evidence in parallel:
 | console.error() | cdp_console_log(level="error") | MCP |
 | Native crash (iOS) | collect_logs(sources=["native_ios"]) | MCP |
 | Native crash (Android) | collect_logs(sources=["native_android"]) | MCP |
-| Metro bundle error | curl localhost:8081/status | bash |
+| Metro bundle error | cdp_metro_events | MCP |
 | Network failure | cdp_network_log (status=0 or missing) | MCP |
 
 **Key rule**: If CDP shows no errors but the app is broken, the problem
@@ -202,7 +202,7 @@ xcrun simctl spawn booted log show --last 5m \
 **If blank/white screen with no RedBox:**
 1. `cdp_component_tree(depth=1)` -- are there fiber roots? (Sanctioned exception to the always-filter rule: on a blank screen there may be no route name to filter by, and `depth=1` returns only root-level nodes — a presence probe, not a dump.) If no roots, app is still loading or crashed natively
 2. Check native logs (Step 3 — `collect_logs`, or the bash fallback if the bridge is down)
-3. Check Metro: `curl http://localhost:8081/status`
+3. Check Metro and bundling: `cdp_status`, then `cdp_metro_events`
 
 **If wrong data displayed:**
 1. `cdp_store_state(path="<slice>")` -- verify the store holds expected data

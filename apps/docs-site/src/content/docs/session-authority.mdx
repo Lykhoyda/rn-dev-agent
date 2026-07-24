@@ -68,6 +68,6 @@ The feedback collector reports only the current session's high-level authority, 
 
 ## Migration and threat boundary
 
-`rn_session status` reports store availability, registry schema 2, legacy-state detection, coarse handshake support, package integration, and strict enforcement. Legacy files are diagnostics only and are never trusted for mutation or adoption. A database from a newer schema is rejected without downgrade.
+`rn_session status` reports store availability, registry compatibility, legacy-state detection, coarse handshake support, package integration, and strict enforcement. Legacy files are diagnostics only and are never trusted for mutation or adoption. A database from a newer schema is rejected without downgrade.
 
 This model prevents accidental cross-worktree targeting, stale-owner writes, and ambiguous local selection. It is not a security boundary against a hostile process already running as the same OS user.

@@ -535,9 +535,7 @@ export function createAuthorityGate(
                   const priorBundle = currentStatus.bindings.bundle as
                     | Record<string, unknown>
                     | undefined;
-                  const metro = currentStatus.bindings.metro as
-                    | Record<string, unknown>
-                    | undefined;
+                  const metro = currentStatus.bindings.metro as Record<string, unknown> | undefined;
                   const oldTargetId = priorBundle?.targetId;
                   const newTargetId = bundle.targetId;
                   const metroPort = metro?.port;
@@ -672,7 +670,8 @@ export function createAuthorityGate(
               if (!resultSucceeded(result)) {
                 return addMeta(result, {
                   authorityInvalidated: true,
-                  nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
+                  nextAction:
+                    'Run rn_session action "pin_dev_client" before another CDP operation.',
                 });
               }
               if (tool === 'cdp_run_action' && !optionalBundleClaimed) {
@@ -780,7 +779,8 @@ export function createAuthorityGate(
             ...(authorityInvalidated
               ? {
                   authorityInvalidated: true,
-                  nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
+                  nextAction:
+                    'Run rn_session action "pin_dev_client" before another CDP operation.',
                 }
               : {}),
           });

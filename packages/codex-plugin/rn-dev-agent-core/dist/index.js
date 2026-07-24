@@ -59464,7 +59464,9 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
         return null;
       }
       execFileSync7("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync7("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], { maxBuffer: 128 * 1024 * 1024 });
+      const headBytes = execFileSync7("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+        maxBuffer: 128 * 1024 * 1024
+      });
       const artifactBytes = readFileSync21(resolvedArtifactPath);
       if (hashBytes(artifactBytes) !== hashBytes(headBytes))
         return null;

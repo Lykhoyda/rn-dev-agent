@@ -56,7 +56,7 @@ Uses the error types matrix to classify the problem:
 | console.error() | `cdp_console_log(level="error")` |
 | Native crash (iOS) | `collect_logs(sources=["native_ios"])` |
 | Native crash (Android) | `collect_logs(sources=["native_android"])` |
-| Metro bundle error | `curl localhost:8081/status` |
+| Metro bundle error | `cdp_metro_events` |
 | Network failure | `cdp_network_log` (status=0) |
 
 If CDP shows no errors but the app is broken, the problem is native.

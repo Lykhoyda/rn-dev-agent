@@ -26,7 +26,7 @@ native device logs, and bash tools.
 | Did the JS engine pause? | MCP | `cdp_status` (reports isPaused) |
 | Is there a RedBox overlay? | MCP | `cdp_component_tree` (auto-detects and warns) |
 | Dismiss RedBox / toggle inspector | MCP | `cdp_dev_settings(action="dismissRedBox")` |
-| Is Metro bundler alive? | bash | `curl localhost:8081/status` |
+| Is Metro bundler alive? | MCP | `cdp_status` |
 | Is a specific element on screen? | MCP | `device_find(text="element")` or Maestro `assertVisible` |
 | Tap an element by text or ref | MCP | `device_find(text="Login", action="click")` or `device_press(ref="@e3")` |
 | Fill a text input | MCP | `device_fill(ref="@e5", text="hello")` |
@@ -47,14 +47,15 @@ problem is native. CDP only sees JavaScript — check native logs as fallback.
 | Unhandled promise rejection | `cdp_error_log` | MCP |
 | Uncaught error overlay (RedBox) | `cdp_component_tree` (APP_HAS_REDBOX warning) | MCP |
 | `console.error()` call | `cdp_console_log(level="error")` | MCP |
-| Metro bundle syntax error | `curl localhost:8081/status` | bash |
+| Metro bundle syntax error | `cdp_metro_events` | MCP |
 | Native crash (iOS) | `collect_logs(sources=["native_ios"], logLevel="error")` | MCP |
 | Native crash (Android) | `collect_logs(sources=["native_android"], logLevel="error")` | MCP |
 | Cross-layer crash diagnosis | `collect_logs(sources=["js_console","native_ios"], durationMs=3000, logLevel="error")` | MCP |
 | Network failure | `cdp_network_log` (look for status=0 or missing status) | MCP |
 
 **Note:** Replace `"/YourApp"` with the actual binary name and `com.example.app`
-with the real bundle ID. Find the binary name: `ls $(xcrun simctl get_app_container booted <bundle-id>)`
+with the real bundle ID. Find the binary name on the bound simulator:
+`ls $(xcrun simctl get_app_container <bound-udid> <bundle-id>)`
 
 ---
 
@@ -79,7 +80,7 @@ Before any testing or debugging, call `cdp_status`. It returns:
 ```
 
 Decision tree:
-- `metro.running = false` → start Metro: `npx expo start` or `npx react-native start`
+- `metro.running = false` → inspect `rn_session(action="status")`, then use literal `pnpm ios` or `pnpm android` for an integrated session
 - `app.hasRedBox = true` → read `cdp_error_log`, fix the error, then `cdp_reload`
 - `app.isPaused = true` → `cdp_reload` (auto-reconnects after reload)
 - `app.errorCount > 0` → check `cdp_error_log` before continuing
@@ -92,15 +93,15 @@ Decision tree:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Metro not found | Dev server not running | `npx expo start` or `npx react-native start` |
-| No Hermes target | App not loaded | Open simulator, wait for app bundle, retry |
+| Metro not found | Session Metro is not running | Inspect `rn_session(action="status")`, then use literal `pnpm ios` or `pnpm android` |
+| No Hermes target | Bound app target is not loaded | Open the bound app, wait for its bundle, then call `cdp_connect` |
 | Error code 1006 | Another debugger connected | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Evaluate timeout (5s) | JS thread blocked or paused | Search for `debugger;` statements; check for long sync ops |
 | "hook not available" | Release build or JSC engine | Only works in `__DEV__` mode with Hermes |
 | `APP_HAS_REDBOX` | Error overlay showing | Read `cdp_error_log`, fix code, `cdp_reload` |
 | "No store found" | Zustand not exposed | Add `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` |
-| All CDP calls fail | Zombie Hermes target | Reload app and reconnect with `cdp_status` |
-| `dev: false` in status | Connected to wrong JS context | CDP auto-selects targets by probing `__DEV__`; if all targets report false, restart Metro or the app |
+| All CDP calls fail | Stale authority-bound Hermes target | Reload the bound app and reconnect with `cdp_connect` |
+| `dev: false` in status | Bound runtime lacks development helpers | Restart the session-bound Metro and app, then call `cdp_connect` |
 | fiberTree/navRef missing | Wrong Bridgeless context | RN 0.76+ Bridgeless exposes multiple Hermes targets; `cdp_status` warns if `dev: false` |
 
 **Code 1006:** Hermes allows only one CDP client. Close all debugger UIs first.
@@ -177,14 +178,10 @@ and missing network requests, consult **`references/common-error-patterns.md`**.
 
 ## Metro Health Check
 
-```bash
-curl localhost:8081/status          # Expected: "packager-status:running"
-curl localhost:8081/json/list       # List Hermes debug targets
-curl localhost:19000/status         # Expo alternative port (Expo Dev Client)
-```
-
-The MCP server auto-discovers Metro on ports 8081, 8082, 19000, 19006.
-Pass `metroPort` to `cdp_status` when using non-standard ports.
+Call `rn_session(action="status")` to inspect the bound Metro authority, then
+use `cdp_status` for passive runtime health and `cdp_metro_events` for bundle
+failures. Ambient default ports are diagnostic only and never establish
+session authority.
 
 ---
 
