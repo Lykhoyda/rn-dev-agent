@@ -1,315 +1,201 @@
-// GH #523 sub-1: cdp_reload after a non-component module edit reliably wedged —
-// Metro full-rebuilds, the old Hermes target dies, no new target registers in
-// the window, and reload returned RECONNECT_TIMEOUT leaving the agent to run
-// the terminate+launch sequence by hand (~8 tool calls). The fix chains
-// force_reconnect → simctl terminate+launch → force_reconnect automatically.
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import { createReloadHandler, recoverAfterFailedReconnect } from '../../dist/tools/reload.js';
 
-function makeClient({
-  port = 8081,
-  target = null,
-  connected = false,
-  autoConnectImpl,
-  evaluateImpl,
-  softReconnectImpl,
-  helpersInjected = true,
+function mockClient({
+  platform = 'ios',
+  appId = 'com.example.app',
+  connected = true,
+  autoConnectFails = false,
+  softReconnectFails = false,
 } = {}) {
-  const calls = { autoConnect: 0, disconnect: 0, softReconnect: 0 };
-  const state = { connected, target };
-  const client = {
-    calls,
-    state,
-    get metroPort() {
-      return port;
+  return {
+    metroPort: 8193,
+    isConnected: connected,
+    connectedTarget: { id: 'target', platform, description: appId },
+    proxyDesired: false,
+    helpersInjected: true,
+    async disconnect() {
+      this.isConnected = false;
     },
-    get isConnected() {
-      return state.connected;
+    async autoConnect() {
+      if (autoConnectFails) throw new Error('no exact target');
+      this.isConnected = true;
     },
-    get connectedTarget() {
-      return state.target;
+    async softReconnect() {
+      if (softReconnectFails) throw new Error('no exact target');
+      this.isConnected = true;
     },
-    get proxyDesired() {
-      return false;
-    },
-    get helpersInjected() {
-      return helpersInjected;
-    },
-    disconnect: async () => {
-      calls.disconnect += 1;
-      state.connected = false;
-    },
-    autoConnect: async (...args) => {
-      calls.autoConnect += 1;
-      if (autoConnectImpl) return autoConnectImpl(state, ...args);
-      state.connected = true;
-    },
-    softReconnect: async () => {
-      calls.softReconnect += 1;
-      if (softReconnectImpl) return softReconnectImpl(state);
-      throw new Error('no targets');
-    },
-    evaluate: async (...args) => {
-      if (evaluateImpl) return evaluateImpl(state, ...args);
+    async evaluate() {
       throw new Error('WebSocket closed');
     },
-    reinjectHelpers: async () => true,
+    async reinjectHelpers() {
+      return true;
+    },
   };
-  return client;
 }
 
-function makeMockExecFile() {
-  const calls = [];
-  const execFile = async (cmd, args) => {
-    calls.push([cmd, ...args]);
-    return { stdout: '', stderr: '' };
-  };
-  return { execFile, calls };
-}
-
-function harness(clientFactories) {
-  let current = clientFactories.shift()();
-  const created = [];
+function harness(factories) {
+  let current = mockClient();
   return {
     getClient: () => current,
-    setClient: (c) => {
-      current = c;
+    setClient: (value) => {
+      current = value;
     },
-    createClient: () => {
-      const next = clientFactories.length > 0 ? clientFactories.shift()() : makeClient();
-      created.push(next);
-      return next;
-    },
-    created,
+    createClient: () => factories.shift()(),
   };
 }
 
-const capturedIos = (bundleId) => ({
-  port: 8081,
-  platform: 'ios',
-  bundleId,
+const captured = (platform = 'ios') => ({
+  port: 8193,
+  platform,
+  bundleId: 'com.example.app',
   proxyWasActive: false,
 });
 
-// ── recoverAfterFailedReconnect unit behavior ──────────────────────────
-
-test('recover: force_reconnect success short-circuits — no simctl', async () => {
-  const h = harness([
-    () => makeClient(),
-    () => makeClient({ target: { platform: 'ios', description: 'com.example.app' } }),
-  ]);
-  const { execFile, calls } = makeMockExecFile();
-
-  const out = await recoverAfterFailedReconnect(
-    h.getClient,
-    h.setClient,
-    h.createClient,
-    capturedIos('com.example.app'),
-    { execFile, sleep: async () => {}, loadPersistedBundleId: () => null },
-  );
-
-  assert.equal(out.ok, true);
-  assert.equal(out.via, 'force_reconnect');
-  assert.equal(calls.length, 0, 'no simctl when force_reconnect works');
-});
-
-test('recover: chains terminate+launch with the captured bundleId, then reconnects', async () => {
-  const failing = () =>
-    makeClient({ autoConnectImpl: () => Promise.reject(new Error('no targets')) });
-  const h = harness([
-    () => makeClient(),
-    failing, // first forceReconnect attempt
-    failing, // replacement client created after the failed attempt
-    () => makeClient({ target: { platform: 'ios', description: 'com.example.app' } }), // post-relaunch
-  ]);
-  const { execFile, calls } = makeMockExecFile();
-
-  const out = await recoverAfterFailedReconnect(
-    h.getClient,
-    h.setClient,
-    h.createClient,
-    capturedIos('com.example.app'),
-    { execFile, sleep: async () => {}, loadPersistedBundleId: () => null },
-  );
-
-  assert.equal(out.ok, true);
-  assert.equal(out.via, 'terminate_launch');
-  const flat = calls.map((c) => c.join(' ')).join('|');
-  assert.match(flat, /simctl terminate booted com\.example\.app/);
-  assert.match(flat, /simctl launch booted com\.example\.app/);
-  assert.match(out.relaunchSteps.join('|'), /simctl launch com\.example\.app:ok/);
-});
-
-test('recover: falls back to the persisted store when nothing was captured', async () => {
-  const failing = () =>
-    makeClient({ autoConnectImpl: () => Promise.reject(new Error('no targets')) });
-  const h = harness([
-    () => makeClient(),
-    failing,
-    failing,
-    () => makeClient({ target: { platform: 'ios', description: 'com.persisted.app' } }),
-  ]);
-  const { execFile, calls } = makeMockExecFile();
-
-  const out = await recoverAfterFailedReconnect(
-    h.getClient,
-    h.setClient,
-    h.createClient,
-    capturedIos(undefined),
-    { execFile, sleep: async () => {}, loadPersistedBundleId: () => 'com.persisted.app' },
-  );
-
-  assert.equal(out.ok, true);
-  const flat = calls.map((c) => c.join(' ')).join('|');
-  assert.match(flat, /simctl launch booted com\.persisted\.app/);
-});
-
-test('recover: no bundleId anywhere — relaunch skipped, failure reported', async () => {
-  const failing = () =>
-    makeClient({ autoConnectImpl: () => Promise.reject(new Error('no targets')) });
-  const h = harness([() => makeClient(), failing, failing]);
-  const { execFile, calls } = makeMockExecFile();
-
-  const out = await recoverAfterFailedReconnect(
-    h.getClient,
-    h.setClient,
-    h.createClient,
-    capturedIos(undefined),
-    { execFile, sleep: async () => {}, loadPersistedBundleId: () => null },
-  );
-
-  assert.equal(out.ok, false);
-  assert.equal(calls.length, 0, 'no simctl without a bundleId');
-  assert.match(out.relaunchSteps.join('|'), /skip-relaunch:no-bundleId/);
-});
-
-test('recover: android platform — relaunch skipped (simctl is iOS-only)', async () => {
-  const failing = () =>
-    makeClient({ autoConnectImpl: () => Promise.reject(new Error('no targets')) });
-  const h = harness([() => makeClient(), failing, failing]);
-  const { execFile, calls } = makeMockExecFile();
-
-  const out = await recoverAfterFailedReconnect(
-    h.getClient,
-    h.setClient,
-    h.createClient,
-    { port: 8081, platform: 'android', bundleId: 'com.example.app', proxyWasActive: false },
-    { execFile, sleep: async () => {}, loadPersistedBundleId: () => null },
-  );
-
-  assert.equal(out.ok, false);
-  assert.equal(calls.length, 0);
-  assert.match(out.relaunchSteps.join('|'), /skip-relaunch:platform=android/);
-});
-
-test('recover: an invalid captured bundleId never reaches simctl', async () => {
-  const failing = () =>
-    makeClient({ autoConnectImpl: () => Promise.reject(new Error('no targets')) });
-  const h = harness([() => makeClient(), failing, failing]);
-  const { execFile, calls } = makeMockExecFile();
-
-  const out = await recoverAfterFailedReconnect(
-    h.getClient,
-    h.setClient,
-    h.createClient,
-    capturedIos('rm -rf / ; com.evil'),
-    { execFile, sleep: async () => {}, loadPersistedBundleId: () => null },
-  );
-
-  assert.equal(out.ok, false);
-  assert.equal(calls.length, 0, 'invalid id must not reach simctl argv');
-  assert.match(out.relaunchSteps.join('|'), /skip-relaunch:no-bundleId/);
-});
-
-test('recover: simctl launch failure aborts the chain without a second reconnect', async () => {
-  let autoConnects = 0;
-  const failing = () =>
-    makeClient({
-      autoConnectImpl: () => {
-        autoConnects += 1;
-        return Promise.reject(new Error('no targets'));
-      },
-    });
-  const h = harness([() => makeClient(), failing, failing, failing]);
+test('force reconnect success does not invoke native recovery', async () => {
+  const h = harness([() => mockClient()]);
   const calls = [];
-  const execFile = async (cmd, args) => {
-    calls.push([cmd, ...args]);
-    if (args[1] === 'launch') throw new Error('Unable to launch');
-    return { stdout: '', stderr: '' };
-  };
-
-  const out = await recoverAfterFailedReconnect(
+  const result = await recoverAfterFailedReconnect(
     h.getClient,
     h.setClient,
     h.createClient,
-    capturedIos('com.example.app'),
-    { execFile, sleep: async () => {}, loadPersistedBundleId: () => null },
+    captured(),
+    {
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+    },
+    {
+      deviceId: 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
+      appId: 'com.example.app',
+    },
   );
 
-  assert.equal(out.ok, false);
-  assert.match(out.relaunchSteps.join('|'), /simctl launch:err/);
-  assert.equal(autoConnects, 1, 'no reconnect retry after a failed launch');
+  assert.equal(result.ok, true);
+  assert.equal(result.via, 'force_reconnect');
+  assert.equal(calls.length, 0);
 });
 
-// ── handler wiring ─────────────────────────────────────────────────────
-
-test('cdp_reload: wedged reload auto-relaunches and reports recovered_via terminate_launch', async () => {
-  const failing = () =>
-    makeClient({ autoConnectImpl: () => Promise.reject(new Error('no targets')) });
-  const old = makeClient({
-    connected: true,
-    target: { platform: 'ios', description: 'com.example.app' },
-    evaluateImpl: (state) => {
-      state.connected = false; // reload killed the ws
-      throw new Error('WebSocket closed');
+test('iOS recovery uses only the exact authority target before reconnecting', async () => {
+  const h = harness([
+    () => mockClient({ autoConnectFails: true }),
+    () => mockClient({ autoConnectFails: true }),
+    () => mockClient(),
+  ]);
+  const calls = [];
+  const result = await recoverAfterFailedReconnect(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    captured(),
+    {
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      sleep: async () => {},
     },
-  });
-  const post = makeClient({
-    target: { platform: 'ios', description: 'com.example.app' },
-    evaluateImpl: () => Promise.reject(new Error('dev menu probe unavailable')),
-  });
-  const h = harness([() => old, failing, failing, () => post]);
-  const { execFile, calls } = makeMockExecFile();
+    {
+      deviceId: 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
+      appId: 'com.example.app',
+    },
+  );
 
-  const handler = createReloadHandler(h.getClient, h.setClient, h.createClient, {
-    execFile,
-    sleep: async () => {},
-    loadPersistedBundleId: () => null,
-  });
-  const result = await handler({ full: true });
-  const envelope = JSON.parse(result.content[0].text);
-
-  assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.reconnected, true);
-  assert.equal(envelope.meta.recovered_via, 'terminate_launch');
-  const flat = calls.map((c) => c.join(' ')).join('|');
-  assert.match(flat, /simctl launch booted com\.example\.app/);
+  assert.equal(result.ok, true);
+  assert.equal(result.via, 'terminate_launch');
+  assert.deepEqual(calls, [
+    ['xcrun', 'simctl', 'terminate', 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3', 'com.example.app'],
+    ['xcrun', 'simctl', 'launch', 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3', 'com.example.app'],
+  ]);
 });
 
-test('cdp_reload: failed chain surfaces the relaunch steps in the warning meta', async () => {
-  const failing = () =>
-    makeClient({ autoConnectImpl: () => Promise.reject(new Error('no targets')) });
-  const old = makeClient({
-    connected: true,
-    target: { platform: 'ios', description: undefined },
-    evaluateImpl: (state) => {
-      state.connected = false;
-      throw new Error('WebSocket closed');
+test('Android recovery uses adb -s with the exact authority target', async () => {
+  const h = harness([
+    () => mockClient({ platform: 'android', autoConnectFails: true }),
+    () => mockClient({ platform: 'android', autoConnectFails: true }),
+    () => mockClient({ platform: 'android' }),
+  ]);
+  const calls = [];
+  const result = await recoverAfterFailedReconnect(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    captured('android'),
+    {
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      sleep: async () => {},
     },
-  });
-  const h = harness([() => old, failing, failing, failing]);
-  const { execFile } = makeMockExecFile();
+    { deviceId: 'emulator-5556', appId: 'com.example.app' },
+  );
 
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], [
+    'adb',
+    '-s',
+    'emulator-5556',
+    'shell',
+    'am',
+    'force-stop',
+    'com.example.app',
+  ]);
+  assert.equal(calls[1][0], 'adb');
+  assert.equal(calls[1][2], 'emulator-5556');
+});
+
+test('missing exact authority never falls back to captured, persisted, or booted state', async () => {
+  const h = harness([
+    () => mockClient({ autoConnectFails: true }),
+    () => mockClient({ autoConnectFails: true }),
+  ]);
+  const calls = [];
+  const result = await recoverAfterFailedReconnect(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    captured(),
+    {
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      sleep: async () => {},
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.relaunchSteps.join('|'), /no-exact-authority-target/);
+  assert.equal(calls.length, 0);
+});
+
+test('reload recovery failure is a typed error rather than reconnected:false success', async () => {
+  const initial = mockClient({ softReconnectFails: true });
+  const h = harness([
+    () => mockClient({ autoConnectFails: true }),
+    () => mockClient({ autoConnectFails: true }),
+  ]);
+  h.setClient(initial);
   const handler = createReloadHandler(h.getClient, h.setClient, h.createClient, {
-    execFile,
+    execFile: async (_command, args) => {
+      if (args.includes('launch')) throw new Error('launch denied');
+      return { stdout: '', stderr: '' };
+    },
     sleep: async () => {},
-    loadPersistedBundleId: () => null,
   });
-  const result = await handler({ full: true });
-  const envelope = JSON.parse(result.content[0].text);
 
-  assert.equal(envelope.data.reconnected, false);
-  assert.match(envelope.meta.warning, /auto-relaunch/i);
-  assert.match(envelope.meta.relaunch_steps.join('|'), /skip-relaunch:no-bundleId/);
+  const result = await handler({
+    full: true,
+    deviceId: 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
+    appId: 'com.example.app',
+  });
+  const parsed = JSON.parse(result.content[0].text);
+
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, 'RECONNECT_TIMEOUT');
+  assert.equal(parsed.meta.reconnected, false);
+  assert.equal(result.isError, true);
 });

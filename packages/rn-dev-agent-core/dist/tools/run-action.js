@@ -36,6 +36,7 @@ import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
+import { SessionAuthorityError } from '../session/registry.js';
 import { isExactPresent, runCdpReplay, firstReplayTestId, } from './cdp-replay-dispatch.js';
 import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
 import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
@@ -203,6 +204,7 @@ export function createRunActionHandler(deps = {}) {
     };
     const blindProbeContext = deps.blindProbeContext ?? (async () => null);
     const targetContext = deps.targetContext ?? (() => null);
+    const claimBundleAuthority = deps.claimBundleAuthority ?? (async () => true);
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -300,7 +302,8 @@ export function createRunActionHandler(deps = {}) {
                 }
             }
             if (atRisk) {
-                const replayDeps = getReplayDeps(args);
+                const candidate = getReplayDeps(args);
+                const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
                 const probe = replayDeps ? firstReplayTestId(action.body, args.params ?? {}) : null;
                 if (replayDeps && probe) {
                     const tProbe = Date.now();
@@ -454,7 +457,9 @@ export function createRunActionHandler(deps = {}) {
             // the default fetcher is a no-op until index.ts wires a CDP-backed one).
             const expectedSeq = action.metadata.expectedRouteSequence;
             if (failure.kind === 'SELECTOR_NOT_FOUND' && expectedSeq && expectedSeq.length > 0) {
-                const liveRoute = await getLiveRoute().catch(() => null);
+                const liveRoute = (await claimBundleAuthority(args))
+                    ? await getLiveRoute().catch(() => null)
+                    : null;
                 const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
                 if (drift.isDrift) {
                     const autoRepair = {
@@ -492,7 +497,8 @@ export function createRunActionHandler(deps = {}) {
             // a silent skip surfaced in the field as an unexplained UNKNOWN.
             let cdpJsFallback;
             if (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN') {
-                const replayDeps = getReplayDeps(args);
+                const candidate = getReplayDeps(args);
+                const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
                 const probe = !replayDeps
                     ? null
                     : failure.kind === 'SELECTOR_NOT_FOUND'
@@ -790,6 +796,8 @@ export function createRunActionHandler(deps = {}) {
             });
         }
         catch (err) {
+            if (err instanceof SessionAuthorityError)
+                throw err;
             // Multi-LLM review of PR #115 (Gemini conf 95): top-level catch
             // ensures any thrown exception during orchestration (maestroRun
             // timeout, repairAction throw through withSession, etc.) lands

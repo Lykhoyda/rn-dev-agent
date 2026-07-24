@@ -1,17 +1,17 @@
 ---
 title: "cdp_status"
-description: "Get full environment status"
+description: "Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target"
 sidebar:
   order: 0
 ---
 
-Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.
+Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `metroPort` | `unknown` | No |  |  | Override Metro port (default: auto-detect 8081/8082/19000/19006) |
+| `metroPort` | `unknown` | No |  |  | Diagnostic comparison only; cdp_status never changes the active Metro port |
 | `platform` | `unknown` | No |  |  |  |
 | `resetArbiter` | `unknown` | No |  |  |  |
 

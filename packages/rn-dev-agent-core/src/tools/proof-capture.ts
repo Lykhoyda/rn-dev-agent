@@ -43,6 +43,7 @@ import {
   type FinalProofReceipt,
   type MechanicallyAcceptedProofReceipt,
   type ProofAction,
+  type ProofAuthority,
   type ProofDevice,
   type ProofRuntime,
   type ProofCandidateRuntime,
@@ -213,6 +214,7 @@ export interface ProofCaptureDeps {
   readCandidateRuntime?: (root: string) => ProofCandidateRuntime;
   proofRootTracked: (root: string, proofRoot: string) => boolean;
   readiness: () => Promise<ProofReadiness>;
+  authority: (runId: string) => ProofAuthority;
   record: (args: DeviceRecordArgs) => Promise<ToolResult>;
   mediaProcess: MediaProcess;
   validateMedia: typeof validateMedia;
@@ -226,6 +228,7 @@ interface Session {
   context: BeginRehearsalArgs;
   actionIdentity: ProofAction;
   candidateRuntime: ProofCandidateRuntime | null;
+  authority: ProofAuthority;
   stage: ProofStage;
   invalidationReasons: string[];
   rehearsalStartedAt: Date;
@@ -430,14 +433,60 @@ export function proofCandidateEntrypointEnvironmentMatches(
   return true;
 }
 
+export function proofCandidateCheckoutMatchesHead(
+  candidateRoot: string,
+  artifactPaths: readonly string[],
+): boolean {
+  return readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) !== null;
+}
+
+export function readProofCandidateHeadArtifacts(
+  candidateRoot: string,
+  artifactPaths: readonly string[],
+): Buffer[] | null {
+  try {
+    const root = realpathSync(candidateRoot);
+    const statusArgs = [
+      '-C',
+      root,
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ];
+    if (execFileSync('git', statusArgs, { encoding: 'utf8' }).trim()) return null;
+    const verifiedBytes: Buffer[] = [];
+    for (const artifactPath of artifactPaths) {
+      const resolvedArtifactPath = realpathSync(artifactPath);
+      const artifactRelativePath = relative(root, resolvedArtifactPath).split(sep).join('/');
+      if (
+        !artifactRelativePath ||
+        artifactRelativePath === '..' ||
+        artifactRelativePath.startsWith('../')
+      ) {
+        return null;
+      }
+      execFileSync('git', ['-C', root, 'ls-files', '--error-unmatch', artifactRelativePath]);
+      const headBytes = execFileSync('git', ['-C', root, 'show', `HEAD:${artifactRelativePath}`], {
+        maxBuffer: 128 * 1024 * 1024,
+      });
+      const artifactBytes = readFileSync(resolvedArtifactPath);
+      if (hashBytes(artifactBytes) !== hashBytes(headBytes)) return null;
+      verifiedBytes.push(artifactBytes);
+    }
+    return execFileSync('git', statusArgs, { encoding: 'utf8' }).trim() ? null : verifiedBytes;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read dual proof authority from immutable candidate bytes. Nothing in this
  * block is caller-authored prose: Git, package digests, and the live MCP
  * process identity are captured at the strict-proof boundary.
  */
 export function readProofCandidateRuntime(candidateRoot: string): ProofCandidateRuntime {
-  const root = resolve(candidateRoot);
-  if (root !== candidateRoot) throw new Error('CANDIDATE_ROOT_NOT_NORMALIZED');
+  const root = realpathSync(resolve(candidateRoot));
   const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
     encoding: 'utf8',
   }).trim();
@@ -455,12 +504,20 @@ export function readProofCandidateRuntime(candidateRoot: string): ProofCandidate
   }
   const { host, coreBundle } = entrypoint;
   const runnerManifest = join(root, 'packages', host, 'runner-manifest.json');
+  const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
+  if (!artifacts) {
+    throw new Error('CANDIDATE_CHECKOUT_NOT_CLEAN');
+  }
+  const confirmedSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  }).trim();
+  if (confirmedSha !== sha) throw new Error('CANDIDATE_SHA_CHANGED');
 
   return proofCandidateRuntimeSchema.parse({
     repo: 'Lykhoyda/rn-dev-agent',
     sha,
-    coreBundleSha256: hashBytes(readFileSync(coreBundle)),
-    runnerManifestSha256: hashBytes(readFileSync(runnerManifest)),
+    coreBundleSha256: hashBytes(artifacts[0]!),
+    runnerManifestSha256: hashBytes(artifacts[1]!),
     mcp: { pid: process.pid, argv, cwd: process.cwd() },
   });
 }
@@ -933,7 +990,7 @@ export function createProofCaptureHandler(
     active.mayOwnRecorder = false;
     active.baseline = null;
     active.mechanicalReceipt = null;
-    deps.monitor.begin();
+    deps.monitor.begin(active.context.runId);
   };
 
   const rejectCapture = async (
@@ -1248,11 +1305,18 @@ export function createProofCaptureHandler(
           return proofFailure(['CANDIDATE_SHA_MISMATCH'], 'idle');
         }
       }
+      let authority: ProofAuthority;
+      try {
+        authority = deps.authority(args.runId);
+      } catch {
+        return proofFailure(['PROOF_AUTHORITY_UNAVAILABLE'], 'idle');
+      }
       const startedAt = deps.now();
       session = {
         context: args,
         actionIdentity,
         candidateRuntime,
+        authority,
         stage: 'rehearsing',
         invalidationReasons: [],
         rehearsalStartedAt: startedAt,
@@ -1270,7 +1334,7 @@ export function createProofCaptureHandler(
         baseline: null,
         mechanicalReceipt: null,
       };
-      deps.monitor.begin();
+      deps.monitor.begin(args.runId);
       return okResult({ stage: session.stage, runId: args.runId });
     }
 
@@ -1323,7 +1387,7 @@ export function createProofCaptureHandler(
       active.invalidationReasons = [];
       active.armedObservationCount = null;
       active.freshStartAssertion = null;
-      deps.monitor.begin();
+      deps.monitor.begin(active.context.runId);
       return okResult({ stage: active.stage, durationMs });
     }
 
@@ -1477,7 +1541,7 @@ export function createProofCaptureHandler(
       active.recordingStartedAt = deps.now();
       active.stage = 'recording';
       active.invalidationReasons = [];
-      deps.monitor.begin();
+      deps.monitor.begin(active.context.runId);
       return okResult({ stage: active.stage, deviceId: started.deviceId, output: started.output });
     }
 
@@ -1533,6 +1597,9 @@ export function createProofCaptureHandler(
       const evidenceReasons: string[] = [...derived.reasons];
       const trace = traceFor(active.context.storyboard, active.recordingEvents);
       evidenceReasons.push(...trace.reasons);
+      if (active.recordingEvents.some((event) => !event.authorityReceiptHash)) {
+        evidenceReasons.push('AUTHORITY_RECEIPT_MISSING');
+      }
       if (!derived.evidence) evidenceReasons.push('STEP_EVIDENCE_MISSING');
 
       const mediaInput: MediaValidationInput = {
@@ -1572,6 +1639,15 @@ export function createProofCaptureHandler(
 
       const git = readGit(active);
       const ready = await readReadiness();
+      try {
+        if (
+          hashProofValue(deps.authority(active.context.runId)) !== hashProofValue(active.authority)
+        ) {
+          evidenceReasons.push('PROOF_AUTHORITY_CHANGED');
+        }
+      } catch {
+        evidenceReasons.push('PROOF_AUTHORITY_UNAVAILABLE');
+      }
       evidenceReasons.push(...(git.ok ? gitReasons(active, git.value, 'validation') : git.reasons));
       evidenceReasons.push(
         ...(ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons),
@@ -1585,7 +1661,7 @@ export function createProofCaptureHandler(
       let receipt: MechanicallyAcceptedProofReceipt;
       try {
         receipt = mechanicallyAcceptedProofReceiptSchema.parse({
-          schemaVersion: 1,
+          schemaVersion: 2,
           runId: active.context.runId,
           issue: active.context.issue,
           pullRequest: active.context.pullRequest,
@@ -1598,6 +1674,7 @@ export function createProofCaptureHandler(
           },
           device: ready.value.device,
           runtime: ready.value.runtime,
+          authority: active.authority,
           ...(active.candidateRuntime ? { candidateRuntime: active.candidateRuntime } : {}),
           fixture: active.context.fixture,
           action: active.context.proofAction,

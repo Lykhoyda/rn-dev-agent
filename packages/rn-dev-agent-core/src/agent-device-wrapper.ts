@@ -157,6 +157,7 @@ export function hasActiveSession(): boolean {
 // Updated by fetchSnapshotNodes() in device-interact.ts whenever a snapshot succeeds.
 interface CachedSnapshot {
   platform: string;
+  authorityReceipt: SnapshotAuthorityReceipt;
   // Lossless: the full runner nodes are stored (rect/enabled included) so a
   // cache-served device_find ranks and dedups identically to a fresh snapshot.
   nodes: {
@@ -173,6 +174,109 @@ interface CachedSnapshot {
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
+let snapshotAuthorityProvider: {
+  current: () => Record<string, unknown> | null;
+  record: (receipt: SnapshotAuthorityReceipt) => void;
+  validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+  validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+} | null = null;
+
+export interface SnapshotAuthorityReceipt {
+  sessionId: unknown;
+  claimEpoch: unknown;
+  sourceKey: unknown;
+  worktreeKey: unknown;
+  appRootKey: unknown;
+  platform: unknown;
+  deviceId: unknown;
+  buildGeneration: unknown;
+  installGeneration: unknown;
+  runnerInstanceId: unknown;
+  runnerClaim: unknown;
+  deviceClaim: unknown;
+  appId: unknown;
+  artifactDigest: unknown;
+  runnerPid: unknown;
+  runnerProcessBirth: unknown;
+  runnerCapabilityHash: unknown;
+  runnerPort: unknown;
+}
+
+export function setSnapshotAuthorityProvider(
+  provider: {
+    current: () => Record<string, unknown> | null;
+    record: (receipt: SnapshotAuthorityReceipt) => void;
+    validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+    validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+  } | null,
+): void {
+  snapshotAuthorityProvider = provider;
+  snapshotCache.clear();
+  snapshotCacheDirty = true;
+}
+
+function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
+  const authority = snapshotAuthorityProvider?.current();
+  const session = getActiveSession();
+  return {
+    sessionId: authority?.sessionId ?? null,
+    claimEpoch: authority?.claimEpoch ?? null,
+    sourceKey: authority?.sourceKey ?? null,
+    worktreeKey: authority?.worktreeKey ?? null,
+    appRootKey: authority?.appRootKey ?? null,
+    platform: authority?.platform ?? platform,
+    deviceId: authority?.deviceId ?? session?.deviceId ?? null,
+    buildGeneration: authority?.buildGeneration ?? null,
+    installGeneration: authority?.installGeneration ?? null,
+    runnerInstanceId: authority?.runnerInstanceId ?? null,
+    runnerClaim: authority?.runnerClaim ?? null,
+    deviceClaim: authority?.deviceClaim ?? null,
+    appId: authority?.appId ?? session?.appId ?? null,
+    artifactDigest: authority?.artifactDigest ?? null,
+    runnerPid: authority?.runnerPid ?? null,
+    runnerProcessBirth: authority?.runnerProcessBirth ?? null,
+    runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
+    runnerPort: authority?.runnerPort ?? null,
+  };
+}
+
+function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: string): boolean {
+  const current = currentSnapshotAuthority(platform);
+  if (receipt.sessionId === null) {
+    return (
+      current.sessionId === null &&
+      receipt.platform === platform &&
+      receipt.deviceId === current.deviceId
+    );
+  }
+  return Boolean(
+    receipt.platform === platform &&
+    receipt.sessionId === current.sessionId &&
+    receipt.claimEpoch === current.claimEpoch &&
+    receipt.sourceKey === current.sourceKey &&
+    receipt.worktreeKey === current.worktreeKey &&
+    receipt.appRootKey === current.appRootKey &&
+    receipt.deviceId !== null &&
+    receipt.installGeneration !== null &&
+    receipt.runnerInstanceId !== null &&
+    receipt.runnerClaim !== null &&
+    receipt.deviceClaim !== null &&
+    receipt.appId !== null &&
+    receipt.artifactDigest !== null &&
+    receipt.runnerPid !== null &&
+    receipt.runnerProcessBirth !== null &&
+    receipt.runnerCapabilityHash !== null &&
+    receipt.runnerPort !== null &&
+    snapshotAuthorityProvider?.validate(receipt),
+  );
+}
+
+export async function validateCachedSnapshotAuthority(platform: string): Promise<boolean> {
+  const snapshot = snapshotCache.get(platform);
+  if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)) return false;
+  if (snapshot.authorityReceipt.sessionId === null) return true;
+  return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
+}
 
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot
@@ -184,8 +288,11 @@ const snapshotCache = new Map<string, CachedSnapshot>();
 let snapshotCacheDirty = true;
 
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
+  const authorityReceipt = currentSnapshotAuthority(platform);
+  if (authorityReceipt.sessionId !== null) snapshotAuthorityProvider?.record(authorityReceipt);
   snapshotCache.set(platform, {
     platform,
+    authorityReceipt,
     nodes,
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),
@@ -195,7 +302,10 @@ export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']):
 }
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {
-  return snapshotCache.get(platform);
+  const snapshot = snapshotCache.get(platform);
+  return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
+    ? snapshot
+    : undefined;
 }
 
 // Called at the runNative dispatch choke point on any screen-mutating verb
@@ -213,6 +323,7 @@ export function isSnapshotCacheValid(
   if (snapshotCacheDirty) return false;
   const entry = snapshotCache.get(platform);
   if (!entry) return false;
+  if (!snapshotAuthorityIsValid(entry.authorityReceipt, platform)) return false;
   return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }
 

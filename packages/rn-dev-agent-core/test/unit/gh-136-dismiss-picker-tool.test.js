@@ -26,7 +26,7 @@ test('helper: iOS with no session returns null (parity with Android)', async () 
     return { content: [{ type: 'text', text: '{}' }] };
   });
   try {
-    const out = await clearDevClientPickerIfPresent('ios');
+    const out = await clearDevClientPickerIfPresent('ios', 8081);
     assert.equal(out, null);
     assert.equal(calls.length, 0, 'no snapshot without a session');
   } finally {
@@ -38,7 +38,7 @@ test('helper: iOS with no session returns null (parity with Android)', async () 
 test('helper: Android with no session returns null', async () => {
   _setHasSessionForTest(false);
   try {
-    const out = await clearDevClientPickerIfPresent('android');
+    const out = await clearDevClientPickerIfPresent('android', 8081);
     assert.equal(out, null);
   } finally {
     _resetHasSessionForTest();
@@ -59,7 +59,7 @@ test('helper: Android delegates to handleDevClientPicker (auto-advance → dismi
     return { ok: true, candidates: [] };
   });
   try {
-    const out = await clearDevClientPickerIfPresent('android');
+    const out = await clearDevClientPickerIfPresent('android', 8081);
     assert.ok(out);
     assert.equal(out.dismissed, true);
     assert.equal(out.platform, 'android');
@@ -71,7 +71,7 @@ test('helper: Android delegates to handleDevClientPicker (auto-advance → dismi
 
 import { createDismissDevClientPickerHandler } from '../../dist/tools/dev-client-picker.js';
 
-const handle = createDismissDevClientPickerHandler();
+const handle = createDismissDevClientPickerHandler(() => 8081);
 const parse = (r) => JSON.parse(r.content[0].text);
 
 test('handler: no session → DEV_CLIENT_PICKER_NO_SESSION', async () => {

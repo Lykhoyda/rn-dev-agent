@@ -113,7 +113,8 @@ unbooted, native crash on launch) — those need Step 0 first.
 ### Step 0: Identify the App
 Before running any commands, determine the app's actual identifiers:
 - **Bundle ID**: from `app.json` (`expo.ios.bundleIdentifier`, `expo.android.package`), `app.config.js/ts`, or `android/app/build.gradle`
-- **iOS binary name**: from the Xcode project name or `ls $(xcrun simctl get_app_container booted <bundle-id>)`
+- **iOS binary name**: from the Xcode project name or
+  `ls $(xcrun simctl get_app_container <bound-udid> <bundle-id>)`
 - **URI scheme**: from `app.json` or native config
 
 Replace all placeholder values (`com.example.app`, `YourApp`, `<app-bundle-id>`) in the commands below with these actual values.
@@ -139,16 +140,17 @@ details on exit code handling (2=ambiguous profiles, 3=no eas-cli, 4=no eas.json
 ### Step 1: Take a Screenshot
 Immediately capture the current screen state before anything changes:
 ```
-device_screenshot(platform="<ios|android>", path="/tmp/debug-start.png")
+rn_session(action="status")
+device_screenshot(platform="<bound-platform>", deviceId="<bound-uuid-or-serial>",
+                  path="/tmp/debug-start.png")
 ```
-Pass the platform from Step 0 explicitly — this runs before CDP connects, so
-there may be nothing to disambiguate a booted simulator + emulator pair. It
-serves pixels even when a flow owns the device (falls back to `simctl`/`adb`
-internally when the runner can't).
+Require the exact ready session before capture. A booted simulator or emulator
+is diagnostic state and never disambiguates the authoritative target.
 
 ### Step 2: Data Gathering
-First, connect and get environment health:
-- `cdp_status` -- auto-connects, returns Metro/CDP/app state, error count, RedBox
+First, inspect environment health:
+- `cdp_status` -- passive Metro/CDP/app state, error count, and RedBox status
+- `cdp_connect` -- pin the exact signed session target when it is not connected
 
 Then, once connected, gather evidence in parallel:
 - `cdp_error_log` -- unhandled JS errors and promise rejections
@@ -168,7 +170,7 @@ Then, once connected, gather evidence in parallel:
 | console.error() | cdp_console_log(level="error") | MCP |
 | Native crash (iOS) | collect_logs(sources=["native_ios"]) | MCP |
 | Native crash (Android) | collect_logs(sources=["native_android"]) | MCP |
-| Metro bundle error | curl localhost:8081/status | bash |
+| Metro bundle error | cdp_metro_events | MCP |
 | Network failure | cdp_network_log (status=0 or missing) | MCP |
 
 **Key rule**: If CDP shows no errors but the app is broken, the problem
@@ -200,7 +202,7 @@ xcrun simctl spawn booted log show --last 5m \
 **If blank/white screen with no RedBox:**
 1. `cdp_component_tree(depth=1)` -- are there fiber roots? (Sanctioned exception to the always-filter rule: on a blank screen there may be no route name to filter by, and `depth=1` returns only root-level nodes — a presence probe, not a dump.) If no roots, app is still loading or crashed natively
 2. Check native logs (Step 3 — `collect_logs`, or the bash fallback if the bridge is down)
-3. Check Metro: `curl http://localhost:8081/status`
+3. Check Metro and bundling: `cdp_status`, then `cdp_metro_events`
 
 **If wrong data displayed:**
 1. `cdp_store_state(path="<slice>")` -- verify the store holds expected data

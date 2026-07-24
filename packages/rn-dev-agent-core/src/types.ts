@@ -221,6 +221,32 @@ export interface EvaluateResult {
 }
 
 export type ToolErrorCode =
+  | 'SESSION_AUTHORITY_REQUIRED'
+  | 'SESSION_NOT_INITIALIZED'
+  | 'SESSION_OWNER_LOST'
+  | 'AUTHORITY_STORE_UNAVAILABLE'
+  | 'PROCESS_BIRTH_UNAVAILABLE'
+  | 'SOURCE_WORKTREE_MISMATCH'
+  | 'SOURCE_REVISION_NOT_BUNDLED'
+  | 'METRO_PORT_CLAIM_CONFLICT'
+  | 'PORT_OCCUPIED_UNOWNED'
+  | 'METRO_AUTHORITY_MISMATCH'
+  | 'METRO_INSTANCE_CHANGED'
+  | 'DEVICE_CLAIM_CONFLICT'
+  | 'APP_INSTALL_IDENTITY_CHANGED'
+  | 'PLATFORM_AUTHORITY_MISMATCH'
+  | 'BUNDLE_HANDSHAKE_UNAVAILABLE'
+  | 'BUNDLE_IDENTITY_MISMATCH'
+  | 'CDP_TARGET_AUTHORITY_MISMATCH'
+  | 'RUNNER_OWNERSHIP_MISMATCH'
+  | 'RUNNER_ADOPTION_REQUIRED'
+  | 'OBSERVE_AUTHORITY_MISMATCH'
+  | 'PROOF_AUTHORITY_MISMATCH'
+  | 'HANDOFF_NOT_AUTHORIZED'
+  | 'STALE_LEASE_NOT_RECLAIMABLE'
+  | 'AUTHORITY_LOST_DURING_OPERATION'
+  | 'OPERATION_ALREADY_IN_PROGRESS'
+  | 'AUTHORITY_STORE_BUSY'
   | 'DIAGNOSTIC_MODE_READ_ONLY'
   | 'TARGET_SESSION_MISMATCH'
   | 'PLATFORM_TARGET_NOT_FOUND'
@@ -380,4 +406,9 @@ export interface FastRunnerState {
   // vs a local xcodebuild. Surfaced by doctor / cdp_status.
   provenance?: 'prebuilt' | 'local';
   quiescence?: 'active' | 'disabled' | 'unavailable';
+  instanceId?: string;
+  sessionId?: string;
+  claimEpoch?: number;
+  capability?: string;
+  processBirth?: string;
 }

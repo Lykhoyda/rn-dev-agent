@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
+import { sessionStateDirectory } from '../session/runtime-paths.js';
 
 /**
  * GH #523 sub-2: last-connected bundleId, persisted per project + platform.
@@ -28,7 +29,7 @@ interface PersistedEntry {
 type StoreShape = Record<string, PersistedEntry>;
 
 function stateFilePath(projectRoot: string): string {
-  return join(projectRoot, '.rn-agent', 'state', STATE_FILE_NAME);
+  return join(sessionStateDirectory(projectRoot), STATE_FILE_NAME);
 }
 
 function readStore(projectRoot: string): StoreShape {
@@ -58,7 +59,7 @@ export function persistLastBundleId(
   try {
     const store = readStore(projectRoot);
     store[platform.toLowerCase()] = { bundleId, updatedAt: new Date().toISOString() };
-    mkdirSync(join(projectRoot, '.rn-agent', 'state'), { recursive: true });
+    mkdirSync(sessionStateDirectory(projectRoot), { recursive: true });
     writeFileSync(stateFilePath(projectRoot), JSON.stringify(store, null, 2));
   } catch {
     /* best-effort */

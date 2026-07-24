@@ -27,9 +27,21 @@ extension RnFastRunnerTests {
         return
       }
       let combined = buffer + data
-      // GET /health carries no body / Content-Length, so parseRequest (which
-      // requires one) would loop forever and the liveness probe would always
-      // time out to "stale". Answer it directly with 200 {ok:true}.
+      guard combined.range(of: Data("\r\n\r\n".utf8)) != nil else {
+        self.receiveRequest(connection: connection, buffer: combined)
+        return
+      }
+      if !self.isAuthorized(combined) {
+        let response = self.jsonResponse(
+          status: 401,
+          response: Response(
+            ok: false,
+            error: ErrorPayload(code: "RUNNER_OWNERSHIP_MISMATCH", message: "invalid runner capability")
+          )
+        )
+        self.sendResponse(response, over: connection)
+        return
+      }
       if self.isHealthRequest(combined) {
         let wedged = self.isRunnerWedged()
         let response = self.jsonResponse(
@@ -41,7 +53,12 @@ extension RnFastRunnerTests {
             runnerVersion: RunnerEnv.pluginVersion(),
             capabilities: QuiescenceStatus.current().capabilities
               + ["SCREEN_STATIC", "HONEST_HITTABLE"],
-            commands: CommandType.allCases.map(\.rawValue)
+            commands: CommandType.allCases.map(\.rawValue),
+            instanceId: RunnerEnv.instanceId(),
+            sessionId: RunnerEnv.sessionId(),
+            claimEpoch: RunnerEnv.claimEpoch(),
+            deviceId: RunnerEnv.deviceId(),
+            appId: RunnerEnv.appId()
           )
         )
         self.sendResponse(response, over: connection)
@@ -88,6 +105,21 @@ extension RnFastRunnerTests {
     return firstLine.hasPrefix("GET /health")
   }
 
+  private func isAuthorized(_ data: Data) -> Bool {
+    guard let capability = RunnerEnv.capability(), !capability.isEmpty,
+          let headerEnd = data.range(of: Data("\r\n\r\n".utf8))
+    else {
+      return false
+    }
+    let headers = String(decoding: data.subdata(in: 0..<headerEnd.lowerBound), as: UTF8.self)
+    return headers.split(separator: "\r\n").contains { line in
+      let parts = line.split(separator: ":", maxSplits: 1)
+      return parts.count == 2
+        && parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "authorization"
+        && parts[1].trimmingCharacters(in: .whitespaces) == "Bearer \(capability)"
+    }
+  }
+
   enum ParseOutcome {
     case incomplete
     case invalid
@@ -101,10 +133,7 @@ extension RnFastRunnerTests {
     let headerData = data.subdata(in: 0..<headerEnd.lowerBound)
     let bodyStart = headerEnd.upperBound
     let headers = String(decoding: headerData, as: UTF8.self)
-    // The header section is complete here, so a missing/negative/oversized
-    // Content-Length can never become valid — answer 400 instead of buffering
-    // forever (and never do range arithmetic on an unchecked length: negative
-    // made an invalid subdata range, huge trapped on integer overflow).
+    // Reject malformed lengths before range arithmetic.
     guard let contentLength = extractContentLength(headers: headers),
           contentLength >= 0, contentLength <= maxRequestBytes
     else {

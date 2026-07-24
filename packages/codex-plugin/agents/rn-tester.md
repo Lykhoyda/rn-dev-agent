@@ -107,13 +107,14 @@ produce idempotent rows (timestamp-suffixed TITLE, etc.), or (b) skip the
 replay and run manually with explicit user confirmation.
 
 ### Step 0: Environment Check
-Call `cdp_status`. If not connected, it auto-connects.
+Call `rn_session(action="status")` and require the intended ready session.
+Then call `cdp_status` for passive diagnostics; it never auto-connects.
 
 **If Metro is not running or no Hermes target found**, attempt auto-recovery
 before stopping:
 
-1. Detect platform: check `xcrun simctl list devices booted` (iOS) or
-   `adb devices` (Android).
+1. Resolve the exact platform and UUID/serial from session authority.
+   `device_list` may diagnose hardware but never chooses the target.
 2. If using an EAS build (`--eas` flag or user request):
    ```bash
    RESULT=$(rn-eas-artifact <platform> [profile]) || EXIT_CODE=$?
@@ -204,7 +205,7 @@ project's own Maestro subflows instead of unreliable manual taps.
           file: $(pwd)/.maestro/subflows/login.yaml
       EOF
       ```
-   f. **Detect platform** from `cdp_status` or booted devices.
+   f. **Use the exact platform** from the ready authority session.
    g. **Run with maestro-runner** (required — classic Maestro is
       unreliable on Android, GH #7):
       ```bash
@@ -301,10 +302,8 @@ Execute the navigation plan from Step 2.7:
    Dev Client picker (GH #9) — prefer programmatic on Dev Client.
 3. **UI fallback** (if a step fails): Use `device_find` + `device_press`
    to tap the navigation element directly.
-4. **Legacy fallback** (no graph): Use deep links:
-   ```bash
-   xcrun simctl openurl booted "myapp://home"
-   ```
+4. **Deep-link fallback** (no graph): call
+   `device_deeplink(url="myapp://home")` against the exact bound session.
 
 5. **Record outcome for EACH step** (critical for learning):
    ```
@@ -475,9 +474,9 @@ When you hit the budget:
 5. **One CDP session**: If cdp_status fails with "1006", ask the user
    to close React Native DevTools, Flipper, or Chrome DevTools.
 
-6. **After code changes**: Wait for Fast Refresh before testing.
-   Hot reload is automatic when Claude Code saves a file. Wait 1-2s
-   or call cdp_reload if needed.
+6. **After code changes**: Fast Refresh does not prove source fidelity.
+   Before authoritative testing, call `cdp_reload(full=true)`, reconnect the
+   exact target, and require a fresh signed initial-bundle marker.
 
 7. **Binary mismatch detection** (GH #5): If you see RedBox errors about
    missing native modules (e.g. "TurboModuleRegistry: module not found",

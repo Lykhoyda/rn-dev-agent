@@ -138,6 +138,7 @@ test('param-needing action + config with values → frozen (maestroRun receives 
     assert.equal(res.data.locked, true);
     assert.ok(capturedArgs !== null, 'maestroRun should have been called');
     assert.deepEqual(capturedArgs.params, { EMAIL: 'test@example.com' });
+    assert.equal(capturedArgs.deviceId, 'udid');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

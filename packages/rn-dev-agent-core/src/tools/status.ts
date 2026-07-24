@@ -28,6 +28,8 @@ import { getEngineStatus } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import type { ConnectFilters } from '../cdp/connect.js';
 import type { HermesTarget } from '../types.js';
+import type { WorkerAuthorityRuntime } from '../session/runtime.js';
+import { projectPublicAuthorityStatus } from '../session/public-status.js';
 
 export function sessionConnectFilters(
   session: ReturnType<typeof getActiveSession>,
@@ -62,6 +64,44 @@ export function targetMatchesSession(
     return false;
   }
   return true;
+}
+
+export function createPassiveStatusHandler(
+  getClient: () => CDPClient,
+  authorityRuntime: WorkerAuthorityRuntime,
+) {
+  return async (args: { metroPort?: number; platform?: string; resetArbiter?: boolean }) => {
+    if (args.resetArbiter) {
+      return failResult(
+        'cdp_status is passive; use an explicit recovery transition to reset the arbiter',
+        'INVALID_ARGUMENT',
+      );
+    }
+    const client = getClient();
+    const target = client.connectedTarget;
+    return okResult({
+      authoritative: false,
+      authority: projectPublicAuthorityStatus(authorityRuntime.status()),
+      metro: {
+        port: client.metroPort,
+        requestedPort: args.metroPort ?? null,
+        connected: client.isConnected,
+      },
+      cdp: {
+        connected: client.isConnected,
+        target: target
+          ? {
+              platform: target.platform ?? null,
+              appBound: Boolean(targetBundleIdentity(target)),
+            }
+          : null,
+        requestedPlatform: args.platform ?? null,
+      },
+      nextAction: client.isConnected
+        ? 'Use rn_session status to inspect bindings before authoritative tools.'
+        : 'Use rn_session bind_metro and cdp_connect with the claimed exact port.',
+    });
+  };
 }
 
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.

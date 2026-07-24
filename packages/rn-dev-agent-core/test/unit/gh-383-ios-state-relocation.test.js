@@ -64,7 +64,10 @@ test('gh-383 ios: parse rejects dead pid, wrong schema, malformed shapes', () =>
 test('gh-383 ios: adopt is a no-op when in-memory state exists or deviceId missing', () => {
   _setRunnerStateForTest(VALID);
   adoptPersistedFastRunnerState('UDID-OTHER');
-  assert.deepEqual(getFastRunnerState(), VALID);
+  assert.deepEqual(getFastRunnerState(), {
+    ...VALID,
+    capability: 'test-capability'.repeat(3),
+  });
   _setRunnerStateForTest(null);
   adoptPersistedFastRunnerState(undefined);
   assert.equal(getFastRunnerState(), null);

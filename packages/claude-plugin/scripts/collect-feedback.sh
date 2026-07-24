@@ -29,6 +29,8 @@ redact() {
     -e 's/xox[baprs]-[A-Za-z0-9-]+/[REDACTED_SLACK]/g' \
     -e 's/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[EMAIL_REDACTED]/g' \
     -e 's/(^|[^0-9])(192|10|172|169)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9]|$)/\1[IP_REDACTED]\3/g' \
+    -e 's#(localhost|127\.0\.0\.1):[0-9]{2,5}#[LOOPBACK_ENDPOINT_REDACTED]#g' \
+    -e 's/"(metroPort|observePort|port)"[[:space:]]*:[[:space:]]*[0-9]+/"\1":"[PORT_REDACTED]"/g' \
     -e 's#/(Users|home|opt|var|tmp)/[A-Za-z0-9_./-]{10,}#[PATH_REDACTED]#g' \
     -e 's/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/[BUNDLE_REDACTED]/g') \
     || { printf '%s' '[REDACTION_FAILED]'; return 0; }
@@ -91,12 +93,49 @@ if command -v adb &>/dev/null; then
   android_emu="${android_count:-0} connected"
 fi
 
-metro_status="not running"
-if curl -s --max-time 2 http://localhost:8081/status 2>/dev/null | grep -q "packager-status:running"; then
-  metro_status="running on 8081"
-elif curl -s --max-time 2 http://localhost:8082/status 2>/dev/null | grep -q "packager-status:running"; then
-  metro_status="running on 8082"
-fi
+authority_json='{"sessionAvailable":false,"authorityState":"unavailable","ownMetroAllocated":false,"ownMetroBound":false,"foreignSessionCount":0}'
+for session_cli in \
+  "${RN_DEV_AGENT_SESSION_CLI:-}" \
+  "$PLUGIN_ROOT/rn-dev-agent-core/dist/rn-session.js" \
+  "$PLUGIN_ROOT/packages/rn-dev-agent-core/dist/rn-session.js"; do
+  if [ -n "$session_cli" ] && [ -f "$session_cli" ]; then
+    node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+    node_minor=$(node -p 'process.versions.node.split(".")[1]' 2>/dev/null || echo 0)
+    if { [ "$node_major" -eq 22 ] && [ "$node_minor" -ge 5 ]; } || { [ "$node_major" -eq 23 ] && [ "$node_minor" -lt 6 ]; }; then
+      candidate=$(node --experimental-sqlite "$session_cli" feedback-json 2>/dev/null || true)
+    else
+      candidate=$(node "$session_cli" feedback-json 2>/dev/null || true)
+    fi
+    projected=$(printf '%s' "$candidate" | python3 -c '
+import json,sys
+value=json.load(sys.stdin)
+assert value.get("sessionAvailable") is True
+safe={
+  "sessionAvailable": True,
+  "authorityState": str(value.get("authorityState", "unavailable")),
+  "ownMetroAllocated": value.get("ownMetroAllocated") is True,
+  "ownMetroBound": value.get("ownMetroBound") is True,
+  "foreignSessionCount": int(value.get("foreignSessionCount", 0)),
+}
+print(json.dumps(safe,separators=(",",":")))
+' 2>/dev/null || true)
+    if [ -n "$projected" ]; then
+      authority_json="$projected"
+      break
+    fi
+  fi
+done
+
+metro_status=$(printf '%s' "$authority_json" | python3 -c '
+import json,sys
+value=json.load(sys.stdin)
+if value.get("ownMetroBound"):
+  print("session allocated and bound")
+elif value.get("ownMetroAllocated"):
+  print("session allocated, not bound")
+else:
+  print("no session allocation")
+' 2>/dev/null || echo "authority unavailable")
 
 # --- Collect recent telemetry (last 20 events, redacted) ---
 # GH #266: the per-tool-call telemetry writer was removed with the Experience
@@ -206,6 +245,7 @@ data = {
     },
     'recent_telemetry_lines': json.loads(sys.argv[12]),
     'telemetry_status': sys.argv[14],
+    'authority': json.loads(sys.argv[15]),
 }
 log_tail = sys.argv[13].strip()
 if log_tail:
@@ -225,4 +265,5 @@ print(json.dumps(data, indent=2))
   "$maestro_runner_version" \
   "$telemetry_json" \
   "$cdp_log_tail" \
-  "$telemetry_status"
+  "$telemetry_status" \
+  "$authority_json"

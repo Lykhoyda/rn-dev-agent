@@ -305,6 +305,7 @@ export interface ScreenshotArgs {
   path?: string;
   format?: string;
   platform?: 'ios' | 'android' | null;
+  deviceId?: string;
   /**
    * GH #136 PR-A internal signal: did the caller pass `platform` explicitly,
    * or was it inferred from the connected CDP target? Explicit calls always
@@ -420,7 +421,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
   // over the session device on multi-sim setups.
   const session = getActiveSession();
   const sessionDeviceId =
-    session && session.platform === args.platform ? session.deviceId : undefined;
+    args.deviceId ?? (session && session.platform === args.platform ? session.deviceId : undefined);
   if (
     (route === 'simctl' || args.platformExplicit) &&
     (args.platform === 'ios' || args.platform === 'android')
@@ -483,15 +484,18 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
  * getClient is optional so existing callers/tests still compile.
  */
 export function createDeviceScreenshotHandler(
-  getClient?: () => CDPClient,
+  _getClient?: () => CDPClient,
 ): (args: ScreenshotArgs) => Promise<ToolResult> {
   return async (args) => {
     const platformExplicit = args.platform === 'ios' || args.platform === 'android';
+    const session = getActiveSession();
     const platform: 'ios' | 'android' | null =
-      args.platform ??
-      (getClient?.()?.connectedTarget?.platform as 'ios' | 'android' | undefined) ??
-      (getActiveSession()?.platform as 'ios' | 'android' | undefined) ?? // A3: so a flow-active capture has a platform
-      null;
-    return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
+      args.platform ?? (session?.platform as 'ios' | 'android' | undefined) ?? null;
+    return captureAndResizeScreenshot({
+      ...args,
+      platform,
+      deviceId: args.deviceId ?? session?.deviceId,
+      platformExplicit,
+    });
   };
 }

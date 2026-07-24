@@ -2,7 +2,6 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 import { autoDismissDevMenuMeta } from './expo-dev-menu.js';
-import { loadPersistedBundleId } from '../cdp/bundle-id-store.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 const defaultExecFile = promisify(execFileCb);
 let sessionReloadCount = 0;
@@ -71,14 +70,11 @@ export async function forceReconnect(oldClient, setClient, createClient, capture
  *   force_reconnect → (iOS + known bundleId) simctl terminate + launch →
  *   force_reconnect again.
  *
- * The bundleId comes from the pre-reload captured target, falling back to
- * the persisted store (GH #523 sub-2). Anything that reaches simctl argv is
- * validated first — captured/persisted state is not trusted blindly.
+ * The bundle ID and device come only from the fenced authority target.
  */
-export async function recoverAfterFailedReconnect(getClient, setClient, createClient, captured, deps = {}) {
+export async function recoverAfterFailedReconnect(getClient, setClient, createClient, captured, deps = {}, authorityTarget) {
     const execFile = deps.execFile ?? defaultExecFile;
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    const loadPersistedBundleIdFn = deps.loadPersistedBundleId ?? loadPersistedBundleId;
     const first = await forceReconnect(getClient(), setClient, createClient, captured);
     if (first.ok) {
         return {
@@ -90,38 +86,57 @@ export async function recoverAfterFailedReconnect(getClient, setClient, createCl
         };
     }
     const steps = [];
+    const bundleId = authorityTarget?.appId && isValidBundleId(authorityTarget.appId) ? authorityTarget.appId : null;
+    const deviceId = authorityTarget?.deviceId;
+    if (!bundleId || !deviceId) {
+        steps.push('skip-relaunch:no-exact-authority-target');
+        return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
+    }
     const platform = captured.platform ?? 'ios';
-    if (platform !== 'ios') {
-        steps.push(`skip-relaunch:platform=${platform}-not-yet-supported`);
-        return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
-    }
-    let bundleId = captured.bundleId && isValidBundleId(captured.bundleId) ? captured.bundleId : null;
-    if (!bundleId) {
-        const persisted = loadPersistedBundleIdFn('ios');
-        if (persisted && isValidBundleId(persisted))
-            bundleId = persisted;
-    }
-    if (!bundleId) {
-        steps.push('skip-relaunch:no-bundleId-on-capturedTarget-or-state');
-        return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
-    }
     try {
-        await execFile('xcrun', ['simctl', 'terminate', 'booted', bundleId], { timeout: 5000 });
-        steps.push(`simctl terminate ${bundleId}:ok`);
+        if (platform === 'ios') {
+            await execFile('xcrun', ['simctl', 'terminate', deviceId, bundleId], {
+                timeout: 5000,
+            });
+            steps.push(`simctl terminate ${bundleId}:ok`);
+        }
+        else {
+            await execFile('adb', ['-s', deviceId, 'shell', 'am', 'force-stop', bundleId], {
+                timeout: 5000,
+            });
+            steps.push(`adb force-stop ${bundleId}:ok`);
+        }
     }
     catch (err) {
-        // Non-fatal: the app is usually already dead — that's why we're here.
-        steps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
+        steps.push(`terminate:warn(${err instanceof Error ? err.message : err})`);
     }
     try {
-        await execFile('xcrun', ['simctl', 'launch', 'booted', bundleId], { timeout: 8000 });
-        steps.push(`simctl launch ${bundleId}:ok`);
+        if (platform === 'ios') {
+            await execFile('xcrun', ['simctl', 'launch', deviceId, bundleId], {
+                timeout: 8000,
+            });
+            steps.push(`simctl launch ${bundleId}:ok`);
+        }
+        else {
+            await execFile('adb', [
+                '-s',
+                deviceId,
+                'shell',
+                'monkey',
+                '--pct-syskeys',
+                '0',
+                '-p',
+                bundleId,
+                '-c',
+                'android.intent.category.LAUNCHER',
+                '1',
+            ], { timeout: 8000 });
+            steps.push(`adb launch ${bundleId}:ok`);
+        }
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        steps.push(`simctl launch:err(${msg})`);
-        // A dead launch means nothing will register on Metro — reconnecting
-        // again would just burn the caller's time.
+        steps.push(`launch:err(${msg})`);
         return {
             ok: false,
             via: null,
@@ -150,7 +165,7 @@ export async function recoverAfterFailedReconnect(getClient, setClient, createCl
 }
 export function createReloadHandler(getClient, setClient, createClient, deps = {}) {
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    return withConnection(getClient, async (_args, client) => {
+    return withConnection(getClient, async (args, client) => {
         try {
             const result = await client.evaluate('(function() {' +
                 '  var ds = null;' +
@@ -215,7 +230,7 @@ export function createReloadHandler(getClient, setClient, createClient, deps = {
             const captured = captureClientState(getClient());
             // GH #523 sub-1: force_reconnect, escalating into an automatic simctl
             // terminate+launch when even that finds no target.
-            const recovery = await recoverAfterFailedReconnect(getClient, setClient, createClient, captured, deps);
+            const recovery = await recoverAfterFailedReconnect(getClient, setClient, createClient, captured, deps, args.deviceId && args.appId ? { deviceId: args.deviceId, appId: args.appId } : undefined);
             if (recovery.ok) {
                 reconnected = true;
                 client = getClient();
@@ -231,20 +246,21 @@ export function createReloadHandler(getClient, setClient, createClient, deps = {
                     recovered_via: recovery.via,
                     proxy_was_active: captured.proxyWasActive,
                     note: notes.join(' '),
-                    ...(recovery.relaunchSteps.length > 0 ? { relaunch_steps: recovery.relaunchSteps } : {}),
+                    ...(recovery.relaunchSteps.length > 0
+                        ? { relaunch_steps: recovery.relaunchSteps }
+                        : {}),
                 };
                 if (!recovery.platformMatched) {
                     forceMeta.warning = `Recovered onto ${recovery.finalPlatform ?? 'unknown'} but pre-reload session was on ${captured.platform ?? 'unknown'}. Run cdp_connect platform: "${captured.platform}" force: true to re-bind.`;
                 }
             }
             else {
-                return okResult({ reloaded: true, type: 'full', reconnected: false }, {
-                    meta: {
-                        warning: `Reload triggered but re-discovery failed after ${softAttemptsRun} soft attempts: ${lastReconnErr}; force_reconnect + auto-relaunch also failed: ${recovery.reason}`,
-                        force_reconnect_attempted: true,
-                        relaunch_steps: recovery.relaunchSteps,
-                        proxy_was_active: captured.proxyWasActive,
-                    },
+                return failResult(`Reload triggered but exact-target re-discovery failed after ${softAttemptsRun} soft attempts: ${lastReconnErr}; fenced recovery also failed: ${recovery.reason}`, 'RECONNECT_TIMEOUT', {
+                    reloaded: true,
+                    reconnected: false,
+                    force_reconnect_attempted: true,
+                    relaunch_steps: recovery.relaunchSteps,
+                    proxy_was_active: captured.proxyWasActive,
                 });
             }
         }
@@ -253,11 +269,10 @@ export function createReloadHandler(getClient, setClient, createClient, deps = {
             await sleep(400);
         }
         if (!client.isConnected) {
-            return okResult({ reloaded: true, type: 'full', reconnected: false }, {
-                meta: {
-                    warning: 'Reload triggered but connection dropped after re-discovery.',
-                    ...forceMeta,
-                },
+            return failResult('Reload triggered but the exact-target connection dropped after re-discovery.', 'RECONNECT_TIMEOUT', {
+                reloaded: true,
+                reconnected: false,
+                ...forceMeta,
             });
         }
         if (!client.helpersInjected) {

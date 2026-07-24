@@ -8,6 +8,7 @@ import { okResult, failResult, withConnection } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { sessionRecordingsDirectory } from '../session/runtime-paths.js';
 import { DEV_CHECK_JS, START_RECORDING_JS, STOP_RECORDING_JS, buildAnnotationJs, } from '../cdp/test-recorder-helpers.js';
 import { generateMaestro, generateDetox } from './test-recorder-generators.js';
 // --- Module state ---
@@ -59,7 +60,7 @@ export function getRecordingsDir(rootResolver = findProjectRoot) {
     const root = rootResolver();
     if (!root)
         return null;
-    return join(root, '.rn-agent', 'recordings');
+    return sessionRecordingsDirectory(root);
 }
 // B144: resolver factory that threads a bundleId into findProjectRoot so
 // save/load/list land in the correct project when the plugin CWD has

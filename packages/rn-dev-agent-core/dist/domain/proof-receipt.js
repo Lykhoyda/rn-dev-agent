@@ -48,7 +48,11 @@ export const proofEventSchema = z
     ts: z.number().int(),
     durationMs: z.number().nonnegative(),
     argsHash: z.string().optional(),
+    authorityReceiptHash: sha256Schema.optional(),
 })
+    .strict();
+export const acceptedProofEventSchema = proofEventSchema
+    .extend({ authorityReceiptHash: sha256Schema })
     .strict();
 export const proofIssueSchema = z
     .object({
@@ -89,6 +93,69 @@ export const proofRuntimeSchema = z
     metroPort: z.number().int().positive().max(65_535),
     metroReady: z.boolean(),
     pluginVersion: z.string().min(1),
+})
+    .strict();
+export const proofAuthoritySchema = z
+    .object({
+    sessionId: z.string().min(1),
+    claimEpoch: z.number().int().positive(),
+    authorityVersion: z.number().int().positive(),
+    controller: z
+        .object({
+        instanceId: z.string().min(1),
+        pid: z.number().int().positive(),
+        birthDigest: sha256Schema,
+    })
+        .strict(),
+    source: z
+        .object({
+        sourceKey: sha256Schema,
+        worktreeKey: sha256Schema,
+        appRootKey: sha256Schema,
+        head: gitShaSchema,
+        dirtyDigest: sha256Schema,
+    })
+        .strict(),
+    install: z
+        .object({
+        artifactDigest: sha256Schema,
+        buildGeneration: z.number().int().positive(),
+        appId: z.string().min(1),
+    })
+        .strict(),
+    metro: z
+        .object({
+        port: z.number().int().positive().max(65_535),
+        instanceId: z.string().min(1),
+        pid: z.number().int().positive(),
+        birthDigest: sha256Schema,
+        buildGeneration: z.number().int().positive(),
+    })
+        .strict(),
+    bundle: z
+        .object({
+        targetId: z.string().min(1),
+        connectionGeneration: z.number().int().positive(),
+        markerDigest: sha256Schema,
+        authorityScope: z.literal('initial-bundle'),
+        sourceFidelity: z.literal('not-proven'),
+    })
+        .strict(),
+    device: z
+        .object({
+        platform: z.enum(['ios', 'android']),
+        deviceId: z.string().min(1),
+    })
+        .strict(),
+    runner: z
+        .object({
+        instanceId: z.string().min(1),
+        protocolVersion: z.number().int().positive(),
+        capabilityDigest: sha256Schema,
+        processBirthDigest: sha256Schema,
+    })
+        .strict(),
+    proof: z.object({ runId: z.string().min(1) }).strict(),
 })
     .strict();
 /**
@@ -175,6 +242,9 @@ export const proofEventTraceSchema = z
     observed: z.array(proofEventSchema),
 })
     .strict();
+export const acceptedProofEventTraceSchema = proofEventTraceSchema
+    .extend({ observed: z.array(acceptedProofEventSchema) })
+    .strict();
 export const proofFrameMatchSchema = z
     .object({
     stepId: kebabIdSchema,
@@ -212,7 +282,7 @@ export const evidenceReviewSchema = z
 })
     .strict();
 const sharedReceiptShape = {
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     runId: z.string().min(1),
     issue: proofIssueSchema,
     pullRequest: proofPullRequestSchema,
@@ -221,6 +291,7 @@ const sharedReceiptShape = {
     git: proofGitSchema,
     device: proofDeviceSchema,
     runtime: proofRuntimeSchema,
+    authority: proofAuthoritySchema,
     candidateRuntime: proofCandidateRuntimeSchema.optional(),
     fixture: proofFixtureSchema,
     action: proofActionSchema,
@@ -232,7 +303,7 @@ const acceptedEvidenceShape = {
     video: proofVideoSchema,
     screenshots: z.array(proofScreenshotSchema).min(3),
     assertions: z.array(acceptedProofAssertionSchema).min(3),
-    eventTrace: proofEventTraceSchema,
+    eventTrace: acceptedProofEventTraceSchema,
     frameMatches: z.array(proofFrameMatchSchema).min(3),
     contactSheet: proofContactSheetSchema,
     errorBaseline: proofErrorBaselineSchema.extend({ clean: z.literal(true) }).strict(),

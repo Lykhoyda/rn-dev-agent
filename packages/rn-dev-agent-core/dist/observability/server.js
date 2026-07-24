@@ -10,14 +10,16 @@ export class ObservabilityServer {
     e2e;
     mirror;
     state;
+    authority;
     server = null;
     port = 0;
     streams = new Set();
-    constructor(recorder, e2e, mirror, state) {
+    constructor(recorder, e2e, mirror, state, authority) {
         this.recorder = recorder;
         this.e2e = e2e;
         this.mirror = mirror;
         this.state = state;
+        this.authority = authority;
     }
     async start(preferredPort) {
         if (this.server)
@@ -34,11 +36,9 @@ export class ObservabilityServer {
         }
         catch (e) {
             if (e.code === 'EADDRINUSE' && preferredPort) {
-                this.port = await listen(server, 0);
+                throw new Error(`OBSERVE_PORT_CLAIM_CONFLICT: allocated Observe port ${preferredPort} is occupied`);
             }
-            else {
-                throw e;
-            }
+            throw e;
         }
         this.server = server;
         return { url: this.url(), port: this.port };
@@ -72,36 +72,52 @@ export class ObservabilityServer {
     handle(req, res) {
         if (!this.guard(req, res))
             return;
-        const url = req.url ?? '/';
-        if (url === '/api/stream')
+        const url = new URL(req.url ?? '/', `http://${HOST}:${this.port}`);
+        const path = url.pathname;
+        if (path === '/api/authority') {
+            return this.json(res, 200, {
+                sessionId: this.authority?.sessionId,
+                claimEpoch: this.authority?.claimEpoch,
+                instanceId: this.authority?.instanceId,
+            });
+        }
+        if (path === '/api/stop' && req.method === 'POST') {
+            res.writeHead(202, { 'content-type': 'application/json' });
+            res.end('{"stopping":true}');
+            queueMicrotask(() => {
+                void this.stop();
+            });
+            return;
+        }
+        if (path === '/api/stream')
             return this.stream(res);
-        const shot = /^\/api\/screenshot\/(\d+)$/.exec(url);
+        const shot = /^\/api\/screenshot\/(\d+)$/.exec(path);
         if (shot)
             return this.screenshot(Number(shot[1]), res);
-        if (/^\/api\/live-screenshot\/\d+$/.test(url))
+        if (/^\/api\/live-screenshot\/\d+$/.test(path))
             return this.liveScreenshot(res);
-        if (/^\/api\/device\/mirror(\?|$)/.test(url)) {
+        if (path === '/api/device/mirror') {
             if (req.method?.toUpperCase() !== 'GET') {
                 this.json(res, 405, { error: 'method not allowed' });
                 return;
             }
             return this.mirrorStream(res);
         }
-        const stateKind = /^\/api\/state\/([A-Za-z]+)$/.exec(url);
+        const stateKind = /^\/api\/state\/([A-Za-z]+)$/.exec(path);
         if (stateKind)
             return void this.stateRead(stateKind[1], req, res);
-        if (url === '/api/e2e/run')
+        if (path === '/api/e2e/run')
             return void this.e2eRun(req, res);
-        if (url === '/api/e2e/runs')
+        if (path === '/api/e2e/runs')
             return void this.e2eListRuns(res);
-        const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(url);
+        const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(path);
         if (runById)
             return void this.e2eLoadRun(runById[1], res);
-        if (url === '/api/e2e/actions')
+        if (path === '/api/e2e/actions')
             return void this.e2eListActions(res);
-        if (url === '/api/e2e/actions/run')
+        if (path === '/api/e2e/actions/run')
             return void this.e2eRunAction(req, res);
-        if (url === '/')
+        if (path === '/')
             return this.index(res);
         res.writeHead(404);
         res.end();
@@ -159,7 +175,21 @@ export class ObservabilityServer {
             host === 'localhost';
         const site = req.headers['sec-fetch-site'];
         const okSite = site === undefined || site === 'same-origin' || site === 'none';
-        if (!okHost || !okSite) {
+        const path = new URL(req.url ?? '/', `http://${HOST}:${this.port}`).pathname;
+        const rootNavigation = path === '/' && (site === undefined || site === 'none');
+        const staticAsset = !path.startsWith('/api/') && path !== '/events';
+        const requestUrl = new URL(req.url ?? '/', `http://${HOST}:${this.port}`);
+        const authorization = req.headers.authorization ??
+            (requestUrl.searchParams.get('capability')
+                ? `Bearer ${requestUrl.searchParams.get('capability')}`
+                : undefined);
+        const instance = req.headers['x-rn-observe-instance'] ?? requestUrl.searchParams.get('instance') ?? undefined;
+        const authorized = !this.authority ||
+            rootNavigation ||
+            staticAsset ||
+            (authorization === `Bearer ${this.authority.capability}` &&
+                instance === this.authority.instanceId);
+        if (!okHost || !okSite || !authorized) {
             res.writeHead(403);
             res.end('forbidden');
             return false;
@@ -217,8 +247,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, out);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     index(res) {
@@ -226,13 +256,24 @@ export class ObservabilityServer {
             // __dir is dist/observability/; the SPA bundle ships at
             // dist/observability/web-dist/index.html (vite outDir).
             let html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
+            if (this.authority) {
+                const authorityJs = JSON.stringify({
+                    capability: this.authority.capability,
+                    instanceId: this.authority.instanceId,
+                }).replace(/</g, '\\u003c');
+                html = html.replace('</head>', `<script>window.__RN_OBSERVE_AUTHORITY__=${authorityJs}</script></head>`);
+            }
             if (this.e2e) {
                 // JSON.stringify + \u003c escaping: a token containing quotes or
                 // </script> must never break out of the inline tag (GH #438 review).
                 const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, '\\u003c');
                 html = html.replace('</head>', `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
             }
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.writeHead(200, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-store',
+                'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
+            });
             res.end(html);
         }
         catch {
@@ -262,8 +303,11 @@ export class ObservabilityServer {
     }
     json(res, status, obj) {
         const body = JSON.stringify(obj);
-        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(body);
+    }
+    internalError(res) {
+        this.json(res, 500, { error: 'internal server error' });
     }
     async e2eRun(req, res) {
         if (!this.e2e) {
@@ -296,8 +340,8 @@ export class ObservabilityServer {
             const result = await this.e2e.triggerRun(parsed.pattern);
             this.json(res, 200, result);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eListRuns(res) {
@@ -309,8 +353,8 @@ export class ObservabilityServer {
             const runs = await this.e2e.listRuns();
             this.json(res, 200, runs);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eLoadRun(id, res) {
@@ -326,8 +370,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, run);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eListActions(res) {
@@ -339,8 +383,8 @@ export class ObservabilityServer {
             const actions = await this.e2e.listActions();
             this.json(res, 200, actions);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
     async e2eRunAction(req, res) {
@@ -386,8 +430,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, result);
         }
-        catch (err) {
-            this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        catch {
+            this.internalError(res);
         }
     }
 }

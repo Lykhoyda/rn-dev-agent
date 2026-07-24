@@ -9,6 +9,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const FAKE = resolve(__dirname, '../fixtures/fake-worker.mjs');
 const CRASHER = resolve(__dirname, '../fixtures/crashing-worker.mjs');
 
+async function waitForTerminalReply(supervisor) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const id = supervisor.send('tools/list');
+    const reply = JSON.parse(await supervisor.nextLine());
+    assert.equal(reply.id, id);
+    if (/crash-looping/.test(reply.error?.message ?? '')) return reply;
+    assert.match(reply.error?.message ?? '', /worker restarted/);
+  }
+  assert.fail(`supervisor did not exhaust its restart budget:\n${supervisor.stderrText()}`);
+}
+
 test('GH#264 supervisor: kill -9 worker → in-flight error, respawn, handshake replayed once, new pid serves', async () => {
   const s = startSupervisor({ workerPath: FAKE });
   try {
@@ -52,10 +64,7 @@ test('GH#264 supervisor: crash-looping worker exhausts budget → terminal error
   try {
     // The crasher dies pre-handshake repeatedly; after the budget the
     // supervisor stays alive and answers requests with the terminal error.
-    await new Promise((r) => setTimeout(r, 1500)); // let the crash loop burn its budget
-    const qId = s.send('tools/list');
-    const reply = JSON.parse(await s.nextLine());
-    assert.equal(reply.id, qId);
+    const reply = await waitForTerminalReply(s);
     assert.equal(reply.error.code, -32000);
     assert.match(reply.error.message, /crash-looping/);
     assert.match(reply.error.message, /exit code 1/);
@@ -71,11 +80,8 @@ test('GH#264 supervisor: unspawnable worker (ENOENT) does NOT crash the supervis
     env: { RN_BRIDGE_MAX_RESPAWNS: '2' },
   });
   try {
-    await new Promise((r) => setTimeout(r, 1500)); // spawn errors burn the budget
     assert.equal(s.child.exitCode, null, 'supervisor survives spawn failures');
-    const qId = s.send('tools/list');
-    const reply = JSON.parse(await s.nextLine());
-    assert.equal(reply.id, qId);
+    const reply = await waitForTerminalReply(s);
     assert.equal(reply.error.code, -32000);
     assert.match(reply.error.message, /crash-looping/);
   } finally {

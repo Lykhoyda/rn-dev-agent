@@ -1,16 +1,17 @@
 ---
 title: "device_reset_state"
-description: "One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-stop the app, then relaunch + reconnect CDP"
+description: "Reset permissions/storage and relaunch the authority-bound app on its exact claimed device, then reconnect and re-prove the session target"
 ---
 
-One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-stop the app, then relaunch + reconnect CDP. Composes device_permission + cdp_mmkv + simctl/adb terminate+launch in one atomic call. Best-effort with per-step status — never silently rolls back. Sequence: permission → storage → terminate → launch → reconnect → helpers (→ optional nav_ready). On iOS, permission state is not queryable post-revoke (simctl limitation) — `ok: true` only means the shell-out exited 0. Returns \{ summary: \{ok, failed, skipped\}, steps: [...], reconnected, helpersInjected \}.
+Reset permissions/storage and relaunch the authority-bound app on its exact claimed device, then reconnect and re-prove the session target.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `appId` | `string` | Yes |  |  | App bundle ID, e.g. "com.example.app". |
-| `platform` | `unknown` | No |  |  | Force platform. Auto-detected from booted devices if omitted. |
+| `appId` | `unknown` | No |  |  | Authority-bound app identifier; normally injected by the session |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `deviceId` | `unknown` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
 | `permissions` | `unknown` | No |  |  |  |
 | `storageKeys` | `unknown` | No |  |  |  |
 | `mmkvInstanceId` | `unknown` | No |  |  | Forwarded to cdp_mmkv. Defaults to mmkv.default. |
@@ -21,5 +22,5 @@ One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-sto
 ## Usage
 
 ```
-device_reset_state(appId: <string>)
+device_reset_state()
 ```

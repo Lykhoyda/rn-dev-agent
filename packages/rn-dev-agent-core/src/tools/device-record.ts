@@ -303,14 +303,7 @@ async function runStart(args: DeviceRecordArgs): Promise<ToolResult> {
   }
 
   const scriptArgs = ['start', platform, outputPath];
-  // Only forward an explicit id when we're picking from >1 candidate; the
-  // single-device case keeps the script's existing `booted`/auto path so
-  // we don't regress any environment where simctl's `booted` shorthand
-  // works differently than passing the literal UDID (defensive — both
-  // should be equivalent on Apple's side).
-  if (!resolution.autoSelected) {
-    scriptArgs.push(platform === 'ios' ? '--udid' : '--serial', resolution.deviceId);
-  }
+  scriptArgs.push(platform === 'ios' ? '--udid' : '--serial', resolution.deviceId);
 
   try {
     const { stdout } = await execFileAsync(getRecordScript(), scriptArgs, {

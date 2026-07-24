@@ -10,6 +10,12 @@ import { ObservabilityServer } from '../../dist/observability/server.js';
 import { Recorder } from '../../dist/observability/recorder.js';
 
 export const CSRF_TOKEN = 'e2e-fixture-token';
+const OBSERVE_AUTHORITY = {
+  sessionId: 'observe-e2e-session',
+  claimEpoch: 1,
+  instanceId: 'observe-e2e-instance',
+  capability: 'observe-e2e-capability',
+};
 
 // Minimal decodable 1x1 JPEG so the device hero <img> gets naturalWidth > 0.
 const JPEG_1PX = Buffer.from(
@@ -131,7 +137,13 @@ export async function startFixture(): Promise<Fixture> {
             : null,
   };
 
-  const server = new ObservabilityServer(recorder, e2eStub, undefined, stateStub);
+  const server = new ObservabilityServer(
+    recorder,
+    e2eStub,
+    undefined,
+    stateStub,
+    OBSERVE_AUTHORITY,
+  );
   const { url } = await server.start(0);
   return { url, recorder, stop: () => server.stop() };
 }

@@ -1,8 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { okResult, failResult } from '../utils.js';
-import { detectPlatform } from './platform-utils.js';
-import { getAdbSerial } from '../agent-device-wrapper.js';
 import { annotateDeepLinkDepth } from '../verification/deep-link-depth.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { clearDevClientPickerIfPresent } from './dev-client-picker.js';
@@ -10,7 +8,9 @@ import { acceptDeeplinkOpenConfirmation, } from './device-system-dialog.js';
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
 export function iosDeeplinkCommandArgs(url, deviceId) {
-    return ['simctl', 'openurl', deviceId ?? 'booted', url];
+    if (!deviceId)
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: exact iOS deviceId is required');
+    return ['simctl', 'openurl', deviceId, url];
 }
 async function openIosDeeplink(url, deviceId) {
     try {
@@ -52,7 +52,9 @@ function posixSingleQuote(s) {
     return `'${s.replace(/'/g, "'\\''")}'`;
 }
 export function androidDeeplinkCommandArgs(url, packageName, deviceId) {
-    const serial = deviceId ? ['-s', deviceId] : getAdbSerial();
+    if (!deviceId)
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: exact Android deviceId is required');
+    const serial = ['-s', deviceId];
     const quotedUrl = posixSingleQuote(url);
     const args = [
         ...serial,
@@ -165,9 +167,9 @@ export function createDeviceDeeplinkHandler() {
         if (args.packageName !== undefined && !isValidBundleId(args.packageName)) {
             return failResult(`Invalid packageName "${String(args.packageName).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`, { code: 'INVALID_PACKAGE_NAME' });
         }
-        const platform = args.platform ?? (await detectPlatform());
-        if (!platform) {
-            return failResult('No iOS simulator or Android device detected. Pass platform explicitly or boot a device.', { code: 'NO_DEVICE' });
+        const platform = args.platform;
+        if (!platform || !args.deviceId) {
+            return failResult('device_deeplink requires the exact authority-bound platform and deviceId.', 'DEVICE_AUTHORITY_MISMATCH');
         }
         const result = platform === 'ios'
             ? await openIosDeeplink(args.url, args.deviceId)
@@ -184,7 +186,7 @@ export function createDeviceDeeplinkHandler() {
             // reach. Accept it via the fast-runner before the picker check;
             // best-effort — a failure never fails the deeplink.
             const openConfirmation = platform === 'ios' ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
-            const outcome = await clearDevClientPickerIfPresent(platform).catch(() => null);
+            const outcome = await clearDevClientPickerIfPresent(platform, args.metroPort).catch(() => null);
             return annotatePicker(annotated, outcome, openConfirmation);
         }
         return annotated;

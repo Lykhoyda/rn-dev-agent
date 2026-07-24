@@ -89,7 +89,11 @@ export async function lockE2eTestCore(
   const session = getSession();
   const platform = (session?.platform as 'ios' | 'android' | undefined) ?? undefined;
 
-  const runArgs: Record<string, unknown> = { flowPath: action.filePath, platform };
+  const runArgs: Record<string, unknown> = {
+    flowPath: action.filePath,
+    platform,
+    ...(session?.deviceId ? { deviceId: session.deviceId } : {}),
+  };
   if (resolvedParams) runArgs['params'] = resolvedParams;
 
   const result = await maestroRun(runArgs);

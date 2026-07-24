@@ -317,7 +317,7 @@ export async function captureAndResizeScreenshot(args) {
     // match — raw is now the primary iOS path and must not pick "first booted"
     // over the session device on multi-sim setups.
     const session = getActiveSession();
-    const sessionDeviceId = session && session.platform === args.platform ? session.deviceId : undefined;
+    const sessionDeviceId = args.deviceId ?? (session && session.platform === args.platform ? session.deviceId : undefined);
     if ((route === 'simctl' || args.platformExplicit) &&
         (args.platform === 'ios' || args.platform === 'android')) {
         const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
@@ -382,13 +382,16 @@ export async function captureAndResizeScreenshot(args) {
  *
  * getClient is optional so existing callers/tests still compile.
  */
-export function createDeviceScreenshotHandler(getClient) {
+export function createDeviceScreenshotHandler(_getClient) {
     return async (args) => {
         const platformExplicit = args.platform === 'ios' || args.platform === 'android';
-        const platform = args.platform ??
-            getClient?.()?.connectedTarget?.platform ??
-            getActiveSession()?.platform ?? // A3: so a flow-active capture has a platform
-            null;
-        return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
+        const session = getActiveSession();
+        const platform = args.platform ?? session?.platform ?? null;
+        return captureAndResizeScreenshot({
+            ...args,
+            platform,
+            deviceId: args.deviceId ?? session?.deviceId,
+            platformExplicit,
+        });
     };
 }

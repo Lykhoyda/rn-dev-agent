@@ -7,24 +7,28 @@ export class StrictProofMonitor {
   private events: ProofEvent[] = [];
   private observedResults: ProofObservation[] = [];
   private active = false;
+  private activeRunId: string | null = null;
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  begin(): void {
+  begin(runId: string = 'legacy'): void {
     this.events = [];
     this.observedResults = [];
     this.active = true;
+    this.activeRunId = runId;
   }
 
   record(event: ToolObserverInput): void {
     if (!this.active || event.tool === 'proof_capture') return;
     const ts = this.now();
+    const authorityReceiptHash = observedAuthorityReceiptHash(event.result);
     this.events.push({
       tool: event.tool,
       ok: event.status === 'PASS',
       ts,
       durationMs: event.latencyMs,
       argsHash: hashProofArgs(event.params),
+      ...(authorityReceiptHash ? { authorityReceiptHash } : {}),
     });
     this.observedResults.push({
       tool: event.tool,
@@ -34,6 +38,7 @@ export class StrictProofMonitor {
       resultHash: hashObservedValue(event.result),
       screenshotPath: observedScreenshotPath(event),
       assertionPassed: observedAssertionPassed(event),
+      ...(authorityReceiptHash ? { authorityReceiptHash } : {}),
     });
   }
 
@@ -44,6 +49,21 @@ export class StrictProofMonitor {
   stop(): readonly ProofEvent[] {
     this.active = false;
     return this.snapshot();
+  }
+
+  isActive(runId: string): boolean {
+    return this.active && this.activeRunId === runId;
+  }
+
+  ownsRun(runId: string): boolean {
+    return this.activeRunId === runId;
+  }
+
+  release(runId: string): void {
+    if (this.activeRunId === runId) {
+      this.active = false;
+      this.activeRunId = null;
+    }
   }
 
   observations(): readonly ProofObservation[] {
@@ -59,6 +79,7 @@ export interface ProofObservation {
   resultHash: string;
   screenshotPath: string | null;
   assertionPassed: boolean;
+  authorityReceiptHash?: string;
 }
 
 function canonicalizeProofValue(value: unknown): unknown {
@@ -94,20 +115,31 @@ function hashObservedValue(value: unknown): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function resultEnvelopeData(result: unknown): unknown {
+function resultEnvelope(result: unknown): Record<string, unknown> | null {
   if (!result || typeof result !== 'object') return null;
   const content = (result as { content?: unknown }).content;
-  if (!Array.isArray(content)) return result;
+  if (!Array.isArray(content)) return result as Record<string, unknown>;
   const text = (content[0] as { text?: unknown } | undefined)?.text;
-  if (typeof text !== 'string') return result;
+  if (typeof text !== 'string') return result as Record<string, unknown>;
   try {
-    const envelope = JSON.parse(text) as { data?: unknown };
-    return envelope.data ?? envelope;
+    return JSON.parse(text) as Record<string, unknown>;
   } catch {
-    return result;
+    return result as Record<string, unknown>;
   }
 }
 
+function resultEnvelopeData(result: unknown): unknown {
+  const envelope = resultEnvelope(result);
+  return envelope?.data ?? envelope;
+}
+
+function observedAuthorityReceiptHash(result: unknown): string | null {
+  const envelope = resultEnvelope(result);
+  const meta = envelope?.meta;
+  if (!meta || typeof meta !== 'object') return null;
+  const receipt = (meta as Record<string, unknown>).authorityReceipt;
+  return receipt && typeof receipt === 'object' ? hashProofValue(receipt) : null;
+}
 function stringField(value: unknown, fields: readonly string[]): string | null {
   if (!value || typeof value !== 'object') return null;
   for (const field of fields) {
@@ -169,6 +201,7 @@ export const traceReasonCodes = [
   'UNDECLARED_READ_ONLY_TOOL',
   'STORYBOARD_OPERATION_MISSING',
   'STORYBOARD_ORDER_VIOLATION',
+  'AUTHORITY_RECEIPT_MISSING',
 ] as const;
 
 export type TraceReasonCode = (typeof traceReasonCodes)[number];

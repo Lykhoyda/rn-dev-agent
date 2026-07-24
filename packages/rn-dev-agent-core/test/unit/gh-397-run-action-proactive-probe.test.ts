@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 import { appendRunRecordToSidecar } from '../helpers/action-state.ts';
+import { SessionAuthorityError } from '../../dist/session/registry.js';
 
 let project: ReturnType<typeof createTmpProject>;
 beforeEach(() => {
@@ -166,6 +167,28 @@ test('gh-397: at-risk + anchor ABSENT → falls through to maestro (fail-open)',
   const result = await handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' });
   assert.equal(readEnvelope(result).data.passed, true);
   assert.equal(counter.calls, 1);
+});
+
+test('gh-588: authority loss escapes orchestration without persisting a RunRecord', async () => {
+  project.seedAction('demo', replayFixtureYaml());
+  const { deps: replay } = makeReplayDeps({ present: true });
+  const handler = createRunActionHandler({
+    replayDeps: () => replay,
+    blindProbeContext: IOS26_CTX,
+    claimBundleAuthority: async () => {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'operation fence was replaced',
+      );
+    },
+  });
+
+  await assert.rejects(
+    () => handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' }),
+    (error) =>
+      error instanceof SessionAuthorityError && error.code === 'AUTHORITY_LOST_DURING_OPERATION',
+  );
+  assert.equal(lastRun('demo'), undefined);
 });
 
 // Mechanism note: firstReplayTestId() normalizes the WHOLE flow and returns

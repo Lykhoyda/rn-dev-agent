@@ -16,6 +16,8 @@ import {
   getCachedSnapshot,
   markSnapshotDirty,
   isSnapshotCacheValid,
+  setSnapshotAuthorityProvider,
+  validateCachedSnapshotAuthority,
 } from '../../dist/agent-device-wrapper.js';
 import { toolInvalidatesSnapshotCache } from '../../dist/observability/live-device.js';
 
@@ -61,6 +63,143 @@ test('snapshot cache: dirty flag is global but validity is keyed per platform re
   assert.equal(isSnapshotCacheValid('android'), true);
   markSnapshotDirty();
   assert.equal(isSnapshotCacheValid('android'), false);
+});
+
+test('snapshot cache preserves exact per-platform receipts within one source generation', () => {
+  let platform = 'ios';
+  let deviceId = 'ios-device';
+  const valid = new Set();
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform,
+      deviceId,
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: `${platform}-install`,
+      artifactDigest: `${platform}-artifact`,
+      runnerInstanceId: `${platform}-runner`,
+      runnerPid: 123,
+      runnerProcessBirth: `${platform}-birth`,
+      runnerCapabilityHash: `${platform}-capability`,
+      runnerPort: platform === 'ios' ? 9100 : 9200,
+      runnerClaim: `${platform}:${deviceId}`,
+      deviceClaim: `${platform}:${deviceId}`,
+    }),
+    record: (receipt) => valid.add(JSON.stringify(receipt)),
+    validate: (receipt) => valid.has(JSON.stringify(receipt)),
+  });
+  cacheSnapshot('ios', NODES);
+  platform = 'android';
+  deviceId = 'android-device';
+  cacheSnapshot('android', NODES);
+
+  assert.deepEqual(getCachedSnapshot('ios')?.nodes, NODES);
+  assert.deepEqual(getCachedSnapshot('android')?.nodes, NODES);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects cross-session and stale-source receipts', () => {
+  let sessionId = 'session-a';
+  const source = {
+    claimEpoch: 1,
+    sourceKey: 'source-a',
+    worktreeKey: 'worktree-a',
+    appRootKey: 'app-a',
+    platform: 'ios',
+    deviceId: 'ios-device',
+    appId: 'dev.example',
+    buildGeneration: 1,
+    installGeneration: 'ios-install',
+    artifactDigest: 'ios-artifact',
+    runnerInstanceId: 'ios-runner',
+    runnerPid: 123,
+    runnerProcessBirth: 'ios-birth',
+    runnerCapabilityHash: 'ios-capability',
+    runnerPort: 9100,
+    runnerClaim: 'ios:ios-device',
+    deviceClaim: 'ios:ios-device',
+  };
+  const valid = new Set();
+  setSnapshotAuthorityProvider({
+    current: () => ({ ...source, sessionId }),
+    record: (receipt) => valid.add(JSON.stringify(receipt)),
+    validate: (receipt) => valid.has(JSON.stringify(receipt)),
+  });
+  cacheSnapshot('ios', NODES);
+  sessionId = 'session-b';
+
+  assert.equal(getCachedSnapshot('ios'), undefined);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects a receipt invalidated by persistent platform authority', () => {
+  let valid = true;
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform: 'ios',
+      deviceId: 'ios-device',
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: 'ios-install',
+      artifactDigest: 'ios-artifact',
+      runnerInstanceId: 'ios-runner',
+      runnerPid: 123,
+      runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
+      runnerClaim: 'ios:ios-device',
+      deviceClaim: 'ios:ios-device',
+    }),
+    record: () => {},
+    validate: () => valid,
+  });
+  cacheSnapshot('ios', NODES);
+  valid = false;
+
+  assert.equal(getCachedSnapshot('ios'), undefined);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects unavailable live runner authority', async () => {
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform: 'ios',
+      deviceId: 'ios-device',
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: 'ios-install',
+      artifactDigest: 'ios-artifact',
+      runnerInstanceId: 'ios-runner',
+      runnerPid: 123,
+      runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
+      runnerClaim: 'ios:ios-device:9100',
+      deviceClaim: 'ios:ios-device',
+    }),
+    record: () => {},
+    validate: () => true,
+    validateLive: async () => false,
+  });
+  cacheSnapshot('ios', NODES);
+
+  assert.equal(await validateCachedSnapshotAuthority('ios'), false);
+  setSnapshotAuthorityProvider(null);
 });
 
 // toolInvalidatesSnapshotCache: the FAIL-SAFE rule at the MCP tool boundary.

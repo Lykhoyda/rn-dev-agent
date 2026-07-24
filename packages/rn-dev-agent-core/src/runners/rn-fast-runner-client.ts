@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   existsSync,
   readdirSync,
@@ -47,6 +48,7 @@ import {
   isAmbiguousTransportFailure,
   parseStatusProbeReply,
 } from './transport-recovery.js';
+import { readProcessBirth } from '../session/process-birth.js';
 
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
@@ -200,7 +202,12 @@ export function _resetCapabilitiesForTest(): void {
 }
 
 export function _setFastRunnerStateForTest(state: FastRunnerState | null): void {
-  runnerState = state;
+  runnerState = state
+    ? {
+        ...state,
+        capability: state.capability ?? 'test-capability'.repeat(3),
+      }
+    : null;
   runnerProcess = null;
   lastRunnerPostMortem = null;
 }
@@ -334,7 +341,7 @@ export function captureFastRunnerCommandAuthority(): FastRunnerCommandAuthority 
  * never call this.
  */
 export function _setRunnerStateForTest(state: FastRunnerState | null): void {
-  runnerState = state;
+  _setFastRunnerStateForTest(state);
 }
 
 export function isFastRunnerAvailable(): boolean {
@@ -522,7 +529,64 @@ function noteStaleHittableArtifact(capabilities: string[] | undefined): void {
  * reused — that would drive the wrong simulator.
  */
 export function shouldReuseRunner(state: FastRunnerState | null, deviceId: string): boolean {
-  return state !== null && state.deviceId === deviceId;
+  const authority = runnerAuthorityFromEnvironment(false);
+  return (
+    state !== null &&
+    state.deviceId === deviceId &&
+    authority !== null &&
+    state.sessionId === authority.sessionId &&
+    state.claimEpoch === authority.claimEpoch &&
+    typeof state.capability === 'string' &&
+    state.capability.length >= 32
+  );
+}
+
+interface RunnerAuthority {
+  instanceId: string;
+  sessionId: string;
+  claimEpoch: number;
+  capability: string;
+}
+
+function runnerAuthorityFromEnvironment(required: boolean): RunnerAuthority | null {
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+    if (!required) return null;
+    throw new Error(
+      'SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session',
+    );
+  }
+  return {
+    instanceId: randomUUID(),
+    sessionId,
+    claimEpoch,
+    capability: randomBytes(32).toString('base64url'),
+  };
+}
+
+export function buildRunnerAuthorityEnv(authority: RunnerAuthority): Record<string, string> {
+  const values: Record<string, string> = {
+    RN_RUNNER_INSTANCE_ID: authority.instanceId,
+    RN_RUNNER_SESSION_ID: authority.sessionId,
+    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+    RN_RUNNER_CAPABILITY: authority.capability,
+  };
+  return Object.fromEntries(
+    Object.entries(values).flatMap(([key, value]) => [
+      [key, value],
+      [`TEST_RUNNER_${key}`, value],
+    ]),
+  );
+}
+
+function buildRunnerTargetEnv(deviceId: string, appId: string): Record<string, string> {
+  return {
+    RN_RUNNER_DEVICE_ID: deviceId,
+    TEST_RUNNER_RN_RUNNER_DEVICE_ID: deviceId,
+    RN_RUNNER_APP_ID: appId,
+    TEST_RUNNER_RN_RUNNER_APP_ID: appId,
+  };
 }
 
 // GH #383 (device-caught): xcodebuild only forwards TEST_RUNNER_-prefixed env
@@ -621,6 +685,8 @@ export async function startFastRunner(
 ): Promise<FastRunnerState> {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
+  if (runnerState) stopFastRunner(deviceId);
+  const authority = runnerAuthorityFromEnvironment(true)!;
 
   const desired = resolveRunnerRequestedPort(port);
 
@@ -669,6 +735,8 @@ export async function startFastRunner(
         ...buildRunnerPortEnv(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
         ...buildRunnerQuiescenceEnv(process.env),
+        ...buildRunnerAuthorityEnv(authority),
+        ...buildRunnerTargetEnv(deviceId, bundleId),
         ...runnerTestFaultEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -707,7 +775,19 @@ export async function startFastRunner(
         ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
         provenance: artifactProvenanceToState(artifacts.provenance),
         ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
+        ...authority,
       };
+      const processBirth = readProcessBirth(child.pid!);
+      if (!processBirth) {
+        child.kill('SIGTERM');
+        reject(
+          new Error(
+            'PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven',
+          ),
+        );
+        return;
+      }
+      state.processBirth = processBirth.token;
       runnerState = state;
       if (Object.keys(runnerTestFaultEnv).length > 0) runnerTestFaultForwarded = true;
       quiescenceAnnouncementPending = true;
@@ -851,6 +931,9 @@ export interface StateSnapshot {
   bundleId: string;
   /** Learned from /health; the spawn-time stamp is only the bridge's own version. */
   protocolVersion?: number;
+  instanceId?: string;
+  sessionId?: string;
+  claimEpoch?: number;
 }
 
 export interface HttpProbeResult {
@@ -861,6 +944,11 @@ export interface HttpProbeResult {
   runnerVersion?: string;
   capabilities?: string[];
   commands?: string[];
+  instanceId?: string;
+  sessionId?: string;
+  claimEpoch?: number;
+  deviceId?: string;
+  appId?: string;
 }
 
 export interface LivenessProbeDeps {
@@ -897,7 +985,11 @@ function defaultProcessAlive(pid: number): boolean {
   }
 }
 
-async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpProbeResult> {
+async function defaultHttpProbe(
+  port: number,
+  timeoutMs: number,
+  capabilityOverride?: string,
+): Promise<HttpProbeResult> {
   // Use the same IPv4 loopback as the /command client (postCommand). The prior
   // [::1] here meant the health probe and the command channel could resolve to
   // different stacks, so a healthy IPv4 listener looked dead over IPv6.
@@ -907,13 +999,23 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
   try {
     // fetchImpl (not bare fetch) so the _setFetchForTest seam covers the health
     // probe like every other client call — production default is globalThis.fetch.
-    const res = await fetchImpl(url, { signal: controller.signal });
+    const capability =
+      capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
+    const res = await fetchImpl(url, {
+      signal: controller.signal,
+      headers: capability ? { authorization: `Bearer ${capability}` } : {},
+    });
     if (!res.ok) return { ok: false, status: res.status };
     let bodyOk: boolean | undefined;
     let protocolVersion: number | undefined;
     let runnerVersion: string | undefined;
     let capabilities: string[] | undefined;
     let commands: string[] | undefined;
+    let instanceId: string | undefined;
+    let sessionId: string | undefined;
+    let claimEpoch: number | undefined;
+    let deviceId: string | undefined;
+    let appId: string | undefined;
     try {
       const body = (await res.json()) as {
         ok?: boolean;
@@ -921,6 +1023,11 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
         runnerVersion?: string;
         capabilities?: unknown;
         commands?: unknown;
+        instanceId?: string;
+        sessionId?: string;
+        claimEpoch?: number;
+        deviceId?: string;
+        appId?: string;
       };
       bodyOk = body.ok === true;
       if (typeof body.protocolVersion === 'number') protocolVersion = body.protocolVersion;
@@ -931,6 +1038,11 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
       if (Array.isArray(body.commands)) {
         commands = body.commands.filter((c): c is string => typeof c === 'string');
       }
+      if (typeof body.instanceId === 'string') instanceId = body.instanceId;
+      if (typeof body.sessionId === 'string') sessionId = body.sessionId;
+      if (typeof body.claimEpoch === 'number') claimEpoch = body.claimEpoch;
+      if (typeof body.deviceId === 'string') deviceId = body.deviceId;
+      if (typeof body.appId === 'string') appId = body.appId;
     } catch {
       bodyOk = false;
     }
@@ -942,9 +1054,40 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
       ...(runnerVersion !== undefined ? { runnerVersion } : {}),
       ...(capabilities !== undefined ? { capabilities } : {}),
       ...(commands !== undefined ? { commands } : {}),
+      ...(instanceId !== undefined ? { instanceId } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(claimEpoch !== undefined ? { claimEpoch } : {}),
+      ...(deviceId !== undefined ? { deviceId } : {}),
+      ...(appId !== undefined ? { appId } : {}),
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function probeFastRunnerAuthority(input: {
+  port: number;
+  capability: string;
+  instanceId: string;
+  sessionId: string;
+  claimEpoch: number;
+  deviceId: string;
+  appId: string;
+}): Promise<boolean> {
+  try {
+    const result = await defaultHttpProbe(input.port, 2_000, input.capability);
+    return (
+      result.ok &&
+      result.status === 200 &&
+      result.bodyOk === true &&
+      result.instanceId === input.instanceId &&
+      result.sessionId === input.sessionId &&
+      result.claimEpoch === input.claimEpoch &&
+      result.deviceId === input.deviceId &&
+      result.appId === input.appId
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -994,6 +1137,17 @@ export async function probeFastRunnerLivenessDetailed(
   try {
     const res = await httpProbe(state.port, timeoutMs);
     if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+      lastKnownCapabilities = [];
+      return { liveness: 'stale', staleReason: 'health' };
+    }
+    if (
+      state.sessionId !== undefined &&
+      (res.instanceId !== state.instanceId ||
+        res.sessionId !== state.sessionId ||
+        res.claimEpoch !== state.claimEpoch ||
+        res.deviceId !== state.deviceId ||
+        res.appId !== state.bundleId)
+    ) {
       lastKnownCapabilities = [];
       return { liveness: 'stale', staleReason: 'health' };
     }
@@ -1196,9 +1350,16 @@ async function sendCommandOnce(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const capability = runnerState?.port === port ? runnerState.capability : undefined;
+    if (!capability) {
+      throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
+    }
     const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${capability}`,
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });

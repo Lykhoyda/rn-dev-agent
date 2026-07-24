@@ -39,12 +39,20 @@ recent legacy telemetry status. If active `cdp_status`/`cdp_error_log` tools are
 available, their high-level connection/error counts may be added; absence or
 transport closure is itself valid feedback and must not block submission.
 
+Call `rn_session({action: "status"})` when available and reconcile it with the
+collector's `authority` object. Compare exact values only in memory. The
+preview may show the sanitized authority state, own Metro allocated/bound
+booleans, and foreign-session count. If there is no exact session, show
+`authority: unknown`; never select the first live session. `cdp_status` is
+passive diagnostic context and does not replace session authority.
+
 Never include:
 
 - absolute home/project paths;
 - secrets/tokens/credentials;
 - email, phone, IP, company/app/bundle identity;
 - tool arguments, store/component/network bodies, console contents, or stacks.
+- foreign session paths, PIDs, device IDs, app IDs, ports, or capabilities.
 
 ## 3. Mandatory review
 
@@ -66,7 +74,7 @@ Wait for explicit confirmation and apply every requested removal.
    failure, retain only with the user's consent and report its path.
 6. Report the created issue URL.
 
-The body includes description, sanitized environment, fresh telemetry status
-(if any), high-level CDP state, reproduction, workaround, suggested fix, and
-related issues. Omit empty optional sections and never present stale telemetry
-as recent.
+The body includes description, sanitized environment, current high-level
+authority, fresh telemetry status (if any), high-level CDP state, reproduction,
+workaround, suggested fix, and related issues. Omit empty optional sections and
+never present stale telemetry as recent.

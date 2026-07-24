@@ -50,6 +50,22 @@ test('parser: entry matching the preferred Metro port wins', () => {
   assert.equal(out, '192.168.1.7:8081');
 });
 
+test('parser: preferred Metro port refuses multiple distinct endpoints', () => {
+  const out = parseFirstServerEntry('Development servers\n192.168.1.7:8081\n10.0.2.2:8081', 8081);
+  assert.equal(out, null);
+});
+
+test('authority helper refuses to select a picker row without an exact Metro port', async () => {
+  _setHasSessionForTest(true);
+  try {
+    const out = await clearDevClientPickerIfPresent('ios');
+    assert.equal(out?.dismissed, false);
+    assert.match(out?.reason ?? '', /Exact authority-bound Metro port/);
+  } finally {
+    _resetHasSessionForTest();
+  }
+});
+
 test('parser: link-local is still used when it is the only entry', () => {
   const out = parseFirstServerEntry('Development servers\n169.254.12.34:8081');
   assert.equal(out, '169.254.12.34:8081');
@@ -77,7 +93,7 @@ test('iOS: picker is detected and dismissed (short-circuit removed)', async () =
   });
   _setRunAgentDeviceForTest(async () => envelope(PICKER_NODES));
 
-  const out = await clearDevClientPickerIfPresent('ios');
+  const out = await clearDevClientPickerIfPresent('ios', 8081);
 
   assert.equal(out.dismissed, true);
   assert.equal(out.platform, 'ios');
@@ -104,7 +120,7 @@ test('iOS: JSON-envelope snapshots resolve node labels, not raw-JSON fragments',
   });
   _setRunAgentDeviceForTest(async () => envelope(PICKER_NODES));
 
-  const out = await clearDevClientPickerIfPresent('ios');
+  const out = await clearDevClientPickerIfPresent('ios', 8081);
 
   assert.equal(out.dismissed, true);
   assert.deepEqual(pressed, ['192.168.1.7:8081'], 'must tap the label, not a JSON fragment');
@@ -112,7 +128,7 @@ test('iOS: JSON-envelope snapshots resolve node labels, not raw-JSON fragments',
 
 test('iOS: no active session returns null (NO_SESSION), not a skip', async () => {
   _setHasSessionForTest(false);
-  const out = await clearDevClientPickerIfPresent('ios');
+  const out = await clearDevClientPickerIfPresent('ios', 8081);
   assert.equal(out, null);
 });
 
@@ -125,7 +141,7 @@ test('iOS: nothing on screen — clean not-detected result without snapshots', a
   });
   _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
 
-  const out = await clearDevClientPickerIfPresent('ios');
+  const out = await clearDevClientPickerIfPresent('ios', 8081);
 
   assert.equal(out.dismissed, false);
   assert.equal(out.platform, 'ios');
@@ -168,7 +184,7 @@ test('iOS: stale-server error dialog is dismissed, then the picker row is tapped
   });
   _setRunAgentDeviceForTest(async () => envelope(PICKER_NODES));
 
-  const out = await clearDevClientPickerIfPresent('ios');
+  const out = await clearDevClientPickerIfPresent('ios', 8081);
 
   assert.equal(out.dismissed, true);
   assert.match(out.reason, /error dialog/i);
@@ -195,7 +211,7 @@ test('iOS: error dialog with no picker afterwards still reports success', async 
     return { content: [{ type: 'text', text: '{}' }] };
   });
 
-  const out = await clearDevClientPickerIfPresent('ios');
+  const out = await clearDevClientPickerIfPresent('ios', 8081);
 
   assert.equal(out.dismissed, true);
   assert.match(out.reason, /error dialog/i);

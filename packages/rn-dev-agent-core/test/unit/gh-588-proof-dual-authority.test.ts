@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   candidateAuthorityReasons,
+  proofCandidateCheckoutMatchesHead,
   proofCandidateEntrypointEnvironmentMatches,
+  readProofCandidateHeadArtifacts,
   resolveProofCandidateEntrypoint,
 } from '../../dist/tools/proof-capture.js';
 import { proofCandidateRuntimeSchema } from '../../dist/domain/proof-receipt.js';
@@ -38,6 +41,38 @@ test('GH-588 Slice P: PR SHA, missing cross-repo block, and tampered bundle are 
 });
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../../..');
+
+test('GH-588 V8: candidate artifacts must be tracked clean HEAD bytes', async (t) => {
+  const candidateRoot = await mkdtemp(join(tmpdir(), 'proof-candidate-clean-'));
+  t.after(() => rm(candidateRoot, { recursive: true, force: true }));
+  const artifact = join(candidateRoot, 'artifact.js');
+  await writeFile(artifact, 'candidate bytes\n');
+  execFileSync('git', ['-C', candidateRoot, 'init']);
+  execFileSync('git', ['-C', candidateRoot, 'add', 'artifact.js']);
+  execFileSync('git', [
+    '-C',
+    candidateRoot,
+    '-c',
+    'user.name=Proof Test',
+    '-c',
+    'user.email=proof@example.invalid',
+    'commit',
+    '-m',
+    'candidate',
+  ]);
+
+  assert.equal(proofCandidateCheckoutMatchesHead(candidateRoot, [artifact]), true);
+  const aliasParent = await mkdtemp(join(tmpdir(), 'proof-candidate-clean-alias-'));
+  t.after(() => rm(aliasParent, { recursive: true, force: true }));
+  const candidateAlias = join(aliasParent, 'candidate');
+  await symlink(candidateRoot, candidateAlias);
+  assert.equal(proofCandidateCheckoutMatchesHead(candidateAlias, [artifact]), true);
+  const verifiedBytes = readProofCandidateHeadArtifacts(candidateAlias, [artifact]);
+  assert.equal(verifiedBytes?.[0]?.toString('utf8'), 'candidate bytes\n');
+  await writeFile(artifact, 'dirty candidate bytes\n');
+  assert.equal(proofCandidateCheckoutMatchesHead(candidateRoot, [artifact]), false);
+  assert.equal(verifiedBytes?.[0]?.toString('utf8'), 'candidate bytes\n');
+});
 
 test('GH-588 V8: absolute Codex supervisor argv binds the candidate packaged core', async (t) => {
   const aliasParent = await mkdtemp(join(tmpdir(), 'proof-candidate-alias-'));

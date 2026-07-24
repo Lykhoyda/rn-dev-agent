@@ -56,7 +56,7 @@ Read/report without mutation:
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |
 | Maestro runner | version/help | package helper/install guidance |
 | iOS/Android devices | list-only platform commands | boot guidance |
-| Metro | localhost status read | app's start command |
+| Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |
 | ffmpeg/idb | version/help and install-state reads | exact install commands |
 | physical device | prerequisite file/tool reads | signing/pairing guidance |

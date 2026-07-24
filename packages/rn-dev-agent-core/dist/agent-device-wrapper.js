@@ -100,6 +100,70 @@ export function hasActiveSession() {
     return activeSession !== null;
 }
 const snapshotCache = new Map();
+let snapshotAuthorityProvider = null;
+export function setSnapshotAuthorityProvider(provider) {
+    snapshotAuthorityProvider = provider;
+    snapshotCache.clear();
+    snapshotCacheDirty = true;
+}
+function currentSnapshotAuthority(platform) {
+    const authority = snapshotAuthorityProvider?.current();
+    const session = getActiveSession();
+    return {
+        sessionId: authority?.sessionId ?? null,
+        claimEpoch: authority?.claimEpoch ?? null,
+        sourceKey: authority?.sourceKey ?? null,
+        worktreeKey: authority?.worktreeKey ?? null,
+        appRootKey: authority?.appRootKey ?? null,
+        platform: authority?.platform ?? platform,
+        deviceId: authority?.deviceId ?? session?.deviceId ?? null,
+        buildGeneration: authority?.buildGeneration ?? null,
+        installGeneration: authority?.installGeneration ?? null,
+        runnerInstanceId: authority?.runnerInstanceId ?? null,
+        runnerClaim: authority?.runnerClaim ?? null,
+        deviceClaim: authority?.deviceClaim ?? null,
+        appId: authority?.appId ?? session?.appId ?? null,
+        artifactDigest: authority?.artifactDigest ?? null,
+        runnerPid: authority?.runnerPid ?? null,
+        runnerProcessBirth: authority?.runnerProcessBirth ?? null,
+        runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
+        runnerPort: authority?.runnerPort ?? null,
+    };
+}
+function snapshotAuthorityIsValid(receipt, platform) {
+    const current = currentSnapshotAuthority(platform);
+    if (receipt.sessionId === null) {
+        return (current.sessionId === null &&
+            receipt.platform === platform &&
+            receipt.deviceId === current.deviceId);
+    }
+    return Boolean(receipt.platform === platform &&
+        receipt.sessionId === current.sessionId &&
+        receipt.claimEpoch === current.claimEpoch &&
+        receipt.sourceKey === current.sourceKey &&
+        receipt.worktreeKey === current.worktreeKey &&
+        receipt.appRootKey === current.appRootKey &&
+        receipt.deviceId !== null &&
+        receipt.installGeneration !== null &&
+        receipt.runnerInstanceId !== null &&
+        receipt.runnerClaim !== null &&
+        receipt.deviceClaim !== null &&
+        receipt.appId !== null &&
+        receipt.artifactDigest !== null &&
+        receipt.runnerPid !== null &&
+        receipt.runnerProcessBirth !== null &&
+        receipt.runnerCapabilityHash !== null &&
+        receipt.runnerPort !== null &&
+        snapshotAuthorityProvider?.validate(receipt));
+}
+export async function validateCachedSnapshotAuthority(platform) {
+    const snapshot = snapshotCache.get(platform);
+    if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform))
+        return false;
+    if (snapshot.authorityReceipt.sessionId === null)
+        return true;
+    return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
+}
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot
 // still faithfully describes the screen. A tap/navigation changes the screen, so
@@ -109,8 +173,12 @@ const snapshotCache = new Map();
 // stale-by-content cache would drive a wrong-element tap.
 let snapshotCacheDirty = true;
 export function cacheSnapshot(platform, nodes) {
+    const authorityReceipt = currentSnapshotAuthority(platform);
+    if (authorityReceipt.sessionId !== null)
+        snapshotAuthorityProvider?.record(authorityReceipt);
     snapshotCache.set(platform, {
         platform,
+        authorityReceipt,
         nodes,
         capturedAt: new Date().toISOString(),
         capturedAtMs: Date.now(),
@@ -119,7 +187,10 @@ export function cacheSnapshot(platform, nodes) {
     snapshotCacheDirty = false;
 }
 export function getCachedSnapshot(platform) {
-    return snapshotCache.get(platform);
+    const snapshot = snapshotCache.get(platform);
+    return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
+        ? snapshot
+        : undefined;
 }
 // Called at the runNative dispatch choke point on any screen-mutating verb
 // (tap/press/fill/type/swipe/scroll/back/longpress/pinch/keyboard/drag).
@@ -133,6 +204,8 @@ export function isSnapshotCacheValid(platform, maxAgeMs = MAX_REF_MAP_AGE_MS) {
         return false;
     const entry = snapshotCache.get(platform);
     if (!entry)
+        return false;
+    if (!snapshotAuthorityIsValid(entry.authorityReceipt, platform))
         return false;
     return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }

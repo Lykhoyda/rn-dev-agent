@@ -13,14 +13,40 @@ object RunnerRuntime {
     val journal: CommandJournal = CommandJournal()
 }
 
-class CommandServer(port: Int, private val pluginVersion: String? = null) : NanoHTTPD(port) {
+data class RunnerAuthority(
+    val capability: String,
+    val instanceId: String,
+    val sessionId: String,
+    val claimEpoch: Long,
+    val deviceId: String,
+    val appId: String,
+)
+
+class CommandServer(
+    port: Int,
+    private val pluginVersion: String? = null,
+    private val authority: RunnerAuthority,
+) : NanoHTTPD(port) {
     override fun serve(session: IHTTPSession): Response {
+        if (session.headers["authorization"] != "Bearer ${authority.capability}") {
+            return json(
+                Response.Status.UNAUTHORIZED,
+                JSONObject()
+                    .put("ok", false)
+                    .put("error", JSONObject().put("code", "RUNNER_OWNERSHIP_MISMATCH").put("message", "invalid runner capability"))
+            )
+        }
         if (session.method == Method.GET && session.uri == "/health") {
             val body = JSONObject()
                 .put("ok", true)
                 .put("protocolVersion", RunnerProtocol.VERSION)
                 .put("capabilities", JSONArray(listOf("WINDOW_UPDATE", "HONEST_HITTABLE")))
                 .put("commands", JSONArray(CommandDispatcher.SUPPORTED_COMMANDS))
+                .put("instanceId", authority.instanceId)
+                .put("sessionId", authority.sessionId)
+                .put("claimEpoch", authority.claimEpoch)
+                .put("deviceId", authority.deviceId)
+                .put("appId", authority.appId)
             if (pluginVersion != null) body.put("runnerVersion", pluginVersion)
             return json(Response.Status.OK, body)
         }

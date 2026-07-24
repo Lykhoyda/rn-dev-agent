@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync } from 'node:fs';
 import { parseMaestroFailure } from './maestro-error-parser.js';
 import { assertValidActionId } from './path-safety.js';
+import { sessionStateDirectory } from '../session/runtime-paths.js';
 export function classifyFlowResult(input) {
     if (input.passed) {
         return {
@@ -60,7 +61,7 @@ export function diffNewlyFailing(current, previousGreen) {
 }
 const INDEX_MAX = 100;
 export function e2eRunsDirFor(projectRoot) {
-    return join(projectRoot, '.rn-agent', 'state', 'e2e-runs');
+    return join(sessionStateDirectory(projectRoot), 'e2e-runs');
 }
 function writeJsonAtomic(file, value) {
     mkdirSync(join(file, '..'), { recursive: true });

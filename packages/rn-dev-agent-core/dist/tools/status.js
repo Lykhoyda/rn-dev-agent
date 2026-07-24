@@ -16,6 +16,7 @@ import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 import { storeMode } from '../domain/action-state-store.js';
 import { getEngineStatus } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
+import { projectPublicAuthorityStatus } from '../session/public-status.js';
 export function sessionConnectFilters(session) {
     if (!session || (session.platform !== 'ios' && session.platform !== 'android'))
         return null;
@@ -42,6 +43,37 @@ export function targetMatchesSession(target, filters) {
         return false;
     }
     return true;
+}
+export function createPassiveStatusHandler(getClient, authorityRuntime) {
+    return async (args) => {
+        if (args.resetArbiter) {
+            return failResult('cdp_status is passive; use an explicit recovery transition to reset the arbiter', 'INVALID_ARGUMENT');
+        }
+        const client = getClient();
+        const target = client.connectedTarget;
+        return okResult({
+            authoritative: false,
+            authority: projectPublicAuthorityStatus(authorityRuntime.status()),
+            metro: {
+                port: client.metroPort,
+                requestedPort: args.metroPort ?? null,
+                connected: client.isConnected,
+            },
+            cdp: {
+                connected: client.isConnected,
+                target: target
+                    ? {
+                        platform: target.platform ?? null,
+                        appBound: Boolean(targetBundleIdentity(target)),
+                    }
+                    : null,
+                requestedPlatform: args.platform ?? null,
+            },
+            nextAction: client.isConnected
+                ? 'Use rn_session status to inspect bindings before authoritative tools.'
+                : 'Use rn_session bind_metro and cdp_connect with the claimed exact port.',
+        });
+    };
 }
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future

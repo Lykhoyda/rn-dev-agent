@@ -40,12 +40,13 @@ mkdir -p docs/proof/<feature-slug>
 
 ### Step 2: Environment check
 
-Call `cdp_status` to confirm the app is running and CDP is connected.
+Call `rn_session(action="status")` and require a ready exact session. Then call
+`cdp_status` to inspect passive CDP state.
 
 **Pre-recording readiness check (GH #8, #9):**
-1. Call `cdp_status` — this auto-detects and auto-dismisses the Dev Client
-   server picker if a device session is open (GH #9). If `cdp_status`
-   returns a warning about the picker, call it again after a few seconds.
+1. If the runtime is not pinned, call `rn_session(action="pin_dev_client")`.
+   Picker recovery may select only the canonical URL already bound to the
+   session; absence or ambiguity is `DEV_CLIENT_ENDPOINT_NOT_FOUND`.
 2. Call `cdp_navigation_state` — verify it returns a valid route name
    (not empty, not "DevClientLauncher", not "ServerPicker"). If still stuck,
    ask the user to select the Metro server manually.

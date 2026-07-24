@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join, extname } from 'node:path';
-import { getCachedSnapshot } from '../agent-device-wrapper.js';
+import { getCachedSnapshot, validateCachedSnapshotAuthority } from '../agent-device-wrapper.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
@@ -70,7 +70,11 @@ export function discoverTestIDs(dir: string): string[] {
   return [...ids].sort();
 }
 
-export function createCrossPlatformVerifyHandler(): (args: VerifyArgs) => Promise<ToolResult> {
+export function createCrossPlatformVerifyHandler(
+  dependencies: {
+    validateAuthority?: (platform: string) => Promise<boolean>;
+  } = {},
+): (args: VerifyArgs) => Promise<ToolResult> {
   return async (args) => {
     let elements = args.elements;
 
@@ -100,8 +104,13 @@ export function createCrossPlatformVerifyHandler(): (args: VerifyArgs) => Promis
     }
 
     const matchBy = args.matchBy ?? 'any';
-    const iosSnap = getCachedSnapshot('ios');
-    const androidSnap = getCachedSnapshot('android');
+    const validateAuthority = dependencies.validateAuthority ?? validateCachedSnapshotAuthority;
+    const [iosValid, androidValid] = await Promise.all([
+      validateAuthority('ios'),
+      validateAuthority('android'),
+    ]);
+    const iosSnap = iosValid ? getCachedSnapshot('ios') : undefined;
+    const androidSnap = androidValid ? getCachedSnapshot('android') : undefined;
 
     if (!iosSnap && !androidSnap) {
       return failResult(

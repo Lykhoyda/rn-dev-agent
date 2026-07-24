@@ -35,3 +35,16 @@ test('cross_platform_verify returns ok:true when all elements match', async () =
   assert.equal(env.ok, true);
   assert.equal(env.data.verdict, 'PASS');
 });
+
+test('cross_platform_verify refuses PASS when retained live authority is unavailable', async () => {
+  cacheSnapshot('ios', [{ ref: '@1', identifier: 'shared' }]);
+  cacheSnapshot('android', [{ ref: '@1', identifier: 'shared' }]);
+  const handler = createCrossPlatformVerifyHandler({
+    validateAuthority: async (platform) => platform === 'android',
+  });
+  const result = await handler({ elements: ['shared'], matchBy: 'testID' });
+  const env = parse(result);
+
+  assert.notEqual(env.data?.verdict, 'PASS');
+  assert.equal(env.meta?.authoritative, undefined);
+});

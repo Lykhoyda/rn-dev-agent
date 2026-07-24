@@ -14,11 +14,10 @@ reading UI state, and managing device settings. All commands run via bash.
 
 ## iOS Simulator (simctl)
 
-`booted` below is a convenience alias for a single-simulator machine. As soon as
-a second simulator is up it is ambiguous and silently targets the wrong device —
-substitute the exact UDID (`xcrun simctl list devices booted`), which is the same
-exact-device identity the plugin's own device session and Maestro replay authority
-are checked against.
+The raw commands below are non-authoritative diagnostics or manual maintenance.
+Never use the `booted` alias for plugin verification: require
+`rn_session(action="status")` and substitute its exact bound UDID. Prefer
+`device_*` tools, which enforce the session claim and return authority receipts.
 
 ### Boot and Manage Devices
 
@@ -54,11 +53,10 @@ xcrun simctl erase booted
 
 ### Deep Links
 
-```bash
-# Open a deep link in the booted simulator
-xcrun simctl openurl booted "myapp://home"
-xcrun simctl openurl booted "myapp://product/123"
-xcrun simctl openurl booted "myapp://checkout"
+```text
+device_deeplink(url="myapp://home")
+device_deeplink(url="myapp://product/123")
+device_deeplink(url="myapp://checkout")
 ```
 
 Prefer deep links over Maestro navigation flows — faster and more deterministic.

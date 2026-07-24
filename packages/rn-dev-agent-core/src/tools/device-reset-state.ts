@@ -1,24 +1,11 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, type ToolResult } from '../utils.js';
-import { detectPlatform } from './platform-utils.js';
 import { createDevicePermissionHandler } from './device-permission.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { buildMmkvExpression } from './mmkv.js';
 import { terminateApp, launchApp } from './app-lifecycle.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { waitForNavigationReady } from './startup-replay.js';
-
-// GH #60 Feature-c / D687: device_reset_state composes the 4-step preflight
-// (permissions → storage → terminate → launch+reconnect) into a single MCP
-// call. Best-effort with per-step status; never silently rolls back.
-//
-// Sequence rationale (Codex/Claude consensus):
-// 1. Permissions FIRST — changes can trigger app-side observers that write
-//    cooldown keys, which must be deletable by the next step.
-// 2. MMKV BEFORE terminate — cdp_mmkv requires a live CDP target, and MMKV
-//    mmap visibility means writes are observable by the next process.
-// 3. Terminate before launch (idempotent on both platforms).
-// 4. Reconnect only if waitForReady — caller can opt out for faster return.
 
 type PermissionAction = 'revoke' | 'reset';
 
@@ -30,6 +17,7 @@ export interface PermissionSpec {
 export interface DeviceResetStateArgs {
   appId: string;
   platform?: 'ios' | 'android';
+  deviceId?: string;
   permissions?: Array<string | PermissionSpec>;
   storageKeys?: string[];
   mmkvInstanceId?: string;
@@ -77,6 +65,7 @@ async function runPermissionSteps(
   permissions: PermissionSpec[],
   appId: string,
   platform: 'ios' | 'android',
+  deviceId: string,
 ): Promise<StepResult[]> {
   const handler = createDevicePermissionHandler();
   const results: StepResult[] = [];
@@ -88,6 +77,7 @@ async function runPermissionSteps(
         permission: perm.name,
         appId,
         platform,
+        deviceId,
       });
       const failed = r.isError === true;
       const parsed = failed ? safeParseError(r) : undefined;
@@ -362,7 +352,7 @@ export function createDeviceResetStateHandler(
         'DEVICE_RESET_INVALID_APPID',
       );
     }
-    const platform = args.platform ?? (await detectPlatform());
+    const platform = args.platform;
     if (platform !== 'ios' && platform !== 'android') {
       return failResult(
         'No iOS simulator or Android device detected. Pass platform explicitly.',
@@ -394,7 +384,13 @@ export function createDeviceResetStateHandler(
         },
       );
     }
-    const lifecycleDeviceId = sessionDeviceId;
+    const lifecycleDeviceId = args.deviceId ?? sessionDeviceId;
+    if (!lifecycleDeviceId) {
+      return failResult(
+        'device_reset_state requires the exact authority-bound deviceId',
+        'DEVICE_AUTHORITY_MISMATCH',
+      );
+    }
 
     const steps: StepResult[] = [];
     let reconnected = false;
@@ -403,7 +399,12 @@ export function createDeviceResetStateHandler(
 
     // Step 1: permissions (no CDP needed).
     if (permissions.length > 0) {
-      const permResults = await runPermissionSteps(permissions, args.appId, platform);
+      const permResults = await runPermissionSteps(
+        permissions,
+        args.appId,
+        platform,
+        lifecycleDeviceId,
+      );
       steps.push(...permResults);
     }
 

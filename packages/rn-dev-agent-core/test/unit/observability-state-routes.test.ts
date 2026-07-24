@@ -68,7 +68,7 @@ test('without state deps the endpoint is 501', async () => {
   }
 });
 
-test('a rejecting reader is a 500 json error, not a crash', async () => {
+test('a rejecting reader is a generic 500 json error, not a stack-trace disclosure', async () => {
   await withServer(
     STATE({
       read: async () => {
@@ -78,7 +78,7 @@ test('a rejecting reader is a 500 json error, not a crash', async () => {
     async (url) => {
       const r = await fetch(url + '/api/state/route');
       assert.equal(r.status, 500);
-      assert.match(((await r.json()) as { error: string }).error, /reader blew up/);
+      assert.deepEqual(await r.json(), { error: 'internal server error' });
     },
   );
 });

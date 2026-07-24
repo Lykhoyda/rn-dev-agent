@@ -24,7 +24,11 @@ SCREAMING_SNAKE_CASE.
 
 ### Metro not found
 
-Start Metro first: `npx expo start` or `npx react-native start`. The plugin auto-detects ports 8081, 8082, 19000, and 19006.
+Run `rn_session(action="status")` first. For an integrated session, use literal
+`pnpm ios` or `pnpm android`; the package adapter starts or validates Metro on
+the session's allocated port. Ambient default-port discovery is diagnostic
+only and cannot establish authority. See
+[Parallel session authority](/rn-dev-agent/session-authority/).
 
 ### No Hermes target
 
@@ -40,7 +44,9 @@ The bridge auto-reconnects by default and evicts the visual React Native DevTool
 
 ### CDP connection lost after reload
 
-This is normal. `cdp_reload` automatically reconnects within 15 seconds. If it fails, call `cdp_status` to re-establish the connection.
+This is normal. `cdp_reload` reconnects the authority-bound target within 15
+seconds. If it fails, call `cdp_status` for passive diagnostics, then
+`cdp_connect` to pin the exact signed target again.
 
 ### MCP server died when Metro was restarted
 
@@ -158,7 +164,9 @@ The crash is native, not JavaScript. Use `adb logcat -b crash` (Android) or chec
 
 ### Android emulator not detected
 
-Ensure the emulator is booted and `adb devices` shows it. The plugin auto-selects the first available device. Set `ANDROID_SERIAL` to target a specific emulator.
+Use `device_list` to diagnose connected emulators, then bind the intended serial
+and app ID with `rn_session(action="bind_device", ...)`. The plugin never turns
+the first available device or `ANDROID_SERIAL` into session authority.
 
 ### Maestro gRPC error on Android
 
@@ -168,25 +176,40 @@ Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 i
 
 Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
 
+### Session authority errors
+
+| Codes | Meaning and repair |
+|---|---|
+| `SESSION_NOT_INITIALIZED`, `SESSION_AUTHORITY_REQUIRED`, `SESSION_OWNER_LOST` | The supervised worker has no current fenced owner. Inspect `rn_session(action="status")`; create or rebind the intended session instead of selecting ambient state. |
+| `AUTHORITY_STORE_UNAVAILABLE`, `AUTHORITY_STORE_BUSY`, `PROCESS_BIRTH_UNAVAILABLE` | The SQLite registry or conservative process identity is unavailable. Retry after the named substrate is healthy; there is no JSON, PID-only, or warning-only fallback. |
+| `SOURCE_WORKTREE_MISMATCH`, `SOURCE_REVISION_NOT_BUNDLED` | The session or strict-proof source does not match the running bundle. Return to the intended worktree and load a fresh initial bundle before retrying. |
+| `METRO_PORT_CLAIM_CONFLICT`, `PORT_OCCUPIED_UNOWNED`, `METRO_AUTHORITY_MISMATCH`, `METRO_INSTANCE_CHANGED` | The allocated port or Metro process cannot be proven. Use the session's literal `pnpm ios`/`pnpm android` integration; never adopt the first listening port. |
+| `DEVICE_CLAIM_CONFLICT`, `DEVICE_AUTHORITY_MISMATCH`, `PLATFORM_AUTHORITY_MISMATCH`, `APP_INSTALL_IDENTITY_CHANGED` | The exact UUID/serial, platform, app, or installed generation differs. Bind the intended device and rebuild or reinstall that generation. |
+| `BUNDLE_HANDSHAKE_UNAVAILABLE`, `BUNDLE_IDENTITY_MISMATCH`, `CDP_TARGET_AUTHORITY_MISMATCH`, `TARGET_CLAIM_CONFLICT` | The signed initial-bundle marker or exact CDP target is absent, changed, or owned elsewhere. Load the intended app from the bound Metro and call `cdp_connect`; do not choose another target. |
+| `RUNNER_OWNERSHIP_MISMATCH`, `RUNNER_ADOPTION_REQUIRED`, `RUNNER_CLAIM_CONFLICT` | Native-runner capability or ownership differs. Rebind the exact runner, or complete the explicit handoff/adoption flow. A live runner is never force-stolen. |
+| `OBSERVE_AUTHORITY_MISMATCH`, `OBSERVE_PORT_CLAIM_CONFLICT`, `PROOF_AUTHORITY_MISMATCH` | Observe or proof belongs to another fenced generation. Start a session-scoped instance or proof run. |
+| `HANDOFF_NOT_AUTHORIZED`, `STALE_LEASE_NOT_RECLAIMABLE` | The handoff/adoption token is invalid, or the prior owner's death is not proven. Lease expiry alone never authorizes reclamation. |
+| `AUTHORITY_LOST_DURING_OPERATION`, `OPERATION_ALREADY_IN_PROGRESS` | Authority changed or another fenced operation is active. Treat any apparent handler success as failed, inspect status, and retry only after the session is stable. |
+
 ### PLATFORM_TARGET_NOT_FOUND / TARGET_PLATFORM_CONFLICT
 
-`cdp_status`/`cdp_connect` refused to connect (or disconnected right after
-connecting) because the requested platform or bundleId could not be
+`cdp_connect` refused to connect (or disconnected right after connecting)
+because the requested platform or bundleId could not be
 **proven** for any live Metro target. A target only proves its identity
 through one internally consistent Metro field — `appId`, an exact bundle-id
 `description`, or the canonical `<bundleId> (<device>)` title; a defaulted
 or ambiguous platform guess never satisfies a platform filter. The refusal
 lists the candidate targets with their inference confidence. Run
 `cdp_targets`, relaunch the requested app, or pass a `targetId` from a
-proven target. With no filters at all, connection proceeds to the best
-available target with a warning instead of failing closed.
+proven target. In a fenced session, omitted values come only from that
+session; no-filter best-target selection is diagnostic legacy behavior, not
+authoritative success.
 
 ### TARGET_SESSION_MISMATCH
 
-`cdp_status`/`cdp_connect` requested a platform or bundleId that conflicts
-with the active device session's binding. Close the device session or
-request the same platform/bundle — cross-platform fallback is refused
-rather than silently targeting a different device.
+The requested platform or bundle ID conflicts with the active device session's
+binding. Inspect passive `cdp_status`, then request the same platform/bundle or
+explicitly rebind the session. Cross-platform fallback is refused.
 
 ### RN_FAST_RUNNER_DOWN / RN_ANDROID_RUNNER_DOWN
 
@@ -281,9 +304,10 @@ with `RN_KEYBOARD_GUARD=0`.
 
 ### DEVICE_BUSY
 
-Another project's session holds this simulator (UDID-scoped ownership
-lock). Close the other session, or wait — the lock self-heals when its
-holder exits (PID-liveness + 90 s heartbeat staleness).
+An in-flight compatibility device session holds this exact simulator. Wait for
+that operation or close its owner. Cross-worktree ownership conflicts surface
+as `DEVICE_CLAIM_CONFLICT` and require explicit handoff or conservatively
+proven stale adoption; heartbeat or sleep expiry alone does not reclaim them.
 
 ### STALE_REF
 

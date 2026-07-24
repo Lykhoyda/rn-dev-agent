@@ -1,0 +1,33 @@
+---
+title: "rn_session"
+description: "Inspect and transition the fenced rn-dev-agent authority session"
+---
+
+Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, and release actions are fail-closed.
+
+## Parameters
+
+| Name | Type | Required | Default | Constraints | Description |
+|------|------|----------|---------|-------------|-------------|
+| `action` | `enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | preview_integration | apply_integration | restore_integration | release` | Yes |  |  |  |
+| `platform` | `enum: ios | android` | No |  |  |  |
+| `deviceId` | `string` | No |  |  |  |
+| `appId` | `string` | No |  |  |  |
+| `devClientUrl` | `string` | No |  |  |  |
+| `buildReceipt` | `Record<string, unknown>` | No |  |  |  |
+| `metroPort` | `number` | No |  | min: 1, max: 65535, integer |  |
+| `metroPid` | `number` | No |  | integer |  |
+| `metroInstanceId` | `string` | No |  |  |  |
+| `buildGeneration` | `number` | No |  | integer |  |
+| `mode` | `enum: managed | external` | No |  |  |  |
+| `targetHandle` | `string` | No |  |  |  |
+| `handoffId` | `string` | No |  |  |  |
+| `token` | `string` | No |  |  |  |
+| `adoptionHandle` | `string` | No |  |  |  |
+| `confirmed` | `boolean` | No |  |  |  |
+
+## Usage
+
+```
+rn_session(action: <enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | preview_integration | apply_integration | restore_integration | release>)
+```

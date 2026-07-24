@@ -59,13 +59,6 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
       }
 
       // D597: Hook fallback — read from JS-side __RN_AGENT_RESPONSE_BODIES__ cache.
-      //
-      // CodeQL js/bad-code-sanitization (alert #20): args.requestId comes from the
-      // MCP tool's `requestId` parameter (zod-validated as a string from the agent).
-      // We pre-validate the shape here as defense in depth — Chrome DevTools Protocol
-      // request IDs are dot-separated decimal numbers like "12345.67" — then pass via
-      // JSON.stringify into the cache lookup. The validator below makes the injection
-      // surface unreachable.
       if (client.networkMode === 'hook') {
         if (!/^[A-Za-z0-9._-]{1,128}$/.test(args.requestId)) {
           return failResult(
@@ -74,21 +67,33 @@ export function createNetworkBodyHandler(getClient: () => CDPClient) {
         }
         await drainNetworkHookBuffer(client);
         try {
-          const result = await client.evaluate(
-            `(function() { var c = globalThis.__RN_AGENT_RESPONSE_BODIES__; if (!c) return JSON.stringify({error:'no_cache'}); var b = c.get(${JSON.stringify(args.requestId)}); if (b === undefined) return JSON.stringify({error:'not_found'}); return JSON.stringify({body: b}); })()`,
-          );
-
-          if (result.error) {
-            return failResult(`Failed to read body from hook cache: ${result.error}`);
-          }
-
-          const parsed = JSON.parse(String(result.value)) as { error?: string; body?: string };
-          if (parsed.error === 'no_cache') {
+          const cache = (await client.send('Runtime.evaluate', {
+            expression: 'globalThis.__RN_AGENT_RESPONSE_BODIES__',
+            returnByValue: false,
+          })) as { result?: { objectId?: string } };
+          const objectId = cache.result?.objectId;
+          if (!objectId) {
             return failResult(
               'Response body cache not available. The network hook may not have been injected yet.',
               { hint: 'Make a request first, then query its body.' },
             );
           }
+
+          const result = (await client.send('Runtime.callFunctionOn', {
+            objectId,
+            functionDeclaration:
+              'function(requestId) { const body = this.get(requestId); return JSON.stringify(body === undefined ? { error: "not_found" } : { body }); }',
+            arguments: [{ value: args.requestId }],
+            returnByValue: true,
+          })) as {
+            result?: { value?: unknown };
+            exceptionDetails?: unknown;
+          };
+          if (result.exceptionDetails || typeof result.result?.value !== 'string') {
+            return failResult('Failed to read body from hook cache');
+          }
+
+          const parsed = JSON.parse(result.result.value) as { error?: string; body?: string };
           if (parsed.error === 'not_found') {
             return failResult(
               `Response body for ${args.requestId} not in cache. It may have been evicted (cache holds last 50 bodies) or the request failed.`,

@@ -15,16 +15,17 @@ Build the app and test this feature: $ARGUMENTS
 
 Phase A — Build pre-flight (run in this session):
 
-1. **Detect platform and exact device** — check booted devices via `device_list`
-   first, or `xcrun simctl list devices booted` / `adb devices` only when the MCP
-   tool is unavailable. Select exactly one target, then retain `<platform>` and
-   its exact iOS UDID or Android serial as `<device-id>`. Stop on ambiguity.
-2. **Check if app is already running** — call `cdp_status`. If `cdp.connected
-   == true` AND `app.dev == true`, skip to Phase B.
+1. **Resolve session authority** — call `rn_session(action="status")` and
+   require the intended worktree, platform, exact UUID/serial, and app ID.
+   `device_list` may diagnose available hardware but never selects the target.
+2. **Check if app is already running** — call passive `cdp_status`. If the
+   session's exact signed target is connected and `app.dev == true`, skip to
+   Phase B.
 3. **Build / install** (substitute `<platform>` with `ios` or `android`):
-   - **No `--eas` flag:** run
-     `bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>"`
-     which triggers `npx expo run:ios` or `npx expo run:android` (local build).
+   - **No `--eas` flag:** after previewing and confirming the session
+     integration, run literal `pnpm ios` or `pnpm android`. The adapter injects
+     the exact device and allocated Metro port and records the build/install
+     receipt.
    - **With `--eas` flag:** enter one shell scope, create `<artifact-dir>` with
      `artifact_dir=$(mktemp -d)`, and immediately register
      `trap 'rm -rf -- "$artifact_dir"' EXIT` in that same scope. Then run
@@ -34,9 +35,10 @@ Phase A — Build pre-flight (run in this session):
      Keep resolution and installation inside the trapped scope so every success
      or failure path cleans only that exact caller-owned directory after the
      install attempt.
-4. **Start Metro** if not running (`npx expo start` in background, or instruct
-   user to start it).
-5. **Confirm CDP** — call `cdp_status` again, must return `ok:true`.
+4. **Start Metro** only through the literal integrated package script; an
+   ambient default-port Metro is diagnostic, not authoritative.
+5. **Confirm CDP** — call `cdp_connect` for the exact signed target, then
+   passive `cdp_status`.
 
 Phase B — Run the rn-tester protocol (load `rn-testing` skill):
 

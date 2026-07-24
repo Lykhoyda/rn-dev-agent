@@ -2,9 +2,8 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, attachMetaNote, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
 import { consumePendingFastRunnerArtifactNote, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, runAndroid, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
+import { stopAndroidRunner, startAndroidRunner, runAndroid, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
 import { launchApp } from './app-lifecycle.js';
-import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice, } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
@@ -181,11 +180,9 @@ export function createDeviceSnapshotHandler(deps = {}) {
             const platform = (args.platform ?? 'ios').toLowerCase();
             const lockPlatform = platform === 'android' ? 'android' : 'ios';
             // GH#202 Phase 2 Task 4: resolve device id NATIVELY (no agent-device).
-            const deviceId = lockPlatform === 'android'
-                ? await resolveAndroidSerial(args.deviceId)
-                : await resolveIosUdid(args.deviceId);
+            const deviceId = args.deviceId?.trim();
             if (!deviceId) {
-                return failResult(`No booted ${platform} device found (or multiple booted — pass deviceId explicitly).`, 'NOT_CONNECTED');
+                return failResult(`Exact ${platform} deviceId is required; ambient booted/first-device selection is diagnostic only.`, 'DEVICE_AUTHORITY_MISMATCH');
             }
             // GH#202 Phase 1.5 / Task 4: acquire the lock BEFORE any side-effect.
             // On conflict, nothing has been launched yet — no teardown needed.
@@ -299,6 +296,20 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 openedAt: new Date().toISOString(),
                 appId,
             });
+            try {
+                await deps.bindRunner?.(lockPlatform, deviceId, appId);
+            }
+            catch (error) {
+                clearActiveSession();
+                if (lockPlatform === 'ios')
+                    stopFastRunner(deviceId);
+                else
+                    await stopAndroidRunner(deviceId);
+                releaseDeviceLockForSession();
+                const message = error instanceof Error ? error.message : String(error);
+                const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
+                return failResult(message, code);
+            }
             // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear
             // the wedge-recovery budget. Placed AFTER the device-lock conflict
             // early-return so a refused DEVICE_BUSY open does NOT reset it.
@@ -419,7 +430,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
             return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
         }
         if (action === 'close') {
-            return closeDeviceSession({
+            const result = await closeDeviceSession({
                 hasActiveSession: () => getActiveSession() !== null,
                 closeUnderlyingSession: async () => okResult({ closed: true }),
                 clearActiveSession,
@@ -428,6 +439,9 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 releaseDeviceLock: releaseDeviceLockForSession,
                 getDeviceId: () => getActiveSession()?.deviceId,
             });
+            if (!result.isError)
+                await deps.unbindRunner?.();
+            return result;
         }
         // action === 'snapshot'
         if (!getActiveSession()) {

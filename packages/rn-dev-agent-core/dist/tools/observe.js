@@ -17,6 +17,7 @@ let server = null;
 let e2eDeps;
 let mirrorManager;
 let stateDeps;
+let authorityDeps;
 export function setObserveE2eDeps(d) {
     e2eDeps = d;
 }
@@ -25,6 +26,9 @@ export function setObserveStateDeps(d) {
 }
 export function setObserveMirror(m) {
     mirrorManager = m;
+}
+export function setObserveAuthorityDeps(deps) {
+    authorityDeps = deps;
 }
 let starting = null;
 /**
@@ -39,10 +43,14 @@ export async function startObserveServer() {
     if (starting)
         return starting;
     starting = (async () => {
-        if (!server)
-            server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps);
-        const { port } = resolveObservePort();
+        const resolved = authorityDeps?.resolve();
+        if (!server) {
+            server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority);
+        }
+        const port = resolved?.port ?? resolveObservePort().port;
         const res = await server.start(port);
+        if (resolved)
+            authorityDeps?.bind({ port: res.port, authority: resolved.authority });
         writeObserveState(res.url, res.port);
         return res;
     })();
@@ -54,7 +62,7 @@ export async function startObserveServer() {
         throw e;
     }
 }
-async function stopObserveServer() {
+export async function stopObserveServer() {
     if (starting) {
         try {
             await starting;
@@ -66,6 +74,7 @@ async function stopObserveServer() {
     starting = null;
     await server?.stop();
     server = null;
+    authorityDeps?.unbind();
     removeObserveState();
 }
 export async function observeHandler(args) {

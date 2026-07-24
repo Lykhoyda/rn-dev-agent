@@ -17,7 +17,7 @@ const sourceTreeSha = 'b'.repeat(40);
 const proofHeadSha = 'c'.repeat(40);
 
 const acceptedReceipt = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   runId: 'run-123',
   issue: { repository: 'Lykhoyda/rn-dev-agent', number: 123 },
   pullRequest: { number: 456, headSha: proofHeadSha },
@@ -44,6 +44,46 @@ const acceptedReceipt = {
     metroPort: 8_081,
     metroReady: true,
     pluginVersion: '0.70.0',
+  },
+  authority: {
+    sessionId: 'session-proof',
+    claimEpoch: 1,
+    authorityVersion: 2,
+    controller: { instanceId: 'worker-1', pid: 42, birthDigest: hash },
+    source: {
+      sourceKey: hash,
+      worktreeKey: hash,
+      appRootKey: hash,
+      head: proofHeadSha,
+      dirtyDigest: hash,
+    },
+    install: {
+      artifactDigest: hash,
+      buildGeneration: 1,
+      appId: 'com.example.proof',
+    },
+    metro: {
+      port: 8_081,
+      instanceId: 'metro-1',
+      pid: 43,
+      birthDigest: hash,
+      buildGeneration: 1,
+    },
+    bundle: {
+      targetId: 'target-1',
+      connectionGeneration: 1,
+      markerDigest: hash,
+      authorityScope: 'initial-bundle',
+      sourceFidelity: 'not-proven',
+    },
+    device: { platform: 'ios', deviceId: 'simulator-1' },
+    runner: {
+      instanceId: 'runner-1',
+      protocolVersion: 1,
+      capabilityDigest: hash,
+      processBirthDigest: hash,
+    },
+    proof: { runId: 'run-123' },
   },
   fixture: {
     name: 'external-consumer-app',
@@ -89,9 +129,30 @@ const acceptedReceipt = {
   eventTrace: {
     allowedTools: ['cdp_run_action', 'proof_step', 'device_screenshot', 'expect_visible_by_testid'],
     observed: [
-      { tool: 'cdp_run_action', ok: true, ts: 1_000, durationMs: 1_000, argsHash: hash },
-      { tool: 'proof_step', ok: true, ts: 2_000, durationMs: 100, argsHash: hash },
-      { tool: 'device_screenshot', ok: true, ts: 3_000, durationMs: 100, argsHash: hash },
+      {
+        tool: 'cdp_run_action',
+        ok: true,
+        ts: 1_000,
+        durationMs: 1_000,
+        argsHash: hash,
+        authorityReceiptHash: hash,
+      },
+      {
+        tool: 'proof_step',
+        ok: true,
+        ts: 2_000,
+        durationMs: 100,
+        argsHash: hash,
+        authorityReceiptHash: hash,
+      },
+      {
+        tool: 'device_screenshot',
+        ok: true,
+        ts: 3_000,
+        durationMs: 100,
+        argsHash: hash,
+        authorityReceiptHash: hash,
+      },
     ],
   },
   frameMatches: ['start', 'form', 'result'].map((stepId, index) => ({
@@ -182,6 +243,28 @@ test('accepted receipts reject failed assertions in Zod and JSON Schema', () => 
     {
       zod: finalProofReceiptSchema.safeParse(failedAssertionReceipt).success,
       jsonSchema: validate(failedAssertionReceipt),
+    },
+    { zod: false, jsonSchema: false },
+    JSON.stringify(validate.errors),
+  );
+});
+
+test('accepted receipts require every observed event to carry authority', () => {
+  const validate = loadValidator();
+  const missingAuthorityReceipt = {
+    ...acceptedReceipt,
+    eventTrace: {
+      ...acceptedReceipt.eventTrace,
+      observed: acceptedReceipt.eventTrace.observed.map(
+        ({ authorityReceiptHash: _authorityReceiptHash, ...event }) => event,
+      ),
+    },
+  };
+
+  assert.deepEqual(
+    {
+      zod: finalProofReceiptSchema.safeParse(missingAuthorityReceipt).success,
+      jsonSchema: validate(missingAuthorityReceipt),
     },
     { zod: false, jsonSchema: false },
     JSON.stringify(validate.errors),

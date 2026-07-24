@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve5.call(this, root, ref);
+      let _sch = resolve8.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve5(root, ref) {
+    function resolve8(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3237,10 +3237,10 @@ var require_utils = __commonJS({
         return { host, isIPV6: false };
       }
     }
-    function findToken(str, token) {
+    function findToken(str, token2) {
       let ind = 0;
       for (let i = 0; i < str.length; i++) {
-        if (str[i] === token) ind++;
+        if (str[i] === token2) ind++;
       }
       return ind;
     }
@@ -3746,59 +3746,59 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse3(serialize(uri, options), options);
+        parse3(serialize2(uri, options), options);
       }
       return uri;
     }
-    function resolve5(baseURI, relativeURI, options) {
+    function resolve8(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
-      return serialize(resolved, schemelessOptions);
+      return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative2, options, skipNormalization) {
+    function resolveComponent(base, relative3, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse3(serialize(base, options), options);
-        relative2 = parse3(serialize(relative2, options), options);
+        base = parse3(serialize2(base, options), options);
+        relative3 = parse3(serialize2(relative3, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative2.scheme) {
-        target.scheme = relative2.scheme;
-        target.userinfo = relative2.userinfo;
-        target.host = relative2.host;
-        target.port = relative2.port;
-        target.path = removeDotSegments(relative2.path || "");
-        target.query = relative2.query;
+      if (!options.tolerant && relative3.scheme) {
+        target.scheme = relative3.scheme;
+        target.userinfo = relative3.userinfo;
+        target.host = relative3.host;
+        target.port = relative3.port;
+        target.path = removeDotSegments(relative3.path || "");
+        target.query = relative3.query;
       } else {
-        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
-          target.userinfo = relative2.userinfo;
-          target.host = relative2.host;
-          target.port = relative2.port;
-          target.path = removeDotSegments(relative2.path || "");
-          target.query = relative2.query;
+        if (relative3.userinfo !== void 0 || relative3.host !== void 0 || relative3.port !== void 0) {
+          target.userinfo = relative3.userinfo;
+          target.host = relative3.host;
+          target.port = relative3.port;
+          target.path = removeDotSegments(relative3.path || "");
+          target.query = relative3.query;
         } else {
-          if (!relative2.path) {
+          if (!relative3.path) {
             target.path = base.path;
-            if (relative2.query !== void 0) {
-              target.query = relative2.query;
+            if (relative3.query !== void 0) {
+              target.query = relative3.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative2.path[0] === "/") {
-              target.path = removeDotSegments(relative2.path);
+            if (relative3.path[0] === "/") {
+              target.path = removeDotSegments(relative3.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative2.path;
+                target.path = "/" + relative3.path;
               } else if (!base.path) {
-                target.path = relative2.path;
+                target.path = relative3.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative3.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative2.query;
+            target.query = relative3.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3806,7 +3806,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative2.fragment;
+      target.fragment = relative3.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -3814,7 +3814,7 @@ var require_fast_uri = __commonJS({
       const normalizedB = normalizeComparableURI(uriB, options);
       return normalizedA !== void 0 && normalizedB !== void 0 && normalizedA.toLowerCase() === normalizedB.toLowerCase();
     }
-    function serialize(cmpts, opts) {
+    function serialize2(cmpts, opts) {
       const component = {
         host: cmpts.host,
         scheme: cmpts.scheme,
@@ -3991,7 +3991,7 @@ var require_fast_uri = __commonJS({
     function normalizeStringWithStatus(uri, opts) {
       const { parsed, malformedAuthorityOrPort } = parseWithStatus(uri, opts);
       return {
-        normalized: malformedAuthorityOrPort ? uri : serialize(parsed, opts),
+        normalized: malformedAuthorityOrPort ? uri : serialize2(parsed, opts),
         malformedAuthorityOrPort
       };
     }
@@ -4001,16 +4001,16 @@ var require_fast_uri = __commonJS({
         return malformedAuthorityOrPort ? void 0 : normalized;
       }
       if (typeof uri === "object") {
-        return serialize(uri, opts);
+        return serialize2(uri, opts);
       }
     }
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve5,
+      resolve: resolve8,
       resolveComponent,
       equal,
-      serialize,
+      serialize: serialize2,
       parse: parse3
     };
     module.exports = fastUri;
@@ -6425,8 +6425,8 @@ var require_discriminator = __commonJS({
           if (!tagRequired)
             throw new Error(`discriminator: "${tagName}" must be required`);
           return oneOfMapping;
-          function hasRequired({ required: required2 }) {
-            return Array.isArray(required2) && required2.includes(tagName);
+          function hasRequired({ required: required3 }) {
+            return Array.isArray(required3) && required3.includes(tagName);
           }
           function addMappings(sch, i) {
             if (sch.const) {
@@ -9201,16 +9201,16 @@ var require_extension = __commonJS({
         throw new SyntaxError("Unexpected end of input");
       }
       if (end === -1) end = i;
-      const token = header.slice(start, end);
+      const token2 = header.slice(start, end);
       if (extensionName === void 0) {
-        push(offers, token, params);
+        push(offers, token2, params);
       } else {
         if (paramName === void 0) {
-          push(params, token, true);
+          push(params, token2, true);
         } else if (mustUnescape) {
-          push(params, paramName, token.replace(/\\/g, ""));
+          push(params, paramName, token2.replace(/\\/g, ""));
         } else {
-          push(params, paramName, token);
+          push(params, paramName, token2);
         }
         push(offers, extensionName, params);
       }
@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes3, createHash: createHash11 } = __require("crypto");
+    var { randomBytes: randomBytes6, createHash: createHash16 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9782,7 +9782,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes3(16).toString("base64");
+      const key = randomBytes6(16).toString("base64");
       const request2 = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -9912,8 +9912,8 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash11("sha1").update(key + GUID).digest("base64");
-        if (res.headers["sec-websocket-accept"] !== digest) {
+        const digest2 = createHash16("sha1").update(key + GUID).digest("base64");
+        if (res.headers["sec-websocket-accept"] !== digest2) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
         }
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash11 } = __require("crypto");
+    var { createHash: createHash16 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,12 +10588,12 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash11("sha1").update(key + GUID).digest("base64");
+        const digest2 = createHash16("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
           "Connection: Upgrade",
-          `Sec-WebSocket-Accept: ${digest}`
+          `Sec-WebSocket-Accept: ${digest2}`
         ];
         const ws = new this.options.WebSocket(null, void 0, this.options);
         if (protocols.size) {
@@ -10824,13 +10824,13 @@ var require_identity = __commonJS({
 var require_visit = __commonJS({
   "node_modules/yaml/dist/visit.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var BREAK = /* @__PURE__ */ Symbol("break visit");
     var SKIP = /* @__PURE__ */ Symbol("skip children");
     var REMOVE = /* @__PURE__ */ Symbol("remove node");
     function visit(node, visitor) {
       const visitor_ = initVisitor(visitor);
-      if (identity.isDocument(node)) {
+      if (identity2.isDocument(node)) {
         const cd = visit_(null, node.contents, visitor_, Object.freeze([node]));
         if (cd === REMOVE)
           node.contents = null;
@@ -10842,12 +10842,12 @@ var require_visit = __commonJS({
     visit.REMOVE = REMOVE;
     function visit_(key, node, visitor, path) {
       const ctrl = callVisitor(key, node, visitor, path);
-      if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
+      if (identity2.isNode(ctrl) || identity2.isPair(ctrl)) {
         replaceNode(key, path, ctrl);
         return visit_(key, ctrl, visitor, path);
       }
       if (typeof ctrl !== "symbol") {
-        if (identity.isCollection(node)) {
+        if (identity2.isCollection(node)) {
           path = Object.freeze(path.concat(node));
           for (let i = 0; i < node.items.length; ++i) {
             const ci = visit_(i, node.items[i], visitor, path);
@@ -10860,7 +10860,7 @@ var require_visit = __commonJS({
               i -= 1;
             }
           }
-        } else if (identity.isPair(node)) {
+        } else if (identity2.isPair(node)) {
           path = Object.freeze(path.concat(node));
           const ck = visit_("key", node.key, visitor, path);
           if (ck === BREAK)
@@ -10878,7 +10878,7 @@ var require_visit = __commonJS({
     }
     async function visitAsync(node, visitor) {
       const visitor_ = initVisitor(visitor);
-      if (identity.isDocument(node)) {
+      if (identity2.isDocument(node)) {
         const cd = await visitAsync_(null, node.contents, visitor_, Object.freeze([node]));
         if (cd === REMOVE)
           node.contents = null;
@@ -10890,12 +10890,12 @@ var require_visit = __commonJS({
     visitAsync.REMOVE = REMOVE;
     async function visitAsync_(key, node, visitor, path) {
       const ctrl = await callVisitor(key, node, visitor, path);
-      if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
+      if (identity2.isNode(ctrl) || identity2.isPair(ctrl)) {
         replaceNode(key, path, ctrl);
         return visitAsync_(key, ctrl, visitor, path);
       }
       if (typeof ctrl !== "symbol") {
-        if (identity.isCollection(node)) {
+        if (identity2.isCollection(node)) {
           path = Object.freeze(path.concat(node));
           for (let i = 0; i < node.items.length; ++i) {
             const ci = await visitAsync_(i, node.items[i], visitor, path);
@@ -10908,7 +10908,7 @@ var require_visit = __commonJS({
               i -= 1;
             }
           }
-        } else if (identity.isPair(node)) {
+        } else if (identity2.isPair(node)) {
           path = Object.freeze(path.concat(node));
           const ck = await visitAsync_("key", node.key, visitor, path);
           if (ck === BREAK)
@@ -10945,31 +10945,31 @@ var require_visit = __commonJS({
     function callVisitor(key, node, visitor, path) {
       if (typeof visitor === "function")
         return visitor(key, node, path);
-      if (identity.isMap(node))
+      if (identity2.isMap(node))
         return visitor.Map?.(key, node, path);
-      if (identity.isSeq(node))
+      if (identity2.isSeq(node))
         return visitor.Seq?.(key, node, path);
-      if (identity.isPair(node))
+      if (identity2.isPair(node))
         return visitor.Pair?.(key, node, path);
-      if (identity.isScalar(node))
+      if (identity2.isScalar(node))
         return visitor.Scalar?.(key, node, path);
-      if (identity.isAlias(node))
+      if (identity2.isAlias(node))
         return visitor.Alias?.(key, node, path);
       return void 0;
     }
     function replaceNode(key, path, node) {
       const parent = path[path.length - 1];
-      if (identity.isCollection(parent)) {
+      if (identity2.isCollection(parent)) {
         parent.items[key] = node;
-      } else if (identity.isPair(parent)) {
+      } else if (identity2.isPair(parent)) {
         if (key === "key")
           parent.key = node;
         else
           parent.value = node;
-      } else if (identity.isDocument(parent)) {
+      } else if (identity2.isDocument(parent)) {
         parent.contents = node;
       } else {
-        const pt = identity.isAlias(parent) ? "alias" : "scalar";
+        const pt = identity2.isAlias(parent) ? "alias" : "scalar";
         throw new Error(`Cannot replace node with ${pt} parent`);
       }
     }
@@ -10982,7 +10982,7 @@ var require_visit = __commonJS({
 var require_directives = __commonJS({
   "node_modules/yaml/dist/doc/directives.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var visit = require_visit();
     var escapeChars = {
       "!": "%21",
@@ -11125,10 +11125,10 @@ var require_directives = __commonJS({
         const lines = this.yaml.explicit ? [`%YAML ${this.yaml.version || "1.2"}`] : [];
         const tagEntries = Object.entries(this.tags);
         let tagNames;
-        if (doc && tagEntries.length > 0 && identity.isNode(doc.contents)) {
+        if (doc && tagEntries.length > 0 && identity2.isNode(doc.contents)) {
           const tags = {};
           visit.visit(doc.contents, (_key, node) => {
-            if (identity.isNode(node) && node.tag)
+            if (identity2.isNode(node) && node.tag)
               tags[node.tag] = true;
           });
           tagNames = Object.keys(tags);
@@ -11153,7 +11153,7 @@ var require_directives = __commonJS({
 var require_anchors = __commonJS({
   "node_modules/yaml/dist/doc/anchors.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var visit = require_visit();
     function anchorIsValid(anchor) {
       if (/[\x00-\x19\s,[\]{}]/.test(anchor)) {
@@ -11200,7 +11200,7 @@ var require_anchors = __commonJS({
         setAnchors: () => {
           for (const source of aliasObjects) {
             const ref = sourceObjects.get(source);
-            if (typeof ref === "object" && ref.anchor && (identity.isScalar(ref.node) || identity.isCollection(ref.node))) {
+            if (typeof ref === "object" && ref.anchor && (identity2.isScalar(ref.node) || identity2.isCollection(ref.node))) {
               ref.node.anchor = ref.anchor;
             } else {
               const error2 = new Error("Failed to resolve repeated object (this should not happen)");
@@ -11273,12 +11273,12 @@ var require_applyReviver = __commonJS({
 var require_toJS = __commonJS({
   "node_modules/yaml/dist/nodes/toJS.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     function toJS(value, arg, ctx) {
       if (Array.isArray(value))
         return value.map((v, i) => toJS(v, String(i), ctx));
       if (value && typeof value.toJSON === "function") {
-        if (!ctx || !identity.hasAnchor(value))
+        if (!ctx || !identity2.hasAnchor(value))
           return value.toJSON(arg, ctx);
         const data = { aliasCount: 0, count: 1, res: void 0 };
         ctx.anchors.set(value, data);
@@ -11304,11 +11304,11 @@ var require_Node = __commonJS({
   "node_modules/yaml/dist/nodes/Node.js"(exports) {
     "use strict";
     var applyReviver = require_applyReviver();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var toJS = require_toJS();
     var NodeBase = class {
       constructor(type) {
-        Object.defineProperty(this, identity.NODE_TYPE, { value: type });
+        Object.defineProperty(this, identity2.NODE_TYPE, { value: type });
       }
       /** Create a copy of this node.  */
       clone() {
@@ -11319,7 +11319,7 @@ var require_Node = __commonJS({
       }
       /** A plain JavaScript representation of this node. */
       toJS(doc, { mapAsMap, maxAliasCount, onAnchor, reviver } = {}) {
-        if (!identity.isDocument(doc))
+        if (!identity2.isDocument(doc))
           throw new TypeError("A document argument is required");
         const ctx = {
           anchors: /* @__PURE__ */ new Map(),
@@ -11346,12 +11346,12 @@ var require_Alias = __commonJS({
     "use strict";
     var anchors = require_anchors();
     var visit = require_visit();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Node = require_Node();
     var toJS = require_toJS();
     var Alias = class extends Node.NodeBase {
       constructor(source) {
-        super(identity.ALIAS);
+        super(identity2.ALIAS);
         this.source = source;
         Object.defineProperty(this, "tag", {
           set() {
@@ -11373,7 +11373,7 @@ var require_Alias = __commonJS({
           nodes = [];
           visit.visit(doc, {
             Node: (_key, node) => {
-              if (identity.isAlias(node) || identity.hasAnchor(node))
+              if (identity2.isAlias(node) || identity2.hasAnchor(node))
                 nodes.push(node);
             }
           });
@@ -11433,11 +11433,11 @@ var require_Alias = __commonJS({
       }
     };
     function getAliasCount(doc, node, anchors2) {
-      if (identity.isAlias(node)) {
+      if (identity2.isAlias(node)) {
         const source = node.resolve(doc);
         const anchor = anchors2 && source && anchors2.get(source);
         return anchor ? anchor.count * anchor.aliasCount : 0;
-      } else if (identity.isCollection(node)) {
+      } else if (identity2.isCollection(node)) {
         let count = 0;
         for (const item of node.items) {
           const c = getAliasCount(doc, item, anchors2);
@@ -11445,7 +11445,7 @@ var require_Alias = __commonJS({
             count = c;
         }
         return count;
-      } else if (identity.isPair(node)) {
+      } else if (identity2.isPair(node)) {
         const kc = getAliasCount(doc, node.key, anchors2);
         const vc = getAliasCount(doc, node.value, anchors2);
         return Math.max(kc, vc);
@@ -11460,13 +11460,13 @@ var require_Alias = __commonJS({
 var require_Scalar = __commonJS({
   "node_modules/yaml/dist/nodes/Scalar.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Node = require_Node();
     var toJS = require_toJS();
     var isScalarValue = (value) => !value || typeof value !== "function" && typeof value !== "object";
     var Scalar = class extends Node.NodeBase {
       constructor(value) {
-        super(identity.SCALAR);
+        super(identity2.SCALAR);
         this.value = value;
       }
       toJSON(arg, ctx) {
@@ -11491,7 +11491,7 @@ var require_createNode = __commonJS({
   "node_modules/yaml/dist/doc/createNode.js"(exports) {
     "use strict";
     var Alias = require_Alias();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Scalar = require_Scalar();
     var defaultTagPrefix = "tag:yaml.org,2002:";
     function findTagObject(value, tagName, tags) {
@@ -11505,12 +11505,12 @@ var require_createNode = __commonJS({
       return tags.find((t) => t.identify?.(value) && !t.format);
     }
     function createNode(value, tagName, ctx) {
-      if (identity.isDocument(value))
+      if (identity2.isDocument(value))
         value = value.contents;
-      if (identity.isNode(value))
+      if (identity2.isNode(value))
         return value;
-      if (identity.isPair(value)) {
-        const map = ctx.schema[identity.MAP].createNode?.(ctx.schema, null, ctx);
+      if (identity2.isPair(value)) {
+        const map = ctx.schema[identity2.MAP].createNode?.(ctx.schema, null, ctx);
         map.items.push(value);
         return map;
       }
@@ -11542,7 +11542,7 @@ var require_createNode = __commonJS({
             ref.node = node2;
           return node2;
         }
-        tagObj = value instanceof Map ? schema[identity.MAP] : Symbol.iterator in Object(value) ? schema[identity.SEQ] : schema[identity.MAP];
+        tagObj = value instanceof Map ? schema[identity2.MAP] : Symbol.iterator in Object(value) ? schema[identity2.SEQ] : schema[identity2.MAP];
       }
       if (onTagObj) {
         onTagObj(tagObj);
@@ -11566,7 +11566,7 @@ var require_Collection = __commonJS({
   "node_modules/yaml/dist/nodes/Collection.js"(exports) {
     "use strict";
     var createNode = require_createNode();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Node = require_Node();
     function collectionFromPath(schema, path, value) {
       let v = value;
@@ -11610,7 +11610,7 @@ var require_Collection = __commonJS({
         const copy = Object.create(Object.getPrototypeOf(this), Object.getOwnPropertyDescriptors(this));
         if (schema)
           copy.schema = schema;
-        copy.items = copy.items.map((it) => identity.isNode(it) || identity.isPair(it) ? it.clone(schema) : it);
+        copy.items = copy.items.map((it) => identity2.isNode(it) || identity2.isPair(it) ? it.clone(schema) : it);
         if (this.range)
           copy.range = this.range.slice();
         return copy;
@@ -11626,7 +11626,7 @@ var require_Collection = __commonJS({
         else {
           const [key, ...rest] = path;
           const node = this.get(key, true);
-          if (identity.isCollection(node))
+          if (identity2.isCollection(node))
             node.addIn(rest, value);
           else if (node === void 0 && this.schema)
             this.set(key, collectionFromPath(this.schema, rest, value));
@@ -11643,7 +11643,7 @@ var require_Collection = __commonJS({
         if (rest.length === 0)
           return this.delete(key);
         const node = this.get(key, true);
-        if (identity.isCollection(node))
+        if (identity2.isCollection(node))
           return node.deleteIn(rest);
         else
           throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
@@ -11657,16 +11657,16 @@ var require_Collection = __commonJS({
         const [key, ...rest] = path;
         const node = this.get(key, true);
         if (rest.length === 0)
-          return !keepScalar && identity.isScalar(node) ? node.value : node;
+          return !keepScalar && identity2.isScalar(node) ? node.value : node;
         else
-          return identity.isCollection(node) ? node.getIn(rest, keepScalar) : void 0;
+          return identity2.isCollection(node) ? node.getIn(rest, keepScalar) : void 0;
       }
       hasAllNullValues(allowScalar) {
         return this.items.every((node) => {
-          if (!identity.isPair(node))
+          if (!identity2.isPair(node))
             return false;
           const n = node.value;
-          return n == null || allowScalar && identity.isScalar(n) && n.value == null && !n.commentBefore && !n.comment && !n.tag;
+          return n == null || allowScalar && identity2.isScalar(n) && n.value == null && !n.commentBefore && !n.comment && !n.tag;
         });
       }
       /**
@@ -11677,7 +11677,7 @@ var require_Collection = __commonJS({
         if (rest.length === 0)
           return this.has(key);
         const node = this.get(key, true);
-        return identity.isCollection(node) ? node.hasIn(rest) : false;
+        return identity2.isCollection(node) ? node.hasIn(rest) : false;
       }
       /**
        * Sets a value in this collection. For `!!set`, `value` needs to be a
@@ -11689,7 +11689,7 @@ var require_Collection = __commonJS({
           this.set(key, value);
         } else {
           const node = this.get(key, true);
-          if (identity.isCollection(node))
+          if (identity2.isCollection(node))
             node.setIn(rest, value);
           else if (node === void 0 && this.schema)
             this.set(key, collectionFromPath(this.schema, rest, value));
@@ -12145,7 +12145,7 @@ var require_stringify = __commonJS({
   "node_modules/yaml/dist/stringify/stringify.js"(exports) {
     "use strict";
     var anchors = require_anchors();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var stringifyComment = require_stringifyComment();
     var stringifyString = require_stringifyString();
     function createStringifyContext(doc, options) {
@@ -12198,7 +12198,7 @@ var require_stringify = __commonJS({
       }
       let tagObj = void 0;
       let obj;
-      if (identity.isScalar(item)) {
+      if (identity2.isScalar(item)) {
         obj = item.value;
         let match = tags.filter((t) => t.identify?.(obj));
         if (match.length > 1) {
@@ -12221,7 +12221,7 @@ var require_stringify = __commonJS({
       if (!doc.directives)
         return "";
       const props = [];
-      const anchor = (identity.isScalar(node) || identity.isCollection(node)) && node.anchor;
+      const anchor = (identity2.isScalar(node) || identity2.isCollection(node)) && node.anchor;
       if (anchor && anchors.anchorIsValid(anchor)) {
         anchors$1.add(anchor);
         props.push(`&${anchor}`);
@@ -12232,9 +12232,9 @@ var require_stringify = __commonJS({
       return props.join(" ");
     }
     function stringify(item, ctx, onComment, onChompKeep) {
-      if (identity.isPair(item))
+      if (identity2.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
-      if (identity.isAlias(item)) {
+      if (identity2.isAlias(item)) {
         if (ctx.doc.directives)
           return item.toString(ctx);
         if (ctx.resolvedAliases?.has(item)) {
@@ -12248,15 +12248,15 @@ var require_stringify = __commonJS({
         }
       }
       let tagObj = void 0;
-      const node = identity.isNode(item) ? item : ctx.doc.createNode(item, { onTagObj: (o) => tagObj = o });
+      const node = identity2.isNode(item) ? item : ctx.doc.createNode(item, { onTagObj: (o) => tagObj = o });
       tagObj ?? (tagObj = getTagObject(ctx.doc.schema.tags, node));
       const props = stringifyProps(node, tagObj, ctx);
       if (props.length > 0)
         ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
-      const str = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
+      const str = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity2.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
       if (!props)
         return str;
-      return identity.isScalar(node) || str[0] === "{" || str[0] === "[" ? `${props} ${str}` : `${props}
+      return identity2.isScalar(node) || str[0] === "{" || str[0] === "[" ? `${props} ${str}` : `${props}
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
@@ -12268,23 +12268,23 @@ ${ctx.indent}${str}`;
 var require_stringifyPair = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyPair.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Scalar = require_Scalar();
     var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
-      let keyComment = identity.isNode(key) && key.comment || null;
+      let keyComment = identity2.isNode(key) && key.comment || null;
       if (simpleKeys) {
         if (keyComment) {
           throw new Error("With simple keys, key nodes cannot have comments");
         }
-        if (identity.isCollection(key) || !identity.isNode(key) && typeof key === "object") {
+        if (identity2.isCollection(key) || !identity2.isNode(key) && typeof key === "object") {
           const msg3 = "With simple keys, collection cannot be used as a key value";
           throw new Error(msg3);
         }
       }
-      let explicitKey = !simpleKeys && (!key || keyComment && value == null && !ctx.inFlow || identity.isCollection(key) || (identity.isScalar(key) ? key.type === Scalar.Scalar.BLOCK_FOLDED || key.type === Scalar.Scalar.BLOCK_LITERAL : typeof key === "object"));
+      let explicitKey = !simpleKeys && (!key || keyComment && value == null && !ctx.inFlow || identity2.isCollection(key) || (identity2.isScalar(key) ? key.type === Scalar.Scalar.BLOCK_FOLDED || key.type === Scalar.Scalar.BLOCK_LITERAL : typeof key === "object"));
       ctx = Object.assign({}, ctx, {
         allNullValues: false,
         implicitKey: !explicitKey && (simpleKeys || !allNullValues),
@@ -12325,7 +12325,7 @@ ${indent}:`;
           str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
       }
       let vsb, vcb, valueComment;
-      if (identity.isNode(value)) {
+      if (identity2.isNode(value)) {
         vsb = !!value.spaceBefore;
         vcb = value.commentBefore;
         valueComment = value.comment;
@@ -12337,10 +12337,10 @@ ${indent}:`;
           value = doc.createNode(value);
       }
       ctx.implicitKey = false;
-      if (!explicitKey && !keyComment && identity.isScalar(value))
+      if (!explicitKey && !keyComment && identity2.isScalar(value))
         ctx.indentAtStart = str.length + 1;
       chompKeep = false;
-      if (!indentSeq && indentStep.length >= 2 && !ctx.inFlow && !explicitKey && identity.isSeq(value) && !value.flow && !value.tag && !value.anchor) {
+      if (!indentSeq && indentStep.length >= 2 && !ctx.inFlow && !explicitKey && identity2.isSeq(value) && !value.flow && !value.tag && !value.anchor) {
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
@@ -12360,7 +12360,7 @@ ${stringifyComment.indentComment(cs, ctx.indent)}`;
           ws += `
 ${ctx.indent}`;
         }
-      } else if (!explicitKey && identity.isCollection(value)) {
+      } else if (!explicitKey && identity2.isCollection(value)) {
         const vs0 = valueStr[0];
         const nl0 = valueStr.indexOf("\n");
         const hasNewline = nl0 !== -1;
@@ -12423,7 +12423,7 @@ var require_log = __commonJS({
 var require_merge = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Scalar = require_Scalar();
     var MERGE_KEY = "<<";
     var merge2 = {
@@ -12436,10 +12436,10 @@ var require_merge = __commonJS({
       }),
       stringify: () => MERGE_KEY
     };
-    var isMergeKey = (ctx, key) => (merge2.identify(key) || identity.isScalar(key) && (!key.type || key.type === Scalar.Scalar.PLAIN) && merge2.identify(key.value)) && ctx?.doc.schema.tags.some((tag) => tag.tag === merge2.tag && tag.default);
+    var isMergeKey = (ctx, key) => (merge2.identify(key) || identity2.isScalar(key) && (!key.type || key.type === Scalar.Scalar.PLAIN) && merge2.identify(key.value)) && ctx?.doc.schema.tags.some((tag) => tag.tag === merge2.tag && tag.default);
     function addMergeToJSMap(ctx, map, value) {
       const source = resolveAliasValue(ctx, value);
-      if (identity.isSeq(source))
+      if (identity2.isSeq(source))
         for (const it of source.items)
           mergeValue(ctx, map, it);
       else if (Array.isArray(source))
@@ -12450,7 +12450,7 @@ var require_merge = __commonJS({
     }
     function mergeValue(ctx, map, value) {
       const source = resolveAliasValue(ctx, value);
-      if (!identity.isMap(source))
+      if (!identity2.isMap(source))
         throw new Error("Merge sources must be maps or map aliases");
       const srcMap = source.toJSON(null, ctx, Map);
       for (const [key, value2] of srcMap) {
@@ -12471,7 +12471,7 @@ var require_merge = __commonJS({
       return map;
     }
     function resolveAliasValue(ctx, value) {
-      return ctx && identity.isAlias(value) ? value.resolve(ctx.doc, ctx) : value;
+      return ctx && identity2.isAlias(value) ? value.resolve(ctx.doc, ctx) : value;
     }
     exports.addMergeToJSMap = addMergeToJSMap;
     exports.isMergeKey = isMergeKey;
@@ -12486,10 +12486,10 @@ var require_addPairToJSMap = __commonJS({
     var log = require_log();
     var merge2 = require_merge();
     var stringify = require_stringify();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map, { key, value }) {
-      if (identity.isNode(key) && key.addToJSMap)
+      if (identity2.isNode(key) && key.addToJSMap)
         key.addToJSMap(ctx, map, value);
       else if (merge2.isMergeKey(ctx, key))
         merge2.addMergeToJSMap(ctx, map, value);
@@ -12520,7 +12520,7 @@ var require_addPairToJSMap = __commonJS({
         return "";
       if (typeof jsKey !== "object")
         return String(jsKey);
-      if (identity.isNode(key) && ctx?.doc) {
+      if (identity2.isNode(key) && ctx?.doc) {
         const strCtx = stringify.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node of ctx.anchors.keys())
@@ -12550,7 +12550,7 @@ var require_Pair = __commonJS({
     var createNode = require_createNode();
     var stringifyPair = require_stringifyPair();
     var addPairToJSMap = require_addPairToJSMap();
-    var identity = require_identity();
+    var identity2 = require_identity();
     function createPair(key, value, ctx) {
       const k = createNode.createNode(key, void 0, ctx);
       const v = createNode.createNode(value, void 0, ctx);
@@ -12558,15 +12558,15 @@ var require_Pair = __commonJS({
     }
     var Pair = class _Pair {
       constructor(key, value = null) {
-        Object.defineProperty(this, identity.NODE_TYPE, { value: identity.PAIR });
+        Object.defineProperty(this, identity2.NODE_TYPE, { value: identity2.PAIR });
         this.key = key;
         this.value = value;
       }
       clone(schema) {
         let { key, value } = this;
-        if (identity.isNode(key))
+        if (identity2.isNode(key))
           key = key.clone(schema);
-        if (identity.isNode(value))
+        if (identity2.isNode(value))
           value = value.clone(schema);
         return new _Pair(key, value);
       }
@@ -12587,7 +12587,7 @@ var require_Pair = __commonJS({
 var require_stringifyCollection = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
@@ -12603,14 +12603,14 @@ var require_stringifyCollection = __commonJS({
       for (let i = 0; i < items.length; ++i) {
         const item = items[i];
         let comment2 = null;
-        if (identity.isNode(item)) {
+        if (identity2.isNode(item)) {
           if (!chompKeep && item.spaceBefore)
             lines.push("");
           addCommentBefore(ctx, lines, item.commentBefore, chompKeep);
           if (item.comment)
             comment2 = item.comment;
-        } else if (identity.isPair(item)) {
-          const ik = identity.isNode(item.key) ? item.key : null;
+        } else if (identity2.isPair(item)) {
+          const ik = identity2.isNode(item.key) ? item.key : null;
           if (ik) {
             if (!chompKeep && ik.spaceBefore)
               lines.push("");
@@ -12658,14 +12658,14 @@ ${indent}${line}` : "\n";
       for (let i = 0; i < items.length; ++i) {
         const item = items[i];
         let comment = null;
-        if (identity.isNode(item)) {
+        if (identity2.isNode(item)) {
           if (item.spaceBefore)
             lines.push("");
           addCommentBefore(ctx, lines, item.commentBefore, false);
           if (item.comment)
             comment = item.comment;
-        } else if (identity.isPair(item)) {
-          const ik = identity.isNode(item.key) ? item.key : null;
+        } else if (identity2.isPair(item)) {
+          const ik = identity2.isNode(item.key) ? item.key : null;
           if (ik) {
             if (ik.spaceBefore)
               lines.push("");
@@ -12673,7 +12673,7 @@ ${indent}${line}` : "\n";
             if (ik.comment)
               reqNewline = true;
           }
-          const iv = identity.isNode(item.value) ? item.value : null;
+          const iv = identity2.isNode(item.value) ? item.value : null;
           if (iv) {
             if (iv.comment)
               comment = iv.comment;
@@ -12741,16 +12741,16 @@ var require_YAMLMap = __commonJS({
     var stringifyCollection = require_stringifyCollection();
     var addPairToJSMap = require_addPairToJSMap();
     var Collection = require_Collection();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Pair = require_Pair();
     var Scalar = require_Scalar();
     function findPair(items, key) {
-      const k = identity.isScalar(key) ? key.value : key;
+      const k = identity2.isScalar(key) ? key.value : key;
       for (const it of items) {
-        if (identity.isPair(it)) {
+        if (identity2.isPair(it)) {
           if (it.key === key || it.key === k)
             return it;
-          if (identity.isScalar(it.key) && it.key.value === k)
+          if (identity2.isScalar(it.key) && it.key.value === k)
             return it;
         }
       }
@@ -12761,7 +12761,7 @@ var require_YAMLMap = __commonJS({
         return "tag:yaml.org,2002:map";
       }
       constructor(schema) {
-        super(identity.MAP, schema);
+        super(identity2.MAP, schema);
         this.items = [];
       }
       /**
@@ -12771,7 +12771,7 @@ var require_YAMLMap = __commonJS({
       static from(schema, obj, ctx) {
         const { keepUndefined, replacer } = ctx;
         const map = new this(schema);
-        const add = (key, value) => {
+        const add2 = (key, value) => {
           if (typeof replacer === "function")
             value = replacer.call(obj, key, value);
           else if (Array.isArray(replacer) && !replacer.includes(key))
@@ -12781,10 +12781,10 @@ var require_YAMLMap = __commonJS({
         };
         if (obj instanceof Map) {
           for (const [key, value] of obj)
-            add(key, value);
+            add2(key, value);
         } else if (obj && typeof obj === "object") {
           for (const key of Object.keys(obj))
-            add(key, obj[key]);
+            add2(key, obj[key]);
         }
         if (typeof schema.sortMapEntries === "function") {
           map.items.sort(schema.sortMapEntries);
@@ -12799,7 +12799,7 @@ var require_YAMLMap = __commonJS({
        */
       add(pair, overwrite) {
         let _pair;
-        if (identity.isPair(pair))
+        if (identity2.isPair(pair))
           _pair = pair;
         else if (!pair || typeof pair !== "object" || !("key" in pair)) {
           _pair = new Pair.Pair(pair, pair?.value);
@@ -12810,7 +12810,7 @@ var require_YAMLMap = __commonJS({
         if (prev) {
           if (!overwrite)
             throw new Error(`Key ${_pair.key} already set`);
-          if (identity.isScalar(prev.value) && Scalar.isScalarValue(_pair.value))
+          if (identity2.isScalar(prev.value) && Scalar.isScalarValue(_pair.value))
             prev.value.value = _pair.value;
           else
             prev.value = _pair.value;
@@ -12834,7 +12834,7 @@ var require_YAMLMap = __commonJS({
       get(key, keepScalar) {
         const it = findPair(this.items, key);
         const node = it?.value;
-        return (!keepScalar && identity.isScalar(node) ? node.value : node) ?? void 0;
+        return (!keepScalar && identity2.isScalar(node) ? node.value : node) ?? void 0;
       }
       has(key) {
         return !!findPair(this.items, key);
@@ -12859,7 +12859,7 @@ var require_YAMLMap = __commonJS({
         if (!ctx)
           return JSON.stringify(this);
         for (const item of this.items) {
-          if (!identity.isPair(item))
+          if (!identity2.isPair(item))
             throw new Error(`Map items must all be pairs; found ${JSON.stringify(item)} instead`);
         }
         if (!ctx.allNullValues && this.hasAllNullValues(false))
@@ -12882,7 +12882,7 @@ var require_YAMLMap = __commonJS({
 var require_map = __commonJS({
   "node_modules/yaml/dist/schema/common/map.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var YAMLMap = require_YAMLMap();
     var map = {
       collection: "map",
@@ -12890,7 +12890,7 @@ var require_map = __commonJS({
       nodeClass: YAMLMap.YAMLMap,
       tag: "tag:yaml.org,2002:map",
       resolve(map2, onError) {
-        if (!identity.isMap(map2))
+        if (!identity2.isMap(map2))
           onError("Expected a mapping for this tag");
         return map2;
       },
@@ -12907,7 +12907,7 @@ var require_YAMLSeq = __commonJS({
     var createNode = require_createNode();
     var stringifyCollection = require_stringifyCollection();
     var Collection = require_Collection();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Scalar = require_Scalar();
     var toJS = require_toJS();
     var YAMLSeq = class extends Collection.Collection {
@@ -12915,7 +12915,7 @@ var require_YAMLSeq = __commonJS({
         return "tag:yaml.org,2002:seq";
       }
       constructor(schema) {
-        super(identity.SEQ, schema);
+        super(identity2.SEQ, schema);
         this.items = [];
       }
       add(value) {
@@ -12941,7 +12941,7 @@ var require_YAMLSeq = __commonJS({
         if (typeof idx !== "number")
           return void 0;
         const it = this.items[idx];
-        return !keepScalar && identity.isScalar(it) ? it.value : it;
+        return !keepScalar && identity2.isScalar(it) ? it.value : it;
       }
       /**
        * Checks if the collection includes a value with the key `key`.
@@ -12965,7 +12965,7 @@ var require_YAMLSeq = __commonJS({
         if (typeof idx !== "number")
           throw new Error(`Expected a valid index, not ${key}.`);
         const prev = this.items[idx];
-        if (identity.isScalar(prev) && Scalar.isScalarValue(value))
+        if (identity2.isScalar(prev) && Scalar.isScalarValue(value))
           prev.value = value;
         else
           this.items[idx] = value;
@@ -13007,7 +13007,7 @@ var require_YAMLSeq = __commonJS({
       }
     };
     function asItemIndex(key) {
-      let idx = identity.isScalar(key) ? key.value : key;
+      let idx = identity2.isScalar(key) ? key.value : key;
       if (idx && typeof idx === "string")
         idx = Number(idx);
       return typeof idx === "number" && Number.isInteger(idx) && idx >= 0 ? idx : null;
@@ -13020,7 +13020,7 @@ var require_YAMLSeq = __commonJS({
 var require_seq = __commonJS({
   "node_modules/yaml/dist/schema/common/seq.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var YAMLSeq = require_YAMLSeq();
     var seq = {
       collection: "seq",
@@ -13028,7 +13028,7 @@ var require_seq = __commonJS({
       nodeClass: YAMLSeq.YAMLSeq,
       tag: "tag:yaml.org,2002:seq",
       resolve(seq2, onError) {
-        if (!identity.isSeq(seq2))
+        if (!identity2.isSeq(seq2))
           onError("Expected a sequence for this tag");
         return seq2;
       },
@@ -13382,17 +13382,17 @@ var require_binary = __commonJS({
 var require_pairs = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Pair = require_Pair();
     var Scalar = require_Scalar();
     var YAMLSeq = require_YAMLSeq();
     function resolvePairs(seq, onError) {
-      if (identity.isSeq(seq)) {
+      if (identity2.isSeq(seq)) {
         for (let i = 0; i < seq.items.length; ++i) {
           let item = seq.items[i];
-          if (identity.isPair(item))
+          if (identity2.isPair(item))
             continue;
-          else if (identity.isMap(item)) {
+          else if (identity2.isMap(item)) {
             if (item.items.length > 1)
               onError("Each pair must have its own sequence indicator");
             const pair = item.items[0] || new Pair.Pair(new Scalar.Scalar(null));
@@ -13406,7 +13406,7 @@ ${cn.comment}` : item.comment;
             }
             item = pair;
           }
-          seq.items[i] = identity.isPair(item) ? item : new Pair.Pair(item);
+          seq.items[i] = identity2.isPair(item) ? item : new Pair.Pair(item);
         }
       } else
         onError("Expected a sequence for this tag");
@@ -13460,7 +13460,7 @@ ${cn.comment}` : item.comment;
 var require_omap = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var toJS = require_toJS();
     var YAMLMap = require_YAMLMap();
     var YAMLSeq = require_YAMLSeq();
@@ -13487,7 +13487,7 @@ var require_omap = __commonJS({
           ctx.onCreate(map);
         for (const pair of this.items) {
           let key, value;
-          if (identity.isPair(pair)) {
+          if (identity2.isPair(pair)) {
             key = toJS.toJS(pair.key, "", ctx);
             value = toJS.toJS(pair.value, key, ctx);
           } else {
@@ -13517,7 +13517,7 @@ var require_omap = __commonJS({
         const pairs$1 = pairs.resolvePairs(seq, onError);
         const seenKeys = [];
         for (const { key } of pairs$1.items) {
-          if (identity.isScalar(key)) {
+          if (identity2.isScalar(key)) {
             if (seenKeys.includes(key.value)) {
               onError(`Ordered maps must not include duplicate keys: ${key.value}`);
             } else {
@@ -13622,8 +13622,8 @@ var require_int2 = __commonJS({
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
     function intResolve(str, offset, radix, { intAsBigInt }) {
-      const sign = str[0];
-      if (sign === "-" || sign === "+")
+      const sign2 = str[0];
+      if (sign2 === "-" || sign2 === "+")
         offset += 1;
       str = str.substring(offset).replace(/_/g, "");
       if (intAsBigInt) {
@@ -13639,10 +13639,10 @@ var require_int2 = __commonJS({
             break;
         }
         const n2 = BigInt(str);
-        return sign === "-" ? BigInt(-1) * n2 : n2;
+        return sign2 === "-" ? BigInt(-1) * n2 : n2;
       }
       const n = parseInt(str, radix);
-      return sign === "-" ? -1 * n : n;
+      return sign2 === "-" ? -1 * n : n;
     }
     function intStringify(node, radix, prefix) {
       const { value } = node;
@@ -13698,7 +13698,7 @@ var require_int2 = __commonJS({
 var require_set = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Pair = require_Pair();
     var YAMLMap = require_YAMLMap();
     var YAMLSet = class _YAMLSet extends YAMLMap.YAMLMap {
@@ -13708,7 +13708,7 @@ var require_set = __commonJS({
       }
       add(key) {
         let pair;
-        if (identity.isPair(key))
+        if (identity2.isPair(key))
           pair = key;
         else if (key && typeof key === "object" && "key" in key && "value" in key && key.value === null)
           pair = new Pair.Pair(key.key, null);
@@ -13724,7 +13724,7 @@ var require_set = __commonJS({
        */
       get(key, keepPair) {
         const pair = YAMLMap.findPair(this.items, key);
-        return !keepPair && identity.isPair(pair) ? identity.isScalar(pair.key) ? pair.key.value : pair.key : pair;
+        return !keepPair && identity2.isPair(pair) ? identity2.isScalar(pair.key) ? pair.key.value : pair.key : pair;
       }
       set(key, value) {
         if (typeof value !== "boolean")
@@ -13768,7 +13768,7 @@ var require_set = __commonJS({
       tag: "tag:yaml.org,2002:set",
       createNode: (schema, iterable, ctx) => YAMLSet.from(schema, iterable, ctx),
       resolve(map, onError) {
-        if (identity.isMap(map)) {
+        if (identity2.isMap(map)) {
           if (map.hasAllNullValues(true))
             return Object.assign(new YAMLSet(), map);
           else
@@ -13789,11 +13789,11 @@ var require_timestamp = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     function parseSexagesimal(str, asBigInt) {
-      const sign = str[0];
-      const parts = sign === "-" || sign === "+" ? str.substring(1) : str;
+      const sign2 = str[0];
+      const parts = sign2 === "-" || sign2 === "+" ? str.substring(1) : str;
       const num = (n) => asBigInt ? BigInt(n) : Number(n);
       const res = parts.replace(/_/g, "").split(":").reduce((res2, p) => res2 * num(60) + num(p), num(0));
-      return sign === "-" ? num(-1) * res : res;
+      return sign2 === "-" ? num(-1) * res : res;
     }
     function stringifySexagesimal(node) {
       let { value } = node;
@@ -13802,9 +13802,9 @@ var require_timestamp = __commonJS({
         num = (n) => BigInt(n);
       else if (isNaN(value) || !isFinite(value))
         return stringifyNumber.stringifyNumber(node);
-      let sign = "";
+      let sign2 = "";
       if (value < 0) {
-        sign = "-";
+        sign2 = "-";
         value *= num(-1);
       }
       const _60 = num(60);
@@ -13819,7 +13819,7 @@ var require_timestamp = __commonJS({
           parts.unshift(value);
         }
       }
-      return sign + parts.map((n) => String(n).padStart(2, "0")).join(":").replace(/000000\d*$/, "");
+      return sign2 + parts.map((n) => String(n).padStart(2, "0")).join(":").replace(/000000\d*$/, "");
     }
     var intTime = {
       identify: (value) => typeof value === "bigint" || Number.isInteger(value),
@@ -14013,7 +14013,7 @@ var require_tags = __commonJS({
 var require_Schema = __commonJS({
   "node_modules/yaml/dist/schema/Schema.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var map = require_map();
     var seq = require_seq();
     var string3 = require_string();
@@ -14026,9 +14026,9 @@ var require_Schema = __commonJS({
         this.knownTags = resolveKnownTags ? tags.coreKnownTags : {};
         this.tags = tags.getTags(customTags, this.name, merge2);
         this.toStringOptions = toStringDefaults ?? null;
-        Object.defineProperty(this, identity.MAP, { value: map.map });
-        Object.defineProperty(this, identity.SCALAR, { value: string3.string });
-        Object.defineProperty(this, identity.SEQ, { value: seq.seq });
+        Object.defineProperty(this, identity2.MAP, { value: map.map });
+        Object.defineProperty(this, identity2.SCALAR, { value: string3.string });
+        Object.defineProperty(this, identity2.SEQ, { value: seq.seq });
         this.sortMapEntries = typeof sortMapEntries === "function" ? sortMapEntries : sortMapEntries === true ? sortMapEntriesByKey : null;
       }
       clone() {
@@ -14045,7 +14045,7 @@ var require_Schema = __commonJS({
 var require_stringifyDocument = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
@@ -14072,7 +14072,7 @@ var require_stringifyDocument = __commonJS({
       let chompKeep = false;
       let contentComment = null;
       if (doc.contents) {
-        if (identity.isNode(doc.contents)) {
+        if (identity2.isNode(doc.contents)) {
           if (doc.contents.spaceBefore && hasDirectives)
             lines.push("");
           if (doc.contents.commentBefore) {
@@ -14127,7 +14127,7 @@ var require_Document = __commonJS({
     "use strict";
     var Alias = require_Alias();
     var Collection = require_Collection();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Pair = require_Pair();
     var toJS = require_toJS();
     var Schema = require_Schema();
@@ -14142,7 +14142,7 @@ var require_Document = __commonJS({
         this.comment = null;
         this.errors = [];
         this.warnings = [];
-        Object.defineProperty(this, identity.NODE_TYPE, { value: identity.DOC });
+        Object.defineProperty(this, identity2.NODE_TYPE, { value: identity2.DOC });
         let _replacer = null;
         if (typeof replacer === "function" || Array.isArray(replacer)) {
           _replacer = replacer;
@@ -14178,7 +14178,7 @@ var require_Document = __commonJS({
        */
       clone() {
         const copy = Object.create(_Document.prototype, {
-          [identity.NODE_TYPE]: { value: identity.DOC }
+          [identity2.NODE_TYPE]: { value: identity2.DOC }
         });
         copy.commentBefore = this.commentBefore;
         copy.comment = this.comment;
@@ -14188,7 +14188,7 @@ var require_Document = __commonJS({
         if (this.directives)
           copy.directives = this.directives.clone();
         copy.schema = this.schema.clone();
-        copy.contents = identity.isNode(this.contents) ? this.contents.clone(copy.schema) : this.contents;
+        copy.contents = identity2.isNode(this.contents) ? this.contents.clone(copy.schema) : this.contents;
         if (this.range)
           copy.range = this.range.slice();
         return copy;
@@ -14251,7 +14251,7 @@ var require_Document = __commonJS({
           sourceObjects
         };
         const node = createNode.createNode(value, tag, ctx);
-        if (flow && identity.isCollection(node))
+        if (flow && identity2.isCollection(node))
           node.flow = true;
         setAnchors();
         return node;
@@ -14291,7 +14291,7 @@ var require_Document = __commonJS({
        * `true` (collections are always returned intact).
        */
       get(key, keepScalar) {
-        return identity.isCollection(this.contents) ? this.contents.get(key, keepScalar) : void 0;
+        return identity2.isCollection(this.contents) ? this.contents.get(key, keepScalar) : void 0;
       }
       /**
        * Returns item at `path`, or `undefined` if not found. By default unwraps
@@ -14300,14 +14300,14 @@ var require_Document = __commonJS({
        */
       getIn(path, keepScalar) {
         if (Collection.isEmptyPath(path))
-          return !keepScalar && identity.isScalar(this.contents) ? this.contents.value : this.contents;
-        return identity.isCollection(this.contents) ? this.contents.getIn(path, keepScalar) : void 0;
+          return !keepScalar && identity2.isScalar(this.contents) ? this.contents.value : this.contents;
+        return identity2.isCollection(this.contents) ? this.contents.getIn(path, keepScalar) : void 0;
       }
       /**
        * Checks if the document includes a value with the key `key`.
        */
       has(key) {
-        return identity.isCollection(this.contents) ? this.contents.has(key) : false;
+        return identity2.isCollection(this.contents) ? this.contents.has(key) : false;
       }
       /**
        * Checks if the document includes a value at `path`.
@@ -14315,7 +14315,7 @@ var require_Document = __commonJS({
       hasIn(path) {
         if (Collection.isEmptyPath(path))
           return this.contents !== void 0;
-        return identity.isCollection(this.contents) ? this.contents.hasIn(path) : false;
+        return identity2.isCollection(this.contents) ? this.contents.hasIn(path) : false;
       }
       /**
        * Sets a value in this document. For `!!set`, `value` needs to be a
@@ -14422,7 +14422,7 @@ var require_Document = __commonJS({
       }
     };
     function assertCollection(contents) {
-      if (identity.isCollection(contents))
+      if (identity2.isCollection(contents))
         return true;
       throw new Error("Expected a YAML collection as document contents");
     }
@@ -14514,29 +14514,29 @@ var require_resolve_props = __commonJS({
       let comma = null;
       let found = null;
       let start = null;
-      for (const token of tokens) {
+      for (const token2 of tokens) {
         if (reqSpace) {
-          if (token.type !== "space" && token.type !== "newline" && token.type !== "comma")
-            onError(token.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
+          if (token2.type !== "space" && token2.type !== "newline" && token2.type !== "comma")
+            onError(token2.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
           reqSpace = false;
         }
         if (tab) {
-          if (atNewline && token.type !== "comment" && token.type !== "newline") {
+          if (atNewline && token2.type !== "comment" && token2.type !== "newline") {
             onError(tab, "TAB_AS_INDENT", "Tabs are not allowed as indentation");
           }
           tab = null;
         }
-        switch (token.type) {
+        switch (token2.type) {
           case "space":
-            if (!flow && (indicator !== "doc-start" || next?.type !== "flow-collection") && token.source.includes("	")) {
-              tab = token;
+            if (!flow && (indicator !== "doc-start" || next?.type !== "flow-collection") && token2.source.includes("	")) {
+              tab = token2;
             }
             hasSpace = true;
             break;
           case "comment": {
             if (!hasSpace)
-              onError(token, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
-            const cb = token.source.substring(1) || " ";
+              onError(token2, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
+            const cb = token2.source.substring(1) || " ";
             if (!comment)
               comment = cb;
             else
@@ -14548,33 +14548,33 @@ var require_resolve_props = __commonJS({
           case "newline":
             if (atNewline) {
               if (comment)
-                comment += token.source;
+                comment += token2.source;
               else if (!found || indicator !== "seq-item-ind")
                 spaceBefore = true;
             } else
-              commentSep += token.source;
+              commentSep += token2.source;
             atNewline = true;
             hasNewline = true;
             if (anchor || tag)
-              newlineAfterProp = token;
+              newlineAfterProp = token2;
             hasSpace = true;
             break;
           case "anchor":
             if (anchor)
-              onError(token, "MULTIPLE_ANCHORS", "A node can have at most one anchor");
-            if (token.source.endsWith(":"))
-              onError(token.offset + token.source.length - 1, "BAD_ALIAS", "Anchor ending in : is ambiguous", true);
-            anchor = token;
-            start ?? (start = token.offset);
+              onError(token2, "MULTIPLE_ANCHORS", "A node can have at most one anchor");
+            if (token2.source.endsWith(":"))
+              onError(token2.offset + token2.source.length - 1, "BAD_ALIAS", "Anchor ending in : is ambiguous", true);
+            anchor = token2;
+            start ?? (start = token2.offset);
             atNewline = false;
             hasSpace = false;
             reqSpace = true;
             break;
           case "tag": {
             if (tag)
-              onError(token, "MULTIPLE_TAGS", "A node can have at most one tag");
-            tag = token;
-            start ?? (start = token.offset);
+              onError(token2, "MULTIPLE_TAGS", "A node can have at most one tag");
+            tag = token2;
+            start ?? (start = token2.offset);
             atNewline = false;
             hasSpace = false;
             reqSpace = true;
@@ -14582,25 +14582,25 @@ var require_resolve_props = __commonJS({
           }
           case indicator:
             if (anchor || tag)
-              onError(token, "BAD_PROP_ORDER", `Anchors and tags must be after the ${token.source} indicator`);
+              onError(token2, "BAD_PROP_ORDER", `Anchors and tags must be after the ${token2.source} indicator`);
             if (found)
-              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.source} in ${flow ?? "collection"}`);
-            found = token;
+              onError(token2, "UNEXPECTED_TOKEN", `Unexpected ${token2.source} in ${flow ?? "collection"}`);
+            found = token2;
             atNewline = indicator === "seq-item-ind" || indicator === "explicit-key-ind";
             hasSpace = false;
             break;
           case "comma":
             if (flow) {
               if (comma)
-                onError(token, "UNEXPECTED_TOKEN", `Unexpected , in ${flow}`);
-              comma = token;
+                onError(token2, "UNEXPECTED_TOKEN", `Unexpected , in ${flow}`);
+              comma = token2;
               atNewline = false;
               hasSpace = false;
               break;
             }
           // else fallthrough
           default:
-            onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.type} token`);
+            onError(token2, "UNEXPECTED_TOKEN", `Unexpected ${token2.type} token`);
             atNewline = false;
             hasSpace = false;
         }
@@ -14693,12 +14693,12 @@ var require_util_flow_indent_check = __commonJS({
 var require_util_map_includes = __commonJS({
   "node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     function mapIncludes(ctx, items, search) {
       const { uniqueKeys } = ctx.options;
       if (uniqueKeys === false)
         return false;
-      const isEqual = typeof uniqueKeys === "function" ? uniqueKeys : (a, b) => a === b || identity.isScalar(a) && identity.isScalar(b) && a.value === b.value;
+      const isEqual = typeof uniqueKeys === "function" ? uniqueKeys : (a, b) => a === b || identity2.isScalar(a) && identity2.isScalar(b) && a.value === b.value;
       return items.some((pair) => isEqual(pair.key, search));
     }
     exports.mapIncludes = mapIncludes;
@@ -14873,15 +14873,15 @@ var require_resolve_end = __commonJS({
       if (end) {
         let hasSpace = false;
         let sep6 = "";
-        for (const token of end) {
-          const { source, type } = token;
+        for (const token2 of end) {
+          const { source, type } = token2;
           switch (type) {
             case "space":
               hasSpace = true;
               break;
             case "comment": {
               if (reqSpace && !hasSpace)
-                onError(token, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
+                onError(token2, "MISSING_CHAR", "Comments must be separated from other tokens by white space characters");
               const cb = source.substring(1) || " ";
               if (!comment)
                 comment = cb;
@@ -14896,7 +14896,7 @@ var require_resolve_end = __commonJS({
               hasSpace = true;
               break;
             default:
-              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${type} at node end`);
+              onError(token2, "UNEXPECTED_TOKEN", `Unexpected ${type} at node end`);
           }
           offset += source.length;
         }
@@ -14911,7 +14911,7 @@ var require_resolve_end = __commonJS({
 var require_resolve_flow_collection = __commonJS({
   "node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Pair = require_Pair();
     var YAMLMap = require_YAMLMap();
     var YAMLSeq = require_YAMLSeq();
@@ -14920,7 +14920,7 @@ var require_resolve_flow_collection = __commonJS({
     var utilContainsNewline = require_util_contains_newline();
     var utilMapIncludes = require_util_map_includes();
     var blockMsg = "Block collections are not allowed within flow collections";
-    var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
+    var isBlock = (token2) => token2 && (token2.type === "block-map" || token2.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
       const isMap = fc.start.source === "{";
       const fcName = isMap ? "flow map" : "flow sequence";
@@ -14990,7 +14990,7 @@ var require_resolve_flow_collection = __commonJS({
             }
             if (prevItemComment) {
               let prev = coll.items[coll.items.length - 1];
-              if (identity.isPair(prev))
+              if (identity2.isPair(prev))
                 prev = prev.value ?? prev.key;
               if (prev.comment)
                 prev.comment += "\n" + prevItemComment;
@@ -15105,15 +15105,15 @@ var require_resolve_flow_collection = __commonJS({
 var require_compose_collection = __commonJS({
   "node_modules/yaml/dist/compose/compose-collection.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Scalar = require_Scalar();
     var YAMLMap = require_YAMLMap();
     var YAMLSeq = require_YAMLSeq();
     var resolveBlockMap = require_resolve_block_map();
     var resolveBlockSeq = require_resolve_block_seq();
     var resolveFlowCollection = require_resolve_flow_collection();
-    function resolveCollection(CN, ctx, token, onError, tagName, tag) {
-      const coll = token.type === "block-map" ? resolveBlockMap.resolveBlockMap(CN, ctx, token, onError, tag) : token.type === "block-seq" ? resolveBlockSeq.resolveBlockSeq(CN, ctx, token, onError, tag) : resolveFlowCollection.resolveFlowCollection(CN, ctx, token, onError, tag);
+    function resolveCollection(CN, ctx, token2, onError, tagName, tag) {
+      const coll = token2.type === "block-map" ? resolveBlockMap.resolveBlockMap(CN, ctx, token2, onError, tag) : token2.type === "block-seq" ? resolveBlockSeq.resolveBlockSeq(CN, ctx, token2, onError, tag) : resolveFlowCollection.resolveFlowCollection(CN, ctx, token2, onError, tag);
       const Coll = coll.constructor;
       if (tagName === "!" || tagName === Coll.tagName) {
         coll.tag = Coll.tagName;
@@ -15123,10 +15123,10 @@ var require_compose_collection = __commonJS({
         coll.tag = tagName;
       return coll;
     }
-    function composeCollection(CN, ctx, token, props, onError) {
+    function composeCollection(CN, ctx, token2, props, onError) {
       const tagToken = props.tag;
       const tagName = !tagToken ? null : ctx.directives.tagName(tagToken.source, (msg3) => onError(tagToken, "TAG_RESOLVE_FAILED", msg3));
-      if (token.type === "block-seq") {
+      if (token2.type === "block-seq") {
         const { anchor, newlineAfterProp: nl } = props;
         const lastProp = anchor && tagToken ? anchor.offset > tagToken.offset ? anchor : tagToken : anchor ?? tagToken;
         if (lastProp && (!nl || nl.offset < lastProp.offset)) {
@@ -15134,9 +15134,9 @@ var require_compose_collection = __commonJS({
           onError(lastProp, "MISSING_CHAR", message);
         }
       }
-      const expType = token.type === "block-map" ? "map" : token.type === "block-seq" ? "seq" : token.start.source === "{" ? "map" : "seq";
+      const expType = token2.type === "block-map" ? "map" : token2.type === "block-seq" ? "seq" : token2.start.source === "{" ? "map" : "seq";
       if (!tagToken || !tagName || tagName === "!" || tagName === YAMLMap.YAMLMap.tagName && expType === "map" || tagName === YAMLSeq.YAMLSeq.tagName && expType === "seq") {
-        return resolveCollection(CN, ctx, token, onError, tagName);
+        return resolveCollection(CN, ctx, token2, onError, tagName);
       }
       let tag = ctx.schema.tags.find((t) => t.tag === tagName && t.collection === expType);
       if (!tag) {
@@ -15150,12 +15150,12 @@ var require_compose_collection = __commonJS({
           } else {
             onError(tagToken, "TAG_RESOLVE_FAILED", `Unresolved tag: ${tagName}`, true);
           }
-          return resolveCollection(CN, ctx, token, onError, tagName);
+          return resolveCollection(CN, ctx, token2, onError, tagName);
         }
       }
-      const coll = resolveCollection(CN, ctx, token, onError, tagName, tag);
+      const coll = resolveCollection(CN, ctx, token2, onError, tagName, tag);
       const res = tag.resolve?.(coll, (msg3) => onError(tagToken, "TAG_RESOLVE_FAILED", msg3), ctx.options) ?? coll;
-      const node = identity.isNode(res) ? res : new Scalar.Scalar(res);
+      const node = identity2.isNode(res) ? res : new Scalar.Scalar(res);
       node.range = coll.range;
       node.tag = tagName;
       if (tag?.format)
@@ -15303,31 +15303,31 @@ var require_resolve_block_scalar = __commonJS({
       let comment = "";
       let length = source.length;
       for (let i = 1; i < props.length; ++i) {
-        const token = props[i];
-        switch (token.type) {
+        const token2 = props[i];
+        switch (token2.type) {
           case "space":
             hasSpace = true;
           // fallthrough
           case "newline":
-            length += token.source.length;
+            length += token2.source.length;
             break;
           case "comment":
             if (strict && !hasSpace) {
               const message = "Comments must be separated from other tokens by white space characters";
-              onError(token, "MISSING_CHAR", message);
+              onError(token2, "MISSING_CHAR", message);
             }
-            length += token.source.length;
-            comment = token.source.substring(1);
+            length += token2.source.length;
+            comment = token2.source.substring(1);
             break;
           case "error":
-            onError(token, "UNEXPECTED_TOKEN", token.message);
-            length += token.source.length;
+            onError(token2, "UNEXPECTED_TOKEN", token2.message);
+            length += token2.source.length;
             break;
           /* istanbul ignore next should not happen */
           default: {
-            const message = `Unexpected token in block scalar header: ${token.type}`;
-            onError(token, "UNEXPECTED_TOKEN", message);
-            const ts = token.source;
+            const message = `Unexpected token in block scalar header: ${token2.type}`;
+            onError(token2, "UNEXPECTED_TOKEN", message);
+            const ts = token2.source;
             if (ts && typeof ts === "string")
               length += ts.length;
           }
@@ -15573,29 +15573,29 @@ var require_resolve_flow_scalar = __commonJS({
 var require_compose_scalar = __commonJS({
   "node_modules/yaml/dist/compose/compose-scalar.js"(exports) {
     "use strict";
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Scalar = require_Scalar();
     var resolveBlockScalar = require_resolve_block_scalar();
     var resolveFlowScalar = require_resolve_flow_scalar();
-    function composeScalar(ctx, token, tagToken, onError) {
-      const { value, type, comment, range } = token.type === "block-scalar" ? resolveBlockScalar.resolveBlockScalar(ctx, token, onError) : resolveFlowScalar.resolveFlowScalar(token, ctx.options.strict, onError);
+    function composeScalar(ctx, token2, tagToken, onError) {
+      const { value, type, comment, range } = token2.type === "block-scalar" ? resolveBlockScalar.resolveBlockScalar(ctx, token2, onError) : resolveFlowScalar.resolveFlowScalar(token2, ctx.options.strict, onError);
       const tagName = tagToken ? ctx.directives.tagName(tagToken.source, (msg3) => onError(tagToken, "TAG_RESOLVE_FAILED", msg3)) : null;
       let tag;
       if (ctx.options.stringKeys && ctx.atKey) {
-        tag = ctx.schema[identity.SCALAR];
+        tag = ctx.schema[identity2.SCALAR];
       } else if (tagName)
         tag = findScalarTagByName(ctx.schema, value, tagName, tagToken, onError);
-      else if (token.type === "scalar")
-        tag = findScalarTagByTest(ctx, value, token, onError);
+      else if (token2.type === "scalar")
+        tag = findScalarTagByTest(ctx, value, token2, onError);
       else
-        tag = ctx.schema[identity.SCALAR];
+        tag = ctx.schema[identity2.SCALAR];
       let scalar;
       try {
-        const res = tag.resolve(value, (msg3) => onError(tagToken ?? token, "TAG_RESOLVE_FAILED", msg3), ctx.options);
-        scalar = identity.isScalar(res) ? res : new Scalar.Scalar(res);
+        const res = tag.resolve(value, (msg3) => onError(tagToken ?? token2, "TAG_RESOLVE_FAILED", msg3), ctx.options);
+        scalar = identity2.isScalar(res) ? res : new Scalar.Scalar(res);
       } catch (error2) {
         const msg3 = error2 instanceof Error ? error2.message : String(error2);
-        onError(tagToken ?? token, "TAG_RESOLVE_FAILED", msg3);
+        onError(tagToken ?? token2, "TAG_RESOLVE_FAILED", msg3);
         scalar = new Scalar.Scalar(value);
       }
       scalar.range = range;
@@ -15612,7 +15612,7 @@ var require_compose_scalar = __commonJS({
     }
     function findScalarTagByName(schema, value, tagName, tagToken, onError) {
       if (tagName === "!")
-        return schema[identity.SCALAR];
+        return schema[identity2.SCALAR];
       const matchWithTest = [];
       for (const tag of schema.tags) {
         if (!tag.collection && tag.tag === tagName) {
@@ -15631,17 +15631,17 @@ var require_compose_scalar = __commonJS({
         return kt;
       }
       onError(tagToken, "TAG_RESOLVE_FAILED", `Unresolved tag: ${tagName}`, tagName !== "tag:yaml.org,2002:str");
-      return schema[identity.SCALAR];
+      return schema[identity2.SCALAR];
     }
-    function findScalarTagByTest({ atKey, directives, schema }, value, token, onError) {
-      const tag = schema.tags.find((tag2) => (tag2.default === true || atKey && tag2.default === "key") && tag2.test?.test(value)) || schema[identity.SCALAR];
+    function findScalarTagByTest({ atKey, directives, schema }, value, token2, onError) {
+      const tag = schema.tags.find((tag2) => (tag2.default === true || atKey && tag2.default === "key") && tag2.test?.test(value)) || schema[identity2.SCALAR];
       if (schema.compat) {
-        const compat = schema.compat.find((tag2) => tag2.default && tag2.test?.test(value)) ?? schema[identity.SCALAR];
+        const compat = schema.compat.find((tag2) => tag2.default && tag2.test?.test(value)) ?? schema[identity2.SCALAR];
         if (tag.tag !== compat.tag) {
           const ts = directives.tagString(tag.tag);
           const cs = directives.tagString(compat.tag);
           const msg3 = `Value may be parsed as either ${ts} or ${cs}`;
-          onError(token, "TAG_RESOLVE_FAILED", msg3, true);
+          onError(token2, "TAG_RESOLVE_FAILED", msg3, true);
         }
       }
       return tag;
@@ -15685,28 +15685,28 @@ var require_compose_node = __commonJS({
   "node_modules/yaml/dist/compose/compose-node.js"(exports) {
     "use strict";
     var Alias = require_Alias();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var composeCollection = require_compose_collection();
     var composeScalar = require_compose_scalar();
     var resolveEnd = require_resolve_end();
     var utilEmptyScalarPosition = require_util_empty_scalar_position();
     var CN = { composeNode, composeEmptyNode };
-    function composeNode(ctx, token, props, onError) {
+    function composeNode(ctx, token2, props, onError) {
       const atKey = ctx.atKey;
       const { spaceBefore, comment, anchor, tag } = props;
       let node;
       let isSrcToken = true;
-      switch (token.type) {
+      switch (token2.type) {
         case "alias":
-          node = composeAlias(ctx, token, onError);
+          node = composeAlias(ctx, token2, onError);
           if (anchor || tag)
-            onError(token, "ALIAS_PROPS", "An alias node must not specify any properties");
+            onError(token2, "ALIAS_PROPS", "An alias node must not specify any properties");
           break;
         case "scalar":
         case "single-quoted-scalar":
         case "double-quoted-scalar":
         case "block-scalar":
-          node = composeScalar.composeScalar(ctx, token, tag, onError);
+          node = composeScalar.composeScalar(ctx, token2, tag, onError);
           if (anchor)
             node.anchor = anchor.source.substring(1);
           break;
@@ -15714,47 +15714,47 @@ var require_compose_node = __commonJS({
         case "block-seq":
         case "flow-collection":
           try {
-            node = composeCollection.composeCollection(CN, ctx, token, props, onError);
+            node = composeCollection.composeCollection(CN, ctx, token2, props, onError);
             if (anchor)
               node.anchor = anchor.source.substring(1);
           } catch (error2) {
             const message = error2 instanceof Error ? error2.message : String(error2);
-            onError(token, "RESOURCE_EXHAUSTION", message);
+            onError(token2, "RESOURCE_EXHAUSTION", message);
           }
           break;
         default: {
-          const message = token.type === "error" ? token.message : `Unsupported token (type: ${token.type})`;
-          onError(token, "UNEXPECTED_TOKEN", message);
+          const message = token2.type === "error" ? token2.message : `Unsupported token (type: ${token2.type})`;
+          onError(token2, "UNEXPECTED_TOKEN", message);
           isSrcToken = false;
         }
       }
-      node ?? (node = composeEmptyNode(ctx, token.offset, void 0, null, props, onError));
+      node ?? (node = composeEmptyNode(ctx, token2.offset, void 0, null, props, onError));
       if (anchor && node.anchor === "")
         onError(anchor, "BAD_ALIAS", "Anchor cannot be an empty string");
-      if (atKey && ctx.options.stringKeys && (!identity.isScalar(node) || typeof node.value !== "string" || node.tag && node.tag !== "tag:yaml.org,2002:str")) {
+      if (atKey && ctx.options.stringKeys && (!identity2.isScalar(node) || typeof node.value !== "string" || node.tag && node.tag !== "tag:yaml.org,2002:str")) {
         const msg3 = "With stringKeys, all keys must be strings";
-        onError(tag ?? token, "NON_STRING_KEY", msg3);
+        onError(tag ?? token2, "NON_STRING_KEY", msg3);
       }
       if (spaceBefore)
         node.spaceBefore = true;
       if (comment) {
-        if (token.type === "scalar" && token.source === "")
+        if (token2.type === "scalar" && token2.source === "")
           node.comment = comment;
         else
           node.commentBefore = comment;
       }
       if (ctx.options.keepSourceTokens && isSrcToken)
-        node.srcToken = token;
+        node.srcToken = token2;
       return node;
     }
     function composeEmptyNode(ctx, offset, before, pos, { spaceBefore, comment, anchor, tag, end }, onError) {
-      const token = {
+      const token2 = {
         type: "scalar",
         offset: utilEmptyScalarPosition.emptyScalarPosition(offset, before, pos),
         indent: -1,
         source: ""
       };
-      const node = composeScalar.composeScalar(ctx, token, tag, onError);
+      const node = composeScalar.composeScalar(ctx, token2, tag, onError);
       if (anchor) {
         node.anchor = anchor.source.substring(1);
         if (node.anchor === "")
@@ -15837,7 +15837,7 @@ var require_composer = __commonJS({
     var directives = require_directives();
     var Document = require_Document();
     var errors = require_errors2();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var composeDoc = require_compose_doc();
     var resolveEnd = require_resolve_end();
     function getErrorPos(src) {
@@ -15899,9 +15899,9 @@ var require_composer = __commonJS({
 ${comment}` : comment;
           } else if (afterEmptyLine || doc.directives.docStart || !dc) {
             doc.commentBefore = comment;
-          } else if (identity.isCollection(dc) && !dc.flow && dc.items.length > 0) {
+          } else if (identity2.isCollection(dc) && !dc.flow && dc.items.length > 0) {
             let it = dc.items[0];
-            if (identity.isPair(it))
+            if (identity2.isPair(it))
               it = it.key;
             const cb = it.commentBefore;
             it.commentBefore = cb ? `${comment}
@@ -15945,28 +15945,28 @@ ${cb}` : comment;
        * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
        */
       *compose(tokens, forceDoc = false, endOffset = -1) {
-        for (const token of tokens)
-          yield* this.next(token);
+        for (const token2 of tokens)
+          yield* this.next(token2);
         yield* this.end(forceDoc, endOffset);
       }
       /** Advance the composer by one CST token. */
-      *next(token) {
+      *next(token2) {
         if (node_process.env.LOG_STREAM)
-          console.dir(token, { depth: null });
-        switch (token.type) {
+          console.dir(token2, { depth: null });
+        switch (token2.type) {
           case "directive":
-            this.directives.add(token.source, (offset, message, warning) => {
-              const pos = getErrorPos(token);
+            this.directives.add(token2.source, (offset, message, warning) => {
+              const pos = getErrorPos(token2);
               pos[0] += offset;
               this.onError(pos, "BAD_DIRECTIVE", message, warning);
             });
-            this.prelude.push(token.source);
+            this.prelude.push(token2.source);
             this.atDirectives = true;
             break;
           case "document": {
-            const doc = composeDoc.composeDoc(this.options, this.directives, token, this.onError);
+            const doc = composeDoc.composeDoc(this.options, this.directives, token2, this.onError);
             if (this.atDirectives && !doc.directives.docStart)
-              this.onError(token, "MISSING_CHAR", "Missing directives-end/doc-start indicator line");
+              this.onError(token2, "MISSING_CHAR", "Missing directives-end/doc-start indicator line");
             this.decorate(doc, false);
             if (this.doc)
               yield this.doc;
@@ -15979,11 +15979,11 @@ ${cb}` : comment;
             break;
           case "comment":
           case "newline":
-            this.prelude.push(token.source);
+            this.prelude.push(token2.source);
             break;
           case "error": {
-            const msg3 = token.source ? `${token.message}: ${JSON.stringify(token.source)}` : token.message;
-            const error2 = new errors.YAMLParseError(getErrorPos(token), "UNEXPECTED_TOKEN", msg3);
+            const msg3 = token2.source ? `${token2.message}: ${JSON.stringify(token2.source)}` : token2.message;
+            const error2 = new errors.YAMLParseError(getErrorPos(token2), "UNEXPECTED_TOKEN", msg3);
             if (this.atDirectives || !this.doc)
               this.errors.push(error2);
             else
@@ -15993,11 +15993,11 @@ ${cb}` : comment;
           case "doc-end": {
             if (!this.doc) {
               const msg3 = "Unexpected doc-end without preceding document";
-              this.errors.push(new errors.YAMLParseError(getErrorPos(token), "UNEXPECTED_TOKEN", msg3));
+              this.errors.push(new errors.YAMLParseError(getErrorPos(token2), "UNEXPECTED_TOKEN", msg3));
               break;
             }
             this.doc.directives.docEnd = true;
-            const end = resolveEnd.resolveEnd(token.end, token.offset + token.source.length, this.doc.options.strict, this.onError);
+            const end = resolveEnd.resolveEnd(token2.end, token2.offset + token2.source.length, this.doc.options.strict, this.onError);
             this.decorate(this.doc, true);
             if (end.comment) {
               const dc = this.doc.comment;
@@ -16008,7 +16008,7 @@ ${end.comment}` : end.comment;
             break;
           }
           default:
-            this.errors.push(new errors.YAMLParseError(getErrorPos(token), "UNEXPECTED_TOKEN", `Unsupported token ${token.type}`));
+            this.errors.push(new errors.YAMLParseError(getErrorPos(token2), "UNEXPECTED_TOKEN", `Unsupported token ${token2.type}`));
         }
       }
       /**
@@ -16045,8 +16045,8 @@ var require_cst_scalar = __commonJS({
     var resolveFlowScalar = require_resolve_flow_scalar();
     var errors = require_errors2();
     var stringifyString = require_stringifyString();
-    function resolveAsScalar(token, strict = true, onError) {
-      if (token) {
+    function resolveAsScalar(token2, strict = true, onError) {
+      if (token2) {
         const _onError = (pos, code, message) => {
           const offset = typeof pos === "number" ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
           if (onError)
@@ -16054,13 +16054,13 @@ var require_cst_scalar = __commonJS({
           else
             throw new errors.YAMLParseError([offset, offset + 1], code, message);
         };
-        switch (token.type) {
+        switch (token2.type) {
           case "scalar":
           case "single-quoted-scalar":
           case "double-quoted-scalar":
-            return resolveFlowScalar.resolveFlowScalar(token, strict, _onError);
+            return resolveFlowScalar.resolveFlowScalar(token2, strict, _onError);
           case "block-scalar":
-            return resolveBlockScalar.resolveBlockScalar({ options: { strict } }, token, _onError);
+            return resolveBlockScalar.resolveBlockScalar({ options: { strict } }, token2, _onError);
         }
       }
       return null;
@@ -16097,13 +16097,13 @@ var require_cst_scalar = __commonJS({
           return { type: "scalar", offset, indent, source, end };
       }
     }
-    function setScalarValue(token, value, context = {}) {
+    function setScalarValue(token2, value, context = {}) {
       let { afterKey = false, implicitKey = false, inFlow = false, type } = context;
-      let indent = "indent" in token ? token.indent : null;
+      let indent = "indent" in token2 ? token2.indent : null;
       if (afterKey && typeof indent === "number")
         indent += 2;
       if (!type)
-        switch (token.type) {
+        switch (token2.type) {
           case "single-quoted-scalar":
             type = "QUOTE_SINGLE";
             break;
@@ -16111,7 +16111,7 @@ var require_cst_scalar = __commonJS({
             type = "QUOTE_DOUBLE";
             break;
           case "block-scalar": {
-            const header = token.props[0];
+            const header = token2.props[0];
             if (header.type !== "block-scalar-header")
               throw new Error("Invalid block scalar header");
             type = header.source[0] === ">" ? "BLOCK_FOLDED" : "BLOCK_LITERAL";
@@ -16129,40 +16129,40 @@ var require_cst_scalar = __commonJS({
       switch (source[0]) {
         case "|":
         case ">":
-          setBlockScalarValue(token, source);
+          setBlockScalarValue(token2, source);
           break;
         case '"':
-          setFlowScalarValue(token, source, "double-quoted-scalar");
+          setFlowScalarValue(token2, source, "double-quoted-scalar");
           break;
         case "'":
-          setFlowScalarValue(token, source, "single-quoted-scalar");
+          setFlowScalarValue(token2, source, "single-quoted-scalar");
           break;
         default:
-          setFlowScalarValue(token, source, "scalar");
+          setFlowScalarValue(token2, source, "scalar");
       }
     }
-    function setBlockScalarValue(token, source) {
+    function setBlockScalarValue(token2, source) {
       const he = source.indexOf("\n");
       const head = source.substring(0, he);
       const body = source.substring(he + 1) + "\n";
-      if (token.type === "block-scalar") {
-        const header = token.props[0];
+      if (token2.type === "block-scalar") {
+        const header = token2.props[0];
         if (header.type !== "block-scalar-header")
           throw new Error("Invalid block scalar header");
         header.source = head;
-        token.source = body;
+        token2.source = body;
       } else {
-        const { offset } = token;
-        const indent = "indent" in token ? token.indent : -1;
+        const { offset } = token2;
+        const indent = "indent" in token2 ? token2.indent : -1;
         const props = [
           { type: "block-scalar-header", offset, indent, source: head }
         ];
-        if (!addEndtoBlockProps(props, "end" in token ? token.end : void 0))
+        if (!addEndtoBlockProps(props, "end" in token2 ? token2.end : void 0))
           props.push({ type: "newline", offset: -1, indent, source: "\n" });
-        for (const key of Object.keys(token))
+        for (const key of Object.keys(token2))
           if (key !== "type" && key !== "offset")
-            delete token[key];
-        Object.assign(token, { type: "block-scalar", indent, props, source: body });
+            delete token2[key];
+        Object.assign(token2, { type: "block-scalar", indent, props, source: body });
       }
     }
     function addEndtoBlockProps(props, end) {
@@ -16179,40 +16179,40 @@ var require_cst_scalar = __commonJS({
           }
       return false;
     }
-    function setFlowScalarValue(token, source, type) {
-      switch (token.type) {
+    function setFlowScalarValue(token2, source, type) {
+      switch (token2.type) {
         case "scalar":
         case "double-quoted-scalar":
         case "single-quoted-scalar":
-          token.type = type;
-          token.source = source;
+          token2.type = type;
+          token2.source = source;
           break;
         case "block-scalar": {
-          const end = token.props.slice(1);
+          const end = token2.props.slice(1);
           let oa = source.length;
-          if (token.props[0].type === "block-scalar-header")
-            oa -= token.props[0].source.length;
+          if (token2.props[0].type === "block-scalar-header")
+            oa -= token2.props[0].source.length;
           for (const tok of end)
             tok.offset += oa;
-          delete token.props;
-          Object.assign(token, { type, source, end });
+          delete token2.props;
+          Object.assign(token2, { type, source, end });
           break;
         }
         case "block-map":
         case "block-seq": {
-          const offset = token.offset + source.length;
-          const nl = { type: "newline", offset, indent: token.indent, source: "\n" };
-          delete token.items;
-          Object.assign(token, { type, source, end: [nl] });
+          const offset = token2.offset + source.length;
+          const nl = { type: "newline", offset, indent: token2.indent, source: "\n" };
+          delete token2.items;
+          Object.assign(token2, { type, source, end: [nl] });
           break;
         }
         default: {
-          const indent = "indent" in token ? token.indent : -1;
-          const end = "end" in token && Array.isArray(token.end) ? token.end.filter((st) => st.type === "space" || st.type === "comment" || st.type === "newline") : [];
-          for (const key of Object.keys(token))
+          const indent = "indent" in token2 ? token2.indent : -1;
+          const end = "end" in token2 && Array.isArray(token2.end) ? token2.end.filter((st) => st.type === "space" || st.type === "comment" || st.type === "newline") : [];
+          for (const key of Object.keys(token2))
             if (key !== "type" && key !== "offset")
-              delete token[key];
-          Object.assign(token, { type, indent, source, end });
+              delete token2[key];
+          Object.assign(token2, { type, indent, source, end });
         }
       }
     }
@@ -16227,40 +16227,40 @@ var require_cst_stringify = __commonJS({
   "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
     var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
-    function stringifyToken(token) {
-      switch (token.type) {
+    function stringifyToken(token2) {
+      switch (token2.type) {
         case "block-scalar": {
           let res = "";
-          for (const tok of token.props)
+          for (const tok of token2.props)
             res += stringifyToken(tok);
-          return res + token.source;
+          return res + token2.source;
         }
         case "block-map":
         case "block-seq": {
           let res = "";
-          for (const item of token.items)
+          for (const item of token2.items)
             res += stringifyItem(item);
           return res;
         }
         case "flow-collection": {
-          let res = token.start.source;
-          for (const item of token.items)
+          let res = token2.start.source;
+          for (const item of token2.items)
             res += stringifyItem(item);
-          for (const st of token.end)
+          for (const st of token2.end)
             res += st.source;
           return res;
         }
         case "document": {
-          let res = stringifyItem(token);
-          if (token.end)
-            for (const st of token.end)
+          let res = stringifyItem(token2);
+          if (token2.end)
+            for (const st of token2.end)
               res += st.source;
           return res;
         }
         default: {
-          let res = token.source;
-          if ("end" in token && token.end)
-            for (const st of token.end)
+          let res = token2.source;
+          if ("end" in token2 && token2.end)
+            for (const st of token2.end)
               res += st.source;
           return res;
         }
@@ -16322,16 +16322,16 @@ var require_cst_visit = __commonJS({
       if (typeof ctrl === "symbol")
         return ctrl;
       for (const field of ["key", "value"]) {
-        const token = item[field];
-        if (token && "items" in token) {
-          for (let i = 0; i < token.items.length; ++i) {
-            const ci = _visit(Object.freeze(path.concat([[field, i]])), token.items[i], visitor);
+        const token2 = item[field];
+        if (token2 && "items" in token2) {
+          for (let i = 0; i < token2.items.length; ++i) {
+            const ci = _visit(Object.freeze(path.concat([[field, i]])), token2.items[i], visitor);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
               return BREAK;
             else if (ci === REMOVE) {
-              token.items.splice(i, 1);
+              token2.items.splice(i, 1);
               i -= 1;
             }
           }
@@ -16356,10 +16356,10 @@ var require_cst = __commonJS({
     var DOCUMENT = "";
     var FLOW_END = "";
     var SCALAR = "";
-    var isCollection = (token) => !!token && "items" in token;
-    var isScalar = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
-    function prettyToken(token) {
-      switch (token) {
+    var isCollection = (token2) => !!token2 && "items" in token2;
+    var isScalar = (token2) => !!token2 && (token2.type === "scalar" || token2.type === "single-quoted-scalar" || token2.type === "double-quoted-scalar" || token2.type === "block-scalar");
+    function prettyToken(token2) {
+      switch (token2) {
         case BOM:
           return "<BOM>";
         case DOCUMENT:
@@ -16369,7 +16369,7 @@ var require_cst = __commonJS({
         case SCALAR:
           return "<SCALAR>";
         default:
-          return JSON.stringify(token);
+          return JSON.stringify(token2);
       }
     }
     function tokenType(source) {
@@ -17093,8 +17093,8 @@ var require_parser = __commonJS({
       }
       return -1;
     }
-    function isFlowToken(token) {
-      switch (token?.type) {
+    function isFlowToken(token2) {
+      switch (token2?.type) {
         case "alias":
         case "scalar":
         case "single-quoted-scalar":
@@ -17301,38 +17301,38 @@ var require_parser = __commonJS({
         return this.stack[this.stack.length - n];
       }
       *pop(error2) {
-        const token = error2 ?? this.stack.pop();
-        if (!token) {
+        const token2 = error2 ?? this.stack.pop();
+        if (!token2) {
           const message = "Tried to pop an empty stack";
           yield { type: "error", offset: this.offset, source: "", message };
         } else if (this.stack.length === 0) {
-          yield token;
+          yield token2;
         } else {
           const top = this.peek(1);
-          if (token.type === "block-scalar") {
-            token.indent = "indent" in top ? top.indent : 0;
-          } else if (token.type === "flow-collection" && top.type === "document") {
-            token.indent = 0;
+          if (token2.type === "block-scalar") {
+            token2.indent = "indent" in top ? top.indent : 0;
+          } else if (token2.type === "flow-collection" && top.type === "document") {
+            token2.indent = 0;
           }
-          if (token.type === "flow-collection")
-            fixFlowSeqItems(token);
+          if (token2.type === "flow-collection")
+            fixFlowSeqItems(token2);
           switch (top.type) {
             case "document":
-              top.value = token;
+              top.value = token2;
               break;
             case "block-scalar":
-              top.props.push(token);
+              top.props.push(token2);
               break;
             case "block-map": {
               const it = top.items[top.items.length - 1];
               if (it.value) {
-                top.items.push({ start: [], key: token, sep: [] });
+                top.items.push({ start: [], key: token2, sep: [] });
                 this.onKeyLine = true;
                 return;
               } else if (it.sep) {
-                it.value = token;
+                it.value = token2;
               } else {
-                Object.assign(it, { key: token, sep: [] });
+                Object.assign(it, { key: token2, sep: [] });
                 this.onKeyLine = !it.explicitKey;
                 return;
               }
@@ -17341,34 +17341,34 @@ var require_parser = __commonJS({
             case "block-seq": {
               const it = top.items[top.items.length - 1];
               if (it.value)
-                top.items.push({ start: [], value: token });
+                top.items.push({ start: [], value: token2 });
               else
-                it.value = token;
+                it.value = token2;
               break;
             }
             case "flow-collection": {
               const it = top.items[top.items.length - 1];
               if (!it || it.value)
-                top.items.push({ start: [], key: token, sep: [] });
+                top.items.push({ start: [], key: token2, sep: [] });
               else if (it.sep)
-                it.value = token;
+                it.value = token2;
               else
-                Object.assign(it, { key: token, sep: [] });
+                Object.assign(it, { key: token2, sep: [] });
               return;
             }
             /* istanbul ignore next should not happen */
             default:
               yield* this.pop();
-              yield* this.pop(token);
+              yield* this.pop(token2);
           }
-          if ((top.type === "document" || top.type === "block-map" || top.type === "block-seq") && (token.type === "block-map" || token.type === "block-seq")) {
-            const last = token.items[token.items.length - 1];
-            if (last && !last.sep && !last.value && last.start.length > 0 && findNonEmptyIndex(last.start) === -1 && (token.indent === 0 || last.start.every((st) => st.type !== "comment" || st.indent < token.indent))) {
+          if ((top.type === "document" || top.type === "block-map" || top.type === "block-seq") && (token2.type === "block-map" || token2.type === "block-seq")) {
+            const last = token2.items[token2.items.length - 1];
+            if (last && !last.sep && !last.value && last.start.length > 0 && findNonEmptyIndex(last.start) === -1 && (token2.indent === 0 || last.start.every((st) => st.type !== "comment" || st.indent < token2.indent))) {
               if (top.type === "document")
                 top.end = last.start;
               else
                 top.items.push({ start: last.start });
-              token.items.splice(-1, 1);
+              token2.items.splice(-1, 1);
             }
           }
         }
@@ -17911,7 +17911,7 @@ var require_parser = __commonJS({
             yield* this.pop();
         }
       }
-      *lineEnd(token) {
+      *lineEnd(token2) {
         switch (this.type) {
           case "comma":
           case "doc-start":
@@ -17928,10 +17928,10 @@ var require_parser = __commonJS({
           case "space":
           case "comment":
           default:
-            if (token.end)
-              token.end.push(this.sourceToken);
+            if (token2.end)
+              token2.end.push(this.sourceToken);
             else
-              token.end = [this.sourceToken];
+              token2.end = [this.sourceToken];
             if (this.type === "newline")
               yield* this.pop();
         }
@@ -17949,7 +17949,7 @@ var require_public_api = __commonJS({
     var Document = require_Document();
     var errors = require_errors2();
     var log = require_log();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var lineCounter = require_line_counter();
     var parser = require_parser();
     function parseOptions(options) {
@@ -18027,7 +18027,7 @@ var require_public_api = __commonJS({
         if (!keepUndefined)
           return void 0;
       }
-      if (identity.isDocument(value) && !_replacer)
+      if (identity2.isDocument(value) && !_replacer)
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
@@ -18047,7 +18047,7 @@ var require_dist2 = __commonJS({
     var Schema = require_Schema();
     var errors = require_errors2();
     var Alias = require_Alias();
-    var identity = require_identity();
+    var identity2 = require_identity();
     var Pair = require_Pair();
     var Scalar = require_Scalar();
     var YAMLMap = require_YAMLMap();
@@ -18065,14 +18065,14 @@ var require_dist2 = __commonJS({
     exports.YAMLParseError = errors.YAMLParseError;
     exports.YAMLWarning = errors.YAMLWarning;
     exports.Alias = Alias.Alias;
-    exports.isAlias = identity.isAlias;
-    exports.isCollection = identity.isCollection;
-    exports.isDocument = identity.isDocument;
-    exports.isMap = identity.isMap;
-    exports.isNode = identity.isNode;
-    exports.isPair = identity.isPair;
-    exports.isScalar = identity.isScalar;
-    exports.isSeq = identity.isSeq;
+    exports.isAlias = identity2.isAlias;
+    exports.isCollection = identity2.isCollection;
+    exports.isDocument = identity2.isDocument;
+    exports.isMap = identity2.isMap;
+    exports.isNode = identity2.isNode;
+    exports.isPair = identity2.isPair;
+    exports.isScalar = identity2.isScalar;
+    exports.isSeq = identity2.isSeq;
     exports.Pair = Pair.Pair;
     exports.Scalar = Scalar.Scalar;
     exports.YAMLMap = YAMLMap.YAMLMap;
@@ -18900,7 +18900,7 @@ function parseLsofCwd(stdout) {
   }
   return null;
 }
-function pidForPort(port, exec) {
+function pidForPort(port, exec = defaultExec) {
   try {
     return parseLsofPid(exec("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"]));
   } catch {
@@ -19025,18 +19025,18 @@ function parseSimctlListapps(stdout) {
 }
 function targetBundleIdentity(target) {
   const identities = /* @__PURE__ */ new Map();
-  const add = (candidate) => {
+  const add2 = (candidate) => {
     if (!isValidBundleId(candidate))
       return;
     identities.set(candidate.toLowerCase(), candidate);
   };
-  add(target.appId);
-  add(target.description);
+  add2(target.appId);
+  add2(target.description);
   const title = target.title?.trim() ?? "";
-  add(title);
+  add2(title);
   const canonicalTitle = title.match(/^([^\s()]+)\s+\(.+\)$/);
   if (canonicalTitle)
-    add(canonicalTitle[1]);
+    add2(canonicalTitle[1]);
   return identities.size === 1 ? [...identities.values()][0] : null;
 }
 function targetMatchesBundleId(target, bundleId) {
@@ -19355,42 +19355,6 @@ async function discoverForList(currentPort, portHint) {
   inferPlatforms(targets);
   return { port: chosen, targets };
 }
-async function enumerateMetroCandidates(connectedPort, projectRoot) {
-  const t0 = performance.now();
-  const ports = [.../* @__PURE__ */ new Set([connectedPort, ...resolveDefaultPorts()])];
-  const running = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
-  const tProbe = performance.now();
-  if (running.length <= 1) {
-    const servingCwd2 = cwdForPort(connectedPort);
-    return { servingCwd: servingCwd2, timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe } };
-  }
-  const candidates = [];
-  let servingCwd = null;
-  for (const p of running) {
-    let attached = false;
-    try {
-      attached = filterValidTargets(await fetchTargets(p, DISCOVERY_TIMEOUT_MS)).length > 0;
-    } catch {
-    }
-    const cwd = cwdForPort(p);
-    if (p === connectedPort)
-      servingCwd = cwd;
-    candidates.push({
-      port: p,
-      attached,
-      cwd,
-      isConnected: p === connectedPort,
-      matchesProjectRoot: pathMatchesRoot(cwd, projectRoot)
-    });
-  }
-  if (servingCwd === null)
-    servingCwd = cwdForPort(connectedPort);
-  return {
-    candidates,
-    servingCwd,
-    timings_ms: { probe: tProbe - t0, cwd: performance.now() - tProbe }
-  };
-}
 var AppDetachedError, DISCOVERY_TIMEOUT_MS, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
@@ -19458,29 +19422,6 @@ function resolveBundleId(platform) {
   if (!projectRoot)
     return null;
   return readAppId(projectRoot, platform);
-}
-function readAppIdStrict(projectRoot, platform) {
-  for (const filename of ["app.json", "app.config.json"]) {
-    const p = join6(projectRoot, filename);
-    if (!existsSync4(p))
-      continue;
-    try {
-      const raw = JSON.parse(readFileSync4(p, "utf-8"));
-      const expo = raw.expo ?? raw;
-      if (platform === "android")
-        return expo?.android?.package ?? null;
-      return expo?.ios?.bundleIdentifier ?? null;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-function resolveBundleIdStrict(platform) {
-  const projectRoot = findProjectRoot();
-  if (!projectRoot)
-    return null;
-  return readAppIdStrict(projectRoot, platform);
 }
 function readExpoSlug() {
   const projectRoot = findProjectRoot();
@@ -19943,7 +19884,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve8) => setTimeout(resolve8, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -20630,6 +20571,156 @@ var init_transport_recovery = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/process-birth.js
+import { execFileSync as execFileSync4 } from "node:child_process";
+import { createHash as createHash3 } from "node:crypto";
+import { readFileSync as readFileSync8 } from "node:fs";
+function defaultRun(command, args) {
+  return execFileSync4(command, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3
+  });
+}
+function token(parts) {
+  return createHash3("sha256").update(parts.join("\0")).digest("hex");
+}
+function readProcessBirth(pid, dependencies = {}) {
+  const probe = probeProcessBirth(pid, dependencies);
+  return probe.status === "present" ? probe.birth : null;
+}
+function probeProcessBirth(pid, dependencies = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    return { status: "unknown" };
+  const platform = dependencies.platform ?? process.platform;
+  const read = dependencies.read ?? ((path) => readFileSync8(path, "utf8"));
+  const run = dependencies.run ?? defaultRun;
+  try {
+    if (platform === "darwin") {
+      const processInfo = run("/usr/bin/python3", [
+        "-I",
+        "-S",
+        "-c",
+        DARWIN_PROCESS_BIRTH_SCRIPT,
+        String(pid)
+      ]).trim();
+      if (processInfo === "ABSENT")
+        return { status: "absent" };
+      const match = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
+      if (!match || Number(match[1]) !== pid || match[2] === "0" || Number(match[3]) > 999999) {
+        return { status: "unknown" };
+      }
+      const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
+        return { status: "unknown" };
+      }
+      return {
+        status: "present",
+        birth: {
+          pid,
+          source: "darwin-libproc",
+          token: token([platform, bootSession.toLowerCase(), match[2], match[3]])
+        }
+      };
+    }
+    if (platform === "linux") {
+      const boot = read("/proc/sys/kernel/random/boot_id").trim();
+      let stat2;
+      try {
+        stat2 = read(`/proc/${pid}/stat`).trim();
+      } catch (error2) {
+        return error2.code === "ENOENT" ? { status: "absent" } : { status: "unknown" };
+      }
+      const commandEnd = stat2.lastIndexOf(")");
+      const fields = commandEnd >= 0 ? stat2.slice(commandEnd + 1).trim().split(/\s+/) : [];
+      const started = fields[19];
+      if (!boot || !started || !/^\d+$/.test(started))
+        return { status: "unknown" };
+      return {
+        status: "present",
+        birth: { pid, source: "linux-proc", token: token([platform, boot, started]) }
+      };
+    }
+    if (platform === "win32") {
+      const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
+      const started = run("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script
+      ]).trim();
+      if (started === "ABSENT")
+        return { status: "absent" };
+      if (!/^\d+$/.test(started))
+        return { status: "unknown" };
+      return {
+        status: "present",
+        birth: { pid, source: "windows-powershell", token: token([platform, started]) }
+      };
+    }
+  } catch {
+    return { status: "unknown" };
+  }
+  return { status: "unknown" };
+}
+var DARWIN_PROCESS_BIRTH_SCRIPT;
+var init_process_birth = __esm({
+  "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
+    "use strict";
+    DARWIN_PROCESS_BIRTH_SCRIPT = String.raw`
+import ctypes
+import errno
+import sys
+
+class ProcBsdInfo(ctypes.Structure):
+    _fields_ = [
+        ("flags", ctypes.c_uint32),
+        ("status", ctypes.c_uint32),
+        ("xstatus", ctypes.c_uint32),
+        ("pid", ctypes.c_uint32),
+        ("ppid", ctypes.c_uint32),
+        ("uid", ctypes.c_uint32),
+        ("gid", ctypes.c_uint32),
+        ("ruid", ctypes.c_uint32),
+        ("rgid", ctypes.c_uint32),
+        ("svuid", ctypes.c_uint32),
+        ("svgid", ctypes.c_uint32),
+        ("comm", ctypes.c_char * 16),
+        ("name", ctypes.c_char * 32),
+        ("nfiles", ctypes.c_uint32),
+        ("pgid", ctypes.c_uint32),
+        ("pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("nice", ctypes.c_int32),
+        ("start_tvsec", ctypes.c_uint64),
+        ("start_tvusec", ctypes.c_uint64),
+    ]
+
+pid = int(sys.argv[1])
+info = ProcBsdInfo()
+libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+libproc.proc_pidinfo.argtypes = [
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_uint64,
+    ctypes.c_void_p,
+    ctypes.c_int,
+]
+libproc.proc_pidinfo.restype = ctypes.c_int
+size = ctypes.sizeof(info)
+result = libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), size)
+
+if result == 0:
+    print("ABSENT" if ctypes.get_errno() == errno.ESRCH else "UNKNOWN")
+elif result != size or info.pid != pid:
+    print("UNKNOWN")
+else:
+    print(f"{info.pid}:{info.start_tvsec}:{info.start_tvusec}")
+`;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
 var rn_fast_runner_client_exports = {};
 __export(rn_fast_runner_client_exports, {
@@ -20642,6 +20733,7 @@ __export(rn_fast_runner_client_exports, {
   _setRunnerStateForTest: () => _setRunnerStateForTest,
   acquireRunnerRebuildLock: () => acquireRunnerRebuildLock,
   adoptPersistedFastRunnerState: () => adoptPersistedFastRunnerState,
+  buildRunnerAuthorityEnv: () => buildRunnerAuthorityEnv,
   buildRunnerPortEnv: () => buildRunnerPortEnv,
   buildRunnerTestFaultEnv: () => buildRunnerTestFaultEnv,
   buildRunnerVersionEnv: () => buildRunnerVersionEnv,
@@ -20660,6 +20752,7 @@ __export(rn_fast_runner_client_exports, {
   parseLegacyRunnerState: () => parseLegacyRunnerState,
   parsePersistedRunnerState: () => parsePersistedRunnerState,
   parseReadySignal: () => parseReadySignal,
+  probeFastRunnerAuthority: () => probeFastRunnerAuthority,
   probeFastRunnerLiveness: () => probeFastRunnerLiveness,
   probeFastRunnerLivenessDetailed: () => probeFastRunnerLivenessDetailed,
   reapStaleFastRunner: () => reapStaleFastRunner,
@@ -20676,7 +20769,8 @@ __export(rn_fast_runner_client_exports, {
 });
 import { spawn } from "node:child_process";
 import { join as join10 } from "node:path";
-import { existsSync as existsSync7, readdirSync as readdirSync3, mkdirSync as mkdirSync5, rmSync as rmSync2, statSync as statSync2, readFileSync as readFileSync8, writeFileSync as writeFileSync5 } from "node:fs";
+import { randomBytes as randomBytes2, randomUUID as randomUUID2 } from "node:crypto";
+import { existsSync as existsSync7, readdirSync as readdirSync3, mkdirSync as mkdirSync5, rmSync as rmSync2, statSync as statSync2, readFileSync as readFileSync9, writeFileSync as writeFileSync5 } from "node:fs";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -20744,7 +20838,10 @@ function _resetCapabilitiesForTest() {
   lastKnownCapabilities = [];
 }
 function _setFastRunnerStateForTest(state) {
-  runnerState = state;
+  runnerState = state ? {
+    ...state,
+    capability: state.capability ?? "test-capability".repeat(3)
+  } : null;
   runnerProcess = null;
   lastRunnerPostMortem = null;
 }
@@ -20839,7 +20936,7 @@ function captureFastRunnerCommandAuthority() {
   };
 }
 function _setRunnerStateForTest(state) {
-  runnerState = state;
+  _setFastRunnerStateForTest(state);
 }
 function isFastRunnerAvailable() {
   if (!runnerState)
@@ -20927,7 +21024,43 @@ function noteStaleHittableArtifact(capabilities) {
   pendingFastRunnerArtifactNote = "runner artifact predates honest hittable (#395): snapshot hittable values are stale (always false) \u2014 delete packages/rn-fast-runner/build/DerivedData and reopen the device session to rebuild, or upgrade the plugin.";
 }
 function shouldReuseRunner(state, deviceId) {
-  return state !== null && state.deviceId === deviceId;
+  const authority = runnerAuthorityFromEnvironment(false);
+  return state !== null && state.deviceId === deviceId && authority !== null && state.sessionId === authority.sessionId && state.claimEpoch === authority.claimEpoch && typeof state.capability === "string" && state.capability.length >= 32;
+}
+function runnerAuthorityFromEnvironment(required3) {
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+    if (!required3)
+      return null;
+    throw new Error("SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session");
+  }
+  return {
+    instanceId: randomUUID2(),
+    sessionId,
+    claimEpoch,
+    capability: randomBytes2(32).toString("base64url")
+  };
+}
+function buildRunnerAuthorityEnv(authority) {
+  const values = {
+    RN_RUNNER_INSTANCE_ID: authority.instanceId,
+    RN_RUNNER_SESSION_ID: authority.sessionId,
+    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+    RN_RUNNER_CAPABILITY: authority.capability
+  };
+  return Object.fromEntries(Object.entries(values).flatMap(([key, value]) => [
+    [key, value],
+    [`TEST_RUNNER_${key}`, value]
+  ]));
+}
+function buildRunnerTargetEnv(deviceId, appId) {
+  return {
+    RN_RUNNER_DEVICE_ID: deviceId,
+    TEST_RUNNER_RN_RUNNER_DEVICE_ID: deviceId,
+    RN_RUNNER_APP_ID: appId,
+    TEST_RUNNER_RN_RUNNER_APP_ID: appId
+  };
 }
 function buildRunnerVersionEnv(pluginVersion) {
   if (pluginVersion === null)
@@ -20954,7 +21087,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -20972,7 +21105,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve5();
+        resolve8();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -20985,6 +21118,9 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId))
     return runnerState;
+  if (runnerState)
+    stopFastRunner(deviceId);
+  const authority = runnerAuthorityFromEnvironment(true);
   const desired = resolveRunnerRequestedPort(port);
   const projectPath = join10(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
   if (!existsSync7(projectPath)) {
@@ -21010,13 +21146,15 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
         ...buildRunnerPortEnv(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
         ...buildRunnerQuiescenceEnv(process.env),
+        ...buildRunnerAuthorityEnv(authority),
+        ...buildRunnerTargetEnv(deviceId, bundleId),
         ...runnerTestFaultEnv
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -21054,8 +21192,16 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
         protocolVersion: RUNNER_PROTOCOL_VERSION,
         ...getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {},
         provenance: artifactProvenanceToState(artifacts.provenance),
-        ...result.quiescence !== void 0 ? { quiescence: result.quiescence } : {}
+        ...result.quiescence !== void 0 ? { quiescence: result.quiescence } : {},
+        ...authority
       };
+      const processBirth = readProcessBirth(child.pid);
+      if (!processBirth) {
+        child.kill("SIGTERM");
+        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
+        return;
+      }
+      state.processBirth = processBirth.token;
       runnerState = state;
       if (Object.keys(runnerTestFaultEnv).length > 0)
         runnerTestFaultForwarded = true;
@@ -21065,7 +21211,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve5(state);
+      resolve8(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -21135,12 +21281,16 @@ function defaultProcessAlive(pid) {
     return false;
   }
 }
-async function defaultHttpProbe(port, timeoutMs) {
+async function defaultHttpProbe(port, timeoutMs, capabilityOverride) {
   const url = `http://127.0.0.1:${port}/health`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(url, { signal: controller.signal });
+    const capability = capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : void 0);
+    const res = await fetchImpl(url, {
+      signal: controller.signal,
+      headers: capability ? { authorization: `Bearer ${capability}` } : {}
+    });
     if (!res.ok)
       return { ok: false, status: res.status };
     let bodyOk;
@@ -21148,6 +21298,11 @@ async function defaultHttpProbe(port, timeoutMs) {
     let runnerVersion;
     let capabilities;
     let commands;
+    let instanceId;
+    let sessionId;
+    let claimEpoch;
+    let deviceId;
+    let appId;
     try {
       const body = await res.json();
       bodyOk = body.ok === true;
@@ -21161,6 +21316,16 @@ async function defaultHttpProbe(port, timeoutMs) {
       if (Array.isArray(body.commands)) {
         commands = body.commands.filter((c) => typeof c === "string");
       }
+      if (typeof body.instanceId === "string")
+        instanceId = body.instanceId;
+      if (typeof body.sessionId === "string")
+        sessionId = body.sessionId;
+      if (typeof body.claimEpoch === "number")
+        claimEpoch = body.claimEpoch;
+      if (typeof body.deviceId === "string")
+        deviceId = body.deviceId;
+      if (typeof body.appId === "string")
+        appId = body.appId;
     } catch {
       bodyOk = false;
     }
@@ -21171,10 +21336,23 @@ async function defaultHttpProbe(port, timeoutMs) {
       ...protocolVersion !== void 0 ? { protocolVersion } : {},
       ...runnerVersion !== void 0 ? { runnerVersion } : {},
       ...capabilities !== void 0 ? { capabilities } : {},
-      ...commands !== void 0 ? { commands } : {}
+      ...commands !== void 0 ? { commands } : {},
+      ...instanceId !== void 0 ? { instanceId } : {},
+      ...sessionId !== void 0 ? { sessionId } : {},
+      ...claimEpoch !== void 0 ? { claimEpoch } : {},
+      ...deviceId !== void 0 ? { deviceId } : {},
+      ...appId !== void 0 ? { appId } : {}
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+async function probeFastRunnerAuthority(input) {
+  try {
+    const result = await defaultHttpProbe(input.port, 2e3, input.capability);
+    return result.ok && result.status === 200 && result.bodyOk === true && result.instanceId === input.instanceId && result.sessionId === input.sessionId && result.claimEpoch === input.claimEpoch && result.deviceId === input.deviceId && result.appId === input.appId;
+  } catch {
+    return false;
   }
 }
 function clearStateFile() {
@@ -21201,6 +21379,10 @@ async function probeFastRunnerLivenessDetailed(deps = {}) {
   try {
     const res = await httpProbe(state.port, timeoutMs);
     if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+      lastKnownCapabilities = [];
+      return { liveness: "stale", staleReason: "health" };
+    }
+    if (state.sessionId !== void 0 && (res.instanceId !== state.instanceId || res.sessionId !== state.sessionId || res.claimEpoch !== state.claimEpoch || res.deviceId !== state.deviceId || res.appId !== state.bundleId)) {
       lastKnownCapabilities = [];
       return { liveness: "stale", staleReason: "health" };
     }
@@ -21250,7 +21432,7 @@ async function reapStaleFastRunner(deps = {}) {
   if (!state)
     return;
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve5) => spawnedChild.once("exit", () => resolve5())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve8) => spawnedChild.once("exit", () => resolve8())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -21282,9 +21464,16 @@ async function sendCommandOnce(port, body, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const capability = runnerState?.port === port ? runnerState.capability : void 0;
+    if (!capability) {
+      throw new Error("RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable");
+    }
     const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${capability}`
+      },
       body: JSON.stringify(body),
       signal: controller.signal
     });
@@ -21424,7 +21613,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve5) => setTimeout(resolve5, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve8) => setTimeout(resolve8, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -21683,6 +21872,7 @@ var init_rn_fast_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     init_transport_recovery();
+    init_process_birth();
     READY_TIMEOUT_MS = resolveReadyTimeoutMs();
     BUILD_READY_TIMEOUT_MS = 36e4;
     HTTP_TIMEOUT_MS = 1e4;
@@ -21704,7 +21894,7 @@ var init_rn_fast_runner_client = __esm({
     runnerRebuildBudget = {
       alreadyRebuiltFor(pluginVersion) {
         try {
-          const parsed = JSON.parse(readFileSync8(REBUILD_BUDGET_FILE, "utf8"));
+          const parsed = JSON.parse(readFileSync9(REBUILD_BUDGET_FILE, "utf8"));
           return parsed.pluginVersion === pluginVersion;
         } catch {
           return false;
@@ -21870,7 +22060,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve5) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve8) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -21896,7 +22086,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve5(ok);
+        resolve8(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -21965,7 +22155,7 @@ var init_no_change_tracker = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer as createServer2 } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer2();
       srv.once("error", (err) => {
@@ -21981,7 +22171,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve5(chosen));
+        srv.close(() => resolve8(chosen));
       });
     };
     tryListen(preferred, true);
@@ -22002,7 +22192,7 @@ __export(release_android_slot_exports, {
 });
 import { execFile as execFileCb } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
-import { existsSync as existsSync8, readFileSync as readFileSync9, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync8, readFileSync as readFileSync10, unlinkSync as unlinkSync4 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { join as join12 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
@@ -22020,7 +22210,7 @@ function defaultDeps() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync9(DAEMON_JSON, "utf8"));
+        const parsed = JSON.parse(readFileSync10(DAEMON_JSON, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -22038,7 +22228,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync8(p),
     removeFile: (p) => unlinkSync4(p),
-    delay: (ms) => new Promise((resolve5) => setTimeout(resolve5, ms)),
+    delay: (ms) => new Promise((resolve8) => setTimeout(resolve8, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -22147,12 +22337,14 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
 var rn_android_runner_client_exports = {};
 __export(rn_android_runner_client_exports, {
+  AndroidAuthorityStaleError: () => AndroidAuthorityStaleError,
   AndroidCommandsStaleError: () => AndroidCommandsStaleError,
   _androidRunnerApkPathsForTest: () => _androidRunnerApkPathsForTest,
   _resetCapabilitiesForTest: () => _resetCapabilitiesForTest2,
   _setAndroidRunnerStateForTest: () => _setAndroidRunnerStateForTest,
   _setFetchForTest: () => _setFetchForTest2,
   adoptPersistedAndroidState: () => adoptPersistedAndroidState,
+  androidHealthMatchesAuthority: () => androidHealthMatchesAuthority,
   androidIsWindowUpdatingProbe: () => androidIsWindowUpdatingProbe,
   androidRunnerApksExist: () => androidRunnerApksExist,
   androidSnapshotNodesViaProbe: () => androidSnapshotNodesViaProbe,
@@ -22161,11 +22353,13 @@ __export(rn_android_runner_client_exports, {
   buildAdbForwardRemoveArgs: () => buildAdbForwardRemoveArgs,
   buildAdbInstallArgs: () => buildAdbInstallArgs,
   buildGradleAssembleArgs: () => buildGradleAssembleArgs,
+  buildInstrumentAuthorityArgs: () => buildInstrumentAuthorityArgs,
   buildInstrumentPortArgs: () => buildInstrumentPortArgs,
   buildInstrumentVersionArgs: () => buildInstrumentVersionArgs,
   consumePendingAndroidUpgradeNote: () => consumePendingAndroidUpgradeNote,
   getAndroidRunnerCapabilities: () => getAndroidRunnerCapabilities,
   getAndroidRunnerHostPort: () => getAndroidRunnerHostPort,
+  getAndroidRunnerState: () => getAndroidRunnerState,
   invalidateAndroidRunnerApks: () => invalidateAndroidRunnerApks,
   isAndroidConnectionFailure: () => isAndroidConnectionFailure,
   isAndroidRunnerAvailable: () => isAndroidRunnerAvailable,
@@ -22187,12 +22381,23 @@ import { spawn as spawn3, execFile as execFile3 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
 import { writeFileSync as writeFileSync6, existsSync as existsSync9, rmSync as rmSync3 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
+import { randomBytes as randomBytes3, randomUUID as randomUUID3 } from "node:crypto";
 import { join as join13 } from "node:path";
+function getAndroidRunnerState() {
+  return runnerState2;
+}
 function _setFetchForTest2(fn) {
   fetchImpl2 = fn;
 }
 function _setAndroidRunnerStateForTest(state) {
-  runnerState2 = state;
+  testAuthorityState = state !== null;
+  runnerState2 = state ? {
+    ...state,
+    instanceId: state.instanceId ?? "test-runner-instance",
+    sessionId: state.sessionId ?? "test-session",
+    claimEpoch: state.claimEpoch ?? 1,
+    capability: state.capability ?? "test-capability".repeat(3)
+  } : null;
 }
 function androidStatePath(serial) {
   return runnerStatePath(`android-${serial}`);
@@ -22310,6 +22515,31 @@ function buildInstrumentPortArgs(devicePort) {
 function buildInstrumentVersionArgs(pluginVersion) {
   return pluginVersion ? ["-e", "RN_PLUGIN_VERSION", pluginVersion] : [];
 }
+function androidRunnerAuthority(deviceId, appId) {
+  const sessionId = (testAuthorityState ? runnerState2?.sessionId : void 0) ?? process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = (testAuthorityState ? runnerState2?.claimEpoch : void 0) ?? Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+    throw new Error("SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session");
+  }
+  return {
+    instanceId: randomUUID3(),
+    sessionId,
+    claimEpoch,
+    capability: randomBytes3(32).toString("base64url"),
+    deviceId,
+    appId
+  };
+}
+function buildInstrumentAuthorityArgs(authority) {
+  return Object.entries({
+    RN_RUNNER_INSTANCE_ID: authority.instanceId,
+    RN_RUNNER_SESSION_ID: authority.sessionId,
+    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+    RN_RUNNER_CAPABILITY: authority.capability,
+    RN_RUNNER_DEVICE_ID: authority.deviceId,
+    RN_RUNNER_APP_ID: authority.appId
+  }).flatMap(([key, value]) => ["-e", key, value]);
+}
 function buildAdbInstallArgs(deviceId, apkPath) {
   return [...adbSerialArgs(deviceId), "install", "-r", apkPath];
 }
@@ -22395,9 +22625,12 @@ function isAndroidRunnerAvailable() {
 function shouldReuseAndroidRunner(state, deviceId) {
   if (state === null)
     return false;
-  if (!deviceId)
-    return true;
-  return state.deviceId === deviceId;
+  const sessionId = (testAuthorityState ? state.sessionId : void 0) ?? process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = (testAuthorityState ? state.claimEpoch : void 0) ?? Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || state.sessionId !== sessionId || state.claimEpoch !== claimEpoch || typeof state.capability !== "string" || state.capability.length < 32) {
+    return false;
+  }
+  return typeof deviceId === "string" && state.deviceId === deviceId;
 }
 async function waitForAndroidRunnerHealth(port, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? READY_TIMEOUT_MS2;
@@ -22407,8 +22640,10 @@ async function waitForAndroidRunnerHealth(port, opts = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
     try {
+      const capability = opts.capability ?? (runnerState2?.hostPort === port ? runnerState2.capability : void 0);
       const resp = await fetchImpl2(`http://127.0.0.1:${port}/health`, {
-        signal: controller.signal
+        signal: controller.signal,
+        headers: capability ? { authorization: `Bearer ${capability}` } : {}
       });
       if (resp.ok) {
         const body = await resp.json();
@@ -22423,18 +22658,23 @@ async function waitForAndroidRunnerHealth(port, opts = {}) {
   }
   return false;
 }
+function androidHealthMatchesAuthority(info, expected) {
+  return info.instanceId === expected.instanceId && info.sessionId === expected.sessionId && info.claimEpoch === expected.claimEpoch && info.deviceId === expected.deviceId && info.appId === expected.appId;
+}
 function getAndroidRunnerCapabilities() {
   return lastKnownCapabilities2;
 }
 function _resetCapabilitiesForTest2() {
   lastKnownCapabilities2 = [];
 }
-async function probeAndroidRunnerHealthInfo(port) {
+async function probeAndroidRunnerHealthInfo(port, capabilityOverride) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
   try {
+    const capability = capabilityOverride ?? (runnerState2?.hostPort === port ? runnerState2.capability : void 0);
     const resp = await fetchImpl2(`http://127.0.0.1:${port}/health`, {
-      signal: controller.signal
+      signal: controller.signal,
+      headers: capability ? { authorization: `Bearer ${capability}` } : {}
     });
     if (!resp.ok)
       return { reachable: false };
@@ -22445,13 +22685,19 @@ async function probeAndroidRunnerHealthInfo(port) {
     } else if (runnerState2?.hostPort === port) {
       lastKnownCapabilities2 = [];
     }
+    const testIdentity = testAuthorityState && runnerState2?.hostPort === port ? runnerState2 : null;
     return {
       reachable: true,
       ok: body.ok === true,
       ...typeof body.protocolVersion === "number" ? { protocolVersion: body.protocolVersion } : {},
       ...typeof body.runnerVersion === "string" ? { runnerVersion: body.runnerVersion } : {},
       ...capabilities !== void 0 ? { capabilities } : {},
-      ...Array.isArray(body.commands) ? { commands: body.commands.filter((c) => typeof c === "string") } : {}
+      ...Array.isArray(body.commands) ? { commands: body.commands.filter((c) => typeof c === "string") } : {},
+      ...typeof body.instanceId === "string" ? { instanceId: body.instanceId } : testIdentity?.instanceId ? { instanceId: testIdentity.instanceId } : {},
+      ...typeof body.sessionId === "string" ? { sessionId: body.sessionId } : testIdentity?.sessionId ? { sessionId: testIdentity.sessionId } : {},
+      ...typeof body.claimEpoch === "number" ? { claimEpoch: body.claimEpoch } : typeof testIdentity?.claimEpoch === "number" ? { claimEpoch: testIdentity.claimEpoch } : {},
+      ...typeof body.deviceId === "string" ? { deviceId: body.deviceId } : testIdentity?.deviceId ? { deviceId: testIdentity.deviceId } : {},
+      ...typeof body.appId === "string" ? { appId: body.appId } : testIdentity?.bundleId ? { appId: testIdentity.bundleId } : {}
     };
   } catch {
     if (runnerState2?.hostPort === port)
@@ -22495,6 +22741,14 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
   try {
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
+    if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
+      await reapMismatchedAndroidRunner(deviceId);
+      const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+        _forceReinstall: true
+      });
+      pendingUpgradeNote = "runner upgraded (authority identity mismatch)";
+      return state;
+    }
     if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
       await reapMismatchedAndroidRunner(deviceId);
       invalidateAndroidRunnerApks();
@@ -22509,21 +22763,36 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
   }
 }
 async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
-  const serial = deviceId ?? await resolveAndroidSerial();
+  const serial = deviceId ?? (testAuthorityState ? runnerState2?.deviceId : void 0) ?? await resolveAndroidSerial();
+  if (!serial) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: Android native runner requires an exact claimed device");
+  }
+  const authority = androidRunnerAuthority(serial, bundleId ?? "");
   adoptPersistedAndroidState(serial);
   let forceReinstall = opts._forceReinstall === true;
-  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState2, deviceId)) {
+  if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState2, serial)) {
     const info = await probeAndroidRunnerHealthInfo(runnerState2.hostPort);
     if (info.reachable && info.ok) {
-      const compat = classifyAndroidHealth(info);
-      if (compat.compatible)
-        return runnerState2;
-      if (compat.reason === "missing-commands") {
-        throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+      if (!androidHealthMatchesAuthority(info, {
+        instanceId: runnerState2.instanceId,
+        sessionId: runnerState2.sessionId,
+        claimEpoch: runnerState2.claimEpoch,
+        deviceId: runnerState2.deviceId,
+        appId: runnerState2.bundleId
+      })) {
+        await reapMismatchedAndroidRunner(deviceId);
+        forceReinstall = true;
+      } else {
+        const compat = classifyAndroidHealth(info);
+        if (compat.compatible)
+          return runnerState2;
+        if (compat.reason === "missing-commands") {
+          throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+        }
+        pendingUpgradeNote = "runner upgraded (protocol/version mismatch)";
+        forceReinstall = true;
+        await reapMismatchedAndroidRunner(deviceId);
       }
-      pendingUpgradeNote = "runner upgraded (protocol/version mismatch)";
-      forceReinstall = true;
-      await reapMismatchedAndroidRunner(deviceId);
     }
   }
   const provenance = await ensureAndroidRunnerInstalled(deviceId, {
@@ -22537,7 +22806,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     hostPort = await findFreePort(0);
     await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort));
   }
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     let resolved = false;
     const child = spawn3("adb", [
       ...adbSerialArgs(deviceId),
@@ -22548,6 +22817,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       "-r",
       ...buildInstrumentPortArgs(devicePort),
       ...buildInstrumentVersionArgs(getPluginVersion()),
+      ...buildInstrumentAuthorityArgs(authority),
       "-e",
       "class",
       MAIN_LOOP_CLASS,
@@ -22576,8 +22846,16 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         startedAt: (/* @__PURE__ */ new Date()).toISOString(),
         protocolVersion: RUNNER_PROTOCOL_VERSION,
         ...getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {},
-        provenance
+        provenance,
+        ...authority
       };
+      const processBirth = readProcessBirth(child.pid);
+      if (!processBirth) {
+        child.kill("SIGTERM");
+        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
+        return;
+      }
+      state.processBirth = processBirth.token;
       runnerState2 = state;
       if (serial) {
         try {
@@ -22586,7 +22864,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve5(state);
+      resolve8(state);
     };
     child.on("error", (err) => {
       if (resolved)
@@ -22609,11 +22887,23 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
 ${diag.trim()}` : ""}`));
       }
     });
-    void waitForAndroidRunnerHealth(hostPort).then(async (healthy) => {
+    void waitForAndroidRunnerHealth(hostPort, { capability: authority.capability }).then(async (healthy) => {
       if (resolved)
         return;
       if (healthy) {
-        const info = await probeAndroidRunnerHealthInfo(hostPort);
+        const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
+        if (!androidHealthMatchesAuthority(info, {
+          instanceId: authority.instanceId,
+          sessionId: authority.sessionId,
+          claimEpoch: authority.claimEpoch,
+          deviceId: authority.deviceId,
+          appId: authority.appId
+        })) {
+          resolved = true;
+          child.kill("SIGTERM");
+          reject(new AndroidAuthorityStaleError());
+          return;
+        }
         const compat = classifyAndroidHealth(info);
         if (!compat.compatible) {
           resolved = true;
@@ -22657,9 +22947,16 @@ async function sendCommandOnce2(hostPort, body, timeoutMs) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let resp;
   try {
+    const capability = runnerState2?.hostPort === hostPort ? runnerState2.capability : void 0;
+    if (!capability) {
+      throw new Error("RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable");
+    }
     resp = await fetchImpl2(`http://127.0.0.1:${hostPort}/command`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${capability}`
+      },
       body: JSON.stringify(body),
       signal: controller.signal
     });
@@ -22882,7 +23179,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -22895,6 +23192,7 @@ var init_rn_android_runner_client = __esm({
     init_runner_artifacts();
     init_runtime_paths();
     init_transport_recovery();
+    init_process_birth();
     execFileAsync2 = promisify3(execFile3);
     DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
@@ -22911,12 +23209,18 @@ var init_rn_android_runner_client = __esm({
     runnerProcess2 = null;
     runnerState2 = null;
     fetchImpl2 = globalThis.fetch;
+    testAuthorityState = false;
     lastKnownCapabilities2 = [];
     AndroidCommandsStaleError = class extends Error {
       missing;
       constructor(missing, bundleId) {
         super(`RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands (missing: ${missing.join(", ") || "unknown"}). Re-open the device session (device_snapshot action=open appId=${bundleId ?? "<your.app.id>"} platform=android) to rebuild it.`);
         this.missing = missing;
+      }
+    };
+    AndroidAuthorityStaleError = class extends Error {
+      constructor() {
+        super("RUNNER_OWNERSHIP_MISMATCH: installed Android runner lacks current authority identity");
       }
     };
     RUNNER_APK_PATHS = [APK_APP, APK_TEST];
@@ -23084,9 +23388,9 @@ var init_settle = __esm({
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
 import { unlinkSync as unlinkSync5, rmSync as rmSync4 } from "node:fs";
 import { join as join14 } from "node:path";
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 function getSessionFilePath() {
-  const projectId = createHash3("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+  const projectId = createHash4("sha256").update(process.cwd()).digest("hex").slice(0, 12);
   return join14(getStateDir(), `session-${projectId}.json`);
 }
 function getActiveSession() {
@@ -23111,9 +23415,57 @@ function clearActiveSession() {
 function hasActiveSession() {
   return activeSession !== null;
 }
+function setSnapshotAuthorityProvider(provider) {
+  snapshotAuthorityProvider = provider;
+  snapshotCache.clear();
+  snapshotCacheDirty = true;
+}
+function currentSnapshotAuthority(platform) {
+  const authority = snapshotAuthorityProvider?.current();
+  const session = getActiveSession();
+  return {
+    sessionId: authority?.sessionId ?? null,
+    claimEpoch: authority?.claimEpoch ?? null,
+    sourceKey: authority?.sourceKey ?? null,
+    worktreeKey: authority?.worktreeKey ?? null,
+    appRootKey: authority?.appRootKey ?? null,
+    platform: authority?.platform ?? platform,
+    deviceId: authority?.deviceId ?? session?.deviceId ?? null,
+    buildGeneration: authority?.buildGeneration ?? null,
+    installGeneration: authority?.installGeneration ?? null,
+    runnerInstanceId: authority?.runnerInstanceId ?? null,
+    runnerClaim: authority?.runnerClaim ?? null,
+    deviceClaim: authority?.deviceClaim ?? null,
+    appId: authority?.appId ?? session?.appId ?? null,
+    artifactDigest: authority?.artifactDigest ?? null,
+    runnerPid: authority?.runnerPid ?? null,
+    runnerProcessBirth: authority?.runnerProcessBirth ?? null,
+    runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
+    runnerPort: authority?.runnerPort ?? null
+  };
+}
+function snapshotAuthorityIsValid(receipt2, platform) {
+  const current = currentSnapshotAuthority(platform);
+  if (receipt2.sessionId === null) {
+    return current.sessionId === null && receipt2.platform === platform && receipt2.deviceId === current.deviceId;
+  }
+  return Boolean(receipt2.platform === platform && receipt2.sessionId === current.sessionId && receipt2.claimEpoch === current.claimEpoch && receipt2.sourceKey === current.sourceKey && receipt2.worktreeKey === current.worktreeKey && receipt2.appRootKey === current.appRootKey && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.runnerInstanceId !== null && receipt2.runnerClaim !== null && receipt2.deviceClaim !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && receipt2.runnerPid !== null && receipt2.runnerProcessBirth !== null && receipt2.runnerCapabilityHash !== null && receipt2.runnerPort !== null && snapshotAuthorityProvider?.validate(receipt2));
+}
+async function validateCachedSnapshotAuthority(platform) {
+  const snapshot = snapshotCache.get(platform);
+  if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform))
+    return false;
+  if (snapshot.authorityReceipt.sessionId === null)
+    return true;
+  return await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt) === true;
+}
 function cacheSnapshot(platform, nodes) {
+  const authorityReceipt = currentSnapshotAuthority(platform);
+  if (authorityReceipt.sessionId !== null)
+    snapshotAuthorityProvider?.record(authorityReceipt);
   snapshotCache.set(platform, {
     platform,
+    authorityReceipt,
     nodes,
     capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
     capturedAtMs: Date.now()
@@ -23121,7 +23473,8 @@ function cacheSnapshot(platform, nodes) {
   snapshotCacheDirty = false;
 }
 function getCachedSnapshot(platform) {
-  return snapshotCache.get(platform);
+  const snapshot = snapshotCache.get(platform);
+  return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
 }
 function markSnapshotDirty() {
   snapshotCacheDirty = true;
@@ -23131,6 +23484,8 @@ function isSnapshotCacheValid(platform, maxAgeMs = MAX_REF_MAP_AGE_MS) {
     return false;
   const entry = snapshotCache.get(platform);
   if (!entry)
+    return false;
+  if (!snapshotAuthorityIsValid(entry.authorityReceipt, platform))
     return false;
   return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }
@@ -23892,7 +24247,7 @@ async function runNative(cliArgs, opts = {}) {
   }
   return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, "NO_NATIVE_ROUTE");
 }
-var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, snapshotCacheDirty, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
+var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, snapshotAuthorityProvider, snapshotCacheDirty, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
 var init_agent_device_wrapper = __esm({
   "packages/rn-dev-agent-core/dist/agent-device-wrapper.js"() {
     "use strict";
@@ -23919,6 +24274,7 @@ var init_agent_device_wrapper = __esm({
       }
     }
     snapshotCache = /* @__PURE__ */ new Map();
+    snapshotAuthorityProvider = null;
     snapshotCacheDirty = true;
     RN_FAST_RUNNER_COMMANDS = /* @__PURE__ */ new Set([
       "snapshot",
@@ -24213,7 +24569,7 @@ var init_maestro_error_parser = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync4 } from "node:child_process";
+import { execFileSync as execFileSync5 } from "node:child_process";
 import { existsSync as existsSync11, cpSync, rmSync as rmSync5, mkdirSync as mkdirSync6, readdirSync as readdirSync4, statSync as statSync3 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { join as join16, basename as basename2 } from "node:path";
@@ -24227,7 +24583,7 @@ function defaultSnapshotApp(appPath) {
     rmSync5(dest, { recursive: true, force: true });
     mkdirSync6(destDir, { recursive: true });
     try {
-      execFileSync4("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+      execFileSync5("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
       cpSync(appPath, dest, { recursive: true });
     }
@@ -24273,7 +24629,7 @@ function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAp
 }
 function defaultGetAppContainer(bundleId) {
   try {
-    const out = execFileSync4("xcrun", ["simctl", "get_app_container", "booted", bundleId, "app"], {
+    const out = execFileSync5("xcrun", ["simctl", "get_app_container", "booted", bundleId, "app"], {
       encoding: "utf8",
       timeout: 5e3
     }).trim();
@@ -24292,7 +24648,7 @@ function defaultListSnapshots() {
 }
 function defaultReadBundleId(appPath, timeoutMs) {
   try {
-    const out = execFileSync4("plutil", ["-extract", "CFBundleIdentifier", "raw", join16(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+    const out = execFileSync5("plutil", ["-extract", "CFBundleIdentifier", "raw", join16(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
     return out.trim() || null;
   } catch {
     return null;
@@ -24353,8 +24709,8 @@ var init_resolve_ios_app_file = __esm({
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { execFile as execFileCb3, spawnSync as spawnSync2 } from "node:child_process";
 import { promisify as promisify5 } from "node:util";
-import { createHash as createHash4 } from "node:crypto";
-import { readFileSync as readFileSync10 } from "node:fs";
+import { createHash as createHash5 } from "node:crypto";
+import { readFileSync as readFileSync11 } from "node:fs";
 function compareVersions(a, b) {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
@@ -24425,7 +24781,7 @@ async function defaultExecVersion(bin) {
   return stdout + "\n" + stderr;
 }
 function defaultHashFile(bin) {
-  return createHash4("sha256").update(readFileSync10(bin)).digest("hex");
+  return createHash5("sha256").update(readFileSync11(bin)).digest("hex");
 }
 function safeBool(fn) {
   try {
@@ -24678,8 +25034,8 @@ async function probeFreshness(client2, timeoutMs = FRESHNESS_PROBE_MS) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve5) => {
-        probeTimer = setTimeout(() => resolve5({ error: "timeout" }), timeoutMs);
+      new Promise((resolve8) => {
+        probeTimer = setTimeout(() => resolve8({ error: "timeout" }), timeoutMs);
       })
     ]);
     if (probeTimer)
@@ -24724,8 +25080,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve5) => {
-        timer = setTimeout(() => resolve5({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve8) => {
+        timer = setTimeout(() => resolve8({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -24855,7 +25211,7 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync12, readFileSync as readFileSync11, rmSync as rmSync6 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync12, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { join as join17 } from "node:path";
 function idsFrom(value, keys) {
@@ -24885,7 +25241,7 @@ function reportDeviceIds(reportDir) {
   if (!existsSync12(reportPath))
     return { ids: [], strength: "none" };
   try {
-    const report = JSON.parse(readFileSync11(reportPath, "utf8"));
+    const report = JSON.parse(readFileSync12(reportPath, "utf8"));
     const flows = Array.isArray(report.flows) ? report.flows : [];
     const devices = [report.device, ...flows.map((flow) => flow?.device)];
     const strong = [
@@ -24927,7 +25283,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     return evidence;
   try {
     evidence.output = `${output}
-${readFileSync11(logPath, "utf8")}`;
+${readFileSync12(logPath, "utf8")}`;
   } catch {
   }
   return evidence;
@@ -24954,7 +25310,7 @@ var init_maestro_runner_report = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb4 } from "node:child_process";
 import { promisify as promisify6 } from "node:util";
-import { existsSync as existsSync13, readFileSync as readFileSync12, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync13, writeFileSync as writeFileSync7 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
 import { join as join18, dirname as dirname6 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -25036,7 +25392,7 @@ function createMaestroRunHandler(deps = {}) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync12(args.flowPath, "utf-8");
+        rawYaml = readFileSync13(args.flowPath, "utf-8");
       } catch (err) {
         return failResult(`Failed to read flow file: ${err.message}`);
       }
@@ -25613,7 +25969,7 @@ function shellWrappedMaestro(command) {
   const tokens = command.trimStart().split(/\s+/);
   if (!SHELL_WRAPPERS.test(executableBasename(tokens[0] ?? "")))
     return false;
-  return tokens.slice(1).some((token) => token.startsWith("/") && /^maestro(?:\.\w+)?$/i.test(executableBasename(token)));
+  return tokens.slice(1).some((token2) => token2.startsWith("/") && /^maestro(?:\.\w+)?$/i.test(executableBasename(token2)));
 }
 function isIosExternalRunnerProcessLine(line) {
   const match = line.match(/^\s*\d+\s+(.+)$/);
@@ -25679,8 +26035,8 @@ var init_external_runner_detect = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { execFileSync as execFileSync5 } from "node:child_process";
-import { existsSync as existsSync15, readFileSync as readFileSync13, unlinkSync as unlinkSync6 } from "node:fs";
+import { execFileSync as execFileSync6 } from "node:child_process";
+import { existsSync as existsSync15, readFileSync as readFileSync14, unlinkSync as unlinkSync6 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join20 } from "node:path";
 function selectInstalledLegacyApps(installed) {
@@ -25737,7 +26093,7 @@ function defaultDeps2() {
     // caller's try/catch, which records a warning. Swallowing it here and
     // returning '' made single-runner enforcement degrade to a silent no-op
     // with no operator signal — exactly when the machine is busy.
-    listProcesses: () => execFileSync5("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
+    listProcesses: () => execFileSync6("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try {
@@ -25749,7 +26105,7 @@ function defaultDeps2() {
     },
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync13(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync14(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -25757,14 +26113,14 @@ function defaultDeps2() {
     },
     fileExists: (path) => existsSync15(path),
     removeFile: (path) => unlinkSync6(path),
-    delay: (ms) => new Promise((resolve5) => setTimeout(resolve5, ms)),
-    listApps: (udid) => execFileSync5("xcrun", ["simctl", "listapps", udid], {
+    delay: (ms) => new Promise((resolve8) => setTimeout(resolve8, ms)),
+    listApps: (udid) => execFileSync6("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
       stdio: ["ignore", "pipe", "ignore"]
     }),
     uninstallApp: (udid, bundleId) => {
-      execFileSync5("xcrun", ["simctl", "uninstall", udid, bundleId], {
+      execFileSync6("xcrun", ["simctl", "uninstall", udid, bundleId], {
         encoding: "utf8",
         timeout: 1e4,
         stdio: ["ignore", "pipe", "ignore"]
@@ -26167,51 +26523,7 @@ import { promisify as promisify11 } from "node:util";
 function resetWedgeRecoveryCounter() {
   attempts = 0;
 }
-async function defaultLaunchApp(udid, appId) {
-  await execFile10("xcrun", ["simctl", "launch", udid, appId], { timeout: 1e4 });
-}
-async function recoverWedge(client2, deps = {}) {
-  const max = deps.maxPerSession ?? DEFAULT_MAX_PER_SESSION;
-  const isFlowActive = deps.isFlowActive ?? (() => arbiter.snapshot.flowLeaseHeldBy !== null);
-  if (isFlowActive()) {
-    return { recovered: false, reason: "flow-active", attempt: attempts };
-  }
-  const session = (deps.getSession ?? getActiveSession)();
-  if (!session?.deviceId || !session?.appId) {
-    return { recovered: false, reason: "no-session", attempt: attempts };
-  }
-  if ((session.platform ?? "ios") !== "ios") {
-    return { recovered: false, reason: "unsupported-platform", attempt: attempts };
-  }
-  if (attempts >= max) {
-    return { recovered: false, reason: "budget-exhausted", attempt: attempts };
-  }
-  attempts += 1;
-  const attempt = attempts;
-  const udid = session.deviceId;
-  const appId = session.appId;
-  const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
-  const launchApp2 = deps.launchApp ?? defaultLaunchApp;
-  const reconnect2 = deps.reconnect ?? (() => client2.softReconnect());
-  const probeAlive = deps.probeAlive ?? (async () => (await probeFreshness(client2)).fresh);
-  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  stopFastRunner2(udid);
-  try {
-    await launchApp2(udid, appId);
-  } catch {
-  }
-  await sleep6(FOREGROUND_SETTLE_MS);
-  try {
-    await reconnect2();
-  } catch {
-  }
-  if (await probeAlive()) {
-    attempts = 0;
-    return { recovered: true, reason: "recovered", attempt };
-  }
-  return { recovered: false, reason: "still-wedged", attempt };
-}
-var execFile10, DEFAULT_MAX_PER_SESSION, FOREGROUND_SETTLE_MS, attempts;
+var execFile10, attempts;
 var init_recover_wedge = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
     "use strict";
@@ -26220,8 +26532,6 @@ var init_recover_wedge = __esm({
     init_device_arbiter();
     init_recovery();
     execFile10 = promisify11(execFileCb8);
-    DEFAULT_MAX_PER_SESSION = 3;
-    FOREGROUND_SETTLE_MS = 800;
     attempts = 0;
   }
 });
@@ -26272,132 +26582,7 @@ function resetDetachedRecoveryCounter() {
   attempts2 = 0;
   confirmedNotInstalled = null;
 }
-async function defaultRelaunchApp(udid, appId, exec = execFile12) {
-  try {
-    await exec("xcrun", ["simctl", "terminate", udid, appId], { timeout: 1e4 });
-  } catch {
-  }
-  await exec("xcrun", ["simctl", "launch", udid, appId], { timeout: 1e4 });
-}
-async function recoverDetached(client2, deps = {}) {
-  if (inflight)
-    return inflight;
-  inflight = recoverDetachedInner(client2, deps);
-  try {
-    return await inflight;
-  } finally {
-    inflight = null;
-  }
-}
-async function recoverDetachedInner(client2, deps = {}) {
-  const max = deps.maxPerSession ?? DEFAULT_MAX_PER_SESSION2;
-  const isFlowActive = deps.isFlowActive ?? (() => arbiter.snapshot.flowLeaseHeldBy !== null);
-  const isOptedOut = deps.isOptedOut ?? (() => process.env.RN_AUTO_RELAUNCH_ON_DETACH === "0");
-  if (isOptedOut()) {
-    return { recovered: false, reason: "opted-out", attempt: attempts2 };
-  }
-  if (isFlowActive()) {
-    return { recovered: false, reason: "flow-active", attempt: attempts2 };
-  }
-  const session = (deps.getSession ?? getActiveSession)();
-  if (!session?.deviceId || !session?.appId) {
-    return { recovered: false, reason: "no-session", attempt: attempts2 };
-  }
-  if ((session.platform ?? "ios") !== "ios") {
-    return { recovered: false, reason: "unsupported-platform", attempt: attempts2 };
-  }
-  const udid = session.deviceId;
-  const appId = session.appId;
-  if (!SIMULATOR_UDID_RE.test(udid) || !isValidBundleId(appId)) {
-    return { recovered: false, reason: "no-session", attempt: attempts2 };
-  }
-  const isAppInstalled = deps.isAppInstalled ?? probeAppInstalled;
-  const buildHint = () => {
-    if (!deps.snapshotHint)
-      return void 0;
-    try {
-      return deps.snapshotHint(appId) ?? void 0;
-    } catch {
-      return void 0;
-    }
-  };
-  if (confirmedNotInstalled && confirmedNotInstalled.udid === udid && confirmedNotInstalled.appId === appId) {
-    const verdict = await isAppInstalled(udid, appId);
-    if (verdict === false) {
-      const snapshotHint = buildHint();
-      return {
-        recovered: false,
-        reason: "app-not-installed",
-        attempt: attempts2,
-        udid,
-        appId,
-        ...snapshotHint ? { snapshotHint } : {}
-      };
-    }
-    if (verdict === true) {
-      attempts2 = 0;
-    }
-    confirmedNotInstalled = null;
-  }
-  if (attempts2 >= max) {
-    if (await isAppInstalled(udid, appId) === false) {
-      confirmedNotInstalled = { udid, appId };
-      const snapshotHint = buildHint();
-      return {
-        recovered: false,
-        reason: "app-not-installed",
-        attempt: attempts2,
-        udid,
-        appId,
-        ...snapshotHint ? { snapshotHint } : {}
-      };
-    }
-    return { recovered: false, reason: "budget-exhausted", attempt: attempts2 };
-  }
-  attempts2 += 1;
-  const attempt = attempts2;
-  const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
-  const relaunchApp = deps.relaunchApp ?? defaultRelaunchApp;
-  const reconnect2 = deps.reconnect ?? (() => client2.softReconnect());
-  const probeAlive = deps.probeAlive ?? (async () => (await probeFreshness(client2)).fresh);
-  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  stopFastRunner2(udid);
-  let relaunchError;
-  try {
-    await relaunchApp(udid, appId);
-  } catch (e) {
-    relaunchError = e instanceof Error ? e.message : String(e);
-    if (await isAppInstalled(udid, appId) === false) {
-      confirmedNotInstalled = { udid, appId };
-      const snapshotHint = buildHint();
-      return {
-        recovered: false,
-        reason: "app-not-installed",
-        attempt,
-        error: relaunchError,
-        udid,
-        appId,
-        ...snapshotHint ? { snapshotHint } : {}
-      };
-    }
-  }
-  await sleep6(RELAUNCH_SETTLE_MS);
-  try {
-    await reconnect2();
-  } catch {
-  }
-  if (await probeAlive()) {
-    attempts2 = 0;
-    return { recovered: true, reason: "recovered", attempt };
-  }
-  return {
-    recovered: false,
-    reason: "still-detached",
-    attempt,
-    ...relaunchError ? { error: relaunchError } : {}
-  };
-}
-var execFile12, DEFAULT_MAX_PER_SESSION2, RELAUNCH_SETTLE_MS, SIMULATOR_UDID_RE, attempts2, confirmedNotInstalled, inflight;
+var execFile12, attempts2, confirmedNotInstalled;
 var init_recover_detached = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
     "use strict";
@@ -26408,17 +26593,13 @@ var init_recover_detached = __esm({
     init_app_installed_probe();
     init_maestro_validator();
     execFile12 = promisify13(execFileCb10);
-    DEFAULT_MAX_PER_SESSION2 = 3;
-    RELAUNCH_SETTLE_MS = 1200;
-    SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
     attempts2 = 0;
     confirmedNotInstalled = null;
-    inflight = null;
   }
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync16, mkdirSync as mkdirSync7, openSync, writeSync, closeSync, readFileSync as readFileSync14, unlinkSync as unlinkSync7, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync16, mkdirSync as mkdirSync7, openSync, writeSync, closeSync, readFileSync as readFileSync15, unlinkSync as unlinkSync7, writeFileSync as writeFileSync9 } from "node:fs";
 import { tmpdir as tmpdir8, userInfo } from "node:os";
 import { join as join21 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -26554,7 +26735,7 @@ var init_device_lock = __esm({
       }
       readExisting() {
         try {
-          const parsed = JSON.parse(readFileSync14(this.lockPath, "utf8"));
+          const parsed = JSON.parse(readFileSync15(this.lockPath, "utf8"));
           if (!isValidBody(parsed))
             return null;
           if (parsed.deviceId !== this.deviceId || parsed.platform !== this.platform)
@@ -26733,9 +26914,9 @@ function createDeviceSnapshotHandler(deps = {}) {
       const sessionName = args.sessionName ?? `rn-agent-${Date.now()}`;
       const platform = (args.platform ?? "ios").toLowerCase();
       const lockPlatform = platform === "android" ? "android" : "ios";
-      const deviceId = lockPlatform === "android" ? await resolveAndroidSerial(args.deviceId) : await resolveIosUdid(args.deviceId);
+      const deviceId = args.deviceId?.trim();
       if (!deviceId) {
-        return failResult(`No booted ${platform} device found (or multiple booted \u2014 pass deviceId explicitly).`, "NOT_CONNECTED");
+        return failResult(`Exact ${platform} deviceId is required; ambient booted/first-device selection is diagnostic only.`, "DEVICE_AUTHORITY_MISMATCH");
       }
       const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
       if (lockResult.status === "conflict") {
@@ -26811,6 +26992,19 @@ function createDeviceSnapshotHandler(deps = {}) {
         openedAt: (/* @__PURE__ */ new Date()).toISOString(),
         appId
       });
+      try {
+        await deps.bindRunner?.(lockPlatform, deviceId, appId);
+      } catch (error2) {
+        clearActiveSession();
+        if (lockPlatform === "ios")
+          stopFastRunner(deviceId);
+        else
+          await stopAndroidRunner(deviceId);
+        releaseDeviceLockForSession();
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? "RUNNER_OWNERSHIP_MISMATCH";
+        return failResult(message, code);
+      }
       resetWedgeRecoveryCounter();
       resetDetachedRecoveryCounter();
       if (process.env.RN_DEVICE_KILL_LEGACY !== "0" && platform === "ios" && deviceId) {
@@ -26896,7 +27090,7 @@ function createDeviceSnapshotHandler(deps = {}) {
       return upgradeNote ? attachMetaNote(result2, upgradeNote) : result2;
     }
     if (action === "close") {
-      return closeDeviceSession({
+      const result2 = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
         clearActiveSession,
@@ -26905,6 +27099,9 @@ function createDeviceSnapshotHandler(deps = {}) {
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId
       });
+      if (!result2.isError)
+        await deps.unbindRunner?.();
+      return result2;
     }
     if (!getActiveSession()) {
       return failResult('No device session open. Call device_snapshot with action="open" first.', {
@@ -27041,7 +27238,6 @@ var init_device_session = __esm({
     init_rn_fast_runner_client();
     init_rn_android_runner_client();
     init_app_lifecycle();
-    init_device_screenshot_raw();
     init_recovery();
     init_external_runner_detect();
     init_ensure_single_runner();
@@ -28261,41 +28457,45 @@ function looksLikeNetworkHost(host) {
 function parseFirstServerEntry(snapshot, preferredPort) {
   if (typeof snapshot !== "string" || snapshot.length === 0)
     return null;
-  const lines = snapshot.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+  if (preferredPort !== void 0) {
+    const exact = /* @__PURE__ */ new Set();
+    for (const match of snapshot.matchAll(PORT_PATTERN)) {
+      const host = match[1];
+      const portNum = Number.parseInt(match[2], 10);
+      if (portNum === preferredPort && looksLikeNetworkHost(host)) {
+        exact.add(`${host}:${portNum}`);
+      }
+    }
+    return exact.size === 1 ? [...exact][0] : null;
+  }
+  const lines = snapshot.split("\n").map((value) => value.trim()).filter((value) => value.length > 0);
   const literalIps = /* @__PURE__ */ new Set(["localhost", "127.0.0.1", "10.0.2.2"]);
   for (const line of lines) {
     if (literalIps.has(line))
       return line;
-    if (line.includes(":")) {
-      const head = line.split(":", 1)[0];
-      if (literalIps.has(head))
-        return line;
-    }
+    if (line.includes(":") && literalIps.has(line.split(":", 1)[0]))
+      return line;
   }
   const entries = [];
   for (const match of snapshot.matchAll(PORT_PATTERN)) {
     const host = match[1];
     const portNum = Number.parseInt(match[2], 10);
-    if (portNum < 80 || portNum > 65535)
-      continue;
-    if (!looksLikeNetworkHost(host))
+    if (portNum < 80 || portNum > 65535 || !looksLikeNetworkHost(host))
       continue;
     entries.push({
       entry: `${host}:${portNum}`,
-      port: portNum,
       linkLocal: host.startsWith("169.254.")
     });
   }
   if (entries.length > 0) {
-    const pick2 = (preferredPort !== void 0 ? entries.find((e) => !e.linkLocal && e.port === preferredPort) : void 0) ?? entries.find((e) => !e.linkLocal) ?? entries[0];
-    return pick2.entry;
+    return (entries.find((entry) => !entry.linkLocal) ?? entries[0]).entry;
   }
-  const headerIdx = lines.findIndex((line) => HEADER_PATTERNS.some((re) => re.test(line)));
-  if (headerIdx === -1)
+  const headerIndex = lines.findIndex((line) => HEADER_PATTERNS.some((pattern) => pattern.test(line)));
+  if (headerIndex === -1)
     return null;
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    if (!FOOTER_ROWS.has(lines[i].toLowerCase()))
-      return lines[i];
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    if (!FOOTER_ROWS.has(lines[index].toLowerCase()))
+      return lines[index];
   }
   return null;
 }
@@ -28319,7 +28519,7 @@ async function dismissStaleServerErrorDialog() {
         continue;
       for (const label of ERROR_DIALOG_DISMISS_LABELS) {
         const button = await fetchCandidatesFn(label, true);
-        if (button.ok && button.candidates.length > 0) {
+        if (button.ok && button.candidates.length === 1) {
           const press = await pressCandidateFn(button.candidates[0], "click");
           if (!press.isError)
             return true;
@@ -28350,6 +28550,13 @@ async function handleDevClientPicker(preferredPort) {
   return { dismissed: false, reason: "Dev Client picker not detected" };
 }
 async function clearDevClientPickerIfPresent(platform, preferredPort) {
+  if (preferredPort === void 0) {
+    return {
+      dismissed: false,
+      platform: platform ?? null,
+      reason: "Exact authority-bound Metro port is required; no picker row was selected."
+    };
+  }
   const sessionPlatform = getActiveSession()?.platform;
   const resolved = platform ?? (sessionPlatform === "ios" || sessionPlatform === "android" ? sessionPlatform : void 0) ?? await detectPlatform();
   if (resolved !== "ios" && resolved !== "android") {
@@ -28388,7 +28595,7 @@ async function dismissPicker(preferredPort) {
   const target = parseFirstServerEntry(snapshotToSearchText(snapshotText), preferredPort);
   if (target) {
     const findResult = await fetchCandidatesFn(target);
-    if (findResult.ok && findResult.candidates.length > 0) {
+    if (findResult.ok && findResult.candidates.length === 1) {
       const pressResult = await pressCandidateFn(findResult.candidates[0], "click");
       if (!pressResult.isError) {
         await waitForBundle();
@@ -28757,12 +28964,12 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash10 } from "node:crypto";
-import { readFileSync as readFileSync31, rmSync as rmSync7 } from "node:fs";
-import { execFile as execFile27 } from "node:child_process";
-import { promisify as promisify29 } from "node:util";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
-import { dirname as dirname17, join as join46 } from "node:path";
+import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
+import { readFileSync as readFileSync36, rmSync as rmSync8 } from "node:fs";
+import { execFile as execFile26 } from "node:child_process";
+import { promisify as promisify28 } from "node:util";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
+import { dirname as dirname20, join as join51 } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -34348,9 +34555,9 @@ var $ZodE164 = /* @__PURE__ */ $constructor("$ZodE164", (inst, def) => {
   def.pattern ?? (def.pattern = e164);
   $ZodStringFormat.init(inst, def);
 });
-function isValidJWT2(token, algorithm = null) {
+function isValidJWT2(token2, algorithm = null) {
   try {
-    const tokensParts = token.split(".");
+    const tokensParts = token2.split(".");
     if (tokensParts.length !== 3)
       return false;
     const [header] = tokensParts;
@@ -39947,7 +40154,7 @@ function parseObjectDef(def, refs) {
     type: "object",
     properties: {}
   };
-  const required2 = [];
+  const required3 = [];
   const shape = def.shape();
   for (const propName in shape) {
     let propDef = shape[propName];
@@ -39974,11 +40181,11 @@ function parseObjectDef(def, refs) {
     }
     result.properties[propName] = parsedDef;
     if (!propOptional) {
-      required2.push(propName);
+      required3.push(propName);
     }
   }
-  if (required2.length) {
-    result.required = required2;
+  if (required3.length) {
+    result.required = required3;
   }
   const additionalProperties = decideAdditionalProperties(def, refs);
   if (additionalProperties !== void 0) {
@@ -40855,7 +41062,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
+        await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -40872,7 +41079,7 @@ var Protocol = class {
    */
   request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve8, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -40950,7 +41157,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve5(parseResult.data);
+            resolve8(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -41211,12 +41418,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve8, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve5, interval);
+      const timeoutId = setTimeout(resolve8, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -42316,7 +42523,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
+      await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -42965,12 +43172,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve5) => {
+    return new Promise((resolve8) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve5();
+        resolve8();
       } else {
-        this._stdout.once("drain", resolve5);
+        this._stdout.once("drain", resolve8);
       }
     });
   }
@@ -43522,7 +43729,7 @@ var MetroEventsClient = class {
   async connectOnce() {
     this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-    return new Promise((resolve5) => {
+    return new Promise((resolve8) => {
       const ws = new wrapper_default(url, {
         headers: { Origin: metroOrigin(url) }
       });
@@ -43536,7 +43743,7 @@ var MetroEventsClient = class {
         this._connectionEpoch += 1;
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
-        resolve5();
+        resolve8();
       };
       const onFail = (reason) => {
         if (outcome !== null)
@@ -43544,7 +43751,7 @@ var MetroEventsClient = class {
         outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
-        resolve5();
+        resolve8();
       };
       ws.once("open", onOpen);
       ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -43722,7 +43929,7 @@ var CDPMultiplexer = class {
     logger.info(this.opts.logTag, "multiplexer stopped");
   }
   startConsumerServer() {
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve8, reject) => {
       this.httpServer = createServer();
       this.wss = new import_websocket_server.default({
         server: this.httpServer,
@@ -43754,12 +43961,12 @@ var CDPMultiplexer = class {
           return;
         }
         this.boundPort = addr.port;
-        resolve5(addr.port);
+        resolve8(addr.port);
       });
     });
   }
   connectHermes() {
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve8, reject) => {
       const ws = new wrapper_default(this.opts.hermesUrl, {
         headers: { Origin: metroOrigin(this.opts.hermesUrl) }
       });
@@ -43770,7 +43977,7 @@ var CDPMultiplexer = class {
           ws.send(msg3);
         this.hermesBuffer = [];
         logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-        resolve5();
+        resolve8();
       };
       const onError = (err) => {
         ws.off("open", onOpen);
@@ -43948,8 +44155,8 @@ var CDPMultiplexer = class {
       this.wss = null;
     }
     if (this.httpServer) {
-      await new Promise((resolve5) => {
-        this.httpServer?.close(() => resolve5());
+      await new Promise((resolve8) => {
+        this.httpServer?.close(() => resolve8());
       });
       this.httpServer = null;
     }
@@ -47279,13 +47486,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve5, reject, timer });
+    pending2.set(id, { resolve: resolve8, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -47582,8 +47789,8 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
       throw err;
     }
   }
-  const generation = ctx.incrementConnectionGeneration();
-  logger.info("CDP", `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${generation}`);
+  const generation2 = ctx.incrementConnectionGeneration();
+  logger.info("CDP", `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${generation2}`);
   const stickyFilters = stickyPlatformFilters(ctx.getConnectFilters(), connectedTarget.platform);
   if (stickyFilters)
     ctx.setConnectFilters(stickyFilters);
@@ -47664,7 +47871,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
   throw new Error(formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null));
 }
 function connectWs(ctx, url) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const ws = new wrapper_default(url, {
       handshakeTimeout: 5e3,
       maxPayload: 100 * 1024 * 1024,
@@ -47686,7 +47893,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve5();
+      resolve8();
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -48477,7 +48684,7 @@ function annotateMutationAbsence(result, ctx) {
 
 // packages/rn-dev-agent-core/dist/verification/config.js
 init_storage();
-import { existsSync as existsSync17, readFileSync as readFileSync15 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync16 } from "node:fs";
 import { join as join22 } from "node:path";
 var MAX_PATTERN_LENGTH = 200;
 var _cachedProjectRoot;
@@ -48541,7 +48748,7 @@ function loadVerificationConfig(projectRoot) {
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync15(path, "utf-8"));
+    raw = JSON.parse(readFileSync16(path, "utf-8"));
   } catch {
     cache2.set(projectRoot, DEFAULTS);
     return DEFAULTS;
@@ -48657,53 +48864,10 @@ async function autoDismissDevMenuMeta(client2) {
   }
 }
 
-// packages/rn-dev-agent-core/dist/cdp/bundle-id-store.js
-init_storage();
-init_maestro_validator();
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync16, writeFileSync as writeFileSync10 } from "node:fs";
-import { join as join23 } from "node:path";
-var STATE_FILE_NAME = "last-bundle-ids.json";
-function stateFilePath(projectRoot) {
-  return join23(projectRoot, ".rn-agent", "state", STATE_FILE_NAME);
-}
-function readStore(projectRoot) {
-  try {
-    const raw = readFileSync16(stateFilePath(projectRoot), "utf8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed;
-    }
-  } catch {
-  }
-  return {};
-}
-function persistLastBundleId(platform, bundleId, projectRoot = findProjectRoot()) {
-  if (!projectRoot || !isValidBundleId(bundleId))
-    return;
-  try {
-    const store = readStore(projectRoot);
-    store[platform.toLowerCase()] = { bundleId, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
-    mkdirSync8(join23(projectRoot, ".rn-agent", "state"), { recursive: true });
-    writeFileSync10(stateFilePath(projectRoot), JSON.stringify(store, null, 2));
-  } catch {
-  }
-}
-function loadPersistedBundleId(platform, projectRoot = findProjectRoot()) {
-  if (!projectRoot)
-    return null;
-  const entry = readStore(projectRoot)[platform.toLowerCase()];
-  if (!entry || typeof entry.bundleId !== "string")
-    return null;
-  return isValidBundleId(entry.bundleId) ? entry.bundleId : null;
-}
-
 // packages/rn-dev-agent-core/dist/tools/reload.js
 init_maestro_validator();
 var defaultExecFile2 = promisify16(execFileCb13);
 var sessionReloadCount = 0;
-function getSessionReloadCount() {
-  return sessionReloadCount;
-}
 var SOFT_RECONNECT_DEADLINE_MS = 3e4;
 var SOFT_RECONNECT_ATTEMPTS = 5;
 var FORCE_FALLBACK_TIMEOUT_MS = 1e4;
@@ -48752,10 +48916,9 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured) {
   const platformMatched = !captured.platform || captured.platform === finalPlatform;
   return { ok: true, platformMatched, finalPlatform };
 }
-async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}) {
-  const execFile28 = deps.execFile ?? defaultExecFile2;
+async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
+  const execFile27 = deps.execFile ?? defaultExecFile2;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const loadPersistedBundleIdFn = deps.loadPersistedBundleId ?? loadPersistedBundleId;
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured);
   if (first.ok) {
     return {
@@ -48767,33 +48930,53 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
     };
   }
   const steps = [];
+  const bundleId = authorityTarget?.appId && isValidBundleId(authorityTarget.appId) ? authorityTarget.appId : null;
+  const deviceId = authorityTarget?.deviceId;
+  if (!bundleId || !deviceId) {
+    steps.push("skip-relaunch:no-exact-authority-target");
+    return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
+  }
   const platform = captured.platform ?? "ios";
-  if (platform !== "ios") {
-    steps.push(`skip-relaunch:platform=${platform}-not-yet-supported`);
-    return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
-  }
-  let bundleId = captured.bundleId && isValidBundleId(captured.bundleId) ? captured.bundleId : null;
-  if (!bundleId) {
-    const persisted = loadPersistedBundleIdFn("ios");
-    if (persisted && isValidBundleId(persisted))
-      bundleId = persisted;
-  }
-  if (!bundleId) {
-    steps.push("skip-relaunch:no-bundleId-on-capturedTarget-or-state");
-    return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
-  }
   try {
-    await execFile28("xcrun", ["simctl", "terminate", "booted", bundleId], { timeout: 5e3 });
-    steps.push(`simctl terminate ${bundleId}:ok`);
+    if (platform === "ios") {
+      await execFile27("xcrun", ["simctl", "terminate", deviceId, bundleId], {
+        timeout: 5e3
+      });
+      steps.push(`simctl terminate ${bundleId}:ok`);
+    } else {
+      await execFile27("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
+        timeout: 5e3
+      });
+      steps.push(`adb force-stop ${bundleId}:ok`);
+    }
   } catch (err) {
-    steps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
+    steps.push(`terminate:warn(${err instanceof Error ? err.message : err})`);
   }
   try {
-    await execFile28("xcrun", ["simctl", "launch", "booted", bundleId], { timeout: 8e3 });
-    steps.push(`simctl launch ${bundleId}:ok`);
+    if (platform === "ios") {
+      await execFile27("xcrun", ["simctl", "launch", deviceId, bundleId], {
+        timeout: 8e3
+      });
+      steps.push(`simctl launch ${bundleId}:ok`);
+    } else {
+      await execFile27("adb", [
+        "-s",
+        deviceId,
+        "shell",
+        "monkey",
+        "--pct-syskeys",
+        "0",
+        "-p",
+        bundleId,
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "1"
+      ], { timeout: 8e3 });
+      steps.push(`adb launch ${bundleId}:ok`);
+    }
   } catch (err) {
     const msg3 = err instanceof Error ? err.message : String(err);
-    steps.push(`simctl launch:err(${msg3})`);
+    steps.push(`launch:err(${msg3})`);
     return {
       ok: false,
       via: null,
@@ -48821,7 +49004,7 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
 }
 function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  return withConnection(getClient2, async (_args, client2) => {
+  return withConnection(getClient2, async (args, client2) => {
     try {
       const result = await client2.evaluate('(function() {  var ds = null;  if (typeof __turboModuleProxy === "function") try { ds = __turboModuleProxy("DevSettings"); } catch(e) {}  if (!ds && typeof globalThis.nativeModuleProxy !== "undefined") try { ds = globalThis.nativeModuleProxy.DevSettings; } catch(e) {}  if (!ds && typeof globalThis.__fbBatchedBridge !== "undefined") try { ds = globalThis.__fbBatchedBridge.getCallableModule("DevSettings"); } catch(e) {}  if (ds && typeof ds.reload === "function") { ds.reload(); return "devSettings"; }  if (typeof globalThis.location !== "undefined" && typeof globalThis.location.reload === "function") { globalThis.location.reload(); return "location"; }  throw new Error("DevSettings not available \u2014 use Maestro or simctl to restart the app");})()');
       if (result.error) {
@@ -48871,7 +49054,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
     let forceMeta = {};
     if (!reconnected) {
       const captured = captureClientState(getClient2());
-      const recovery = await recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps);
+      const recovery = await recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps, args.deviceId && args.appId ? { deviceId: args.deviceId, appId: args.appId } : void 0);
       if (recovery.ok) {
         reconnected = true;
         client2 = getClient2();
@@ -48893,13 +49076,12 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
           forceMeta.warning = `Recovered onto ${recovery.finalPlatform ?? "unknown"} but pre-reload session was on ${captured.platform ?? "unknown"}. Run cdp_connect platform: "${captured.platform}" force: true to re-bind.`;
         }
       } else {
-        return okResult({ reloaded: true, type: "full", reconnected: false }, {
-          meta: {
-            warning: `Reload triggered but re-discovery failed after ${softAttemptsRun} soft attempts: ${lastReconnErr}; force_reconnect + auto-relaunch also failed: ${recovery.reason}`,
-            force_reconnect_attempted: true,
-            relaunch_steps: recovery.relaunchSteps,
-            proxy_was_active: captured.proxyWasActive
-          }
+        return failResult(`Reload triggered but exact-target re-discovery failed after ${softAttemptsRun} soft attempts: ${lastReconnErr}; fenced recovery also failed: ${recovery.reason}`, "RECONNECT_TIMEOUT", {
+          reloaded: true,
+          reconnected: false,
+          force_reconnect_attempted: true,
+          relaunch_steps: recovery.relaunchSteps,
+          proxy_was_active: captured.proxyWasActive
         });
       }
     }
@@ -48908,11 +49090,10 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
       await sleep6(400);
     }
     if (!client2.isConnected) {
-      return okResult({ reloaded: true, type: "full", reconnected: false }, {
-        meta: {
-          warning: "Reload triggered but connection dropped after re-discovery.",
-          ...forceMeta
-        }
+      return failResult("Reload triggered but the exact-target connection dropped after re-discovery.", "RECONNECT_TIMEOUT", {
+        reloaded: true,
+        reconnected: false,
+        ...forceMeta
       });
     }
     if (!client2.helpersInjected) {
@@ -48941,66 +49122,9 @@ init_metro_cwd();
 init_agent_device_wrapper();
 init_rn_fast_runner_client();
 init_protocol();
-async function getDeviceSessionHealth(deps = {}) {
-  const getSession = deps.getActiveSession ?? getActiveSession;
-  const probe = deps.probeLiveness ?? probeFastRunnerLivenessDetailed;
-  const session = getSession();
-  if (!session)
-    return { sessionOpen: false, rnFastRunner: "dead" };
-  const health = { sessionOpen: true, rnFastRunner: "dead" };
-  if (session.appId)
-    health.appId = session.appId;
-  if (session.deviceId)
-    health.deviceId = session.deviceId;
-  if (session.platform === "ios") {
-    const adopt = deps.adopt ?? adoptPersistedFastRunnerState;
-    adopt(session.deviceId);
-    try {
-      const detail = await probe();
-      health.rnFastRunner = detail.liveness;
-      if (detail.liveness !== "dead") {
-        const plugin = getPluginVersion();
-        health.runnerProtocol = {
-          expected: RUNNER_PROTOCOL_VERSION,
-          ...detail.runnerProtocolVersion !== void 0 ? { runner: detail.runnerProtocolVersion } : {},
-          ...detail.runnerVersion !== void 0 ? { runnerVersion: detail.runnerVersion } : {},
-          ...plugin !== null ? { pluginVersion: plugin } : {},
-          ...detail.missingCommands !== void 0 ? { missingCommands: detail.missingCommands } : {},
-          compatible: detail.liveness === "alive"
-        };
-        if (detail.capabilities !== void 0 && detail.capabilities.length > 0) {
-          health.runnerCapabilities = detail.capabilities;
-        }
-        const runnerState3 = (deps.getRunnerState ?? getFastRunnerState)();
-        if (runnerState3?.provenance)
-          health.runnerProvenance = runnerState3.provenance;
-      }
-    } catch {
-      health.rnFastRunner = "dead";
-    }
-    if (deps.detectForeign) {
-      try {
-        const f = await deps.detectForeign(session.deviceId);
-        if (f)
-          health.foreignRunner = f;
-      } catch {
-      }
-    }
-  }
-  return health;
-}
 
 // packages/rn-dev-agent-core/dist/tools/status.js
 init_external_runner_detect();
-
-// packages/rn-dev-agent-core/dist/lifecycle/supervisor-core.js
-function bridgeEnvState(env) {
-  return {
-    supervised: env.RN_BRIDGE_SUPERVISED === "1",
-    workerRestarts: Number(env.RN_BRIDGE_RESTARTS ?? "0") || 0,
-    lastWorkerExit: env.RN_BRIDGE_LAST_EXIT ?? null
-  };
-}
 
 // packages/rn-dev-agent-core/dist/domain/action-state-store.js
 init_logger();
@@ -49010,6 +49134,33 @@ import { basename as basename3, dirname as dirname9, sep as sep3 } from "node:pa
 import { createRequire } from "node:module";
 import { existsSync as existsSync18, mkdirSync as mkdirSync9, readdirSync as readdirSync5, readFileSync as readFileSync17 } from "node:fs";
 import { dirname as dirname7, join as join24 } from "node:path";
+
+// packages/rn-dev-agent-core/dist/session/runtime-paths.js
+import { chmodSync, lstatSync as lstatSync3, mkdirSync as mkdirSync8 } from "node:fs";
+import { join as join23, resolve as resolve2 } from "node:path";
+function privateDirectory(path) {
+  mkdirSync8(path, { recursive: true, mode: 448 });
+  const stat2 = lstatSync3(path);
+  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
+    throw new Error("SESSION_RUNTIME_ROOT_UNSAFE: runtime root must be a real directory");
+  }
+  chmodSync(path, 448);
+  return path;
+}
+function sessionRuntimeRoot(projectRoot) {
+  const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  return configured ? privateDirectory(resolve2(configured)) : join23(resolve2(projectRoot), ".rn-agent");
+}
+function sessionStateDirectory(projectRoot) {
+  const path = join23(sessionRuntimeRoot(projectRoot), "state");
+  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
+}
+function sessionRecordingsDirectory(projectRoot) {
+  const path = join23(sessionRuntimeRoot(projectRoot), "recordings");
+  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
+}
+
+// packages/rn-dev-agent-core/dist/domain/action-db.js
 var _require = createRequire(import.meta.url);
 var SCHEMA = `
 PRAGMA busy_timeout=5000;
@@ -49070,7 +49221,7 @@ function openActionDb(projectRoot, opts = {}) {
   if (!Ctor)
     return null;
   try {
-    const dbPath = join24(projectRoot, ".rn-agent", "state", "actions.db");
+    const dbPath = join24(sessionStateDirectory(projectRoot), "actions.db");
     mkdirSync9(dirname7(dbPath), { recursive: true });
     const db = new Ctor(dbPath);
     db.exec(SCHEMA);
@@ -49259,7 +49410,7 @@ var RUN_HISTORY_MAX = 50;
 var REPAIR_HISTORY_MAX = 25;
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
-import { existsSync as existsSync19, readFileSync as readFileSync18, writeFileSync as writeFileSync11, mkdirSync as mkdirSync10, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync19, readFileSync as readFileSync18, writeFileSync as writeFileSync10, mkdirSync as mkdirSync10, statSync as statSync4 } from "node:fs";
 import { join as join25, dirname as dirname8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/reusable-action.js
@@ -49457,7 +49608,8 @@ function sidecarPathFor(yamlFilePath) {
   const parent = dirname8(dir);
   const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
   const base = filename.split(/[\\/]/).pop();
-  return join25(parent, "state", base);
+  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname8(parent)) : join25(parent, "state");
+  return join25(stateDirectory, base);
 }
 function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
   const path = sidecarPathFor(yamlFilePath);
@@ -49490,7 +49642,7 @@ function saveSidecar(yamlFilePath, state) {
   const parentDir = dirname8(path);
   if (!existsSync19(parentDir))
     mkdirSync10(parentDir, { recursive: true });
-  writeFileSync11(path, JSON.stringify(state, null, 2) + "\n", "utf8");
+  writeFileSync10(path, JSON.stringify(state, null, 2) + "\n", "utf8");
   return { path };
 }
 function yamlEditedSinceLastSeen(yamlFilePath, state) {
@@ -49509,11 +49661,6 @@ function markSeen(state, mtimeMs) {
 var TAG = "action-state-store";
 var sqliteCtorOverride;
 var dbCache = /* @__PURE__ */ new Map();
-function sqliteAvailable() {
-  if (sqliteCtorOverride === void 0)
-    return loadSqlite() !== null;
-  return sqliteCtorOverride !== null;
-}
 function dbFor(projectRoot) {
   if (dbCache.has(projectRoot))
     return dbCache.get(projectRoot) ?? null;
@@ -49529,14 +49676,6 @@ function dbFor(projectRoot) {
   return handle;
 }
 var idOf = (yamlFilePath) => basename3(yamlFilePath).replace(/\.ya?ml$/i, "");
-function storeMode(projectRoot) {
-  if (!sqliteAvailable())
-    return "degraded:sqlite-unavailable";
-  if (dbCache.has(projectRoot) && dbCache.get(projectRoot) == null) {
-    return "degraded:open-failed";
-  }
-  return "sqlite";
-}
 function mirrorToDb(opts) {
   const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;
   try {
@@ -49580,15 +49719,82 @@ function projectRootFromYaml(yamlFilePath) {
 // packages/rn-dev-agent-core/dist/tools/status.js
 init_engine_pin();
 init_agent_device_wrapper();
-function sessionConnectFilters(session) {
-  if (!session || session.platform !== "ios" && session.platform !== "android")
-    return null;
+
+// packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
+import { existsSync as existsSync20, readFileSync as readFileSync19 } from "node:fs";
+import { join as join26 } from "node:path";
+function inspectAuthorityMigration(status, dependencies = {}) {
+  const exists = dependencies.exists ?? existsSync20;
+  const readText = dependencies.readText ?? ((path) => readFileSync19(path, "utf8"));
+  const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
+  const manifestPath = appRoot ? join26(appRoot, ".rn-agent", "integration", "rn-session-integration.json") : "";
+  let packageIntegrationInstalled = false;
+  if (manifestPath && exists(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readText(manifestPath));
+      packageIntegrationInstalled = manifest.version === 1;
+    } catch {
+      packageIntegrationInstalled = false;
+    }
+  }
+  const legacyStateDetected = [
+    "/tmp/rn-dev-agent-session.json",
+    "/tmp/rn-fast-runner-state.json",
+    "/tmp/rn-android-runner-state.json"
+  ].some(exists);
   return {
-    platform: session.platform,
-    ...session.appId ? { bundleId: session.appId } : {},
-    ...session.platform === "android" && session.deviceId ? { deviceKind: session.deviceId.startsWith("emulator-") ? "emulator" : "physical" } : {}
+    rollout: "strict-default",
+    storeAvailable: true,
+    registrySchema: 3,
+    legacyStateDetected,
+    bundleHandshake: {
+      supported: true,
+      scope: "coarse-initial-bundle",
+      bound: Boolean(status.bindings.bundle),
+      sourceFidelity: "not-proven"
+    },
+    packageIntegration: {
+      supported: true,
+      installed: packageIntegrationInstalled
+    },
+    strictEnforcement: true
   };
 }
+
+// packages/rn-dev-agent-core/dist/session/public-status.js
+function projectPublicAuthorityStatus(status) {
+  if (!status.available) {
+    return {
+      available: false,
+      code: status.code
+    };
+  }
+  const recovery = status.bindings.recoveryHandles;
+  const recoveryStatus = status.state === "blocked" && recovery ? {
+    handoffRecipientHandle: typeof recovery.handoffRecipient?.token === "string" ? recovery.handoffRecipient.token : void 0,
+    handoffRecipientExpiresMs: typeof recovery.handoffRecipient?.expiresMs === "number" ? recovery.handoffRecipient.expiresMs : void 0,
+    adoptionRequired: Boolean(recovery.adoptStale),
+    adoptionHandle: typeof recovery.adoptStale?.token === "string" ? recovery.adoptStale.token : void 0,
+    adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
+  } : void 0;
+  return {
+    available: true,
+    state: status.state,
+    sourceKind: status.source.kind,
+    metroPort: status.bindings.metroPort,
+    observePort: status.bindings.observePort,
+    platform: status.bindings.device?.platform,
+    deviceBound: Boolean(status.bindings.device),
+    installBound: Boolean(status.bindings.install),
+    metroBound: Boolean(status.bindings.metro),
+    bundleBound: Boolean(status.bindings.bundle),
+    runnerBound: Boolean(status.bindings.runner),
+    ...recoveryStatus ? { recovery: recoveryStatus } : {},
+    migration: inspectAuthorityMigration(status)
+  };
+}
+
+// packages/rn-dev-agent-core/dist/tools/status.js
 function targetMatchesSession(target, filters) {
   if (!target)
     return false;
@@ -49601,357 +49807,31 @@ function targetMatchesSession(target, filters) {
   }
   return true;
 }
-function narrowArchitecture(raw) {
-  return raw === "new" || raw === "old" ? raw : "unknown";
-}
-function computeMetroMismatch(args) {
-  const { servingCwd, projectRoot, port } = args;
-  if (!servingCwd || !projectRoot || pathMatchesRoot(servingCwd, projectRoot)) {
-    return { mismatch: false };
-  }
-  return {
-    mismatch: true,
-    warning: `Connected Metro on :${port} is serving ${servingCwd}, but this session's project root is ${projectRoot} \u2014 you may be verifying against a different worktree's bundle. Restart Metro in this worktree or pass metroPort.`
-  };
-}
-var STATUS_PROBE_EXPRESSION = `
-(function() {
-  var result = { appInfo: null, errorCount: 0, fiberTree: false, hasRedBox: false, helpersLoaded: false };
-  var agent = globalThis.__RN_AGENT;
-  if (!agent) return JSON.stringify(result);
-  result.helpersLoaded = true;
-  try { result.appInfo = JSON.parse(agent.getAppInfo()); } catch(e) {}
-  try { result.errorCount = JSON.parse(agent.getErrors()).length; } catch(e) {}
-  try { result.fiberTree = agent.isReady(); } catch(e) {}
-  try { result.hasRedBox = JSON.parse(agent.getTree({maxDepth:1})).warning === 'APP_HAS_REDBOX'; } catch(e) {}
-  return JSON.stringify(result);
-})()
-`;
-async function buildStatusResult(client2) {
-  let appInfo = null;
-  let errorCount = 0;
-  let fiberTree = false;
-  let hasRedBox = false;
-  if (client2.helpersInjected) {
-    const probeResult = await client2.evaluate(STATUS_PROBE_EXPRESSION);
-    if (probeResult.value && typeof probeResult.value === "string") {
-      try {
-        const probe = JSON.parse(probeResult.value);
-        if (probe.helpersLoaded) {
-          appInfo = probe.appInfo;
-          errorCount = probe.errorCount;
-          fiberTree = probe.fiberTree;
-          hasRedBox = probe.hasRedBox;
-        }
-      } catch {
-      }
-    }
-  }
-  const metroEvents = client2.metroEventsClient;
-  const deviceSession = await getDeviceSessionHealth({
-    detectForeign: async (udid) => await detectIosExternalRunner(void 0, udid) ? { detected: true } : null
-  });
-  let replayEngine;
-  try {
-    replayEngine = await getEngineStatus();
-  } catch {
-  }
-  const projectRoot = resolveBridgeProjectRoot() ?? void 0;
-  let candidates;
-  let servingCwd;
-  let metroTimings;
-  try {
-    const enriched = await enumerateMetroCandidates(client2.metroPort, projectRoot);
-    servingCwd = enriched.servingCwd;
-    candidates = enriched.candidates;
-    metroTimings = enriched.timings_ms;
-  } catch {
-  }
-  return {
-    metro: {
-      running: true,
-      port: client2.metroPort,
-      eventsConnected: metroEvents?.isConnected ?? false,
-      lastBuild: metroEvents?.lastBuild ?? null,
-      buildErrors: metroEvents?.buildErrors ?? 0,
-      candidates,
-      projectRoot,
-      servingCwd,
-      timings_ms: metroTimings
-    },
-    cdp: {
-      connected: client2.isConnected,
-      device: client2.connectedTarget?.title ?? null,
-      pageId: client2.connectedTarget?.id ?? null,
-      platform: client2.connectedTarget?.platform ?? null,
-      bundleId: client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null,
-      affinityScope: (() => {
-        const active = getActiveSession();
-        if (!active)
-          return "best-available";
-        return active.platform === "android" ? "platform-bundle-device-kind" : "platform-bundle-class";
-      })()
-    },
-    app: {
-      platform: appInfo?.platform ?? null,
-      dev: appInfo?.__DEV__ ?? null,
-      hermes: appInfo?.hermes ?? null,
-      rnVersion: appInfo?.rnVersion ? JSON.stringify(appInfo.rnVersion) : null,
-      dimensions: appInfo?.dimensions ?? null,
-      hasRedBox,
-      isPaused: client2.isPaused,
-      errorCount,
-      architecture: narrowArchitecture(appInfo?.architecture)
-    },
-    capabilities: {
-      networkDomain: client2.networkMode === "cdp",
-      fiberTree,
-      networkFallback: client2.networkMode === "hook",
-      bridgeDetected: client2.bridgeDetected,
-      bridgeVersion: client2.bridgeVersion,
-      supportsMultipleDebuggers: supportsNativeMultiDebugger(appInfo?.rnVersion),
-      helpersInjected: client2.helpersInjected
-    },
-    domains: {
-      runtime: client2.isConnected,
-      debugger: client2.isConnected,
-      network: client2.networkMode === "cdp",
-      log: client2.logDomainEnabled,
-      profiler: client2.profilerAvailable,
-      heapProfiler: client2.heapProfilerAvailable
-    },
-    reconnect: client2.reconnectState,
-    autoConnect: client2.autoConnectState,
-    bridge: bridgeEnvState(process.env),
-    deviceSession,
-    actionStore: storeMode(projectRoot ?? ""),
-    replayEngine,
-    proxy: {
-      active: client2.isProxyActive,
-      port: client2.proxyMultiplexer?.port ?? null,
-      url: client2.proxyUrl,
-      consumerCount: client2.proxyMultiplexer?.consumerCount ?? 0
-    }
-  };
-}
-function createStatusHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const recoverDetachedFn = deps.recoverDetached ?? recoverDetached;
+function createPassiveStatusHandler(getClient2, authorityRuntime2) {
   return async (args) => {
-    if (args?.resetArbiter) {
-      const arbiterReset = arbiter.reset("manual via cdp_status");
-      try {
-        const status = await buildStatusResult(getClient2());
-        return okResult({ ...status, arbiterReset });
-      } catch {
-        return okResult({ arbiterReset });
-      }
+    if (args.resetArbiter) {
+      return failResult("cdp_status is passive; use an explicit recovery transition to reset the arbiter", "INVALID_ARGUMENT");
     }
-    try {
-      let client2 = getClient2();
-      const session = getActiveSession();
-      const sessionFilters = sessionConnectFilters(session);
-      if (args.platform && sessionFilters?.platform && args.platform.toLowerCase() !== sessionFilters.platform) {
-        return failResult(`cdp_status requested ${args.platform}, but the active device session is ${sessionFilters.platform} (${session?.deviceId}). Refusing a cross-platform target; this guarantees platform+bundle class only and does not claim iOS UDID identity because Metro does not expose it. Close the session or request the same platform.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
-      }
-      const connectFilters = sessionFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
-      const validateConnectedTarget = async () => {
-        if (targetMatchesSession(client2.connectedTarget, connectFilters))
-          return;
-        const wrong = client2.connectedTarget;
-        await client2.disconnect();
-        throw new TargetSelectionError(connectFilters.targetId ? "TARGET_PLATFORM_CONFLICT" : "PLATFORM_TARGET_NOT_FOUND", `Connected target failed post-connect affinity validation for platform=${connectFilters.platform ?? "unspecified"} bundleId=${connectFilters.bundleId ?? "unspecified"}. The socket was disconnected; run cdp_targets and relaunch the requested app.`, wrong ? [wrong] : []);
-      };
-      if (args.metroPort && args.metroPort !== client2.metroPort) {
-        await client2.disconnect();
-        client2 = createClient2(args.metroPort);
-        setClient2(client2);
-      }
-      if (!client2.isConnected) {
-        try {
-          if (await isDevClientPickerShowing()) {
-            await handleDevClientPicker();
-          }
-        } catch {
-        }
-        if (client2.reconnectState.active && !args.platform && !sessionFilters) {
-          await client2.softReconnect();
-        } else {
-          if (client2.reconnectState.active) {
-            await client2.disconnect();
-            client2 = createClient2(client2.metroPort);
-            setClient2(client2);
-          }
-          await client2.autoConnect(args.metroPort, connectFilters, "status");
-          await validateConnectedTarget();
-        }
-      } else if (!targetMatchesSession(client2.connectedTarget, connectFilters)) {
-        await client2.disconnect();
-        client2 = createClient2(client2.metroPort);
-        setClient2(client2);
-        await client2.autoConnect(args.metroPort, connectFilters, "status");
-        await validateConnectedTarget();
-      }
-      const status = await buildStatusResult(client2);
-      let autoRecoveredMessage;
-      if (status.app.dev === false) {
-        let devRecovered = false;
-        try {
-          await client2.softReconnect();
-          if (client2.helpersInjected) {
-            const retryResult = await client2.evaluate(STATUS_PROBE_EXPRESSION);
-            if (retryResult.value && typeof retryResult.value === "string") {
-              try {
-                const retryProbe = JSON.parse(retryResult.value);
-                if (retryProbe.appInfo?.__DEV__ === true) {
-                  status.app.dev = true;
-                  status.app.platform = retryProbe.appInfo?.platform ?? null;
-                  status.app.hermes = retryProbe.appInfo?.hermes ?? null;
-                  status.app.rnVersion = retryProbe.appInfo?.rnVersion ? JSON.stringify(retryProbe.appInfo.rnVersion) : null;
-                  status.app.dimensions = retryProbe.appInfo?.dimensions ?? null;
-                  status.app.hasRedBox = retryProbe.hasRedBox;
-                  status.app.errorCount = retryProbe.errorCount;
-                  status.app.isPaused = client2.isPaused;
-                  status.app.architecture = narrowArchitecture(retryProbe.appInfo?.architecture);
-                  status.cdp.device = client2.connectedTarget?.title ?? null;
-                  status.cdp.pageId = client2.connectedTarget?.id ?? null;
-                  status.cdp.bundleId = client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null;
-                  status.capabilities.fiberTree = retryProbe.fiberTree;
-                  devRecovered = true;
-                  autoRecoveredMessage = "Reconnected to correct JS context";
-                }
-              } catch {
-              }
-            }
-          }
-        } catch {
-        }
-        if (!devRecovered) {
-          return warnResult(status, "Connected to a JS context where __DEV__ is false. This may not be the app's main context. Try cdp_reload(full=true) or restart Metro.");
-        }
-      }
-      if (status.app.isPaused) {
-        try {
-          await client2.softReconnect();
-          status.app.isPaused = client2.isPaused;
-          status.cdp.device = client2.connectedTarget?.title ?? null;
-          status.cdp.pageId = client2.connectedTarget?.id ?? null;
-          status.cdp.bundleId = client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null;
-        } catch {
-        }
-        if (status.app.isPaused) {
-          const wedge = await recoverWedge(client2);
-          if (wedge.recovered) {
-            status.app.isPaused = client2.isPaused;
-            status.cdp.device = client2.connectedTarget?.title ?? null;
-            status.cdp.pageId = client2.connectedTarget?.id ?? null;
-            status.cdp.bundleId = client2.connectedTarget ? targetBundleIdentity(client2.connectedTarget) : null;
-          } else {
-            const hint = wedge.reason === "flow-active" ? "A Maestro flow is running \u2014 skipped re-foreground recovery. Wait for the flow to finish, then retry." : wedge.reason === "budget-exhausted" ? "Wedge-recovery budget exhausted this session. Try cdp_restart(hardReset=true)." : "Re-foreground recovery did not clear the wedge. Try cdp_restart(hardReset=true).";
-            return warnResult(status, `Debugger paused / app backgrounded. ${hint}`);
-          }
-        }
-      }
-      const reloadCount = getSessionReloadCount();
-      if (reloadCount >= 5) {
-        return warnResult(status, `${reloadCount} full reloads in this session. NativeWind stylesheet may be corrupted \u2014 if the screen appears blank, restart Metro and relaunch the app.`);
-      }
-      if (status.cdp.connected && !client2.helpersInjected && !status.app.hasRedBox && status.app.errorCount === 0) {
-        return warnResult(status, "CDP connected but app helpers not injected and no JS errors captured. The app may have crashed natively before __RN_AGENT loaded (e.g. missing native module, failed bundle fetch). Call cdp_native_errors to inspect the platform log.");
-      }
-      const mismatch = computeMetroMismatch({
-        servingCwd: status.metro.servingCwd ?? null,
-        projectRoot: status.metro.projectRoot,
-        port: status.metro.port
-      });
-      if (mismatch.mismatch) {
-        return warnResult(status, mismatch.warning);
-      }
-      return okResult(status, autoRecoveredMessage ? { meta: { autoRecovered: autoRecoveredMessage } } : void 0);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (err instanceof TargetSelectionError) {
-        const stale = getClient2();
-        const stalePort = stale.metroPort;
-        await stale.disconnect().catch(() => void 0);
-        setClient2(createClient2(stalePort));
-        return failResult(message, err.code, {
-          candidates: err.candidates.map((target) => ({
-            id: target.id,
-            title: target.title,
-            deviceName: target.deviceName ?? null,
-            description: target.description ?? null,
-            platform: target.platform ?? null,
-            confidence: target.platformInference ?? "probed"
-          })),
-          affinity: "cross-platform-only; iOS UDID identity is unavailable from Metro"
-        });
-      }
-      if (err instanceof AppDetachedError) {
-        const callerPinnedNonIos = !!args.platform && args.platform.toLowerCase() !== "ios";
-        const recovery = callerPinnedNonIos ? { recovered: false, reason: "unsupported-platform", attempt: 0 } : await recoverDetachedFn(getClient2(), { snapshotHint: snapshotHintForBundleId });
-        if (recovery.recovered) {
-          try {
-            return warnResult(await buildStatusResult(getClient2()), `App had detached (Metro up, 0 Hermes targets) \u2014 auto-relaunched and reconnected (attempt ${recovery.attempt}).`);
-          } catch {
-            return warnResult({ recovered: true }, `App had detached (Metro up, 0 Hermes targets) \u2014 auto-relaunched and reconnected (attempt ${recovery.attempt}), but reading the full status failed; retry cdp_status.`);
-          }
-        }
-        if (recovery.reason === "app-not-installed") {
-          return failResult(`${message} ${buildNotInstalledAdvice(recovery.udid ?? "booted", recovery.appId ?? "the app", recovery.snapshotHint ?? null)}`, "APP_NOT_INSTALLED", {
-            reconnect: getClient2().reconnectState,
-            autoConnect: getClient2().autoConnectState,
-            bridge: bridgeEnvState(process.env),
-            recovery
-          });
-        }
-        const detachedHint = recovery.reason === "flow-active" ? "A Maestro flow is running \u2014 skipped auto-relaunch. Wait for the flow to finish, then retry cdp_status." : recovery.reason === "opted-out" ? "Auto-relaunch is disabled (RN_AUTO_RELAUNCH_ON_DETACH=0). Relaunch the app manually, or call cdp_restart(hardReset=true)." : recovery.reason === "budget-exhausted" ? "Auto-relaunch budget exhausted this session. Relaunch the app manually, or call cdp_restart(hardReset=true)." : recovery.reason === "no-session" ? "No active device session to relaunch from. Relaunch the app on the simulator, or call cdp_restart(hardReset=true)." : recovery.reason === "unsupported-platform" ? "Auto-relaunch is iOS-only here. Relaunch the app on the device, then retry cdp_status." : "Auto-relaunch did not restore the app. Relaunch it manually, or call cdp_restart(hardReset=true).";
-        const errSuffix = recovery.error ? ` (relaunch error: ${recovery.error})` : "";
-        return failResult(`${message} ${detachedHint}${errSuffix}`, "APP_DETACHED", {
-          reconnect: getClient2().reconnectState,
-          autoConnect: getClient2().autoConnectState,
-          bridge: bridgeEnvState(process.env),
-          recovery
-        });
-      }
-      const pickerBlocking = err instanceof PickerBlockingBundleError;
-      try {
-        const pickerResult = await handleDevClientPicker();
-        if (pickerResult?.dismissed) {
-          try {
-            let retryClient = getClient2();
-            if (!retryClient.isConnected) {
-              const activeFilters = sessionConnectFilters(getActiveSession());
-              const retryFilters = activeFilters ?? (args.platform ? { platform: args.platform.toLowerCase() } : {});
-              await retryClient.autoConnect(args.metroPort, retryFilters, "status");
-              if (!targetMatchesSession(retryClient.connectedTarget, retryFilters)) {
-                const wrong = retryClient.connectedTarget;
-                const retryPort = retryClient.metroPort;
-                await retryClient.disconnect();
-                setClient2(createClient2(retryPort));
-                return failResult("Picker dismissal connected a target that failed post-connect platform/session validation; the socket was disconnected.", retryFilters.targetId ? "TARGET_PLATFORM_CONFLICT" : "PLATFORM_TARGET_NOT_FOUND", { target: wrong, affinity: "cross-platform-only; not iOS UDID identity" });
-              }
-            }
-            if (retryClient.isConnected) {
-              return warnResult(await buildStatusResult(retryClient), `Dev Client picker was blocking \u2014 auto-dismissed (${pickerResult.reason}). Connection recovered.`);
-            }
-          } catch {
-          }
-          return failResult(`${message}. Dev Client picker was dismissed but reconnection failed. Try cdp_status again.`);
-        }
-        if (pickerResult && !pickerResult.dismissed && pickerResult.reason.includes("could not find")) {
-          return failResult(`${message}. ${pickerResult.reason}`);
-        }
-      } catch {
-      }
-      return pickerBlocking ? failResult(message, "PICKER_BLOCKING", {
-        autoConnect: getClient2().autoConnectState,
-        bridge: bridgeEnvState(process.env)
-      }) : failResult(message, {
-        reconnect: getClient2().reconnectState,
-        autoConnect: getClient2().autoConnectState,
-        bridge: bridgeEnvState(process.env)
-      });
-    }
+    const client2 = getClient2();
+    const target = client2.connectedTarget;
+    return okResult({
+      authoritative: false,
+      authority: projectPublicAuthorityStatus(authorityRuntime2.status()),
+      metro: {
+        port: client2.metroPort,
+        requestedPort: args.metroPort ?? null,
+        connected: client2.isConnected
+      },
+      cdp: {
+        connected: client2.isConnected,
+        target: target ? {
+          platform: target.platform ?? null,
+          appBound: Boolean(targetBundleIdentity(target))
+        } : null,
+        requestedPlatform: args.platform ?? null
+      },
+      nextAction: client2.isConnected ? "Use rn_session status to inspect bindings before authoritative tools." : "Use rn_session bind_metro and cdp_connect with the claimed exact port."
+    });
   };
 }
 
@@ -50245,11 +50125,11 @@ function dedupeByMessage(entries) {
   }
   return out;
 }
-async function defaultRunIOS(sinceSeconds) {
+async function defaultRunIOS(sinceSeconds, deviceId) {
   const { stdout } = await execFile15("xcrun", [
     "simctl",
     "spawn",
-    "booted",
+    deviceId,
     "log",
     "show",
     "--style",
@@ -50259,18 +50139,21 @@ async function defaultRunIOS(sinceSeconds) {
   ], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   return stdout;
 }
-async function defaultRunAndroid(sinceSeconds) {
-  const { stdout } = await execFile15("adb", ["logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+async function defaultRunAndroid(sinceSeconds, deviceId) {
+  const { stdout } = await execFile15("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   return stdout;
 }
 async function readNativeErrors(opts = {}) {
   const platform = (opts.platform ?? "ios").toLowerCase();
   const sinceSeconds = opts.sinceSeconds ?? 60;
   const limit = opts.limit ?? 10;
+  if (!opts.deviceId && (platform === "android" && !opts.runAndroid || platform !== "android" && !opts.runIOS)) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: exact native log deviceId is required");
+  }
   const command = platform === "android" ? "adb logcat" : "xcrun simctl spawn ... log show";
   try {
     if (platform === "android") {
-      const out2 = await (opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds)))();
+      const out2 = await (opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds, String(opts.deviceId))))();
       return {
         ok: true,
         entries: parseAndroidLog(out2).slice(-limit),
@@ -50279,7 +50162,7 @@ async function readNativeErrors(opts = {}) {
         command
       };
     }
-    const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds)))();
+    const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds, String(opts.deviceId))))();
     return {
       ok: true,
       entries: parseIOSLog(out).slice(-limit),
@@ -50304,6 +50187,7 @@ function createNativeErrorsHandler(getClient2) {
     try {
       const result = await readNativeErrors({
         platform,
+        deviceId: args.deviceId,
         sinceSeconds: args.sinceSeconds,
         limit: args.limit
       });
@@ -50544,14 +50428,24 @@ function createNetworkBodyHandler(getClient2) {
       }
       await drainNetworkHookBuffer(client2);
       try {
-        const result = await client2.evaluate(`(function() { var c = globalThis.__RN_AGENT_RESPONSE_BODIES__; if (!c) return JSON.stringify({error:'no_cache'}); var b = c.get(${JSON.stringify(args.requestId)}); if (b === undefined) return JSON.stringify({error:'not_found'}); return JSON.stringify({body: b}); })()`);
-        if (result.error) {
-          return failResult(`Failed to read body from hook cache: ${result.error}`);
-        }
-        const parsed = JSON.parse(String(result.value));
-        if (parsed.error === "no_cache") {
+        const cache3 = await client2.send("Runtime.evaluate", {
+          expression: "globalThis.__RN_AGENT_RESPONSE_BODIES__",
+          returnByValue: false
+        });
+        const objectId = cache3.result?.objectId;
+        if (!objectId) {
           return failResult("Response body cache not available. The network hook may not have been injected yet.", { hint: "Make a request first, then query its body." });
         }
+        const result = await client2.send("Runtime.callFunctionOn", {
+          objectId,
+          functionDeclaration: 'function(requestId) { const body = this.get(requestId); return JSON.stringify(body === undefined ? { error: "not_found" } : { body }); }',
+          arguments: [{ value: args.requestId }],
+          returnByValue: true
+        });
+        if (result.exceptionDetails || typeof result.result?.value !== "string") {
+          return failResult("Failed to read body from hook cache");
+        }
+        const parsed = JSON.parse(result.result.value);
         if (parsed.error === "not_found") {
           return failResult(`Response body for ${args.requestId} not in cache. It may have been evicted (cache holds last 50 bodies) or the request failed.`);
         }
@@ -50657,10 +50551,14 @@ function createCpuProfileHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/tools/object-inspect.js
 init_utils();
+var SAFE_INSPECTION_EXPRESSION = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?|true|false|null|undefined|[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)$/;
 function createObjectInspectHandler(getClient2) {
   return withConnection(getClient2, async (args, client2) => {
     const depth = Math.min(Math.max(args.depth ?? 1, 0), 3);
     const maxProps = Math.min(Math.max(args.maxProperties ?? 20, 1), 100);
+    if (!SAFE_INSPECTION_EXPRESSION.test(args.expression)) {
+      return failResult("Object inspection requires a property path or literal");
+    }
     try {
       const evalResult = await client2.send("Runtime.evaluate", {
         expression: args.expression,
@@ -51054,7 +50952,7 @@ init_utils();
 import { mkdirSync as mkdirSync11 } from "node:fs";
 import { execFile as execFile17 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { dirname as dirname10, join as join26 } from "node:path";
+import { dirname as dirname10, join as join27 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
@@ -51156,7 +51054,7 @@ init_device_arbiter();
 init_foreign_flow_gate();
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve2, sep as sep4 } from "node:path";
+import { resolve as resolve3, sep as sep4 } from "node:path";
 var PathTraversalError = class extends Error {
   constructor(message) {
     super(message);
@@ -51181,8 +51079,8 @@ function assertValidActionId(s, context) {
   }
 }
 function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve2(baseDir);
-  const resolvedChild = resolve2(baseDir, child);
+  const resolvedBase = resolve3(baseDir);
+  const resolvedChild = resolve3(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
   const baseWithSep = resolvedBase.endsWith(sep4) ? resolvedBase : resolvedBase + sep4;
@@ -51653,7 +51551,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join26(homedir9(), args.path.slice(2));
+      return join27(homedir9(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
@@ -51793,7 +51691,7 @@ async function captureAndResizeScreenshot(args) {
     return failResult("device_screenshot: a Maestro flow owns the device and the platform could not be resolved for a simctl fallback. Pass platform=ios|android, or retry after the flow completes.", "SCREENSHOT_FAILED", { flowActive: true });
   }
   const session = getActiveSession();
-  const sessionDeviceId = session && session.platform === args.platform ? session.deviceId : void 0;
+  const sessionDeviceId = args.deviceId ?? (session && session.platform === args.platform ? session.deviceId : void 0);
   if ((route === "simctl" || args.platformExplicit) && (args.platform === "ios" || args.platform === "android")) {
     const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
     if (raw.ok)
@@ -51833,12 +51731,17 @@ async function captureAndResizeScreenshot(args) {
     recorder.registerCapturedScreenshot(observedPath);
   return finalResult;
 }
-function createDeviceScreenshotHandler(getClient2) {
+function createDeviceScreenshotHandler(_getClient) {
   return async (args) => {
     const platformExplicit = args.platform === "ios" || args.platform === "android";
-    const platform = args.platform ?? getClient2?.()?.connectedTarget?.platform ?? getActiveSession()?.platform ?? // A3: so a flow-active capture has a platform
-    null;
-    return captureAndResizeScreenshot({ ...args, platform, platformExplicit });
+    const session = getActiveSession();
+    const platform = args.platform ?? session?.platform ?? null;
+    return captureAndResizeScreenshot({
+      ...args,
+      platform,
+      deviceId: args.deviceId ?? session?.deviceId,
+      platformExplicit
+    });
   };
 }
 
@@ -52169,10 +52072,10 @@ function createDeviceBatchHandler(getClient2) {
       let stepTimedOut = false;
       const result = await Promise.race([
         executeStep(step, getClient2),
-        new Promise((resolve5) => {
+        new Promise((resolve8) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
-            resolve5(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
+            resolve8(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
           }, stepTimeout);
         })
       ]);
@@ -52668,15 +52571,13 @@ function createExpectTextHandler() {
 // packages/rn-dev-agent-core/dist/tools/repair-action.js
 init_agent_device_wrapper();
 init_utils();
-import { execFile as execFileCb16 } from "node:child_process";
-import { promisify as promisify20 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync21, readFileSync as readFileSync19, statSync as statSync7 } from "node:fs";
-import { join as join27 } from "node:path";
+import { existsSync as existsSync22, readFileSync as readFileSync20, statSync as statSync7 } from "node:fs";
+import { join as join28 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync12, renameSync as renameSync4, statSync as statSync6, mkdirSync as mkdirSync12, existsSync as existsSync20, unlinkSync as unlinkSync8, readdirSync as readdirSync6 } from "node:fs";
+import { writeFileSync as writeFileSync11, renameSync as renameSync4, statSync as statSync6, mkdirSync as mkdirSync12, existsSync as existsSync21, unlinkSync as unlinkSync8, readdirSync as readdirSync6 } from "node:fs";
 import { dirname as dirname11, basename as basename4 } from "node:path";
 var FUTURE_MTIME_BUFFER_MS = 1e3;
 var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
@@ -52742,7 +52643,7 @@ function cleanupOrphans(yamlPath, sidecarPath) {
 var atomicWriter = {
   /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
   _writeFile(path, content) {
-    writeFileSync12(path, content, "utf8");
+    writeFileSync11(path, content, "utf8");
   },
   /** Underlying `fs.renameSync(from, to)`. */
   _rename(from, to) {
@@ -52756,7 +52657,7 @@ var atomicWriter = {
    *  cases for ensureDir / cleanupOrphans can simulate exotic failures
    *  (PR #109 review). */
   _exists(path) {
-    return existsSync20(path);
+    return existsSync21(path);
   },
   /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
   _mkdir(path) {
@@ -52784,10 +52685,10 @@ var atomicWriter = {
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join27(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join28(projectRoot, ".rn-agent", "actions");
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
-  return join27(actionsDir, fileName);
+  return join28(actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -52850,9 +52751,9 @@ function joinYaml(parts) {
 }
 function loadAction(projectRoot, actionId) {
   const filePath = actionPathFor(projectRoot, actionId);
-  if (!existsSync21(filePath))
+  if (!existsSync22(filePath))
     return null;
-  const text = readFileSync19(filePath, "utf8");
+  const text = readFileSync20(filePath, "utf8");
   const metadata = parseM7Header(text, actionId);
   if (!metadata)
     return null;
@@ -52872,12 +52773,12 @@ var SaveActionPreconditionError = class extends Error {
   }
 };
 function saveAction(action) {
-  if (existsSync21(action.filePath) && actionWasEditedExternally(action)) {
+  if (existsSync22(action.filePath) && actionWasEditedExternally(action)) {
     throw new SaveActionPreconditionError(action.filePath);
   }
   let topSection = "";
-  if (existsSync21(action.filePath)) {
-    const existing = readFileSync19(action.filePath, "utf8");
+  if (existsSync22(action.filePath)) {
+    const existing = readFileSync20(action.filePath, "utf8");
     topSection = splitYaml(existing).topSection;
   }
   if (!topSection && action.metadata.appId) {
@@ -52930,7 +52831,7 @@ function canonicalRuntimeJson(state) {
 function runtimeSidecarMatches(sidecarPath, expected) {
   let onDisk;
   try {
-    onDisk = JSON.parse(readFileSync19(sidecarPath, "utf8"));
+    onDisk = JSON.parse(readFileSync20(sidecarPath, "utf8"));
   } catch {
     return false;
   }
@@ -52939,7 +52840,7 @@ function runtimeSidecarMatches(sidecarPath, expected) {
 }
 function saveActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync21(sidecarPath)) {
+  if (existsSync22(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
@@ -52952,7 +52853,7 @@ function saveActionRuntimeWithCAS(expected, nextState) {
 }
 function promoteActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync21(sidecarPath)) {
+  if (existsSync22(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
@@ -52961,7 +52862,7 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync19(expected.filePath, "utf8");
+  const yaml2 = readFileSync20(expected.filePath, "utf8");
   const marker = /^# status: experimental[ \t]*$/gm;
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
@@ -53157,34 +53058,10 @@ function applyRepair(action, result, now = () => /* @__PURE__ */ new Date(), age
 }
 
 // packages/rn-dev-agent-core/dist/tools/repair-action.js
-init_project_config();
 init_runner_leak_recovery();
-init_platform_utils();
 init_rn_fast_runner_client();
 init_app_lifecycle();
-var execFile18 = promisify20(execFileCb16);
-async function resolveIOSDeviceIdForRepair() {
-  const session = getActiveSession();
-  if (session?.deviceId)
-    return session.deviceId;
-  try {
-    const { stdout } = await execFile18("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
-      timeout: 5e3,
-      encoding: "utf8"
-    });
-    const data = JSON.parse(stdout);
-    for (const list of Object.values(data.devices ?? {})) {
-      for (const dev of list) {
-        if (dev.state === "Booted" && dev.udid)
-          return dev.udid;
-      }
-    }
-  } catch {
-  }
-  return void 0;
-}
-async function bringTargetAppToForeground(platform, bundleId) {
-  const deviceId = getActiveSession()?.deviceId;
+async function bringTargetAppToForeground(platform, bundleId, deviceId) {
   try {
     stopFastRunner(deviceId);
   } catch {
@@ -53239,16 +53116,16 @@ function createRepairActionHandler() {
         hint: "Investigate why this action keeps drifting \u2014 usually means the underlying screen is being heavily refactored. Either redesign the action or wait for the screen to stabilise."
       });
     }
-    const targetPlatform = await detectPlatform() ?? "ios";
-    const targetBundleId = resolveBundleId(targetPlatform);
-    if (targetBundleId) {
-      await bringTargetAppToForeground(targetPlatform, targetBundleId);
+    const session = getActiveSession();
+    const targetPlatform = args.platform ?? session?.platform;
+    const targetBundleId = args.appId ?? session?.appId;
+    const targetDeviceId = args.deviceId ?? session?.deviceId;
+    if (targetPlatform !== "ios" && targetPlatform !== "android" || !targetBundleId || !targetDeviceId) {
+      return failResult("cdp_repair_action requires exact session platform, app, and device authority", "DEVICE_AUTHORITY_MISMATCH");
     }
+    await bringTargetAppToForeground(targetPlatform, targetBundleId, targetDeviceId);
     if (targetPlatform === "ios" && targetBundleId) {
-      const deviceId = await resolveIOSDeviceIdForRepair();
-      if (deviceId) {
-        await ensureFastRunner(deviceId, targetBundleId);
-      }
+      await ensureFastRunner(targetDeviceId, targetBundleId);
     }
     const snapResult = await runNative(["snapshot", "-i"], { platform: targetPlatform });
     const snapEnvelope = snapResult.content?.[0]?.text ?? "";
@@ -53264,7 +53141,7 @@ function createRepairActionHandler() {
       return failResult(`cdp_repair_action: snapshot returned the Agent Device Runner's own UI instead of the target app \u2014 repair cannot proceed`, "RUNNER_LEAK", {
         actionId: args.actionId,
         bundleId: targetBundleId,
-        hint: `Bring the target app to foreground and retry (xcrun simctl launch booted ${targetBundleId ?? "<bundleId>"}). If this persists, the agent-device daemon dropped appBundleId on dispatch \u2014 see B119/GH#35 + B153.`
+        hint: `Bring the target app to foreground on ${targetDeviceId} and retry. If this persists, the agent-device daemon dropped appBundleId on dispatch \u2014 see B119/GH#35 + B153.`
       });
     }
     const candidates = extractAllTestIDs(snapEnvelope);
@@ -53347,13 +53224,13 @@ function createRepairActionHandler() {
 
 // packages/rn-dev-agent-core/dist/tools/save-as-action.js
 init_utils();
-import { existsSync as existsSync22 } from "node:fs";
+import { existsSync as existsSync23 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder.js
 init_utils();
 init_storage();
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join as join28 } from "node:path";
+import { join as join29 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/cdp/test-recorder-helpers.js
 var DEV_CHECK_JS = `(typeof __DEV__ !== 'undefined' && __DEV__ === true)`;
@@ -54007,7 +53884,7 @@ function getRecordingsDir(rootResolver = findProjectRoot) {
   const root = rootResolver();
   if (!root)
     return null;
-  return join28(root, ".rn-agent", "recordings");
+  return sessionRecordingsDirectory(root);
 }
 function makeRecordingRootResolver(getClient2, mode = "save") {
   return () => {
@@ -54158,7 +54035,7 @@ function createRecordTestSaveHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join28(dir, `${safe}.json`);
+    const filePath = join29(dir, `${safe}.json`);
     const payload = { savedAt: (/* @__PURE__ */ new Date()).toISOString(), events: storedEvents };
     await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
     return okResult({
@@ -54179,7 +54056,7 @@ function createRecordTestLoadHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join28(dir, `${safe}.json`);
+    const filePath = join29(dir, `${safe}.json`);
     let raw;
     try {
       raw = await readFile(filePath, "utf8");
@@ -54239,7 +54116,7 @@ function createSaveAsActionHandler() {
     }
     const projectRoot = args.projectRoot ?? process.cwd();
     const filePath = actionPathFor(projectRoot, args.id);
-    const preexisted = existsSync22(filePath);
+    const preexisted = existsSync23(filePath);
     if (preexisted && !args.overwrite) {
       return failResult(`cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`, "BAD_FILENAME", {
         actionId: args.id,
@@ -54313,6 +54190,1480 @@ function classifyRouteDriftAfterFailure(input) {
     };
   }
   return { isDrift: false, liveRoute };
+}
+
+// packages/rn-dev-agent-core/dist/session/registry.js
+import { createHash as createHash6, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+// packages/rn-dev-agent-core/dist/session/authority-store.js
+import { chmodSync as chmodSync2, lstatSync as lstatSync4, mkdirSync as mkdirSync13, statSync as statSync8 } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
+import { dirname as dirname12 } from "node:path";
+var require2 = createRequire2(import.meta.url);
+var AuthorityStoreUnavailableError = class extends Error {
+  code = "AUTHORITY_STORE_UNAVAILABLE";
+  constructor(reason, options) {
+    super(reason, options);
+    this.name = "AuthorityStoreUnavailableError";
+  }
+};
+function loadAuthoritySqlite() {
+  try {
+    const sqlite = require2("node:sqlite");
+    return sqlite.DatabaseSync ?? null;
+  } catch {
+    return null;
+  }
+}
+function assertPrivateDirectory(path) {
+  mkdirSync13(path, { mode: 448, recursive: true });
+  const link = lstatSync4(path);
+  if (link.isSymbolicLink() || !link.isDirectory()) {
+    throw new Error("authority state root must be a real directory");
+  }
+  const stat2 = statSync8(path);
+  if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
+    throw new Error("authority state root is not owned by the current user");
+  }
+  chmodSync2(path, 448);
+}
+function secureDatabaseFiles(path) {
+  for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      const link = lstatSync4(candidate);
+      if (link.isSymbolicLink() || !link.isFile()) {
+        throw new Error("authority database path is not a regular file");
+      }
+      const stat2 = statSync8(candidate);
+      if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
+        throw new Error("authority database is not owned by the current user");
+      }
+      chmodSync2(candidate, 384);
+    } catch (error2) {
+      const code = error2.code;
+      if (code !== "ENOENT")
+        throw error2;
+    }
+  }
+}
+function openAuthorityStore(path, options = {}) {
+  const ctor = options.sqliteCtor === void 0 ? loadAuthoritySqlite() : options.sqliteCtor;
+  if (!ctor) {
+    throw new AuthorityStoreUnavailableError("node:sqlite could not be loaded by this Node runtime");
+  }
+  try {
+    assertPrivateDirectory(dirname12(path));
+    try {
+      const existing = lstatSync4(path);
+      if (existing.isSymbolicLink() || !existing.isFile()) {
+        throw new Error("authority database path is not a regular file");
+      }
+    } catch (error2) {
+      if (error2.code !== "ENOENT")
+        throw error2;
+    }
+    const database = new ctor(path);
+    secureDatabaseFiles(path);
+    database.exec(`
+      PRAGMA busy_timeout=5;
+      PRAGMA journal_mode=WAL;
+      CREATE TABLE IF NOT EXISTS authority_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT INTO authority_meta(key, value)
+      VALUES ('schema_version', '1')
+      ON CONFLICT(key) DO NOTHING;
+    `);
+    secureDatabaseFiles(path);
+    return {
+      database,
+      secureFiles: () => secureDatabaseFiles(path),
+      close: () => {
+        secureDatabaseFiles(path);
+        database.close();
+        secureDatabaseFiles(path);
+      }
+    };
+  } catch (cause) {
+    throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
+  }
+}
+
+// packages/rn-dev-agent-core/dist/session/registry.js
+var SessionAuthorityError = class extends Error {
+  code;
+  holder;
+  details;
+  constructor(code, message, holder, details) {
+    super(`${code}: ${message}`);
+    this.name = "SessionAuthorityError";
+    this.code = code;
+    this.holder = holder;
+    this.details = details;
+  }
+};
+var errorAxes = {
+  SESSION_AUTHORITY_REQUIRED: "C",
+  SESSION_OWNER_LOST: "C",
+  OPERATION_ALREADY_IN_PROGRESS: "C",
+  SOURCE_WORKTREE_MISMATCH: "S",
+  SOURCE_REVISION_NOT_BUNDLED: "S",
+  APP_INSTALL_IDENTITY_CHANGED: "I",
+  METRO_PORT_CLAIM_CONFLICT: "M",
+  PORT_OCCUPIED_UNOWNED: "M",
+  METRO_AUTHORITY_MISMATCH: "M",
+  METRO_INSTANCE_CHANGED: "M",
+  BUNDLE_HANDSHAKE_UNAVAILABLE: "B",
+  BUNDLE_IDENTITY_MISMATCH: "B",
+  CDP_TARGET_AUTHORITY_MISMATCH: "B",
+  TARGET_CLAIM_CONFLICT: "B",
+  DEVICE_CLAIM_CONFLICT: "D",
+  DEVICE_AUTHORITY_MISMATCH: "D",
+  PLATFORM_AUTHORITY_MISMATCH: "D",
+  RUNNER_OWNERSHIP_MISMATCH: "R",
+  RUNNER_ADOPTION_REQUIRED: "R",
+  OBSERVE_AUTHORITY_MISMATCH: "O",
+  PROOF_AUTHORITY_MISMATCH: "P"
+};
+function shortAuthorityIdentity(value) {
+  return createHash6("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+function authorityErrorMeta(error2) {
+  return {
+    axis: error2.details?.axis ?? errorAxes[error2.code],
+    expected: error2.details?.expected,
+    observed: error2.details?.observed,
+    holder: error2.holder ? {
+      sessionId: error2.holder.sessionId.slice(0, 12),
+      claimEpoch: error2.holder.claimEpoch
+    } : void 0,
+    nextAction: error2.details?.nextAction ?? 'Run rn_session with action "status" and repair the named authority axis.'
+  };
+}
+var conflictCodes = {
+  device: "DEVICE_CLAIM_CONFLICT",
+  "device-receipt": "DEVICE_CLAIM_CONFLICT",
+  target: "TARGET_CLAIM_CONFLICT",
+  "metro-port": "METRO_PORT_CLAIM_CONFLICT",
+  "observe-port": "OBSERVE_PORT_CLAIM_CONFLICT",
+  runner: "RUNNER_CLAIM_CONFLICT",
+  "runner-receipt": "RUNNER_CLAIM_CONFLICT"
+};
+function asSession(row) {
+  return row ? row : null;
+}
+function asClaim(row) {
+  return row ? row : null;
+}
+function claimConflict(claim) {
+  const code = conflictCodes[claim.resource_type] ?? "RESOURCE_CLAIM_CONFLICT";
+  return new SessionAuthorityError(code, `${claim.resource_type}:${claim.resource_key} is held`, {
+    sessionId: claim.session_id,
+    claimEpoch: claim.claim_epoch
+  });
+}
+function isOperationalState(state) {
+  return (/* @__PURE__ */ new Set([
+    "active",
+    "source_bound",
+    "metro_bound",
+    "device_claimed",
+    "device_bound",
+    "runtime_bound",
+    "ready"
+  ])).has(state);
+}
+function isFenceableState(state) {
+  return isOperationalState(state) || state === "handoff";
+}
+function bindingsRunnerPresent(bindingsJson) {
+  const bindings = JSON.parse(bindingsJson);
+  return Boolean(bindings.runner && typeof bindings.runner === "object");
+}
+var SessionRegistry = class {
+  #database;
+  #close;
+  #secureFiles;
+  #now;
+  #ownerStatus;
+  #leaseMs;
+  #operationContext = new AsyncLocalStorage();
+  #pendingPlatformReceipts = /* @__PURE__ */ new Map();
+  constructor(database, close, secureFiles, dependencies) {
+    this.#database = database;
+    this.#close = close;
+    this.#secureFiles = secureFiles;
+    this.#now = dependencies.now ?? Date.now;
+    this.#ownerStatus = dependencies.ownerStatus;
+    this.#leaseMs = dependencies.leaseMs ?? 3e4;
+    this.#initialize();
+  }
+  close() {
+    this.#close();
+  }
+  runWithOperation(operation, callback) {
+    return this.#operationContext.run(operation, callback);
+  }
+  createSession(input) {
+    const now = this.#now();
+    this.#database.prepare(`INSERT INTO sessions(
+          session_id, source_key, worktree_key, app_root_key, state,
+          claim_epoch, authority_version, supervisor_pid, supervisor_birth,
+          worker_instance, worker_pid, worker_birth, heartbeat_ms, lease_until_ms,
+          source_json, bindings_json, created_ms, updated_ms
+        ) VALUES (?, ?, ?, ?, 'active', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.sessionId, input.sourceKey, input.worktreeKey, input.appRootKey, input.supervisor.pid, input.supervisor.token, input.worker?.instanceId ?? null, input.worker?.pid ?? null, input.worker?.token ?? null, now, now + this.#leaseMs, JSON.stringify(input.source ?? {}), JSON.stringify(input.bindings ?? {}), now, now);
+    this.#secureFiles();
+    return { sessionId: input.sessionId, claimEpoch: 1 };
+  }
+  claimResources(session, resources, options = {}) {
+    const unique = new Map(resources.map((resource) => [`${resource.type}\0${resource.key}`, resource]));
+    if (unique.size !== resources.length) {
+      throw new SessionAuthorityError("DUPLICATE_RESOURCE_CLAIM", "claim set contains duplicates");
+    }
+    const probes = this.#probeClaimOwners(session, resources);
+    const now = this.#now();
+    return this.#transaction(() => {
+      const owner = this.#requireSession(session);
+      const reclaim = /* @__PURE__ */ new Set();
+      for (const resource of resources) {
+        const claim = this.#findConflictingClaim(resource);
+        if (!claim || claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch) {
+          continue;
+        }
+        const probe = probes.get(claim.session_id);
+        if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+          throw claimConflict(claim);
+        }
+        if (probe.status === "match")
+          throw claimConflict(claim);
+        if (probe.status === "unknown") {
+          if (claim.lease_until_ms < now) {
+            throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "expired lease owner identity could not be proven", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+          }
+          throw claimConflict(claim);
+        }
+        if (options.allowReclaim === false) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale owner requires explicit adopt_stale before claims transfer", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+        reclaim.add(claim.session_id);
+      }
+      for (const sessionId of reclaim)
+        this.#fenceSession(sessionId, now);
+      const leaseUntil = now + this.#leaseMs;
+      for (const resource of resources) {
+        this.#database.prepare(`INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
+      }
+      this.#database.prepare(`UPDATE sessions
+           SET authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, owner.session_id, owner.claim_epoch);
+      this.#advanceActiveOperationFence(session, owner.authority_version, owner.authority_version + 1);
+      return session;
+    });
+  }
+  releaseResources(session, resources) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const current = this.#requireSession(session);
+      for (const resource of resources) {
+        if (resource.type === "runner" || resource.type === "device") {
+          const rows = this.#database.prepare(`SELECT platform, receipt_json FROM platform_authority_receipts
+               WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
+          for (const row of rows) {
+            const persisted = JSON.parse(row.receipt_json);
+            const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+            if (resource.type === "runner" && receipt2.runnerClaim === resource.key || resource.type === "device" && receipt2.deviceClaim === resource.key) {
+              this.#invalidatePlatformReceipt(session, row.platform);
+            }
+          }
+        }
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+      }
+      this.#database.prepare(`UPDATE sessions SET authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+      this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+    });
+  }
+  async claimResourcesWithRetry(session, resources, options = {}) {
+    return this.#retry(() => this.claimResources(session, resources), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
+  }
+  renewSession(session) {
+    const now = this.#now();
+    this.#transaction(() => {
+      this.#requireSession(session);
+      const leaseUntil = now + this.#leaseMs;
+      this.#database.prepare(`UPDATE sessions
+           SET heartbeat_ms = ?, lease_until_ms = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, leaseUntil, now, session.sessionId, session.claimEpoch);
+      this.#database.prepare(`UPDATE claims SET lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(leaseUntil, session.sessionId, session.claimEpoch);
+    });
+  }
+  async renewSessionWithRetry(session, options = {}) {
+    return this.#retry(() => this.renewSession(session), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
+  }
+  bindWorker(session, worker) {
+    const now = this.#now();
+    this.#transaction(() => {
+      this.#requireSession(session);
+      this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`UPDATE sessions
+           SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(worker.instanceId, worker.pid, worker.token, now, session.sessionId, session.claimEpoch);
+    });
+  }
+  bindRecoveryWorker(session, worker, capability) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireRecoverableSession(session);
+      const bindings = JSON.parse(row.bindings_json);
+      const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
+      const actual = createHash6("sha256").update(capability).digest();
+      if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
+      }
+      const adoptionRequired = bindings.adoptionRequired;
+      const expiresMs = now + 5 * 6e4;
+      const recoveryHandles = {
+        handoffRecipient: {
+          token: randomBytes4(32).toString("base64url"),
+          expiresMs,
+          workerInstance: worker.instanceId
+        },
+        ...typeof adoptionRequired?.sessionId === "string" ? {
+          adoptStale: {
+            token: randomBytes4(32).toString("base64url"),
+            expiresMs,
+            priorSessionId: adoptionRequired.sessionId,
+            priorClaimEpoch: adoptionRequired.claimEpoch
+          }
+        } : {}
+      };
+      this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`UPDATE sessions
+           SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
+               bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?
+             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, JSON.stringify({ ...bindings, recoveryHandles }), now, session.sessionId, session.claimEpoch);
+    });
+  }
+  replaceDeviceAuthority(session, input) {
+    const resource = input.resource ?? {
+      type: "device",
+      key: `${String(input.device.platform)}:${String(input.device.deviceId)}`
+    };
+    const probes = this.#probeClaimOwners(session, [resource]);
+    const now = this.#now();
+    this.#transaction(() => {
+      const current = this.#requireSession(session);
+      const claim = this.#findConflictingClaim(resource);
+      if (claim && (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
+        const probe = probes.get(claim.session_id);
+        if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
+          throw claimConflict(claim);
+        }
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+      }
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type IN ('device', 'target', 'runner')`).run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`INSERT INTO claims(
+            resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+          ) VALUES (?, ?, ?, ?, ?)`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, now + this.#leaseMs);
+      const bindings = {
+        ...JSON.parse(current.bindings_json),
+        device: input.device,
+        install: input.install ?? null,
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null,
+        pendingBuild: null
+      };
+      this.#invalidatePlatformReceipt(session, String(input.device.platform));
+      this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(input.install ? "device_bound" : "device_claimed", JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
+      this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+    });
+  }
+  updateBindings(session, input) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const current = this.#requireSession(session);
+      if (input.expectedAuthorityVersion !== void 0 && current.authority_version !== input.expectedAuthorityVersion) {
+        throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed before binding commit");
+      }
+      const bindings = {
+        ...JSON.parse(current.bindings_json),
+        ...input.bindings
+      };
+      if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install") || Object.hasOwn(input.bindings, "runner")) {
+        const currentBindings = JSON.parse(current.bindings_json);
+        const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
+        if (platform) {
+          this.#invalidatePlatformReceipt(session, platform);
+        }
+      }
+      for (const resource of input.releaseResources ?? []) {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+      }
+      this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
+      this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+    });
+  }
+  replaceBindingsDuringOperation(operation, input) {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const current = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
+             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+      const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+      if (!current || !isOperationalState(current.state) || current.claim_epoch !== operation.claimEpoch || current.authority_version !== operation.authorityVersion || !active) {
+        throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+      }
+      for (const resource of input.claimResources ?? []) {
+        const claim = this.#findConflictingClaim(resource);
+        if (claim && (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)) {
+          throw claimConflict(claim);
+        }
+      }
+      for (const resource of input.releaseResources ?? []) {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, operation.sessionId, operation.claimEpoch);
+      }
+      const leaseUntil = now + this.#leaseMs;
+      for (const resource of input.claimResources ?? []) {
+        this.#database.prepare(`INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, operation.sessionId, operation.claimEpoch, leaseUntil);
+      }
+      const nextAuthorityVersion = operation.authorityVersion + 1;
+      const bindings = {
+        ...JSON.parse(current.bindings_json),
+        ...input.bindings
+      };
+      this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(input.state ?? current.state, JSON.stringify(bindings), nextAuthorityVersion, now, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+      this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(nextAuthorityVersion, leaseUntil, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+      const context = this.#operationContext.getStore();
+      if (context?.operationId === operation.operationId) {
+        context.authorityVersion = nextAuthorityVersion;
+      }
+      return { ...operation, authorityVersion: nextAuthorityVersion };
+    });
+  }
+  getSessionStatus(sessionId) {
+    const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                  claim_epoch, authority_version, supervisor_pid, supervisor_birth,
+                  worker_instance, worker_pid, worker_birth, lease_until_ms,
+                  source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(sessionId));
+    if (!row)
+      return null;
+    const claims = this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+         FROM claims WHERE session_id = ? AND claim_epoch = ?
+         ORDER BY resource_type, resource_key`).all(sessionId, row.claim_epoch).map((claim) => {
+      const typed = claim;
+      return {
+        type: typed.resource_type,
+        key: typed.resource_key,
+        sessionId: typed.session_id,
+        claimEpoch: typed.claim_epoch,
+        leaseUntilMs: typed.lease_until_ms
+      };
+    });
+    return {
+      sessionId: row.session_id,
+      sourceKey: row.source_key,
+      worktreeKey: row.worktree_key,
+      appRootKey: row.app_root_key,
+      state: row.state,
+      claimEpoch: row.claim_epoch,
+      authorityVersion: row.authority_version,
+      leaseUntilMs: row.lease_until_ms,
+      source: JSON.parse(row.source_json),
+      bindings: JSON.parse(row.bindings_json),
+      claims,
+      worker: {
+        instanceId: row.worker_instance,
+        pid: row.worker_pid,
+        birthAvailable: row.worker_birth !== null
+      }
+    };
+  }
+  countOtherOperationalSessions(sessionId) {
+    const rows = this.#database.prepare(`SELECT state FROM sessions
+         WHERE session_id <> ?`).all(sessionId);
+    return rows.filter((row) => typeof row.state === "string" && isOperationalState(row.state)).length;
+  }
+  findSessionsByWorktree(worktreeKey) {
+    const rows = this.#database.prepare(`SELECT session_id FROM sessions
+         WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
+         ORDER BY updated_ms DESC`).all(worktreeKey);
+    return rows.map((row) => this.getSessionStatus(String(row.session_id))).filter((status) => status !== null);
+  }
+  getControllerBinding(session) {
+    const row = this.#requireSession(session);
+    return this.#controllerBinding(row);
+  }
+  getHandoffCancellationControllerBinding(session) {
+    const row = this.#requireHandoffSession(session);
+    return this.#controllerBinding(row);
+  }
+  #controllerBinding(row) {
+    return {
+      sessionId: row.session_id,
+      claimEpoch: row.claim_epoch,
+      authorityVersion: row.authority_version,
+      supervisor: { pid: row.supervisor_pid, token: row.supervisor_birth },
+      worker: {
+        instanceId: row.worker_instance,
+        pid: row.worker_pid,
+        token: row.worker_birth
+      }
+    };
+  }
+  releaseSession(session) {
+    const now = this.#now();
+    this.#transaction(() => {
+      this.#requireSession(session);
+      const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+      if (active && !String(active.profile).startsWith("transition:")) {
+        throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot be released while an operation is active");
+      }
+      if (active) {
+        const context = this.#operationContext.getStore();
+        if (!context || context.operationId !== active.operation_id || context.sessionId !== session.sessionId || context.claimEpoch !== session.claimEpoch) {
+          throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session release is not owned by the active operation fence");
+        }
+        this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      }
+      this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+    });
+  }
+  discardBlockedSession(session) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+      if (!row || row.state !== "blocked" || row.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged blocked session may be discarded");
+      }
+      const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(session.sessionId);
+      if (claim) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked session unexpectedly owns resource claims");
+      }
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+    });
+  }
+  prepareHandoff(session, input) {
+    const now = this.#now();
+    const handoffId = randomBytes4(16).toString("hex");
+    const token2 = randomBytes4(32).toString("base64url");
+    const tokenHash = createHash6("sha256").update(token2).digest("hex");
+    this.#transaction(() => {
+      const current = this.#requireSession(session);
+      let targetInstance = input.targetInstance;
+      if (input.targetHandle) {
+        const targets = this.#database.prepare(`SELECT session_id, bindings_json FROM sessions
+             WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(current.source_key, current.worktree_key, current.app_root_key);
+        for (const target of targets) {
+          const bindings = JSON.parse(target.bindings_json);
+          const handles = bindings.recoveryHandles;
+          const handle = handles?.handoffRecipient;
+          if (typeof handle?.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, input.targetHandle)) {
+            targetInstance = typeof handle.workerInstance === "string" ? handle.workerInstance : void 0;
+            this.#database.prepare("UPDATE sessions SET bindings_json = ? WHERE session_id = ?").run(JSON.stringify({
+              ...bindings,
+              recoveryHandles: { ...handles, handoffRecipient: null }
+            }), target.session_id);
+            break;
+          }
+        }
+      }
+      if (!targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff recipient capability is invalid or expired");
+      }
+      const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+      if (active && !String(active.profile).startsWith("transition:")) {
+        throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot enter handoff while an operation is active");
+      }
+      this.#database.prepare(`INSERT INTO handoffs(
+            handoff_id, session_id, claim_epoch, target_instance,
+            token_hash, source_state, expires_ms, consumed_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, targetInstance, tokenHash, this.#requireSession(session).state, now + (input.ttlMs ?? 15e3));
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+      this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+    });
+    return { handoffId, token: token2 };
+  }
+  prepareHandoffForHandle(session, input) {
+    return this.prepareHandoff(session, input);
+  }
+  cancelHandoff(session, handoffId) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const handoff = this.#database.prepare(`SELECT session_id, claim_epoch, source_state, consumed_ms
+           FROM handoffs WHERE handoff_id = ?`).get(handoffId);
+      if (!handoff || handoff.session_id !== session.sessionId || handoff.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not belong to session");
+      }
+      if (handoff.consumed_ms !== null) {
+        throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
+      }
+      const row = asSession(this.#database.prepare("SELECT state, claim_epoch, authority_version FROM sessions WHERE session_id = ?").get(session.sessionId));
+      if (!row || row.state !== "handoff" || row.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff source owner changed");
+      }
+      this.#database.prepare(`UPDATE sessions
+           SET state = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session.sessionId, session.claimEpoch);
+      this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoffId);
+      this.#advanceActiveOperationFence(session, row.authority_version, row.authority_version + 1);
+    });
+  }
+  getHandoffOwner(handoffId) {
+    const row = this.#database.prepare("SELECT session_id FROM handoffs WHERE handoff_id = ?").get(handoffId);
+    return typeof row?.session_id === "string" ? row.session_id : null;
+  }
+  validateHandoffInto(target, input) {
+    const targetRow = this.#requireRecoverableSession(target);
+    if (targetRow.state !== "blocked") {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
+    }
+    if (targetRow.worker_instance !== input.targetInstance) {
+      throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target is not the current fenced worker instance");
+    }
+    const handoff = this.#database.prepare(`SELECT session_id, claim_epoch, target_instance, token_hash, expires_ms, consumed_ms
+         FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
+    if (!handoff) {
+      throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
+    }
+    if (handoff.consumed_ms !== null) {
+      throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
+    }
+    if (handoff.expires_ms < this.#now()) {
+      throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
+    }
+    if (handoff.target_instance !== input.targetInstance) {
+      throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
+    }
+    const expected = Buffer.from(handoff.token_hash, "hex");
+    const actual = createHash6("sha256").update(input.token).digest();
+    if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
+      throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+    }
+    const prior = this.getSessionStatus(handoff.session_id);
+    if (!prior || prior.state !== "handoff" || prior.claimEpoch !== handoff.claim_epoch || prior.sourceKey !== targetRow.source_key || prior.worktreeKey !== targetRow.worktree_key || prior.appRootKey !== targetRow.app_root_key) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff no longer matches the exact source owner");
+    }
+  }
+  acceptHandoff(input) {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const handoff = this.#database.prepare(`SELECT handoff_id, session_id, claim_epoch, target_instance,
+                  token_hash, expires_ms, consumed_ms
+           FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
+      if (!handoff) {
+        throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
+      }
+      if (handoff.consumed_ms !== null) {
+        throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
+      }
+      if (handoff.expires_ms < now) {
+        throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
+      }
+      if (handoff.target_instance !== input.targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
+      }
+      const expected = Buffer.from(handoff.token_hash, "hex");
+      const actual = Buffer.from(createHash6("sha256").update(input.token).digest("hex"), "hex");
+      if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
+        throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+      }
+      const session = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                    supervisor_pid, supervisor_birth, lease_until_ms, bindings_json
+             FROM sessions WHERE session_id = ?`).get(handoff.session_id));
+      if (!session || session.state !== "handoff" || session.claim_epoch !== handoff.claim_epoch) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff no longer matches the session claim epoch");
+      }
+      const nextEpoch = session.claim_epoch + 1;
+      const leaseUntil = now + this.#leaseMs;
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(session.session_id, session.claim_epoch);
+      this.#database.prepare(`UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session.session_id, session.claim_epoch);
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'source_bound', claim_epoch = ?, authority_version = authority_version + 1,
+               supervisor_pid = ?, supervisor_birth = ?, heartbeat_ms = ?,
+               lease_until_ms = ?, bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, input.supervisor.pid, input.supervisor.token, now, leaseUntil, JSON.stringify({
+        ...JSON.parse(session.bindings_json),
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null,
+        pendingBuild: null
+      }), now, session.session_id, session.claim_epoch);
+      this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
+      return { sessionId: session.session_id, claimEpoch: nextEpoch };
+    });
+  }
+  acceptHandoffInto(target, input) {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const targetRow = this.#requireRecoverableSession(target);
+      if (targetRow.state !== "blocked") {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
+      }
+      if (targetRow.worker_instance !== input.targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target is not the current fenced worker instance");
+      }
+      const handoff = this.#database.prepare(`SELECT handoff_id, session_id, claim_epoch, target_instance,
+                  token_hash, expires_ms, consumed_ms
+           FROM handoffs WHERE handoff_id = ?`).get(input.handoffId);
+      if (!handoff) {
+        throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
+      }
+      if (handoff.consumed_ms !== null) {
+        throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
+      }
+      if (handoff.expires_ms < now) {
+        throw new SessionAuthorityError("HANDOFF_EXPIRED", "handoff capability expired");
+      }
+      if (handoff.target_instance !== input.targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
+      }
+      const expected = Buffer.from(handoff.token_hash, "hex");
+      const actual = createHash6("sha256").update(input.token).digest();
+      if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
+        throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+      }
+      const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                    claim_epoch, authority_version, bindings_json
+             FROM sessions WHERE session_id = ?`).get(handoff.session_id));
+      if (!prior || prior.state !== "handoff" || prior.claim_epoch !== handoff.claim_epoch) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff no longer matches the live owner epoch");
+      }
+      if (prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
+        throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "handoff source does not match the target session");
+      }
+      const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ?
+              OR (session_id = ? AND profile NOT LIKE 'transition:%')
+           LIMIT 1`).get(prior.session_id, target.sessionId);
+      if (active) {
+        throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "handoff cannot transfer while either session has an active operation");
+      }
+      const priorRunnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(prior.session_id, prior.claim_epoch);
+      if (bindingsRunnerPresent(prior.bindings_json) && !priorRunnerClaim?.resource_key) {
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner binding has no exclusive cleanup claim");
+      }
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch);
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')`).run(prior.session_id, prior.claim_epoch);
+      this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+      const bindings = JSON.parse(prior.bindings_json);
+      const targetBindings = JSON.parse(targetRow.bindings_json);
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'handoff_cleanup', bindings_json = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+        ...bindings,
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null,
+        pendingBuild: null,
+        recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
+        handoffCleanup: {
+          observe: bindings.observe && typeof bindings.observe === "object" ? {
+            ...bindings.observe,
+            stopRequestedAt: null,
+            completedAt: null
+          } : null,
+          runner: bindings.runner && typeof bindings.runner === "object" ? {
+            ...bindings.runner,
+            claimKey: priorRunnerClaim?.resource_key,
+            stopRequestedAt: null,
+            completedAt: null
+          } : null
+        }
+      }), now, target.sessionId, target.claimEpoch);
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, prior.session_id, prior.claim_epoch);
+      this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
+      return {
+        ...this.getSessionStatus(target.sessionId)?.bindings.handoffCleanup
+      };
+    });
+  }
+  beginHandoffCleanupResource(target, targetInstance, resource) {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+      const bindings = JSON.parse(row.bindings_json);
+      const cleanup = bindings.handoffCleanup;
+      const current = cleanup?.[resource];
+      if (!current || typeof current !== "object")
+        return null;
+      const binding = current;
+      if (typeof binding.completedAt === "number")
+        return binding;
+      if (resource === "runner") {
+        const claimKey = String(binding.claimKey ?? "");
+        const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}:${String(binding.port)}`;
+        const claim = this.#findClaim("runner", claimKey);
+        if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.capability !== "string" || typeof binding.instanceId !== "string") {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner cleanup claim no longer matches the authenticated binding");
+        }
+      }
+      const requested = {
+        ...binding,
+        stopRequestedAt: typeof binding.stopRequestedAt === "number" ? binding.stopRequestedAt : now
+      };
+      this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+        ...bindings,
+        handoffCleanup: { ...cleanup, [resource]: requested }
+      }), now, target.sessionId, target.claimEpoch);
+      return requested;
+    });
+  }
+  completeHandoffCleanupResource(target, targetInstance, resource) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+      const bindings = JSON.parse(row.bindings_json);
+      const cleanup = bindings.handoffCleanup;
+      const current = cleanup?.[resource];
+      if (!current || typeof current !== "object")
+        return;
+      const binding = current;
+      if (typeof binding.stopRequestedAt !== "number") {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup was not durably requested`);
+      }
+      if (typeof binding.completedAt === "number")
+        return;
+      if (resource === "runner") {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'runner' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+      }
+      this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+        ...bindings,
+        handoffCleanup: {
+          ...cleanup,
+          [resource]: { ...binding, completedAt: now }
+        }
+      }), now, target.sessionId, target.claimEpoch);
+    });
+  }
+  finishHandoffCleanup(target, targetInstance) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
+             FROM sessions WHERE session_id = ?`).get(target.sessionId));
+      if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
+      }
+      const bindings = JSON.parse(row.bindings_json);
+      const cleanup = bindings.handoffCleanup;
+      for (const resource of ["runner", "observe"]) {
+        const binding = cleanup?.[resource];
+        if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
+        }
+      }
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'source_bound', bindings_json = ?,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
+        ...bindings,
+        handoffCleanup: null
+      }), now, target.sessionId, target.claimEpoch);
+    });
+  }
+  recordPlatformAuthorityReceipt(session, platform, receipt2) {
+    const operation = this.#operationContext.getStore();
+    if (!operation || operation.sessionId !== session.sessionId || operation.claimEpoch !== session.claimEpoch) {
+      throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "platform receipt recording requires the active operation fence");
+    }
+    this.verifyOperation(operation);
+    const staged = this.#platformReceiptFromCurrentAuthority(session, platform, receipt2);
+    const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+    pending2.push(staged);
+    this.#pendingPlatformReceipts.set(operation.operationId, pending2);
+  }
+  commitPlatformAuthorityReceipts(operation) {
+    const pending2 = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
+    if (pending2.length === 0)
+      return;
+    const now = this.#now();
+    this.#transaction(() => {
+      this.verifyOperation(operation);
+      for (const staged of pending2) {
+        const current = this.#platformReceiptFromCurrentAuthority(staged.session, staged.platform, staged.receipt);
+        const runnerClaim = String(staged.receipt.runnerClaim);
+        const deviceClaim = String(staged.receipt.deviceClaim);
+        for (const resource of [
+          { type: "runner-receipt", key: runnerClaim },
+          { type: "device-receipt", key: deviceClaim }
+        ]) {
+          const existing = this.#findClaim(resource.type, resource.key);
+          if (existing && (existing.session_id !== staged.session.sessionId || existing.claim_epoch !== staged.session.claimEpoch)) {
+            throw claimConflict(existing);
+          }
+        }
+        this.#invalidatePlatformReceipt(staged.session, staged.platform);
+        for (const resource of [
+          { type: "runner-receipt", key: runnerClaim },
+          { type: "device-receipt", key: deviceClaim }
+        ]) {
+          this.#database.prepare(`INSERT INTO claims(
+                 resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+               ) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+                 session_id = excluded.session_id,
+                 claim_epoch = excluded.claim_epoch,
+                 lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, staged.session.sessionId, staged.session.claimEpoch, now + this.#leaseMs);
+        }
+        this.#database.prepare(`INSERT INTO platform_authority_receipts(
+               session_id, claim_epoch, platform, receipt_json, updated_ms
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(session_id, platform) DO UPDATE SET
+               claim_epoch = excluded.claim_epoch,
+               receipt_json = excluded.receipt_json,
+               updated_ms = excluded.updated_ms`).run(staged.session.sessionId, staged.session.claimEpoch, staged.platform, JSON.stringify({ receipt: staged.receipt, probe: current.probe }), now);
+      }
+    });
+    this.#pendingPlatformReceipts.delete(operation.operationId);
+  }
+  validatePlatformAuthorityReceipt(session, platform, receipt2) {
+    const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
+    const persisted = typeof row?.receipt_json === "string" ? JSON.parse(row.receipt_json) : null;
+    const persistedReceipt = persisted?.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+    const runnerClaim = this.#findClaim("runner-receipt", String(receipt2.runnerClaim));
+    const deviceClaim = this.#findClaim("device-receipt", String(receipt2.deviceClaim));
+    return row?.claim_epoch === session.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt2) && runnerClaim?.session_id === session.sessionId && runnerClaim.claim_epoch === session.claimEpoch && deviceClaim?.session_id === session.sessionId && deviceClaim.claim_epoch === session.claimEpoch;
+  }
+  getPlatformAuthorityProbe(session, platform, receipt2) {
+    if (!this.validatePlatformAuthorityReceipt(session, platform, receipt2))
+      return null;
+    const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session.sessionId, session.claimEpoch, platform);
+    if (typeof row?.receipt_json !== "string")
+      return null;
+    const persisted = JSON.parse(row.receipt_json);
+    const probe = persisted.probe;
+    if (!probe || createHash6("sha256").update(probe.capability).digest("hex") !== receipt2.runnerCapabilityHash) {
+      return null;
+    }
+    return probe;
+  }
+  adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
+    const priorStatus = this.getSessionStatus(priorSessionId);
+    if (!priorStatus) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale session is unavailable");
+    }
+    const owner = asSession(this.#database.prepare(`SELECT supervisor_pid, supervisor_birth FROM sessions WHERE session_id = ?`).get(priorSessionId));
+    if (!owner || this.#ownerStatus({
+      sessionId: priorSessionId,
+      pid: owner.supervisor_pid,
+      token: owner.supervisor_birth
+    }) !== "mismatch") {
+      throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "prior source owner is not proven stale");
+    }
+    const now = this.#now();
+    this.#transaction(() => {
+      const targetRow = this.#requireRecoverableSession(target);
+      if (targetRow.state !== "blocked") {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption is not available during handoff cleanup");
+      }
+      if (targetRow.worker_instance !== targetInstance) {
+        throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
+      }
+      const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                    claim_epoch, bindings_json
+             FROM sessions WHERE session_id = ?`).get(priorSessionId));
+      if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
+        throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
+      }
+      if (prior.state === "handoff_cleanup") {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption cannot discard an incomplete handoff cleanup plan");
+      }
+      this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
+      this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+      const priorBindings = JSON.parse(prior.bindings_json);
+      const targetBindings = JSON.parse(targetRow.bindings_json);
+      const sameMetro = Number(priorBindings.metro?.port) === Number(targetBindings.metroPort);
+      this.#database.prepare(`UPDATE sessions
+           SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
+               updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
+        ...targetBindings,
+        adoptionRequired: null,
+        recoveryHandles: null,
+        metro: sameMetro ? priorBindings.metro : null,
+        device: priorBindings.device ?? null,
+        install: priorBindings.install ?? null,
+        bundle: null,
+        runner: null,
+        observe: null,
+        proof: null
+      }), now, target.sessionId, target.claimEpoch);
+      this.#fenceSession(prior.session_id, now);
+    });
+  }
+  adoptStaleWithHandle(target, handle, targetInstance) {
+    const targetStatus = this.getSessionStatus(target.sessionId);
+    const recovery = targetStatus?.bindings.recoveryHandles;
+    const adoption = recovery?.adoptStale;
+    if (targetStatus?.state !== "blocked" || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
+    }
+    const prior = this.getSessionStatus(adoption.priorSessionId);
+    if (prior?.claimEpoch !== adoption.priorClaimEpoch) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
+    }
+    this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance);
+  }
+  beginOperation(session, operation) {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const owner = this.#requireFenceableSession(session);
+      const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+      if (active) {
+        throw new SessionAuthorityError("OPERATION_ALREADY_IN_PROGRESS", "session already has an active fenced operation");
+      }
+      this.#database.prepare(`INSERT INTO operations(
+            operation_id, session_id, claim_epoch, authority_version,
+            tool, profile, started_ms, lease_until_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(operation.operationId, session.sessionId, session.claimEpoch, owner.authority_version, operation.tool, operation.profile, now, now + this.#leaseMs);
+      return {
+        operationId: operation.operationId,
+        sessionId: session.sessionId,
+        claimEpoch: session.claimEpoch,
+        authorityVersion: owner.authority_version
+      };
+    });
+  }
+  refreshOperation(operation) {
+    this.verifyOperation(operation);
+    return operation;
+  }
+  endOperation(operation) {
+    this.#transaction(() => {
+      const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+      const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+      if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
+        throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+      }
+      this.#database.prepare("DELETE FROM operations WHERE operation_id = ?").run(operation.operationId);
+    });
+    this.#pendingPlatformReceipts.delete(operation.operationId);
+  }
+  cancelOperation(operation) {
+    this.#transaction(() => {
+      this.#database.prepare(`DELETE FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+    });
+    this.#pendingPlatformReceipts.delete(operation.operationId);
+  }
+  verifyOperation(operation) {
+    const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+           FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+    const active = this.#database.prepare(`SELECT operation_id FROM operations
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+    if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
+      throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+    }
+  }
+  renewOperation(operation) {
+    const now = this.#now();
+    this.#transaction(() => {
+      this.verifyOperation(operation);
+      this.#database.prepare("UPDATE operations SET lease_until_ms = ? WHERE operation_id = ?").run(now + this.#leaseMs, operation.operationId);
+    });
+  }
+  getClaim(type, key) {
+    const claim = this.#findClaim(type, key);
+    return claim ? {
+      type: claim.resource_type,
+      key: claim.resource_key,
+      sessionId: claim.session_id,
+      claimEpoch: claim.claim_epoch,
+      leaseUntilMs: claim.lease_until_ms
+    } : null;
+  }
+  allocatePort(input) {
+    if (!Number.isSafeInteger(input.base) || input.base < 1 || !Number.isSafeInteger(input.span) || input.span < 1 || input.base + input.span > 65536) {
+      throw new SessionAuthorityError("INVALID_PORT_RANGE", "port allocation range is invalid");
+    }
+    return this.#transaction(() => {
+      const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
+      if (existing)
+        return existing.port;
+      const digest2 = createHash6("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+      const preferred = digest2.readUInt32BE(0) % input.span;
+      for (let offset = 0; offset < input.span; offset += 1) {
+        const port = input.base + (preferred + offset) % input.span;
+        const occupied = this.#database.prepare("SELECT worktree_key FROM allocations WHERE service = ? AND port = ?").get(input.service, port);
+        if (occupied)
+          continue;
+        this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
+             VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, port);
+        return port;
+      }
+      throw new SessionAuthorityError("PORT_RANGE_EXHAUSTED", `no ${input.service} port is available in the configured range`);
+    });
+  }
+  #initialize() {
+    const schema = this.#database.prepare("SELECT value FROM authority_meta WHERE key = ?").get("schema_version")?.value;
+    const version2 = Number(schema);
+    if (!Number.isSafeInteger(version2) || version2 < 1 || version2 > 4) {
+      throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version2 > 4 ? `authority registry schema ${version2} is newer than supported schema 4` : "authority registry schema version is invalid");
+    }
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        source_key TEXT NOT NULL,
+        worktree_key TEXT NOT NULL,
+        app_root_key TEXT NOT NULL,
+        state TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        authority_version INTEGER NOT NULL,
+        supervisor_pid INTEGER NOT NULL,
+        supervisor_birth TEXT NOT NULL,
+        worker_instance TEXT,
+        worker_pid INTEGER,
+        worker_birth TEXT,
+        heartbeat_ms INTEGER NOT NULL,
+        lease_until_ms INTEGER NOT NULL,
+        source_json TEXT NOT NULL,
+        bindings_json TEXT NOT NULL,
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS claims (
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        lease_until_ms INTEGER NOT NULL,
+        PRIMARY KEY(resource_type, resource_key)
+      );
+      CREATE INDEX IF NOT EXISTS claims_session_idx
+        ON claims(session_id, claim_epoch);
+      CREATE TABLE IF NOT EXISTS operations (
+        operation_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        authority_version INTEGER NOT NULL,
+        tool TEXT NOT NULL,
+        profile TEXT NOT NULL,
+        started_ms INTEGER NOT NULL,
+        lease_until_ms INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS operations_session_idx
+        ON operations(session_id, claim_epoch);
+      CREATE TABLE IF NOT EXISTS allocations (
+        service TEXT NOT NULL,
+        worktree_key TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        PRIMARY KEY(service, worktree_key),
+        UNIQUE(service, port)
+      );
+      CREATE TABLE IF NOT EXISTS handoffs (
+        handoff_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        target_instance TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        expires_ms INTEGER NOT NULL,
+        consumed_ms INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS platform_authority_receipts (
+        session_id TEXT NOT NULL,
+        claim_epoch INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        PRIMARY KEY(session_id, platform)
+      );
+      `);
+      if (version2 < 3) {
+        const columns = this.#database.prepare("PRAGMA table_info(handoffs)").all();
+        if (!columns.some((column) => column.name === "source_state")) {
+          this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
+        }
+      }
+      this.#database.exec("UPDATE authority_meta SET value = '4' WHERE key = 'schema_version';");
+      this.#database.exec("COMMIT");
+    } catch (error2) {
+      this.#database.exec("ROLLBACK");
+      throw error2;
+    }
+    this.#secureFiles();
+  }
+  #probeClaimOwners(session, resources) {
+    const owners = /* @__PURE__ */ new Map();
+    for (const resource of resources) {
+      const claim = this.#findConflictingClaim(resource);
+      if (!claim || claim.session_id === session.sessionId || owners.has(claim.session_id)) {
+        continue;
+      }
+      const owner = asSession(this.#database.prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+             FROM sessions WHERE session_id = ?`).get(claim.session_id));
+      let status = "unknown";
+      if (owner && owner.claim_epoch === claim.claim_epoch) {
+        try {
+          status = this.#ownerStatus({
+            sessionId: owner.session_id,
+            pid: owner.supervisor_pid,
+            token: owner.supervisor_birth
+          });
+        } catch {
+          status = "unknown";
+        }
+      }
+      owners.set(claim.session_id, { claimEpoch: claim.claim_epoch, status });
+    }
+    return owners;
+  }
+  #requireSession(session) {
+    const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session.sessionId));
+    if (!row || !isOperationalState(row.state) || row.claim_epoch !== session.claimEpoch) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
+    }
+    return row;
+  }
+  #requireFenceableSession(session) {
+    const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session.sessionId));
+    if (!row || !isFenceableState(row.state) || row.claim_epoch !== session.claimEpoch) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
+    }
+    return row;
+  }
+  #requireHandoffSession(session) {
+    const row = this.#requireFenceableSession(session);
+    if (row.state !== "handoff") {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the handoff claim epoch");
+    }
+    return row;
+  }
+  #requireRecoverableSession(session) {
+    const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session.sessionId));
+    if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup" || row.claim_epoch !== session.claimEpoch) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session is not an unchanged recovery contender");
+    }
+    return row;
+  }
+  #requireHandoffCleanupOwner(session, targetInstance) {
+    const row = this.#requireRecoverableSession(session);
+    if (row.state !== "handoff_cleanup" || row.worker_instance !== targetInstance) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
+    }
+    return row;
+  }
+  #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion) {
+    const active = this.#database.prepare(`SELECT operation_id, authority_version FROM operations
+         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+    if (!active)
+      return;
+    const context = this.#operationContext.getStore();
+    if (!context || context.operationId !== active.operation_id || context.sessionId !== session.sessionId || context.claimEpoch !== session.claimEpoch || context.authorityVersion !== priorAuthorityVersion || active.authority_version !== priorAuthorityVersion) {
+      throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "authority mutation is not owned by the active operation fence");
+    }
+    const changed = this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`).run(nextAuthorityVersion, this.#now() + this.#leaseMs, context.operationId, session.sessionId, session.claimEpoch, priorAuthorityVersion);
+    if (changed.changes === 0) {
+      throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence did not advance atomically");
+    }
+    context.authorityVersion = nextAuthorityVersion;
+  }
+  #findClaim(type, key) {
+    return asClaim(this.#database.prepare(`SELECT resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+           FROM claims WHERE resource_type = ? AND resource_key = ?`).get(type, key));
+  }
+  #findConflictingClaim(resource) {
+    return this.#findClaim(resource.type, resource.key) ?? (resource.type === "runner" ? this.#findClaim("runner-receipt", resource.key) : resource.type === "device" ? this.#findClaim("device-receipt", resource.key) : null);
+  }
+  #platformReceiptFromCurrentAuthority(session, platform, receipt2) {
+    const row = this.#requireSession(session);
+    const bindings = JSON.parse(row.bindings_json);
+    const device = bindings.device;
+    const install = bindings.install;
+    const runner = bindings.runner;
+    const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
+    const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session.sessionId, session.claimEpoch);
+    const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash6("sha256").update(runner.capability).digest("hex") : null;
+    if (device?.platform !== platform || receipt2.sessionId !== session.sessionId || receipt2.claimEpoch !== session.claimEpoch || receipt2.sourceKey !== row.source_key || receipt2.worktreeKey !== row.worktree_key || receipt2.appRootKey !== row.app_root_key || receipt2.deviceId !== device.deviceId || receipt2.appId !== device.appId || receipt2.installGeneration !== install?.installGeneration || receipt2.artifactDigest !== install?.artifactDigest || receipt2.runnerInstanceId !== runner?.instanceId || receipt2.runnerPid !== runner?.pid || receipt2.runnerProcessBirth !== runner?.processBirth || receipt2.runnerPort !== runner?.port || receipt2.runnerClaim !== runnerClaim?.resource_key || receipt2.deviceClaim !== deviceClaim?.resource_key || receipt2.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
+      throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
+    }
+    return {
+      session,
+      platform,
+      receipt: receipt2,
+      probe: {
+        platform,
+        port: runner.port,
+        capability: runner.capability,
+        instanceId: runner.instanceId,
+        sessionId: session.sessionId,
+        claimEpoch: session.claimEpoch,
+        deviceId: device.deviceId,
+        appId: device.appId,
+        pid: runner.pid,
+        processBirth: runner.processBirth,
+        installGeneration: install.installGeneration
+      }
+    };
+  }
+  #invalidatePlatformReceipt(session, platform) {
+    const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session.sessionId, session.claimEpoch, platform);
+    if (typeof row?.receipt_json === "string") {
+      const persisted = JSON.parse(row.receipt_json);
+      const receipt2 = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
+      if (typeof receipt2.runnerClaim === "string") {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'runner-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(receipt2.runnerClaim, session.sessionId, session.claimEpoch);
+      }
+      if (typeof receipt2.deviceClaim === "string") {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'device-receipt' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(receipt2.deviceClaim, session.sessionId, session.claimEpoch);
+      }
+    }
+    this.#database.prepare(`DELETE FROM platform_authority_receipts
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session.sessionId, session.claimEpoch, platform);
+  }
+  #capabilityMatches(expected, actual) {
+    const expectedDigest = createHash6("sha256").update(expected).digest();
+    const actualDigest = createHash6("sha256").update(actual).digest();
+    return timingSafeEqual2(expectedDigest, actualDigest);
+  }
+  #fenceSession(sessionId, now) {
+    this.#database.prepare("DELETE FROM claims WHERE session_id = ?").run(sessionId);
+    this.#database.prepare("DELETE FROM operations WHERE session_id = ?").run(sessionId);
+    this.#database.prepare(`UPDATE sessions
+         SET state = 'stale', claim_epoch = claim_epoch + 1,
+             authority_version = authority_version + 1, updated_ms = ?
+         WHERE session_id = ?`).run(now, sessionId);
+  }
+  #transaction(operation) {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = operation();
+      this.#database.exec("COMMIT");
+      this.#secureFiles();
+      return result;
+    } catch (error2) {
+      this.#database.exec("ROLLBACK");
+      this.#secureFiles();
+      throw error2;
+    }
+  }
+  async #retry(operation, timeoutMs, retryDelayMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (; ; ) {
+      try {
+        return operation();
+      } catch (error2) {
+        const code = error2.code;
+        const message = error2 instanceof Error ? error2.message : "";
+        if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+          throw error2;
+        if (Date.now() >= deadline) {
+          throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
+        }
+        await new Promise((resolve8) => setTimeout(resolve8, retryDelayMs));
+      }
+    }
+  }
+};
+function openSessionRegistry(path, dependencies) {
+  const store = openAuthorityStore(path, { sqliteCtor: dependencies.sqliteCtor });
+  try {
+    return new SessionRegistry(store.database, store.close, store.secureFiles, dependencies);
+  } catch (error2) {
+    store.close();
+    throw error2;
+  }
 }
 
 // packages/rn-dev-agent-core/dist/tools/cdp-replay-dispatch.js
@@ -54552,9 +55903,9 @@ function buildCdpDispatch(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js
-import { execFile as execFileCb17 } from "node:child_process";
-import { promisify as promisify21 } from "node:util";
-var execFile19 = promisify21(execFileCb17);
+import { execFile as execFileCb16 } from "node:child_process";
+import { promisify as promisify20 } from "node:util";
+var execFile18 = promisify20(execFileCb16);
 var WDA_BLIND_MIN_IOS_MAJOR = 26;
 var RECENT_WINDOW = 5;
 function evaluateBlindProbeGate(input) {
@@ -54593,7 +55944,7 @@ function parseIosRuntimeMajorForUdid(simctlJson, udid) {
   return null;
 }
 var runtimeCache = /* @__PURE__ */ new Map();
-async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile19(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
+async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile18(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
   if (runtimeCache.has(udid))
     return runtimeCache.get(udid) ?? null;
   try {
@@ -54720,6 +56071,7 @@ function createRunActionHandler(deps = {}) {
   };
   const blindProbeContext2 = deps.blindProbeContext ?? (async () => null);
   const targetContext = deps.targetContext ?? (() => null);
+  const claimBundleAuthority = deps.claimBundleAuthority ?? (async () => true);
   return async (args) => {
     if (!args.actionId || typeof args.actionId !== "string") {
       return failResult("cdp_run_action requires actionId", "BAD_FILENAME");
@@ -54778,7 +56130,8 @@ function createRunActionHandler(deps = {}) {
         }
       }
       if (atRisk) {
-        const replayDeps = getReplayDeps(args);
+        const candidate = getReplayDeps(args);
+        const replayDeps = candidate && await claimBundleAuthority(args) ? candidate : null;
         const probe = replayDeps ? firstReplayTestId(action.body, args.params ?? {}) : null;
         if (replayDeps && probe) {
           const tProbe = Date.now();
@@ -54908,7 +56261,7 @@ function createRunActionHandler(deps = {}) {
       const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === "SELECTOR_NOT_FOUND" && expectedSeq && expectedSeq.length > 0) {
-        const liveRoute = await getLiveRoute().catch(() => null);
+        const liveRoute = await claimBundleAuthority(args) ? await getLiveRoute().catch(() => null) : null;
         const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
         if (drift.isDrift) {
           const autoRepair2 = {
@@ -54937,7 +56290,8 @@ function createRunActionHandler(deps = {}) {
       }
       let cdpJsFallback;
       if (failure.kind === "SELECTOR_NOT_FOUND" || failure.kind === "UNKNOWN") {
-        const replayDeps = getReplayDeps(args);
+        const candidate = getReplayDeps(args);
+        const replayDeps = candidate && await claimBundleAuthority(args) ? candidate : null;
         const probe = !replayDeps ? null : failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : firstReplayTestId(action.body, args.params ?? {});
         if (!replayDeps) {
           cdpJsFallback = { attempted: false, reason: "no-replay-deps" };
@@ -55183,6 +56537,8 @@ function createRunActionHandler(deps = {}) {
         underlyingFailure: retryFailureDetail
       });
     } catch (err) {
+      if (err instanceof SessionAuthorityError)
+        throw err;
       const msg3 = err instanceof Error ? err.message : String(err);
       const autoRepair = {
         attempted: false,
@@ -55533,9 +56889,9 @@ function createInteractHandler(getClient2) {
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
 init_agent_device_wrapper();
 init_utils();
-import { execFile as execFileCb18, spawn as spawn4 } from "node:child_process";
-import { promisify as promisify22 } from "node:util";
-var execFile20 = promisify22(execFileCb18);
+import { execFile as execFileCb17, spawn as spawn4 } from "node:child_process";
+import { promisify as promisify21 } from "node:util";
+var execFile19 = promisify21(execFileCb17);
 function normalizeTimestamp(ts) {
   if (!ts)
     return (/* @__PURE__ */ new Date()).toISOString();
@@ -55609,7 +56965,7 @@ var PID_PROBE_TIMEOUT_MS = 5e3;
 async function resolveIosAppPid(deviceId, bundleId, signal) {
   let stdout;
   try {
-    ({ stdout } = await execFile20("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
+    ({ stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal
     }));
@@ -55623,7 +56979,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -55692,7 +57048,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve5(entries);
+        resolve8(entries);
       }
     });
     proc.on("error", (err) => {
@@ -55757,7 +57113,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -55825,7 +57181,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve5(entries);
+        resolve8(entries);
       }
     });
     proc.on("error", (err) => {
@@ -55991,11 +57347,10 @@ init_device_interact();
 
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
 init_utils();
-init_platform_utils();
 init_maestro_validator();
-import { execFile as execFile21 } from "node:child_process";
-import { promisify as promisify23 } from "node:util";
-var execFileAsync4 = promisify23(execFile21);
+import { execFile as execFile20 } from "node:child_process";
+import { promisify as promisify22 } from "node:util";
+var execFileAsync4 = promisify22(execFile20);
 var EXEC_TIMEOUT = 1e4;
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -56023,14 +57378,14 @@ var ANDROID_PERMISSIONS = {
   calendar: "android.permission.READ_CALENDAR",
   storage: "android.permission.READ_EXTERNAL_STORAGE"
 };
-async function iosPermission(action, permission, appId) {
+async function iosPermission(action, permission, appId, deviceId) {
   const iosKey = IOS_PERMISSIONS[permission];
   if (!iosKey) {
     const valid = Object.keys(IOS_PERMISSIONS).join(", ");
     return failResult(`Unknown iOS permission: "${permission}". Valid: ${valid}`);
   }
   try {
-    const args = ["simctl", "privacy", "booted", action, iosKey, appId];
+    const args = ["simctl", "privacy", deviceId, action, iosKey, appId];
     const { stdout, stderr } = await execFileAsync4("xcrun", args, { timeout: EXEC_TIMEOUT });
     return okResult({
       platform: "ios",
@@ -56044,12 +57399,10 @@ async function iosPermission(action, permission, appId) {
     return failResult(`xcrun simctl privacy failed: ${msg3}`);
   }
 }
-async function androidPermission(action, permission, appId) {
+async function androidPermission(action, permission, appId, deviceId) {
   if (action === "reset") {
     try {
-      const { stdout } = await execFileAsync4("adb", ["shell", "pm", "reset-permissions", appId], {
-        timeout: EXEC_TIMEOUT
-      });
+      const { stdout } = await execFileAsync4("adb", ["-s", deviceId, "shell", "pm", "reset-permissions", appId], { timeout: EXEC_TIMEOUT });
       return okResult({ platform: "android", action: "reset", appId, output: stdout.trim() });
     } catch (e) {
       const msg3 = e instanceof Error ? e.message : String(e);
@@ -56063,7 +57416,7 @@ async function androidPermission(action, permission, appId) {
   }
   const adbAction = action === "grant" ? "grant" : "revoke";
   try {
-    const { stdout, stderr } = await execFileAsync4("adb", ["shell", "pm", adbAction, appId, androidKey], { timeout: EXEC_TIMEOUT });
+    const { stdout, stderr } = await execFileAsync4("adb", ["-s", deviceId, "shell", "pm", adbAction, appId, androidKey], { timeout: EXEC_TIMEOUT });
     return okResult({
       platform: "android",
       action: adbAction,
@@ -56076,12 +57429,10 @@ async function androidPermission(action, permission, appId) {
     return failResult(`adb pm ${adbAction} failed: ${msg3}`);
   }
 }
-async function androidQueryPermission(permission, appId) {
+async function androidQueryPermission(permission, appId, deviceId) {
   if (permission === "all") {
     try {
-      const { stdout } = await execFileAsync4("adb", ["shell", "dumpsys", "package", appId], {
-        timeout: EXEC_TIMEOUT
-      });
+      const { stdout } = await execFileAsync4("adb", ["-s", deviceId, "shell", "dumpsys", "package", appId], { timeout: EXEC_TIMEOUT });
       if (stdout.includes("Unable to find package")) {
         return failResult(`Package "${appId}" not installed on device`);
       }
@@ -56106,9 +57457,7 @@ async function androidQueryPermission(permission, appId) {
     return failResult(`Unknown Android permission: "${permission}". Valid: ${valid}`);
   }
   try {
-    const { stdout } = await execFileAsync4("adb", ["shell", "dumpsys", "package", appId], {
-      timeout: EXEC_TIMEOUT
-    });
+    const { stdout } = await execFileAsync4("adb", ["-s", deviceId, "shell", "dumpsys", "package", appId], { timeout: EXEC_TIMEOUT });
     if (stdout.includes("Unable to find package")) {
       return failResult(`Package "${appId}" not installed on device`);
     }
@@ -56151,27 +57500,28 @@ async function iosQueryPermission(permission, appId) {
 }
 function createDevicePermissionHandler() {
   return async (args) => {
-    const platform = args.platform ?? await detectPlatform();
-    if (!platform)
-      return failResult("No iOS simulator or Android device detected");
+    const platform = args.platform;
     if (platform !== "ios" && platform !== "android") {
       return failResult(`Invalid platform "${platform}". Supported values: "ios", "android".`, "INVALID_PLATFORM");
     }
     if (!isValidBundleId(args.appId)) {
       return failResult(`Invalid appId "${String(args.appId).slice(0, 80)}" \u2014 must be reverse-DNS bundle identifier (e.g. com.example.app)`, "INVALID_APPID");
     }
-    if (args.action === "query") {
-      return platform === "ios" ? iosQueryPermission(args.permission, args.appId) : androidQueryPermission(args.permission, args.appId);
+    if (!args.deviceId) {
+      return failResult("device_permission requires the exact authority-bound deviceId", "DEVICE_AUTHORITY_MISMATCH");
     }
-    if (platform === "ios")
-      return iosPermission(args.action, args.permission, args.appId);
-    return androidPermission(args.action, args.permission, args.appId);
+    if (args.action === "query") {
+      return platform === "ios" ? iosQueryPermission(args.permission, args.appId) : androidQueryPermission(args.permission, args.appId, args.deviceId);
+    }
+    if (platform === "ios") {
+      return iosPermission(args.action, args.permission, args.appId, args.deviceId);
+    }
+    return androidPermission(args.action, args.permission, args.appId, args.deviceId);
   };
 }
 
 // packages/rn-dev-agent-core/dist/tools/device-reset-state.js
 init_utils();
-init_platform_utils();
 init_maestro_validator();
 init_app_lifecycle();
 init_dev_client_picker();
@@ -56411,7 +57761,7 @@ function normalizePermissions(input) {
     return [];
   return input.map((p) => typeof p === "string" ? { name: p, action: "revoke" } : { name: p.name, action: p.action ?? "revoke" });
 }
-async function runPermissionSteps(permissions, appId, platform) {
+async function runPermissionSteps(permissions, appId, platform, deviceId) {
   const handler = createDevicePermissionHandler();
   const results = [];
   for (const perm of permissions) {
@@ -56421,7 +57771,8 @@ async function runPermissionSteps(permissions, appId, platform) {
         action: perm.action ?? "revoke",
         permission: perm.name,
         appId,
-        platform
+        platform,
+        deviceId
       });
       const failed = r.isError === true;
       const parsed = failed ? safeParseError(r) : void 0;
@@ -56643,7 +57994,7 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
     if (!isValidBundleId(args.appId)) {
       return failResult(`Invalid appId "${String(args.appId).slice(0, 80)}" \u2014 must be reverse-DNS bundle identifier (e.g. com.example.app)`, "DEVICE_RESET_INVALID_APPID");
     }
-    const platform = args.platform ?? await detectPlatform();
+    const platform = args.platform;
     if (platform !== "ios" && platform !== "android") {
       return failResult("No iOS simulator or Android device detected. Pass platform explicitly.", "DEVICE_RESET_INVALID_ARGS");
     }
@@ -56661,13 +58012,16 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
         activeSessionDeviceId: sessionDeviceId
       });
     }
-    const lifecycleDeviceId = sessionDeviceId;
+    const lifecycleDeviceId = args.deviceId ?? sessionDeviceId;
+    if (!lifecycleDeviceId) {
+      return failResult("device_reset_state requires the exact authority-bound deviceId", "DEVICE_AUTHORITY_MISMATCH");
+    }
     const steps = [];
     let reconnected = false;
     let helpersInjected = false;
     let reconnectAttempted = false;
     if (permissions.length > 0) {
-      const permResults = await runPermissionSteps(permissions, args.appId, platform);
+      const permResults = await runPermissionSteps(permissions, args.appId, platform, lifecycleDeviceId);
       steps.push(...permResults);
     }
     if (storageKeys.length > 0) {
@@ -56756,10 +58110,8 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
 init_utils();
-init_platform_utils();
-init_agent_device_wrapper();
-import { execFile as execFileCb19 } from "node:child_process";
-import { promisify as promisify24 } from "node:util";
+import { execFile as execFileCb18 } from "node:child_process";
+import { promisify as promisify23 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/verification/deep-link-depth.js
 var SUCCESS_SUFFIX_REGEX = /(success|done|added|complete|completed|confirmation)$/i;
@@ -56975,14 +58327,16 @@ function createDeviceDismissSystemDialogHandler() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
-var execFile22 = promisify24(execFileCb19);
+var execFile21 = promisify23(execFileCb18);
 var EXEC_TIMEOUT_MS = 1e4;
 function iosDeeplinkCommandArgs(url, deviceId) {
-  return ["simctl", "openurl", deviceId ?? "booted", url];
+  if (!deviceId)
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: exact iOS deviceId is required");
+  return ["simctl", "openurl", deviceId, url];
 }
 async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile22("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
+    const { stdout, stderr } = await execFile21("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
@@ -57005,7 +58359,9 @@ function posixSingleQuote2(s) {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 function androidDeeplinkCommandArgs(url, packageName, deviceId) {
-  const serial = deviceId ? ["-s", deviceId] : getAdbSerial();
+  if (!deviceId)
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: exact Android deviceId is required");
+  const serial = ["-s", deviceId];
   const quotedUrl = posixSingleQuote2(url);
   const args = [
     ...serial,
@@ -57024,7 +58380,7 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
 async function openAndroidDeeplink(url, packageName, deviceId) {
   const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
-    const { stdout, stderr } = await execFile22("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile21("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
@@ -57087,15 +58443,15 @@ function createDeviceDeeplinkHandler() {
     if (args.packageName !== void 0 && !isValidBundleId(args.packageName)) {
       return failResult(`Invalid packageName "${String(args.packageName).slice(0, 80)}" \u2014 must be reverse-DNS bundle identifier (e.g. com.example.app)`, { code: "INVALID_PACKAGE_NAME" });
     }
-    const platform = args.platform ?? await detectPlatform();
-    if (!platform) {
-      return failResult("No iOS simulator or Android device detected. Pass platform explicitly or boot a device.", { code: "NO_DEVICE" });
+    const platform = args.platform;
+    if (!platform || !args.deviceId) {
+      return failResult("device_deeplink requires the exact authority-bound platform and deviceId.", "DEVICE_AUTHORITY_MISMATCH");
     }
     const result = platform === "ios" ? await openIosDeeplink(args.url, args.deviceId) : await openAndroidDeeplink(args.url, args.packageName, args.deviceId);
     const annotated = annotateDeepLinkDepth(result, { url: args.url });
     if (!annotated.isError) {
       const openConfirmation = platform === "ios" ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
-      const outcome = await clearDevClientPickerIfPresent(platform).catch(() => null);
+      const outcome = await clearDevClientPickerIfPresent(platform, args.metroPort).catch(() => null);
       return annotatePicker(annotated, outcome, openConfirmation);
     }
     return annotated;
@@ -57108,12 +58464,12 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 init_platform_utils();
-import { execFile as execFile23 } from "node:child_process";
-import { existsSync as existsSync23 } from "node:fs";
-import { promisify as promisify25 } from "node:util";
+import { execFile as execFile22 } from "node:child_process";
+import { existsSync as existsSync24 } from "node:fs";
+import { promisify as promisify24 } from "node:util";
 import { fileURLToPath } from "node:url";
-import { dirname as dirname12, join as join29 } from "node:path";
-var execFileAsync5 = promisify25(execFile23);
+import { dirname as dirname13, join as join30 } from "node:path";
+var execFileAsync5 = promisify24(execFile22);
 var START_TIMEOUT_MS = 1e4;
 var STOP_TIMEOUT_MS = 6e4;
 var STATUS_TIMEOUT_MS = 5e3;
@@ -57196,28 +58552,28 @@ function compactUnique2(paths) {
   }
   return out;
 }
-function candidateRecordScripts(baseDir = dirname12(fileURLToPath(import.meta.url))) {
+function candidateRecordScripts(baseDir = dirname13(fileURLToPath(import.meta.url))) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
     process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
-    codexPluginRoot ? join29(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join29(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join29(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
+    codexPluginRoot ? join30(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join30(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join30(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join29(baseDir, "..", "..", "scripts", "record_proof.sh"),
+    join30(baseDir, "..", "..", "scripts", "record_proof.sh"),
     // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
-    join29(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
+    join30(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
     // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
-    join29(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
+    join30(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
-function resolveRecordScript(baseDir = dirname12(fileURLToPath(import.meta.url))) {
+function resolveRecordScript(baseDir = dirname13(fileURLToPath(import.meta.url))) {
   if (process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT) {
     return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
   }
   const candidates = candidateRecordScripts(baseDir);
-  return candidates.find((path) => existsSync23(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync24(path)) ?? candidates[0];
 }
 function getRecordScript() {
   return resolveRecordScript();
@@ -57280,9 +58636,7 @@ async function runStart(args) {
 ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidates });
   }
   const scriptArgs = ["start", platform, outputPath];
-  if (!resolution.autoSelected) {
-    scriptArgs.push(platform === "ios" ? "--udid" : "--serial", resolution.deviceId);
-  }
+  scriptArgs.push(platform === "ios" ? "--udid" : "--serial", resolution.deviceId);
   try {
     const { stdout } = await execFileAsync5(getRecordScript(), scriptArgs, {
       timeout: START_TIMEOUT_MS
@@ -57398,37 +58752,41 @@ function createDeviceRecordHandler() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
-import { execFileSync as execFileSync6 } from "node:child_process";
-import { chmodSync, closeSync as closeSync3, existsSync as existsSync24, fsyncSync, lstatSync as lstatSync3, mkdirSync as mkdirSync13, openSync as openSync3, readFileSync as readFileSync20, realpathSync as realpathSync3, renameSync as renameSync5, unlinkSync as unlinkSync9, writeFileSync as writeFileSync13 } from "node:fs";
-import { basename as basename5, dirname as dirname13, extname, isAbsolute as isAbsolute3, join as join30, relative, resolve as resolve3, sep as sep5 } from "node:path";
+import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypto";
+import { execFileSync as execFileSync7 } from "node:child_process";
+import { chmodSync as chmodSync3, closeSync as closeSync3, existsSync as existsSync25, fsyncSync, lstatSync as lstatSync5, mkdirSync as mkdirSync14, openSync as openSync3, readFileSync as readFileSync21, realpathSync as realpathSync3, renameSync as renameSync5, unlinkSync as unlinkSync9, writeFileSync as writeFileSync12 } from "node:fs";
+import { basename as basename5, dirname as dirname14, extname, isAbsolute as isAbsolute3, join as join31, relative, resolve as resolve4, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
   observedResults = [];
   active = false;
+  activeRunId = null;
   constructor(now = Date.now) {
     this.now = now;
   }
-  begin() {
+  begin(runId = "legacy") {
     this.events = [];
     this.observedResults = [];
     this.active = true;
+    this.activeRunId = runId;
   }
   record(event) {
     if (!this.active || event.tool === "proof_capture")
       return;
     const ts = this.now();
+    const authorityReceiptHash = observedAuthorityReceiptHash(event.result);
     this.events.push({
       tool: event.tool,
       ok: event.status === "PASS",
       ts,
       durationMs: event.latencyMs,
-      argsHash: hashProofArgs(event.params)
+      argsHash: hashProofArgs(event.params),
+      ...authorityReceiptHash ? { authorityReceiptHash } : {}
     });
     this.observedResults.push({
       tool: event.tool,
@@ -57437,7 +58795,8 @@ var StrictProofMonitor = class {
       argsHash: hashProofArgs(event.params),
       resultHash: hashObservedValue(event.result),
       screenshotPath: observedScreenshotPath(event),
-      assertionPassed: observedAssertionPassed(event)
+      assertionPassed: observedAssertionPassed(event),
+      ...authorityReceiptHash ? { authorityReceiptHash } : {}
     });
   }
   snapshot() {
@@ -57446,6 +58805,18 @@ var StrictProofMonitor = class {
   stop() {
     this.active = false;
     return this.snapshot();
+  }
+  isActive(runId) {
+    return this.active && this.activeRunId === runId;
+  }
+  ownsRun(runId) {
+    return this.activeRunId === runId;
+  }
+  release(runId) {
+    if (this.activeRunId === runId) {
+      this.active = false;
+      this.activeRunId = null;
+    }
   }
   observations() {
     return structuredClone(this.observedResults);
@@ -57462,16 +58833,16 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash5("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash7("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash5("sha256").update(bytes).digest("hex");
+  return createHash7("sha256").update(bytes).digest("hex");
 }
-function resultEnvelopeData(result) {
+function resultEnvelope(result) {
   if (!result || typeof result !== "object")
     return null;
   const content = result.content;
@@ -57481,11 +58852,22 @@ function resultEnvelopeData(result) {
   if (typeof text !== "string")
     return result;
   try {
-    const envelope = JSON.parse(text);
-    return envelope.data ?? envelope;
+    return JSON.parse(text);
   } catch {
     return result;
   }
+}
+function resultEnvelopeData(result) {
+  const envelope = resultEnvelope(result);
+  return envelope?.data ?? envelope;
+}
+function observedAuthorityReceiptHash(result) {
+  const envelope = resultEnvelope(result);
+  const meta = envelope?.meta;
+  if (!meta || typeof meta !== "object")
+    return null;
+  const receipt2 = meta.authorityReceipt;
+  return receipt2 && typeof receipt2 === "object" ? hashProofValue(receipt2) : null;
 }
 function stringField(value, fields) {
   if (!value || typeof value !== "object")
@@ -57663,8 +59045,10 @@ var proofEventSchema = external_exports.object({
   ok: external_exports.boolean(),
   ts: external_exports.number().int(),
   durationMs: external_exports.number().nonnegative(),
-  argsHash: external_exports.string().optional()
+  argsHash: external_exports.string().optional(),
+  authorityReceiptHash: sha256Schema.optional()
 }).strict();
+var acceptedProofEventSchema = proofEventSchema.extend({ authorityReceiptHash: sha256Schema }).strict();
 var proofIssueSchema = external_exports.object({
   repository: external_exports.string().min(1),
   number: external_exports.number().int().positive()
@@ -57693,6 +59077,53 @@ var proofRuntimeSchema = external_exports.object({
   metroPort: external_exports.number().int().positive().max(65535),
   metroReady: external_exports.boolean(),
   pluginVersion: external_exports.string().min(1)
+}).strict();
+var proofAuthoritySchema = external_exports.object({
+  sessionId: external_exports.string().min(1),
+  claimEpoch: external_exports.number().int().positive(),
+  authorityVersion: external_exports.number().int().positive(),
+  controller: external_exports.object({
+    instanceId: external_exports.string().min(1),
+    pid: external_exports.number().int().positive(),
+    birthDigest: sha256Schema
+  }).strict(),
+  source: external_exports.object({
+    sourceKey: sha256Schema,
+    worktreeKey: sha256Schema,
+    appRootKey: sha256Schema,
+    head: gitShaSchema,
+    dirtyDigest: sha256Schema
+  }).strict(),
+  install: external_exports.object({
+    artifactDigest: sha256Schema,
+    buildGeneration: external_exports.number().int().positive(),
+    appId: external_exports.string().min(1)
+  }).strict(),
+  metro: external_exports.object({
+    port: external_exports.number().int().positive().max(65535),
+    instanceId: external_exports.string().min(1),
+    pid: external_exports.number().int().positive(),
+    birthDigest: sha256Schema,
+    buildGeneration: external_exports.number().int().positive()
+  }).strict(),
+  bundle: external_exports.object({
+    targetId: external_exports.string().min(1),
+    connectionGeneration: external_exports.number().int().positive(),
+    markerDigest: sha256Schema,
+    authorityScope: external_exports.literal("initial-bundle"),
+    sourceFidelity: external_exports.literal("not-proven")
+  }).strict(),
+  device: external_exports.object({
+    platform: external_exports.enum(["ios", "android"]),
+    deviceId: external_exports.string().min(1)
+  }).strict(),
+  runner: external_exports.object({
+    instanceId: external_exports.string().min(1),
+    protocolVersion: external_exports.number().int().positive(),
+    capabilityDigest: sha256Schema,
+    processBirthDigest: sha256Schema
+  }).strict(),
+  proof: external_exports.object({ runId: external_exports.string().min(1) }).strict()
 }).strict();
 var proofCandidateRuntimeSchema = external_exports.object({
   repo: external_exports.literal("Lykhoyda/rn-dev-agent"),
@@ -57751,6 +59182,7 @@ var proofEventTraceSchema = external_exports.object({
   allowedTools: external_exports.array(external_exports.string().min(1)).min(1),
   observed: external_exports.array(proofEventSchema)
 }).strict();
+var acceptedProofEventTraceSchema = proofEventTraceSchema.extend({ observed: external_exports.array(acceptedProofEventSchema) }).strict();
 var proofFrameMatchSchema = external_exports.object({
   stepId: kebabIdSchema,
   screenshotSha256: sha256Schema,
@@ -57780,7 +59212,7 @@ var evidenceReviewSchema = external_exports.object({
   resultHash: sha256Schema
 }).strict();
 var sharedReceiptShape = {
-  schemaVersion: external_exports.literal(1),
+  schemaVersion: external_exports.literal(2),
   runId: external_exports.string().min(1),
   issue: proofIssueSchema,
   pullRequest: proofPullRequestSchema,
@@ -57789,6 +59221,7 @@ var sharedReceiptShape = {
   git: proofGitSchema,
   device: proofDeviceSchema,
   runtime: proofRuntimeSchema,
+  authority: proofAuthoritySchema,
   candidateRuntime: proofCandidateRuntimeSchema.optional(),
   fixture: proofFixtureSchema,
   action: proofActionSchema,
@@ -57800,7 +59233,7 @@ var acceptedEvidenceShape = {
   video: proofVideoSchema,
   screenshots: external_exports.array(proofScreenshotSchema).min(3),
   assertions: external_exports.array(acceptedProofAssertionSchema).min(3),
-  eventTrace: proofEventTraceSchema,
+  eventTrace: acceptedProofEventTraceSchema,
   frameMatches: external_exports.array(proofFrameMatchSchema).min(3),
   contactSheet: proofContactSheetSchema,
   errorBaseline: proofErrorBaselineSchema.extend({ clean: external_exports.literal(true) }).strict(),
@@ -57937,7 +59370,7 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash6("sha256").update(bytes).digest("hex");
+  return createHash8("sha256").update(bytes).digest("hex");
 }
 function realpathOrSelf(path) {
   try {
@@ -57963,9 +59396,9 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
       continue;
     }
     for (const host of ["claude-plugin", "codex-plugin"]) {
-      const hostRoot = join30(root, "packages", host);
-      const coreIndex = realpathOrSelf(join30(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-      const coreSupervisor = realpathOrSelf(join30(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+      const hostRoot = join31(root, "packages", host);
+      const coreIndex = realpathOrSelf(join31(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+      const coreSupervisor = realpathOrSelf(join31(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
       if (arg === coreIndex) {
         return {
           host,
@@ -57984,8 +59417,8 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
           kind: "core-supervisor"
         };
       }
-      if (host === "codex-plugin" && arg === realpathOrSelf(join30(hostRoot, "bin", "cdp-supervisor.js"))) {
-        if (!existsSync24(coreIndex) || !existsSync24(coreSupervisor))
+      if (host === "codex-plugin" && arg === realpathOrSelf(join31(hostRoot, "bin", "cdp-supervisor.js"))) {
+        if (!existsSync25(coreIndex) || !existsSync25(coreSupervisor))
           return null;
         return {
           host,
@@ -58017,21 +59450,53 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   }
   if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
     return false;
-  if (coreRootOverride && join30(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+  if (coreRootOverride && join31(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
     return false;
   }
   if (workerOverride && workerOverride !== entrypoint.coreBundle)
     return false;
   return true;
 }
+function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
+  try {
+    const root = realpathSync3(candidateRoot);
+    const statusArgs = [
+      "-C",
+      root,
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignore-submodules=none"
+    ];
+    if (execFileSync7("git", statusArgs, { encoding: "utf8" }).trim())
+      return null;
+    const verifiedBytes = [];
+    for (const artifactPath of artifactPaths) {
+      const resolvedArtifactPath = realpathSync3(artifactPath);
+      const artifactRelativePath = relative(root, resolvedArtifactPath).split(sep5).join("/");
+      if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
+        return null;
+      }
+      execFileSync7("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync7("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+        maxBuffer: 128 * 1024 * 1024
+      });
+      const artifactBytes = readFileSync21(resolvedArtifactPath);
+      if (hashBytes(artifactBytes) !== hashBytes(headBytes))
+        return null;
+      verifiedBytes.push(artifactBytes);
+    }
+    return execFileSync7("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+  } catch {
+    return null;
+  }
+}
 function readProofCandidateRuntime(candidateRoot) {
-  const root = resolve3(candidateRoot);
-  if (root !== candidateRoot)
-    throw new Error("CANDIDATE_ROOT_NOT_NORMALIZED");
-  const sha = execFileSync6("git", ["-C", root, "rev-parse", "HEAD"], {
+  const root = realpathSync3(resolve4(candidateRoot));
+  const sha = execFileSync7("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync6("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync7("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
@@ -58043,12 +59508,21 @@ function readProofCandidateRuntime(candidateRoot) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
   const { host, coreBundle } = entrypoint;
-  const runnerManifest = join30(root, "packages", host, "runner-manifest.json");
+  const runnerManifest = join31(root, "packages", host, "runner-manifest.json");
+  const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
+  if (!artifacts) {
+    throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
+  }
+  const confirmedSha = execFileSync7("git", ["-C", root, "rev-parse", "HEAD"], {
+    encoding: "utf8"
+  }).trim();
+  if (confirmedSha !== sha)
+    throw new Error("CANDIDATE_SHA_CHANGED");
   return proofCandidateRuntimeSchema.parse({
     repo: "Lykhoyda/rn-dev-agent",
     sha,
-    coreBundleSha256: hashBytes(readFileSync20(coreBundle)),
-    runnerManifestSha256: hashBytes(readFileSync20(runnerManifest)),
+    coreBundleSha256: hashBytes(artifacts[0]),
+    runnerManifestSha256: hashBytes(artifacts[1]),
     mcp: { pid: process.pid, argv, cwd: process.cwd() }
   });
 }
@@ -58068,23 +59542,23 @@ function sameProofAction(left, right) {
 function readProofActionIdentity(appProjectRoot, actionId) {
   try {
     const path = actionPathFor(appProjectRoot, actionId);
-    const bytesBefore = readFileSync20(path);
+    const bytesBefore = readFileSync21(path);
     const action = loadAction(appProjectRoot, actionId);
-    const bytesAfter = readFileSync20(path);
+    const bytesAfter = readFileSync21(path);
     if (!action || action.metadata.id !== actionId || !bytesBefore.equals(bytesAfter) || !Number.isInteger(action.state.revision) || action.state.revision < 1) {
       return null;
     }
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash6("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash8("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute3(root) || !isAbsolute3(path) || resolve3(root) !== root || resolve3(path) !== path) {
+  if (!isAbsolute3(root) || !isAbsolute3(path) || resolve4(root) !== root || resolve4(path) !== path) {
     return false;
   }
   const fromRoot = relative(root, path);
@@ -58093,9 +59567,9 @@ function isNormalizedDescendant(root, path) {
 function hasExistingSymlink(root, path) {
   const parts = relative(root, path).split(sep5);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve3(root, ...parts.slice(0, length));
+    const candidate = resolve4(root, ...parts.slice(0, length));
     try {
-      if (lstatSync3(candidate).isSymbolicLink())
+      if (lstatSync5(candidate).isSymbolicLink())
         return true;
     } catch {
     }
@@ -58103,12 +59577,12 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve3(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve4(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
     return false;
-  const proofRoot = join30(expectedRoot, "docs", "proof", args.runId);
+  const proofRoot = join31(expectedRoot, "docs", "proof", args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
@@ -58122,24 +59596,24 @@ function validCaptureContext(args, expectedRoot) {
   }));
 }
 function proofRootExists(args) {
-  const proofRoot = join30(args.projectRoot, "docs", "proof", args.runId);
+  const proofRoot = join31(args.projectRoot, "docs", "proof", args.runId);
   try {
-    lstatSync3(proofRoot);
+    lstatSync5(proofRoot);
     return true;
   } catch (error2) {
     return error2.code !== "ENOENT";
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute3(detectedProjectRoot) || resolve3(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute3(detectedProjectRoot) || resolve4(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync6("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync7("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute3(root) && resolve3(root) === root ? root : null;
+    return root && isAbsolute3(root) && resolve4(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -58167,8 +59641,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync6("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync6("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync7("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync7("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -58179,7 +59653,7 @@ function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
   const path = relative(root, proofRoot).replaceAll(sep5, "/");
-  return execFileSync6("git", ["ls-files", "-z", "--", path], {
+  return execFileSync7("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -58237,11 +59711,11 @@ function requiredToolSequence(storyboard) {
   return storyboard.steps.flatMap((step) => [step.expectedTool, step.assertionTool]);
 }
 function sequenceObservations(storyboard, observations) {
-  const required2 = requiredToolSequence(storyboard).map(normalizeTool);
-  const relevant = observations.filter((observation) => required2.includes(normalizeTool(observation.tool)));
-  if (relevant.length !== required2.length)
+  const required3 = requiredToolSequence(storyboard).map(normalizeTool);
+  const relevant = observations.filter((observation) => required3.includes(normalizeTool(observation.tool)));
+  if (relevant.length !== required3.length)
     return null;
-  if (relevant.some((observation, index) => normalizeTool(observation.tool) !== required2[index])) {
+  if (relevant.some((observation, index) => normalizeTool(observation.tool) !== required3[index])) {
     return null;
   }
   return storyboard.steps.map((_, index) => ({
@@ -58250,39 +59724,39 @@ function sequenceObservations(storyboard, observations) {
   }));
 }
 function traceFor(storyboard, events) {
-  const required2 = requiredToolSequence(storyboard);
-  const allowedExtras = storyboard.allowedTools.filter((tool) => !required2.map(normalizeTool).includes(normalizeTool(tool)));
-  return validateTrace([...required2, ...allowedExtras], events);
+  const required3 = requiredToolSequence(storyboard);
+  const allowedExtras = storyboard.allowedTools.filter((tool) => !required3.map(normalizeTool).includes(normalizeTool(tool)));
+  return validateTrace([...required3, ...allowedExtras], events);
 }
 function readProofContractAt(moduleUrl = import.meta.url) {
-  const moduleDir = dirname13(fileURLToPath2(moduleUrl));
+  const moduleDir = dirname14(fileURLToPath2(moduleUrl));
   const candidates = [
-    resolve3(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve3(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve4(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve4(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
-      const bytes = readFileSync20(path, "utf8");
+      const bytes = readFileSync21(path, "utf8");
       return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
     } catch {
     }
   }
   throw new Error("PROOF_CONTRACT_MISSING");
 }
-function writeProofReceiptAtomic(path, receipt) {
-  const directory = dirname13(path);
-  mkdirSync13(directory, { recursive: true, mode: 448 });
-  const temporary = resolve3(directory, `.${randomUUID2()}.proof-receipt.tmp`);
+function writeProofReceiptAtomic(path, receipt2) {
+  const directory = dirname14(path);
+  mkdirSync14(directory, { recursive: true, mode: 448 });
+  const temporary = resolve4(directory, `.${randomUUID4()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync3(temporary, "wx", 384);
-    writeFileSync13(descriptor, `${JSON.stringify(receipt, null, 2)}
+    writeFileSync12(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
     closeSync3(descriptor);
     descriptor = null;
     renameSync5(temporary, path);
-    chmodSync(path, 384);
+    chmodSync3(path, 384);
   } catch (error2) {
     if (descriptor !== null)
       closeSync3(descriptor);
@@ -58376,7 +59850,7 @@ function createProofCaptureHandler(deps) {
     active.mayOwnRecorder = false;
     active.baseline = null;
     active.mechanicalReceipt = null;
-    deps.monitor.begin();
+    deps.monitor.begin(active.context.runId);
   };
   const rejectCapture = async (active, reasons) => {
     deps.monitor.stop();
@@ -58588,7 +60062,7 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
       }
       try {
-        const proofRoot = join30(args.projectRoot, "docs", "proof", args.runId);
+        const proofRoot = join31(args.projectRoot, "docs", "proof", args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
           return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
         }
@@ -58610,11 +60084,18 @@ function createProofCaptureHandler(deps) {
           return proofFailure(["CANDIDATE_SHA_MISMATCH"], "idle");
         }
       }
+      let authority;
+      try {
+        authority = deps.authority(args.runId);
+      } catch {
+        return proofFailure(["PROOF_AUTHORITY_UNAVAILABLE"], "idle");
+      }
       const startedAt = deps.now();
       session = {
         context: args,
         actionIdentity,
         candidateRuntime,
+        authority,
         stage: "rehearsing",
         invalidationReasons: [],
         rehearsalStartedAt: startedAt,
@@ -58632,7 +60113,7 @@ function createProofCaptureHandler(deps) {
         baseline: null,
         mechanicalReceipt: null
       };
-      deps.monitor.begin();
+      deps.monitor.begin(args.runId);
       return okResult({ stage: session.stage, runId: args.runId });
     }
     if (!session)
@@ -58677,7 +60158,7 @@ function createProofCaptureHandler(deps) {
       active.invalidationReasons = [];
       active.armedObservationCount = null;
       active.freshStartAssertion = null;
-      deps.monitor.begin();
+      deps.monitor.begin(active.context.runId);
       return okResult({ stage: active.stage, durationMs });
     }
     if (args.action === "arm") {
@@ -58806,7 +60287,7 @@ function createProofCaptureHandler(deps) {
       active.recordingStartedAt = deps.now();
       active.stage = "recording";
       active.invalidationReasons = [];
-      deps.monitor.begin();
+      deps.monitor.begin(active.context.runId);
       return okResult({ stage: active.stage, deviceId: started.deviceId, output: started.output });
     }
     if (args.action === "stop_recording") {
@@ -58859,6 +60340,9 @@ function createProofCaptureHandler(deps) {
       const evidenceReasons = [...derived.reasons];
       const trace = traceFor(active.context.storyboard, active.recordingEvents);
       evidenceReasons.push(...trace.reasons);
+      if (active.recordingEvents.some((event) => !event.authorityReceiptHash)) {
+        evidenceReasons.push("AUTHORITY_RECEIPT_MISSING");
+      }
       if (!derived.evidence)
         evidenceReasons.push("STEP_EVIDENCE_MISSING");
       const mediaInput = {
@@ -58890,16 +60374,23 @@ function createProofCaptureHandler(deps) {
       }
       const git = readGit(active);
       const ready = await readReadiness();
+      try {
+        if (hashProofValue(deps.authority(active.context.runId)) !== hashProofValue(active.authority)) {
+          evidenceReasons.push("PROOF_AUTHORITY_CHANGED");
+        }
+      } catch {
+        evidenceReasons.push("PROOF_AUTHORITY_UNAVAILABLE");
+      }
       evidenceReasons.push(...git.ok ? gitReasons(active, git.value, "validation") : git.reasons);
       evidenceReasons.push(...ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons);
       if (evidenceReasons.length > 0 || !media.ok || !ready.ok || !git.ok) {
         return rejectCapture(active, evidenceReasons);
       }
       const storyboardBytes = JSON.stringify(active.context.storyboard);
-      let receipt;
+      let receipt2;
       try {
-        receipt = mechanicallyAcceptedProofReceiptSchema.parse({
-          schemaVersion: 1,
+        receipt2 = mechanicallyAcceptedProofReceiptSchema.parse({
+          schemaVersion: 2,
           runId: active.context.runId,
           issue: active.context.issue,
           pullRequest: active.context.pullRequest,
@@ -58912,6 +60403,7 @@ function createProofCaptureHandler(deps) {
           },
           device: ready.value.device,
           runtime: ready.value.runtime,
+          authority: active.authority,
           ...active.candidateRuntime ? { candidateRuntime: active.candidateRuntime } : {},
           fixture: active.context.fixture,
           action: active.context.proofAction,
@@ -58944,13 +60436,13 @@ function createProofCaptureHandler(deps) {
       } catch {
         return rejectCapture(active, ["RECEIPT_CONSTRUCTION_FAILED"]);
       }
-      active.mechanicalReceipt = receipt;
+      active.mechanicalReceipt = receipt2;
       active.stage = "mechanically_accepted";
       active.invalidationReasons = [];
       return okResult({
         stage: active.stage,
-        receipt,
-        reviewTargetSha256: hashProofValue(receipt)
+        receipt: receipt2,
+        reviewTargetSha256: hashProofValue(receipt2)
       });
     }
     if (args.action === "finalize") {
@@ -59006,11 +60498,11 @@ function createProofCaptureHandler(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir9 } from "node:os";
-import { dirname as dirname14, join as join31 } from "node:path";
+import { dirname as dirname15, join as join32 } from "node:path";
 var MediaFailure = class extends Error {
   reason;
   constructor(reason) {
@@ -59049,7 +60541,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash7("sha256");
+  const hash = createHash9("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -59123,10 +60615,10 @@ async function runFrameProcess(process3, args) {
 }
 function parseSsim(output) {
   const tokens = [...output.matchAll(/\bAll:([^\s]+)/g)];
-  const token = tokens.at(-1)?.[1];
-  if (!token || !/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(token))
+  const token2 = tokens.at(-1)?.[1];
+  if (!token2 || !/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(token2))
     fail("FRAME_MISMATCH");
-  return Number(token);
+  return Number(token2);
 }
 async function matchScreenshotAt(process3, input) {
   const threshold = input.threshold ?? 0.9;
@@ -59147,7 +60639,7 @@ async function matchScreenshotAt(process3, input) {
   if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
     fail("INVALID_MEDIA_INPUT");
   }
-  const normalizedScreenshotPath = join31(input.scratchDir, `screenshot-${index}.png`);
+  const normalizedScreenshotPath = join32(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process3, [
     "-y",
@@ -59172,7 +60664,7 @@ async function matchScreenshotAt(process3, input) {
   let best = null;
   let decodedFrameCount = 0;
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
-    const framePath = join31(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    const framePath = join32(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
     await rm(framePath, { force: true });
     try {
       await runFrameProcess(process3, [
@@ -59244,7 +60736,7 @@ async function buildContactSheet(process3, selectedFramePaths, contactSheetPath)
     await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
   }
   try {
-    await mkdir2(dirname14(contactSheetPath), { recursive: true });
+    await mkdir2(dirname15(contactSheetPath), { recursive: true });
     await rm(contactSheetPath, { force: true });
   } catch {
     fail("MEDIA_IO_FAILED");
@@ -59296,7 +60788,7 @@ async function validateMedia(process3, input) {
     const scratchRoot = input.scratchRoot ?? tmpdir9();
     try {
       await mkdir2(scratchRoot, { recursive: true });
-      scratchDir = await mkdtemp(join31(scratchRoot, "proof-media-"));
+      scratchDir = await mkdtemp(join32(scratchRoot, "proof-media-"));
     } catch {
       fail("MEDIA_IO_FAILED");
     }
@@ -59735,10 +61227,10 @@ function buildNavigationPlan(graph, targetScreen, fromScreen) {
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
 init_storage();
-import { execFileSync as execFileSync7 } from "node:child_process";
+import { execFileSync as execFileSync8 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync7("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync8("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -60472,12 +61964,12 @@ init_agent_device_wrapper();
 init_project_config();
 init_maestro_validator();
 init_maestro_run();
-import { execFile as execFileCb20 } from "node:child_process";
-import { promisify as promisify26 } from "node:util";
-import { existsSync as existsSync25, readFileSync as readFileSync21, writeFileSync as writeFileSync14, readdirSync as readdirSync7 } from "node:fs";
-import { join as join32 } from "node:path";
+import { execFile as execFileCb19 } from "node:child_process";
+import { promisify as promisify25 } from "node:util";
+import { existsSync as existsSync26, readFileSync as readFileSync22, writeFileSync as writeFileSync13, readdirSync as readdirSync7 } from "node:fs";
+import { join as join33 } from "node:path";
 import { homedir as homedir10 } from "node:os";
-var execFile24 = promisify26(execFileCb20);
+var execFile23 = promisify25(execFileCb19);
 var AUTH_ROUTE_PATTERNS = [
   "login",
   "signin",
@@ -60537,9 +62029,9 @@ async function isOnAuthScreen(client2) {
   }
 }
 function findLoginFlow(projectRoot) {
-  const searchDirs = [join32(projectRoot, ".maestro", "subflows"), join32(projectRoot, ".maestro")];
+  const searchDirs = [join33(projectRoot, ".maestro", "subflows"), join33(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
-    if (!existsSync25(dir))
+    if (!existsSync26(dir))
       continue;
     let files;
     try {
@@ -60549,12 +62041,12 @@ function findLoginFlow(projectRoot) {
     }
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join32(dir, candidate);
+        return join33(dir, candidate);
       }
     }
     const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
     if (authFile)
-      return join32(dir, authFile);
+      return join33(dir, authFile);
   }
   return null;
 }
@@ -60590,7 +62082,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
-  const originalContent = readFileSync21(flowPath, "utf-8");
+  const originalContent = readFileSync22(flowPath, "utf-8");
   const flowContent = stripClearState(originalContent);
   let validatedCommands;
   try {
@@ -60626,16 +62118,16 @@ async function handleAutoLogin(client2, opts = {}) {
     throw err;
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
-  writeFileSync14(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join32(homedir10(), ".maestro-runner", "bin", "maestro-runner");
-  if (!existsSync25(runnerPath)) {
+  writeFileSync13(wrapperPath, wrapperContent, "utf-8");
+  const runnerPath = join33(homedir10(), ".maestro-runner", "bin", "maestro-runner");
+  if (!existsSync26(runnerPath)) {
     return {
       loggedIn: false,
       reason: "maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
     };
   }
   try {
-    await runFlowParked(() => execFile24(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile23(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -60803,97 +62295,6 @@ function createProofStepHandler(getClient2, deps = {}) {
 init_utils();
 init_agent_device_wrapper();
 init_discovery();
-function createConnectHandler(getClient2, setClient2, createClient2) {
-  return async (args) => {
-    let client2 = getClient2();
-    const session = getActiveSession();
-    const sessionFilters = sessionConnectFilters(session);
-    if (args.platform && sessionFilters?.platform && args.platform.toLowerCase() !== sessionFilters.platform) {
-      return failResult(`cdp_connect requested ${args.platform}, but the active session is bound to ${sessionFilters.platform}; refusing cross-platform fallback. This is platform affinity, not iOS UDID identity.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
-    }
-    if (args.bundleId && sessionFilters?.bundleId && args.bundleId.toLowerCase() !== sessionFilters.bundleId.toLowerCase()) {
-      return failResult(`cdp_connect requested bundleId ${args.bundleId}, but the active session is bound to ${sessionFilters.bundleId}.`, "TARGET_SESSION_MISMATCH", { deviceSession: session });
-    }
-    const effectiveFilters = {
-      ...sessionFilters,
-      ...args.platform ? { platform: args.platform.toLowerCase() } : {},
-      ...args.bundleId ? { bundleId: args.bundleId } : {},
-      ...args.targetId ? { targetId: args.targetId } : {}
-    };
-    if (client2.isConnected && !args.force) {
-      const target = client2.connectedTarget;
-      const portMismatch = typeof args.metroPort === "number" && args.metroPort !== client2.metroPort;
-      const targetIdMismatch = typeof effectiveFilters.targetId === "string" && effectiveFilters.targetId.length > 0 && effectiveFilters.targetId !== target?.id;
-      const sessionMismatch = !targetMatchesSession(target ?? null, effectiveFilters);
-      if (portMismatch || targetIdMismatch || sessionMismatch) {
-        const port = args.metroPort ?? client2.metroPort;
-        await client2.disconnect();
-        client2 = createClient2(port);
-        setClient2(client2);
-      } else {
-        return okResult({
-          alreadyConnected: true,
-          port: client2.metroPort,
-          target: target ? {
-            id: target.id,
-            title: target.title,
-            vm: target.vm,
-            platform: target.platform ?? null
-          } : null
-        });
-      }
-    } else if (client2.isConnected && args.force) {
-      const port = args.metroPort ?? client2.metroPort;
-      await client2.disconnect();
-      client2 = createClient2(port);
-      setClient2(client2);
-    } else if (typeof args.metroPort === "number" && args.metroPort !== client2.metroPort) {
-      await client2.disconnect();
-      client2 = createClient2(args.metroPort);
-      setClient2(client2);
-    }
-    try {
-      const msg3 = await client2.autoConnect(args.metroPort, effectiveFilters);
-      const target = client2.connectedTarget;
-      if (!targetMatchesSession(target, effectiveFilters)) {
-        await client2.disconnect();
-        throw new TargetSelectionError(effectiveFilters.targetId ? "TARGET_PLATFORM_CONFLICT" : "PLATFORM_TARGET_NOT_FOUND", `Connected target failed post-connect affinity validation for platform=${effectiveFilters.platform ?? "unspecified"} bundleId=${effectiveFilters.bundleId ?? "unspecified"}. The socket was disconnected; run cdp_targets and relaunch the requested app.`, target ? [target] : []);
-      }
-      return okResult({
-        connected: true,
-        message: msg3,
-        port: client2.metroPort,
-        target: target ? {
-          id: target.id,
-          title: target.title,
-          vm: target.vm,
-          platform: target.platform ?? null,
-          description: target.description ?? null,
-          appId: target.appId ?? null
-        } : null
-      });
-    } catch (err) {
-      if (err instanceof TargetSelectionError) {
-        const port = client2.metroPort;
-        await client2.disconnect().catch(() => void 0);
-        setClient2(createClient2(port));
-        return failResult(err.message, err.code, {
-          candidates: err.candidates.map((target) => ({
-            id: target.id,
-            title: target.title,
-            deviceName: target.deviceName ?? null,
-            description: target.description ?? null,
-            appId: target.appId ?? null,
-            platform: target.platform ?? null,
-            confidence: target.platformInference ?? "probed"
-          })),
-          affinity: "cross-platform-only; iOS UDID identity is unavailable from Metro"
-        });
-      }
-      return failResult(err instanceof Error ? err.message : String(err));
-    }
-  };
-}
 function createDisconnectHandler(getClient2, setClient2, createClient2) {
   return async (_args) => {
     const client2 = getClient2();
@@ -60937,70 +62338,54 @@ function createTargetsHandler(getClient2) {
 init_logger();
 init_utils();
 init_rn_fast_runner_client();
-init_project_config();
-init_agent_device_wrapper();
 init_app_installed_probe();
 init_recover_detached();
-import { execFile as execFileCb21 } from "node:child_process";
-import { promisify as promisify27 } from "node:util";
 init_resolve_ios_app_file();
 init_maestro_validator();
-var defaultExecFile3 = promisify27(execFileCb21);
-var lastSeenBundleIds = /* @__PURE__ */ new Map();
-var SIMULATOR_UDID_RE2 = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+import { execFile as execFileCb20 } from "node:child_process";
+import { promisify as promisify26 } from "node:util";
+var defaultExecFile3 = promisify26(execFileCb20);
+var SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 function safeSimctlTarget(deviceId) {
-  if (deviceId === "booted")
-    return "booted";
-  if (deviceId && SIMULATOR_UDID_RE2.test(deviceId))
-    return deviceId;
-  return "booted";
+  return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
 }
 var inflightRestart = null;
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile28 = deps.execFile ?? defaultExecFile3;
+  const execFile27 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const resolveBundleIdStrictFn = deps.resolveBundleIdStrict ?? resolveBundleIdStrict;
-  const getSessionFn = deps.getSession ?? getActiveSession;
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
-  const persistBundleIdFn = deps.persistBundleId ?? persistLastBundleId;
-  const loadPersistedBundleIdFn = deps.loadPersistedBundleId ?? loadPersistedBundleId;
   async function doRestart(args) {
     try {
       logger.info("MCP", `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
       const oldClient = getClient2();
       const preservedPort = oldClient.metroPort;
-      const observedBundleId = oldClient.connectedTarget?.description ?? null;
-      const targetPlatform = (oldClient.connectedTarget?.platform ?? args.platform ?? "ios").toLowerCase();
-      if (observedBundleId) {
-        lastSeenBundleIds.set(targetPlatform, observedBundleId);
-        persistBundleIdFn(targetPlatform, observedBundleId);
-      }
+      const targetPlatform = (args.platform ?? oldClient.connectedTarget?.platform ?? "").toLowerCase();
       const hardResetSteps = [];
       let bundleId = null;
       if (args.hardReset) {
-        const session = getSessionFn();
-        const sessionMatches = !!session && (session.platform ?? "ios") === targetPlatform;
-        bundleId = args.bundleId ?? observedBundleId ?? (sessionMatches ? session?.appId ?? null : null) ?? lastSeenBundleIds.get(targetPlatform) ?? loadPersistedBundleIdFn(targetPlatform) ?? resolveBundleIdStrictFn(targetPlatform);
-        const targetUdid = safeSimctlTarget(sessionMatches ? session?.deviceId : void 0);
-        if (bundleId !== null && !isValidBundleId(bundleId)) {
-          if (args.bundleId !== void 0) {
-            return failResult(`cdp_restart: invalid bundleId argument "${String(args.bundleId).slice(0, 80)}" \u2014 expected reverse-DNS app id like com.example.app`, "INVALID_BUNDLE_ID");
-          }
-          hardResetSteps.push("skip-simctl:invalid-bundleId-from-cache-or-config");
-          bundleId = null;
+        bundleId = args.appId ?? args.bundleId ?? null;
+        if (!bundleId || !isValidBundleId(bundleId)) {
+          return failResult("cdp_restart hardReset requires the exact authority-bound appId", "APP_INSTALL_IDENTITY_CHANGED");
+        }
+        if (!args.deviceId || !targetPlatform) {
+          return failResult("cdp_restart hardReset requires the exact authority-bound device and platform", "DEVICE_AUTHORITY_MISMATCH");
         }
         try {
-          stopFastRunner2(sessionMatches ? session?.deviceId : void 0);
+          stopFastRunner2(args.deviceId);
           hardResetSteps.push("stopFastRunner:ok");
         } catch (err) {
           hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
         }
         if (bundleId && targetPlatform === "ios") {
+          const targetUdid = safeSimctlTarget(args.deviceId);
+          if (!targetUdid) {
+            return failResult("cdp_restart refused a non-exact iOS simulator identifier", "DEVICE_AUTHORITY_MISMATCH");
+          }
           try {
-            await execFile28("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile27("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -61008,7 +62393,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile28("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile27("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -61026,10 +62411,32 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             }
           }
           await sleep6(3e3);
-        } else if (!bundleId) {
-          hardResetSteps.push("skip-simctl:no-bundleId-on-connectedTarget-or-cache-or-state");
+        } else if (bundleId && targetPlatform === "android") {
+          try {
+            await execFile27("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
+              timeout: 5e3
+            });
+            hardResetSteps.push(`adb force-stop ${bundleId}:ok`);
+            await execFile27("adb", [
+              "-s",
+              args.deviceId,
+              "shell",
+              "monkey",
+              "--pct-syskeys",
+              "0",
+              "-p",
+              bundleId,
+              "-c",
+              "android.intent.category.LAUNCHER",
+              "1"
+            ], { timeout: 8e3 });
+            hardResetSteps.push(`adb launch ${bundleId}:ok`);
+          } catch (err) {
+            return failResult(`cdp_restart exact Android relaunch failed: ${err instanceof Error ? err.message : String(err)}`, "RECONNECT_TIMEOUT", { hardResetSteps });
+          }
+          await sleep6(3e3);
         } else {
-          hardResetSteps.push(`skip-simctl:platform=${targetPlatform}-not-yet-supported`);
+          return failResult(`cdp_restart refused unsupported authority platform "${targetPlatform}"`, "PLATFORM_AUTHORITY_MISMATCH");
         }
       }
       try {
@@ -61042,20 +62449,25 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
       let connected = false;
       let connectError;
       try {
-        await newClient.autoConnect(args.metroPort, args.platform);
+        await newClient.autoConnect(args.metroPort, {
+          platform: args.platform,
+          bundleId: args.appId
+        });
         connected = newClient.isConnected;
-        const postConnectBundle = newClient.connectedTarget?.description;
-        if (postConnectBundle) {
-          const postConnectPlatform = (newClient.connectedTarget?.platform ?? args.platform ?? "ios").toLowerCase();
-          lastSeenBundleIds.set(postConnectPlatform, postConnectBundle);
-          persistBundleIdFn(postConnectPlatform, postConnectBundle);
-        }
       } catch (err) {
         connectError = err instanceof Error ? err.message : String(err);
-        logger.warn("MCP", `cdp_restart: autoConnect failed (best-effort): ${connectError}`);
+        logger.warn("MCP", `cdp_restart: exact autoConnect failed: ${connectError}`);
       }
       if (args.hardReset && connected)
         resetDetachedBudgetFn();
+      if (!connected) {
+        return failResult(`cdp_restart could not reconnect the exact session target${connectError ? `: ${connectError}` : ""}`, "RECONNECT_TIMEOUT", {
+          restarted: true,
+          connected: false,
+          hardReset: !!args.hardReset,
+          hardResetSteps
+        });
+      }
       return okResult({
         restarted: true,
         connected,
@@ -61071,11 +62483,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   }
   return async (args) => {
     if (inflightRestart) {
-      return okResult({
-        restarted: false,
-        reason: "restart-in-progress",
-        hint: "A cdp_restart is already running; await its completion and call again only if it failed."
-      });
+      return failResult("A cdp_restart is already running for this worker.", "OPERATION_ALREADY_IN_PROGRESS", { nextAction: "Await the active restart before retrying." });
     }
     inflightRestart = doRestart(args).finally(() => {
       inflightRestart = null;
@@ -61113,10 +62521,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve5) => {
+    const timeout = new Promise((resolve8) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve5();
+        resolve8();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -61127,11 +62535,11 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash8 } from "node:crypto";
-import { execFileSync as execFileSync8 } from "node:child_process";
-import { closeSync as closeSync4, existsSync as existsSync26, mkdirSync as mkdirSync14, openSync as openSync4, readFileSync as readFileSync22, statSync as statSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15, writeSync as writeSync2 } from "node:fs";
+import { createHash as createHash10 } from "node:crypto";
+import { execFileSync as execFileSync9 } from "node:child_process";
+import { closeSync as closeSync4, existsSync as existsSync27, mkdirSync as mkdirSync15, openSync as openSync4, readFileSync as readFileSync23, statSync as statSync9, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14, writeSync as writeSync2 } from "node:fs";
 import { tmpdir as tmpdir10, userInfo as userInfo2 } from "node:os";
-import { join as join33, resolve as resolve4 } from "node:path";
+import { join as join34, resolve as resolve5 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var DEFAULT_STALE_MS2 = 9e4;
@@ -61148,7 +62556,7 @@ function defaultProcessAlive4(pid) {
 }
 function defaultProcessName(pid) {
   try {
-    const out = execFileSync8("ps", ["-p", String(pid), "-o", "args="], {
+    const out = execFileSync9("ps", ["-p", String(pid), "-o", "args="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -61160,7 +62568,7 @@ function defaultProcessName(pid) {
 }
 function defaultProcessParent(pid) {
   try {
-    const out = execFileSync8("ps", ["-p", String(pid), "-o", "ppid="], {
+    const out = execFileSync9("ps", ["-p", String(pid), "-o", "ppid="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -61175,7 +62583,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash8("md5").update(resolve4(projectRoot)).digest("hex").slice(0, 8);
+  return createHash10("md5").update(resolve5(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -61201,7 +62609,7 @@ var Lockfile = class {
       processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
       staleMs: opts.staleMs ?? DEFAULT_STALE_MS2
     };
-    this.lockPath = join33(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
+    this.lockPath = join34(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
   }
   // GH#251: acquire via atomic exclusive-create (same pattern as DeviceLock).
   // The previous read-then-writeFileSync let two bridges starting in the same
@@ -61258,7 +62666,7 @@ var Lockfile = class {
     if (!this.acquired)
       return;
     try {
-      if (existsSync26(this.lockPath)) {
+      if (existsSync27(this.lockPath)) {
         const body = this.readExisting();
         if (body?.pid === this.opts.pid) {
           unlinkSync10(this.lockPath);
@@ -61286,16 +62694,16 @@ var Lockfile = class {
       return false;
     body.lastHeartbeat = this.opts.clock();
     try {
-      writeFileSync15(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+      writeFileSync14(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
     } catch {
     }
     return true;
   }
   readExisting() {
-    if (!existsSync26(this.lockPath))
+    if (!existsSync27(this.lockPath))
       return null;
     try {
-      const raw = readFileSync22(this.lockPath, "utf8");
+      const raw = readFileSync23(this.lockPath, "utf8");
       const parsed = JSON.parse(raw);
       if (!isValidLockBody(parsed))
         return null;
@@ -61330,7 +62738,7 @@ var Lockfile = class {
   }
   ageOfLockFile() {
     try {
-      const st = statSync8(this.lockPath);
+      const st = statSync9(this.lockPath);
       return this.opts.clock() - st.mtimeMs;
     } catch {
       return null;
@@ -61346,8 +62754,8 @@ var Lockfile = class {
       version: this.opts.version || void 0
     };
     const dir = this.opts.tmpDir;
-    if (!existsSync26(dir)) {
-      mkdirSync14(dir, { recursive: true });
+    if (!existsSync27(dir)) {
+      mkdirSync15(dir, { recursive: true });
     }
     const fd = openSync4(this.lockPath, "wx");
     try {
@@ -61366,20 +62774,20 @@ function isValidLockBody(obj) {
   const o = obj;
   return typeof o.pid === "number" && typeof o.projectRoot === "string" && typeof o.startedAt === "number";
 }
-function formatLockConflictMessage(conflict) {
-  const ageSec = Math.floor(conflict.ageMs / 1e3);
+function formatLockConflictMessage(conflict2) {
+  const ageSec = Math.floor(conflict2.ageMs / 1e3);
   const ageStr = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
   return [
     `Another rn-dev-agent MCP is running in this project.`,
-    `  PID:      ${conflict.pid}`,
-    `  Project:  ${conflict.projectRoot}`,
+    `  PID:      ${conflict2.pid}`,
+    `  Project:  ${conflict2.projectRoot}`,
     `  Started:  ${ageStr}`,
-    `  Lock:     ${conflict.lockPath}`,
+    `  Lock:     ${conflict2.lockPath}`,
     ``,
     `To resolve:`,
     `  1. Close the other Claude Code window for this project, OR`,
-    `  2. Kill the other process:  kill ${conflict.pid}`,
-    `  3. (If the process is dead) delete the lock file:  rm ${conflict.lockPath}`,
+    `  2. Kill the other process:  kill ${conflict2.pid}`,
+    `  3. (If the process is dead) delete the lock file:  rm ${conflict2.lockPath}`,
     ``,
     `Running two MCPs in the same project causes missed events and state flicker.`,
     `Start with --no-lock to bypass this check (advanced; expect flaky behavior).`
@@ -61422,8 +62830,8 @@ init_maestro_run();
 init_utils();
 init_storage();
 init_maestro_validator();
-import { existsSync as existsSync27, mkdirSync as mkdirSync15, writeFileSync as writeFileSync16 } from "node:fs";
-import { join as join34 } from "node:path";
+import { existsSync as existsSync28, mkdirSync as mkdirSync16, writeFileSync as writeFileSync15 } from "node:fs";
+import { join as join35 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
   switch (step.action) {
@@ -61479,16 +62887,16 @@ function createMaestroGenerateHandler() {
       return failResult("Provide a flow name and at least one step.");
     }
     const root = findProjectRoot();
-    const outputDir = args.outputDir ?? (root ? join34(root, ".rn-agent", "actions") : null);
+    const outputDir = args.outputDir ?? (root ? join35(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
-    if (!existsSync27(outputDir)) {
-      mkdirSync15(outputDir, { recursive: true });
+    if (!existsSync28(outputDir)) {
+      mkdirSync16(outputDir, { recursive: true });
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join34(outputDir, fileName);
+    const filePath = join35(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
@@ -61507,7 +62915,7 @@ function createMaestroGenerateHandler() {
       }
       throw err;
     }
-    writeFileSync16(filePath, content, "utf-8");
+    writeFileSync15(filePath, content, "utf-8");
     return okResult({
       generated: true,
       path: filePath,
@@ -61528,17 +62936,17 @@ init_maestro_error_parser();
 init_resolve_ios_app_file();
 init_maestro_device_authority();
 init_maestro_runner_report();
-import { execFile as execFileCb22 } from "node:child_process";
-import { promisify as promisify28 } from "node:util";
-import { existsSync as existsSync28, readdirSync as readdirSync8, readFileSync as readFileSync23, writeFileSync as writeFileSync17 } from "node:fs";
-import { join as join35 } from "node:path";
+import { execFile as execFileCb21 } from "node:child_process";
+import { promisify as promisify27 } from "node:util";
+import { existsSync as existsSync29, readdirSync as readdirSync8, readFileSync as readFileSync24, writeFileSync as writeFileSync16 } from "node:fs";
+import { join as join36 } from "node:path";
 import { tmpdir as tmpdir11 } from "node:os";
-var execFile25 = promisify28(execFileCb22);
+var execFile24 = promisify27(execFileCb21);
 function discoverFlows(dir, pattern) {
-  if (!existsSync28(dir))
+  if (!existsSync29(dir))
     return [];
   const files = readdirSync8(dir, { recursive: true });
-  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join35(dir, f)).sort();
+  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join36(dir, f)).sort();
   if (pattern) {
     if (pattern.length > 256) {
       return yamls;
@@ -61570,7 +62978,7 @@ function createMaestroTestAllHandler() {
       return failResult(dispatch.error);
     }
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join35(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join36(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
@@ -61590,12 +62998,12 @@ function createMaestroTestAllHandler() {
       let appFile;
       let flowHasHideKeyboard = false;
       try {
-        const yamlText = readFileSync23(flow, "utf-8");
+        const yamlText = readFileSync24(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsed.appId !== void 0 ? { appId: parsed.appId } : {}, parsed.commands);
-        safeFlowFile = join35(tmpdir11(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-        writeFileSync17(safeFlowFile, canonical, "utf-8");
+        safeFlowFile = join36(tmpdir11(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        writeFileSync16(safeFlowFile, canonical, "utf-8");
         const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, void 0);
         if (!appFileResolution.ok) {
           results.push({
@@ -61636,7 +63044,7 @@ function createMaestroTestAllHandler() {
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
       const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
       try {
-        const { stdout, stderr } = await runFlowParked(() => execFile25(flowDispatch.binPath, finalArgs, {
+        const { stdout, stderr } = await runFlowParked(() => execFile24(flowDispatch.binPath, finalArgs, {
           timeout,
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
@@ -61723,8 +63131,8 @@ function createMaestroTestAllHandler() {
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
 init_agent_device_wrapper();
 init_utils();
-import { readFileSync as readFileSync24, readdirSync as readdirSync9, lstatSync as lstatSync4 } from "node:fs";
-import { join as join36, extname as extname2 } from "node:path";
+import { readFileSync as readFileSync25, readdirSync as readdirSync9, lstatSync as lstatSync6 } from "node:fs";
+import { join as join37, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
   return nodes.some((n) => {
@@ -61749,9 +63157,9 @@ function discoverTestIDs(dir) {
     for (const entry of entries) {
       if (entry === "node_modules" || entry.startsWith("."))
         continue;
-      const full = join36(d, entry);
+      const full = join37(d, entry);
       try {
-        const st = lstatSync4(full);
+        const st = lstatSync6(full);
         if (st.isSymbolicLink())
           continue;
         if (st.isDirectory()) {
@@ -61760,7 +63168,7 @@ function discoverTestIDs(dir) {
         }
         if (!SCAN_EXTENSIONS.has(extname2(entry)))
           continue;
-        const src = readFileSync24(full, "utf8");
+        const src = readFileSync25(full, "utf8");
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id)
@@ -61773,7 +63181,7 @@ function discoverTestIDs(dir) {
   walk(dir);
   return [...ids].sort();
 }
-function createCrossPlatformVerifyHandler() {
+function createCrossPlatformVerifyHandler(dependencies = {}) {
   return async (args) => {
     let elements = args.elements;
     let discoveredCount = 0;
@@ -61792,8 +63200,13 @@ function createCrossPlatformVerifyHandler() {
       return failResult("Provide elements[] or scanDir to discover testIDs from source.");
     }
     const matchBy = args.matchBy ?? "any";
-    const iosSnap = getCachedSnapshot("ios");
-    const androidSnap = getCachedSnapshot("android");
+    const validateAuthority = dependencies.validateAuthority ?? validateCachedSnapshotAuthority;
+    const [iosValid, androidValid] = await Promise.all([
+      validateAuthority("ios"),
+      validateAuthority("android")
+    ]);
+    const iosSnap = iosValid ? getCachedSnapshot("ios") : void 0;
+    const androidSnap = androidValid ? getCachedSnapshot("android") : void 0;
     if (!iosSnap && !androidSnap) {
       return failResult("No cached snapshots for either platform. Run device_snapshot on iOS and Android first, then call this tool to compare.", {
         hint: "Workflow: open iOS session \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify"
@@ -61970,6 +63383,80 @@ function createMetroEventsHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/index.js
 init_rn_fast_runner_client();
+init_rn_android_runner_client();
+
+// packages/rn-dev-agent-core/dist/session/install-authority.js
+import { execFileSync as execFileSync10 } from "node:child_process";
+import { createHash as createHash11 } from "node:crypto";
+import { readFileSync as readFileSync26, statSync as statSync10 } from "node:fs";
+import { join as join38 } from "node:path";
+function runText(command, args) {
+  return execFileSync10(command, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 1e4,
+    maxBuffer: 8 * 1024 * 1024
+  });
+}
+function generation(parts) {
+  return createHash11("sha256").update(parts.join("\0")).digest("hex");
+}
+function androidApkPaths(target, text) {
+  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
+}
+function captureInstallGeneration(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join38(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const stat2 = dependencies.stat ?? statSync10;
+    const metadata2 = [infoPath, join38(appPath, executable)].map((path) => {
+      const value = stat2(path);
+      return `${path}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+    });
+    return generation(metadata2);
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  const metadata = text("adb", [
+    "-s",
+    target.deviceId,
+    "shell",
+    "stat",
+    "-c",
+    "%n:%i:%s:%Y",
+    ...apkPaths
+  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
+  if (metadata.length !== apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
+  }
+  return generation(metadata);
+}
+
+// packages/rn-dev-agent-core/dist/index.js
+init_process_birth();
 init_ensure_single_runner();
 
 // packages/rn-dev-agent-core/dist/observability/instrumentation.js
@@ -62073,7 +63560,7 @@ function instrumentTool(toolName, handler) {
 }
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join37 } from "node:path";
+import { join as join39 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
@@ -62216,7 +63703,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join37(tmpdir12(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join39(tmpdir12(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -62230,16 +63717,16 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync25 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname15, join as join38 } from "node:path";
+import { dirname as dirname16, join as join40 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
-import { randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { randomBytes as randomBytes5, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 function makeCsrfToken() {
-  return randomBytes2(24).toString("hex");
+  return randomBytes5(24).toString("hex");
 }
-function isPostAllowed(req, token) {
+function isPostAllowed(req, token2) {
   if ((req.method ?? "").toUpperCase() !== "POST") {
     return { ok: false, status: 405, reason: "method not allowed" };
   }
@@ -62247,8 +63734,8 @@ function isPostAllowed(req, token) {
   if (gotRaw !== void 0) {
     const got = String(gotRaw);
     const a = Buffer.from(got);
-    const b = Buffer.from(token);
-    if (a.length !== b.length || !timingSafeEqual2(a, b)) {
+    const b = Buffer.from(token2);
+    if (a.length !== b.length || !timingSafeEqual3(a, b)) {
       return { ok: false, status: 403, reason: "bad csrf token" };
     }
   }
@@ -62264,20 +63751,22 @@ function isPostAllowed(req, token) {
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 var HOST = "127.0.0.1";
-var __dir = dirname15(fileURLToPath3(import.meta.url));
+var __dir = dirname16(fileURLToPath3(import.meta.url));
 var ObservabilityServer = class {
   recorder;
   e2e;
   mirror;
   state;
+  authority;
   server = null;
   port = 0;
   streams = /* @__PURE__ */ new Set();
-  constructor(recorder2, e2e, mirror, state) {
+  constructor(recorder2, e2e, mirror, state, authority) {
     this.recorder = recorder2;
     this.e2e = e2e;
     this.mirror = mirror;
     this.state = state;
+    this.authority = authority;
   }
   async start(preferredPort) {
     if (this.server)
@@ -62289,10 +63778,9 @@ var ObservabilityServer = class {
       this.port = await listen(server3, preferredPort ?? 0);
     } catch (e) {
       if (e.code === "EADDRINUSE" && preferredPort) {
-        this.port = await listen(server3, 0);
-      } else {
-        throw e;
+        throw new Error(`OBSERVE_PORT_CLAIM_CONFLICT: allocated Observe port ${preferredPort} is occupied`);
       }
+      throw e;
     }
     this.server = server3;
     return { url: this.url(), port: this.port };
@@ -62320,36 +63808,52 @@ var ObservabilityServer = class {
   handle(req, res) {
     if (!this.guard(req, res))
       return;
-    const url = req.url ?? "/";
-    if (url === "/api/stream")
+    const url = new URL(req.url ?? "/", `http://${HOST}:${this.port}`);
+    const path = url.pathname;
+    if (path === "/api/authority") {
+      return this.json(res, 200, {
+        sessionId: this.authority?.sessionId,
+        claimEpoch: this.authority?.claimEpoch,
+        instanceId: this.authority?.instanceId
+      });
+    }
+    if (path === "/api/stop" && req.method === "POST") {
+      res.writeHead(202, { "content-type": "application/json" });
+      res.end('{"stopping":true}');
+      queueMicrotask(() => {
+        void this.stop();
+      });
+      return;
+    }
+    if (path === "/api/stream")
       return this.stream(res);
-    const shot = /^\/api\/screenshot\/(\d+)$/.exec(url);
+    const shot = /^\/api\/screenshot\/(\d+)$/.exec(path);
     if (shot)
       return this.screenshot(Number(shot[1]), res);
-    if (/^\/api\/live-screenshot\/\d+$/.test(url))
+    if (/^\/api\/live-screenshot\/\d+$/.test(path))
       return this.liveScreenshot(res);
-    if (/^\/api\/device\/mirror(\?|$)/.test(url)) {
+    if (path === "/api/device/mirror") {
       if (req.method?.toUpperCase() !== "GET") {
         this.json(res, 405, { error: "method not allowed" });
         return;
       }
       return this.mirrorStream(res);
     }
-    const stateKind = /^\/api\/state\/([A-Za-z]+)$/.exec(url);
+    const stateKind = /^\/api\/state\/([A-Za-z]+)$/.exec(path);
     if (stateKind)
       return void this.stateRead(stateKind[1], req, res);
-    if (url === "/api/e2e/run")
+    if (path === "/api/e2e/run")
       return void this.e2eRun(req, res);
-    if (url === "/api/e2e/runs")
+    if (path === "/api/e2e/runs")
       return void this.e2eListRuns(res);
-    const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(url);
+    const runById = /^\/api\/e2e\/runs\/([^/]+)$/.exec(path);
     if (runById)
       return void this.e2eLoadRun(runById[1], res);
-    if (url === "/api/e2e/actions")
+    if (path === "/api/e2e/actions")
       return void this.e2eListActions(res);
-    if (url === "/api/e2e/actions/run")
+    if (path === "/api/e2e/actions/run")
       return void this.e2eRunAction(req, res);
-    if (url === "/")
+    if (path === "/")
       return this.index(res);
     res.writeHead(404);
     res.end();
@@ -62402,7 +63906,14 @@ var ObservabilityServer = class {
     const okHost = host === `127.0.0.1:${this.port}` || host === `localhost:${this.port}` || host === "127.0.0.1" || host === "localhost";
     const site = req.headers["sec-fetch-site"];
     const okSite = site === void 0 || site === "same-origin" || site === "none";
-    if (!okHost || !okSite) {
+    const path = new URL(req.url ?? "/", `http://${HOST}:${this.port}`).pathname;
+    const rootNavigation = path === "/" && (site === void 0 || site === "none");
+    const staticAsset = !path.startsWith("/api/") && path !== "/events";
+    const requestUrl = new URL(req.url ?? "/", `http://${HOST}:${this.port}`);
+    const authorization = req.headers.authorization ?? (requestUrl.searchParams.get("capability") ? `Bearer ${requestUrl.searchParams.get("capability")}` : void 0);
+    const instance = req.headers["x-rn-observe-instance"] ?? requestUrl.searchParams.get("instance") ?? void 0;
+    const authorized = !this.authority || rootNavigation || staticAsset || authorization === `Bearer ${this.authority.capability}` && instance === this.authority.instanceId;
+    if (!okHost || !okSite || !authorized) {
       res.writeHead(403);
       res.end("forbidden");
       return false;
@@ -62456,18 +63967,29 @@ var ObservabilityServer = class {
         return;
       }
       this.json(res, 200, out);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
   index(res) {
     try {
-      let html = readFileSync25(join38(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync27(join40(__dir, "web-dist", "index.html"), "utf8");
+      if (this.authority) {
+        const authorityJs = JSON.stringify({
+          capability: this.authority.capability,
+          instanceId: this.authority.instanceId
+        }).replace(/</g, "\\u003c");
+        html = html.replace("</head>", `<script>window.__RN_OBSERVE_AUTHORITY__=${authorityJs}</script></head>`);
+      }
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
       }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+      });
       res.end(html);
     } catch {
       res.writeHead(503);
@@ -62478,26 +64000,29 @@ var ObservabilityServer = class {
   // handle() fire-and-forgets the async routes, so a rejecting await here
   // would crash the process on an oversized/aborted request (GH #438 review).
   readBody(req) {
-    return new Promise((resolve5) => {
+    return new Promise((resolve8) => {
       let body = "";
       let bytes = 0;
       req.on("data", (chunk) => {
         bytes += chunk.length;
         if (bytes > 65536) {
           req.destroy();
-          resolve5(null);
+          resolve8(null);
           return;
         }
         body += chunk.toString();
       });
-      req.on("end", () => resolve5(body));
-      req.on("error", () => resolve5(null));
+      req.on("end", () => resolve8(body));
+      req.on("error", () => resolve8(null));
     });
   }
   json(res, status, obj) {
     const body = JSON.stringify(obj);
-    res.writeHead(status, { "Content-Type": "application/json" });
+    res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(body);
+  }
+  internalError(res) {
+    this.json(res, 500, { error: "internal server error" });
   }
   async e2eRun(req, res) {
     if (!this.e2e) {
@@ -62528,8 +64053,8 @@ var ObservabilityServer = class {
     try {
       const result = await this.e2e.triggerRun(parsed.pattern);
       this.json(res, 200, result);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
   async e2eListRuns(res) {
@@ -62540,8 +64065,8 @@ var ObservabilityServer = class {
     try {
       const runs = await this.e2e.listRuns();
       this.json(res, 200, runs);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
   async e2eLoadRun(id, res) {
@@ -62556,8 +64081,8 @@ var ObservabilityServer = class {
         return;
       }
       this.json(res, 200, run);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
   async e2eListActions(res) {
@@ -62568,8 +64093,8 @@ var ObservabilityServer = class {
     try {
       const actions = await this.e2e.listActions();
       this.json(res, 200, actions);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
   async e2eRunAction(req, res) {
@@ -62613,13 +64138,13 @@ var ObservabilityServer = class {
         return;
       }
       this.json(res, 200, result);
-    } catch (err) {
-      this.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      this.internalError(res);
     }
   }
 };
 function listen(server3, port) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve8, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -62628,7 +64153,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve5(typeof addr === "object" && addr ? addr.port : port);
+      resolve8(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -62639,10 +64164,10 @@ init_project_config();
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
 init_secure_state_file();
 init_storage();
-import { join as join39 } from "node:path";
+import { join as join41 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join39(getStateDir(), "observe", `${safe}.json`);
+  return join41(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -62681,6 +64206,7 @@ var server = null;
 var e2eDeps;
 var mirrorManager;
 var stateDeps;
+var authorityDeps;
 function setObserveE2eDeps(d) {
   e2eDeps = d;
 }
@@ -62690,15 +64216,22 @@ function setObserveStateDeps(d) {
 function setObserveMirror(m) {
   mirrorManager = m;
 }
+function setObserveAuthorityDeps(deps) {
+  authorityDeps = deps;
+}
 var starting = null;
 async function startObserveServer() {
   if (starting)
     return starting;
   starting = (async () => {
-    if (!server)
-      server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps);
-    const { port } = resolveObservePort();
+    const resolved = authorityDeps?.resolve();
+    if (!server) {
+      server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority);
+    }
+    const port = resolved?.port ?? resolveObservePort().port;
     const res = await server.start(port);
+    if (resolved)
+      authorityDeps?.bind({ port: res.port, authority: resolved.authority });
     writeObserveState(res.url, res.port);
     return res;
   })();
@@ -62719,6 +64252,7 @@ async function stopObserveServer() {
   starting = null;
   await server?.stop();
   server = null;
+  authorityDeps?.unbind();
   removeObserveState();
 }
 async function observeHandler(args) {
@@ -62810,10 +64344,10 @@ async function autostartObserve(deps) {
 init_project_config();
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn5, execFile as execFile26 } from "node:child_process";
+import { spawn as spawn5, execFile as execFile25 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir13 } from "node:os";
-import { join as join40 } from "node:path";
+import { join as join42 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
 var MAX_FRAME_BYTES = 8e6;
@@ -62866,7 +64400,7 @@ var RestartGate = class {
 var SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
 var IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-var sleep5 = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms));
+var sleep5 = (ms) => new Promise((resolve8) => setTimeout(resolve8, ms));
 var scheduleAfter = (fn, delayMs) => {
   if (delayMs <= 0)
     setImmediate(fn);
@@ -62874,9 +64408,9 @@ var scheduleAfter = (fn, delayMs) => {
     setTimeout(fn, delayMs);
 };
 var defaultSpawn = (cmd, args) => spawn5(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-async function detectIdb(execFileFn = execFile26) {
-  return new Promise((resolve5) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve5(!err));
+async function detectIdb(execFileFn = execFile25) {
+  return new Promise((resolve8) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve8(!err));
   });
 }
 function isEnoent(err) {
@@ -62969,7 +64503,7 @@ var IosSimctlLoopSource = class {
     this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
     this.idleDelayMs = opts.idleDelayMs ?? 25;
     this.failurePauseMs = opts.failurePauseMs ?? 500;
-    this.tmpPath = opts.tmpPath ?? (() => join40(tmpdir13(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+    this.tmpPath = opts.tmpPath ?? (() => join42(tmpdir13(), "rn-mirror-simctl-" + process.pid + ".jpg"));
   }
   start(sink) {
     this.active = true;
@@ -63007,8 +64541,8 @@ var IosSimctlLoopSource = class {
 };
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve5, reject) => {
-    execFile26(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+  return new Promise((resolve8, reject) => {
+    execFile25(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -63016,7 +64550,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile2(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve5(buf);
+        resolve8(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -63404,20 +64938,20 @@ function buildMirrorTargetResolver(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync28 } from "node:fs";
+import { readFileSync as readFileSync30 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname16, join as join41 } from "node:path";
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync18, renameSync as renameSync6, readFileSync as readFileSync26, readdirSync as readdirSync10, existsSync as existsSync29 } from "node:fs";
-import { createHash as createHash9 } from "node:crypto";
+import { dirname as dirname17, join as join43 } from "node:path";
+import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync17, renameSync as renameSync6, readFileSync as readFileSync28, readdirSync as readdirSync10, existsSync as existsSync30 } from "node:fs";
+import { createHash as createHash12 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
-  return join41(projectRoot, ".rn-agent", "e2e");
+  return join43(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join41(dir, `${id}.yaml`);
+  const file = join43(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -63441,11 +64975,11 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash9("sha256").update(s).digest("hex");
+  return createHash12("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
-  mkdirSync16(dirname16(filePath), { recursive: true });
+  mkdirSync17(dirname17(filePath), { recursive: true });
   const meta = {
     id: source.id,
     intent: source.intent,
@@ -63459,19 +64993,19 @@ function freezeLockedTest(projectRoot, source, ctx) {
     flow: source.flow
   };
   const tmp = `${filePath}.tmp`;
-  writeFileSync18(tmp, serializeLockedTest(meta), "utf8");
+  writeFileSync17(tmp, serializeLockedTest(meta), "utf8");
   renameSync6(tmp, filePath);
   return { ...meta, filePath };
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
-  if (!existsSync29(filePath))
+  if (!existsSync30(filePath))
     return null;
-  return parseLockedTest(readFileSync26(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync28(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
-  if (!existsSync29(dir))
+  if (!existsSync30(dir))
     return [];
   return readdirSync10(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
@@ -63510,29 +65044,29 @@ function parseLockedTest(text, filePath) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync27 } from "node:fs";
-import { join as join42 } from "node:path";
+import { readFileSync as readFileSync29 } from "node:fs";
+import { join as join44 } from "node:path";
 function loadE2eConfig(projectRoot) {
-  const filePath = join42(projectRoot, ".rn-agent", "e2e.config.json");
+  const filePath = join44(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync27(filePath, "utf8");
+    const raw = readFileSync29(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
   }
 }
-function resolveParams(config2, testId, required2, provided) {
+function resolveParams(config2, testId, required3, provided) {
   const overrides = Object.fromEntries(Object.entries(provided ?? {}).filter(([, v]) => typeof v === "string" && v !== ""));
   const merged = {
     ...config2.defaults?.params,
     ...config2.tests?.[testId]?.params,
     ...overrides
   };
-  const missing = required2.filter((k) => !merged[k]);
+  const missing = required3.filter((k) => !merged[k]);
   if (missing.length > 0)
     return { ok: false, missing };
   const params = {};
-  for (const k of required2)
+  for (const k of required3)
     params[k] = merged[k];
   return { ok: true, params };
 }
@@ -63552,8 +65086,8 @@ function redactSecrets(text, secretValues) {
 }
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync9 } from "node:child_process";
-var defaultExec3 = (cmd, args) => execFileSync9(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+import { execFileSync as execFileSync11 } from "node:child_process";
+var defaultExec3 = (cmd, args) => execFileSync11(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -63583,7 +65117,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync28(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync30(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -63606,7 +65140,11 @@ async function lockE2eTestCore(args, deps = {}) {
   }
   const session = getSession();
   const platform = session?.platform ?? void 0;
-  const runArgs = { flowPath: action.filePath, platform };
+  const runArgs = {
+    flowPath: action.filePath,
+    platform,
+    ...session?.deviceId ? { deviceId: session.deviceId } : {}
+  };
   if (resolvedParams)
     runArgs["params"] = resolvedParams;
   const result = await maestroRun(runArgs);
@@ -63641,8 +65179,8 @@ function createLockE2eTestHandler(deps = {}) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
-import { join as join43 } from "node:path";
-import { mkdirSync as mkdirSync17, writeFileSync as writeFileSync19, renameSync as renameSync7, readFileSync as readFileSync29, existsSync as existsSync30 } from "node:fs";
+import { join as join45 } from "node:path";
+import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync18, renameSync as renameSync7, readFileSync as readFileSync31, existsSync as existsSync31 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -63697,20 +65235,20 @@ function diffNewlyFailing(current, previousGreen) {
 }
 var INDEX_MAX = 100;
 function e2eRunsDirFor(projectRoot) {
-  return join43(projectRoot, ".rn-agent", "state", "e2e-runs");
+  return join45(sessionStateDirectory(projectRoot), "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync17(join43(file, ".."), { recursive: true });
+  mkdirSync18(join45(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync19(tmp, JSON.stringify(value, null, 2), "utf8");
+  writeFileSync18(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync7(tmp, file);
 }
 function loadIndex(projectRoot) {
-  const file = join43(e2eRunsDirFor(projectRoot), "index.json");
-  if (!existsSync30(file))
+  const file = join45(e2eRunsDirFor(projectRoot), "index.json");
+  if (!existsSync31(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync29(file, "utf8"));
+    const parsed = JSON.parse(readFileSync31(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -63719,7 +65257,7 @@ function loadIndex(projectRoot) {
 function writeRunRecord(projectRoot, rec) {
   assertValidActionId(rec.runId, "writeRunRecord");
   const dir = e2eRunsDirFor(projectRoot);
-  writeJsonAtomic(join43(dir, `${rec.runId}.json`), rec);
+  writeJsonAtomic(join45(dir, `${rec.runId}.json`), rec);
   const entry = {
     runId: rec.runId,
     finishedAt: rec.finishedAt,
@@ -63727,15 +65265,15 @@ function writeRunRecord(projectRoot, rec) {
     totals: rec.totals
   };
   const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
-  writeJsonAtomic(join43(dir, "index.json"), next);
+  writeJsonAtomic(join45(dir, "index.json"), next);
 }
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
-  const file = join43(e2eRunsDirFor(projectRoot), `${runId}.json`);
-  if (!existsSync30(file))
+  const file = join45(e2eRunsDirFor(projectRoot), `${runId}.json`);
+  if (!existsSync31(file))
     return null;
   try {
-    return JSON.parse(readFileSync29(file, "utf8"));
+    return JSON.parse(readFileSync31(file, "utf8"));
   } catch {
     return null;
   }
@@ -63751,8 +65289,8 @@ init_storage();
 init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
-import { join as join44 } from "node:path";
-import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync20, renameSync as renameSync8, readFileSync as readFileSync30, readdirSync as readdirSync11, existsSync as existsSync31 } from "node:fs";
+import { join as join46 } from "node:path";
+import { mkdirSync as mkdirSync19, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync32, readdirSync as readdirSync11, existsSync as existsSync32 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -63760,25 +65298,25 @@ var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "interrupted"
 ]);
 function requestsDir(projectRoot) {
-  return join44(e2eRunsDirFor(projectRoot), "requests");
+  return join46(e2eRunsDirFor(projectRoot), "requests");
 }
 function requestPath(projectRoot, runId) {
   assertValidActionId(runId, "e2e-run-request");
-  return join44(requestsDir(projectRoot), `${runId}.json`);
+  return join46(requestsDir(projectRoot), `${runId}.json`);
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
-  mkdirSync18(requestsDir(projectRoot), { recursive: true });
+  mkdirSync19(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync20(tmp, JSON.stringify(req, null, 2), "utf8");
+  writeFileSync19(tmp, JSON.stringify(req, null, 2), "utf8");
   renameSync8(tmp, file);
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
-  if (!existsSync31(file))
+  if (!existsSync32(file))
     return null;
   try {
-    return JSON.parse(readFileSync30(file, "utf8"));
+    return JSON.parse(readFileSync32(file, "utf8"));
   } catch {
     return null;
   }
@@ -63793,7 +65331,7 @@ function updateRequest(projectRoot, runId, patch) {
 }
 function listRequests(projectRoot) {
   const dir = requestsDir(projectRoot);
-  if (!existsSync31(dir))
+  if (!existsSync32(dir))
     return [];
   const out = [];
   for (const f of readdirSync11(dir)) {
@@ -64058,15 +65596,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve8) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve5((res.statusCode ?? 500) < 500);
+      resolve8((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve5(false));
+    req.on("error", () => resolve8(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve5(false);
+      resolve8(false);
     });
     req.end();
   });
@@ -64079,9 +65617,9 @@ init_storage();
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
 import { readdirSync as readdirSync12 } from "node:fs";
-import { join as join45 } from "node:path";
+import { join as join47 } from "node:path";
 async function listActions(projectRoot) {
-  const actionsDir = join45(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join47(projectRoot, ".rn-agent", "actions");
   let files;
   try {
     files = readdirSync12(actionsDir);
@@ -64117,9 +65655,2379 @@ async function listActions(projectRoot) {
   return results;
 }
 
+// packages/rn-dev-agent-core/dist/session/runtime.js
+init_process_birth();
+
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+init_process_birth();
+function defaultProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error2) {
+    const code = error2.code;
+    if (code === "ESRCH")
+      return "dead";
+    if (code === "EPERM")
+      return "alive";
+    return "unknown";
+  }
+}
+function inspectSessionOwner(owner, dependencies = {}) {
+  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
+  if (state === "dead")
+    return "mismatch";
+  if (state === "unknown")
+    return "unknown";
+  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
+  if (!observed)
+    return "unknown";
+  return observed.token === owner.token ? "match" : "mismatch";
+}
+
+// packages/rn-dev-agent-core/dist/session/runtime.js
+init_secure_state_file();
+var WorkerAuthorityRuntime = class {
+  available;
+  #registry;
+  #session;
+  #unavailable;
+  #recoveryOnly;
+  constructor(registry2, session, unavailable2, recoveryOnly = false) {
+    this.#registry = registry2;
+    this.#session = session;
+    this.#unavailable = unavailable2;
+    this.available = registry2 !== null && session !== null;
+    this.#recoveryOnly = recoveryOnly;
+  }
+  requireAvailable() {
+    if (!this.#registry || !this.#session) {
+      throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
+    }
+    return { registry: this.#registry, session: this.#session };
+  }
+  requireOperational() {
+    const available = this.requireAvailable();
+    const status = this.status();
+    if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
+      throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
+    }
+    return available;
+  }
+  requireRecovery() {
+    const available = this.requireAvailable();
+    const status = this.status();
+    if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
+    }
+    return available;
+  }
+  status() {
+    if (!this.#registry || !this.#session) {
+      return {
+        available: false,
+        code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
+        reason: this.#unavailable?.reason ?? "authority session is unavailable"
+      };
+    }
+    const status = this.#registry.getSessionStatus(this.#session.sessionId);
+    if (!status) {
+      return {
+        available: false,
+        code: "SESSION_OWNER_LOST",
+        reason: "session is no longer present in the authority registry"
+      };
+    }
+    return { available: true, ...status };
+  }
+  close() {
+    this.#registry?.close();
+  }
+};
+function unavailable(reason, fallbackCode) {
+  const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
+  return new WorkerAuthorityRuntime(null, null, {
+    code: matched?.[1] ?? fallbackCode,
+    reason
+  });
+}
+function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
+  if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
+    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
+  }
+  const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);
+  const registryPath = environment.RN_DEV_AGENT_REGISTRY_PATH;
+  const workerInstance = environment.RN_DEV_AGENT_WORKER_INSTANCE;
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
+    return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
+  if (!birth) {
+    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
+  }
+  try {
+    const registry2 = openSessionRegistry(registryPath, {
+      ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
+    });
+    const session = { sessionId, claimEpoch };
+    const status = registry2.getSessionStatus(sessionId);
+    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
+    if (recoveryOnly) {
+      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
+      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
+      if (!recoveryCapability) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
+      }
+      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
+    } else {
+      registry2.bindWorker(session, {
+        instanceId: workerInstance,
+        pid: birth.pid,
+        token: birth.token
+      });
+    }
+    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
+  } catch (error2) {
+    return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
+  }
+}
+var sharedRuntime = null;
+function getWorkerAuthorityRuntime() {
+  sharedRuntime ??= createWorkerAuthorityRuntime();
+  return sharedRuntime;
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+init_utils();
+
+// packages/rn-dev-agent-core/dist/session/build-receipt.js
+import { createHmac, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+function serialize(payload) {
+  return JSON.stringify(payload);
+}
+function sign(payload, capability) {
+  return createHmac("sha256", capability).update(serialize(payload)).digest("hex");
+}
+function verifyBuildReceipt(receipt2, capability, expected) {
+  if (receipt2.version !== 1 || !receipt2.payload || !receipt2.signature) {
+    throw new Error("BUILD_RECEIPT_INVALID: build receipt shape is invalid");
+  }
+  const expectedSignature = Buffer.from(sign(receipt2.payload, capability), "hex");
+  const actualSignature = Buffer.from(receipt2.signature, "hex");
+  if (expectedSignature.length !== actualSignature.length || !timingSafeEqual4(expectedSignature, actualSignature)) {
+    throw new Error("BUILD_RECEIPT_INVALID: build receipt signature is invalid");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (receipt2.payload[key] !== value) {
+      throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${key} contradicts the active session`);
+    }
+  }
+  return receipt2.payload;
+}
+
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+init_metro_cwd();
+init_process_birth();
+import { execFileSync as execFileSync12 } from "node:child_process";
+function numericListener(output, emptyStatus) {
+  const value = String(output).trim();
+  if (!value)
+    return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: "unknown" };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+}
+function probeMetroListener(port, platform = process.platform, execute = execFileSync12) {
+  try {
+    if (platform === "win32") {
+      const output = execute("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
+    }
+    if (platform === "linux") {
+      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const value = String(output).trim();
+      if (!value)
+        return { status: "absent" };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+    }
+    if (platform === "darwin") {
+      const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 2e3
+      });
+      return numericListener(output, "unknown");
+    }
+    return { status: "unknown" };
+  } catch (error2) {
+    const failure = error2;
+    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
+  }
+}
+function metroListenerPid(port, platform = process.platform, execute = execFileSync12) {
+  const probe = probeMetroListener(port, platform, execute);
+  return probe.status === "listening" ? probe.pid : null;
+}
+async function fetchMetroStatus(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: controller.signal
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function captureMetroBinding(input, dependencies = {}) {
+  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
+  if (!birth) {
+    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
+  }
+  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
+  if (!status.includes("packager-status:running")) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
+  }
+  const servingRoot = (dependencies.servingRoot ?? cwdForPort)(input.port);
+  if (!servingRoot || !pathMatchesRoot(servingRoot, input.sourceRoot)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
+  }
+  return {
+    port: input.port,
+    pid: input.pid,
+    birth: birth.token,
+    instanceId: input.instanceId,
+    servingRoot,
+    buildGeneration: input.buildGeneration
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/build-adapter.js
+function conflict(flag) {
+  throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
+}
+function ensureValue(command, flag, value) {
+  const index = command.indexOf(flag);
+  if (index >= 0) {
+    if (command[index + 1] !== value)
+      conflict(flag);
+    return;
+  }
+  command.push(flag, value);
+}
+function ensureFlag(command, flag) {
+  if (!command.includes(flag))
+    command.push(flag);
+}
+function commandKind(command) {
+  const offset = command[0] === "npx" ? 1 : 0;
+  const executable = command[offset];
+  const subcommand = command[offset + 1];
+  if (executable === "expo" && (subcommand === "run:ios" || subcommand === "run:android")) {
+    return "expo";
+  }
+  if (executable === "react-native" && subcommand === "run-ios")
+    return "bare-ios";
+  if (executable === "react-native" && subcommand === "run-android")
+    return "bare-android";
+  return null;
+}
+function createBuildLaunchPlan(input) {
+  const command = [...input.command];
+  if (!input.session)
+    return { mode: "passthrough", command, env: {} };
+  if (input.session.platform !== input.platform)
+    conflict("platform");
+  const kind = commandKind(command);
+  const expectedKind = input.platform === "ios" ? /* @__PURE__ */ new Set(["expo", "bare-ios"]) : /* @__PURE__ */ new Set(["expo", "bare-android"]);
+  if (!kind || !expectedKind.has(kind)) {
+    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized");
+  }
+  if (kind === "expo") {
+    ensureValue(command, "--device", input.session.deviceId);
+    ensureValue(command, "--port", String(input.session.metroPort));
+    ensureFlag(command, "--no-bundler");
+  } else if (kind === "bare-ios") {
+    ensureValue(command, "--udid", input.session.deviceId);
+    ensureValue(command, "--port", String(input.session.metroPort));
+    ensureFlag(command, "--no-packager");
+  } else {
+    ensureValue(command, "--deviceId", input.session.deviceId);
+    ensureValue(command, "--port", String(input.session.metroPort));
+    ensureFlag(command, "--no-packager");
+  }
+  return {
+    mode: "session",
+    command,
+    env: {
+      RCT_METRO_PORT: String(input.session.metroPort),
+      RN_DEV_AGENT_SESSION_ID: input.session.sessionId
+    }
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/package-integration.js
+import { chmodSync as chmodSync4, existsSync as existsSync33, lstatSync as lstatSync7, mkdirSync as mkdirSync20, readFileSync as readFileSync33, renameSync as renameSync9, rmSync as rmSync7, statSync as statSync11, writeFileSync as writeFileSync20 } from "node:fs";
+import { dirname as dirname18, join as join48, resolve as resolve6 } from "node:path";
+var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
+var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
+var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
+var METRO_START = "// rn-dev-agent session integration: begin";
+var METRO_END = "// rn-dev-agent session integration: end";
+var SENTINELS = {
+  ios: `node ${ADAPTER} ios`,
+  android: `node ${ADAPTER} android`
+};
+function renderMetroIntegrationAdapter() {
+  return `'use strict';
+const path = require('node:path');
+module.exports = function withRnDevAgentAuthority(config) {
+  if (config && typeof config.then === 'function') {
+    return config.then(withRnDevAgentAuthority);
+  }
+  const current = config || {};
+  const serializer = current.serializer || {};
+  const original = serializer.getModulesRunBeforeMainModule;
+  const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
+  return {
+    ...current,
+    serializer: {
+      ...serializer,
+      getModulesRunBeforeMainModule(entryFile) {
+        return [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+      },
+    },
+  };
+};
+`;
+}
+function previewMetroIntegration(source) {
+  const hasStart = source.includes(METRO_START);
+  const hasEnd = source.includes(METRO_END);
+  if (hasStart !== hasEnd) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt");
+  }
+  if (hasStart)
+    return source;
+  return `${source.trimEnd()}
+
+${METRO_START}
+module.exports = require('./${METRO_ADAPTER}')(module.exports);
+${METRO_END}
+`;
+}
+function restoreMetroIntegration(source) {
+  const start = source.indexOf(METRO_START);
+  const end = source.indexOf(METRO_END);
+  if (start < 0 && end < 0)
+    return source;
+  if (start < 0 || end < start || source.indexOf(METRO_START, start + METRO_START.length) >= 0 || source.indexOf(METRO_END, end + METRO_END.length) >= 0) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt");
+  }
+  const blockEnd = end + METRO_END.length;
+  const prefix = source.slice(0, start).trimEnd();
+  const suffix = source.slice(blockEnd).replace(/^(?:\r?\n)+/, "");
+  return suffix ? `${prefix}
+${suffix}` : `${prefix}
+`;
+}
+function parseSupportedScript(script, platform) {
+  if (/[;&|`$<>()\\'"]/.test(script)) {
+    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: shell syntax cannot be wrapped safely");
+  }
+  const command = script.trim().split(/\s+/).filter(Boolean);
+  createBuildLaunchPlan({
+    platform,
+    command,
+    session: {
+      platform,
+      deviceId: "preview-device",
+      metroPort: 8081,
+      sessionId: "preview-session"
+    }
+  });
+  return command;
+}
+function previewPackageIntegration(packageJson, existing, sessionCli) {
+  if (existing && packageJson.scripts?.ios === SENTINELS.ios && packageJson.scripts?.android === SENTINELS.android) {
+    return {
+      packageJson,
+      manifest: sessionCli ? { ...existing, sessionCli: resolve6(sessionCli) } : existing
+    };
+  }
+  const ios = packageJson.scripts?.ios;
+  const android = packageJson.scripts?.android;
+  if (typeof ios !== "string" || typeof android !== "string") {
+    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: ios and android scripts are required");
+  }
+  const manifest = {
+    version: 1,
+    adapter: ADAPTER,
+    ...sessionCli ? { sessionCli: resolve6(sessionCli) } : {},
+    originalScripts: {
+      ios: parseSupportedScript(ios, "ios"),
+      android: parseSupportedScript(android, "android")
+    }
+  };
+  return {
+    packageJson: {
+      ...packageJson,
+      scripts: { ...packageJson.scripts, ...SENTINELS }
+    },
+    manifest
+  };
+}
+function restorePackageIntegration(packageJson, manifest) {
+  return {
+    ...packageJson,
+    scripts: {
+      ...packageJson.scripts,
+      ios: manifest.originalScripts.ios.join(" "),
+      android: manifest.originalScripts.android.join(" ")
+    }
+  };
+}
+function renderProjectAdapter() {
+  return String.raw`#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const platform = process.argv[2];
+if (platform !== 'ios' && platform !== 'android') {
+  process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: expected ios or android\n');
+  process.exit(2);
+}
+const manifestPath = path.join(process.cwd(), '.rn-agent', 'integration', 'rn-session-integration.json');
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+const original = manifest.originalScripts && manifest.originalScripts[platform];
+if (!Array.isArray(original) || original.length === 0 || original.some((part) => typeof part !== 'string')) {
+  process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: integration manifest is invalid\n');
+  process.exit(2);
+}
+const command = [...original, ...process.argv.slice(3)];
+const rawSession = process.env.RN_DEV_AGENT_SESSION_BUILD_JSON;
+let session = null;
+let sessionCli = null;
+if (rawSession) {
+  try {
+    session = JSON.parse(rawSession);
+  } catch {
+    process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is invalid\n');
+    process.exit(2);
+  }
+}
+if (!session && typeof manifest.sessionCli === 'string' && fs.existsSync(manifest.sessionCli)) {
+  sessionCli = manifest.sessionCli;
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
+    ? ['--experimental-sqlite']
+    : [];
+  let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+  });
+  if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
+    const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+    });
+    if (metro.status !== 0) {
+      process.stderr.write(String(metro.stderr) || 'METRO_START_UNAVAILABLE: managed Metro failed\n');
+      process.exit(2);
+    }
+    probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+    });
+  }
+  if (probe.status === 0) {
+    try {
+      session = JSON.parse(probe.stdout);
+    } catch {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON\n');
+      process.exit(2);
+    }
+  } else if (!String(probe.stderr).includes('no live session matches this canonical worktree')) {
+    process.stderr.write(String(probe.stderr) || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed\n');
+    process.exit(2);
+  }
+}
+if (session && !sessionCli && typeof manifest.sessionCli === 'string' && fs.existsSync(manifest.sessionCli)) {
+  sessionCli = manifest.sessionCli;
+}
+
+function ensureValue(flag, value) {
+  const index = command.indexOf(flag);
+  if (index >= 0) {
+    if (command[index + 1] !== value) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
+      process.exit(2);
+    }
+    return;
+  }
+  command.push(flag, value);
+}
+function ensureFlag(flag) {
+  if (!command.includes(flag)) command.push(flag);
+}
+
+if (session) {
+  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
+    process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete\n');
+    process.exit(2);
+  }
+  if (!sessionCli) {
+    process.stderr.write('SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI\n');
+    process.exit(2);
+  }
+  const offset = command[0] === 'npx' ? 1 : 0;
+  const executable = command[offset];
+  const subcommand = command[offset + 1];
+  if (executable === 'expo' && subcommand === 'run:' + platform) {
+    ensureValue('--device', session.deviceId);
+    ensureValue('--port', String(session.metroPort));
+    ensureFlag('--no-bundler');
+  } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
+    ensureValue('--udid', session.deviceId);
+    ensureValue('--port', String(session.metroPort));
+    ensureFlag('--no-packager');
+  } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
+    ensureValue('--deviceId', session.deviceId);
+    ensureValue('--port', String(session.metroPort));
+    ensureFlag('--no-packager');
+  } else {
+    process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized\n');
+    process.exit(2);
+  }
+}
+
+const child = spawnSync(command[0], command.slice(1), {
+  cwd: process.cwd(),
+  env: session ? {
+    ...process.env,
+    RCT_METRO_PORT: String(session.metroPort),
+    RN_DEV_AGENT_SESSION_ID: session.sessionId,
+  } : process.env,
+  stdio: 'inherit',
+});
+if (child.error) {
+  process.stderr.write('rn-session-adapter: ' + child.error.message + '\n');
+  process.exit(1);
+}
+if (child.status !== 0) process.exit(child.status === null ? 1 : child.status);
+if (session) {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
+    ? ['--experimental-sqlite']
+    : [];
+  const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    },
+    encoding: 'utf8',
+  });
+  if (complete.status !== 0) {
+    process.stderr.write(String(complete.stderr) || 'APP_INSTALL_IDENTITY_CHANGED: build receipt could not be recorded\n');
+    process.exit(2);
+  }
+  process.stdout.write(String(complete.stdout));
+}
+process.exit(0);
+`;
+}
+function atomicWrite(path, contents, mode) {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync20(temporary, contents, { encoding: "utf8", mode });
+  chmodSync4(temporary, mode);
+  renameSync9(temporary, path);
+}
+function snapshotFiles(paths) {
+  return paths.map((path) => ({
+    path,
+    contents: existsSync33(path) ? readFileSync33(path) : null,
+    mode: existsSync33(path) ? statSync11(path).mode & 511 : 384
+  }));
+}
+function restoreSnapshots(snapshots) {
+  for (const snapshot of [...snapshots].reverse()) {
+    if (snapshot.contents === null) {
+      rmSync7(snapshot.path, { force: true });
+    } else {
+      atomicWrite(snapshot.path, snapshot.contents.toString("utf8"), snapshot.mode);
+    }
+  }
+}
+function applyPackageIntegration(input) {
+  const appRoot = resolve6(input.appRoot);
+  const packagePath = join48(appRoot, "package.json");
+  const integrationRoot = join48(appRoot, ".rn-agent", "integration");
+  const manifestPath = join48(integrationRoot, "rn-session-integration.json");
+  const adapterPath = join48(appRoot, ADAPTER);
+  const metroConfigPath = ["metro.config.js", "metro.config.cjs"].map((name) => join48(appRoot, name)).find((path) => {
+    try {
+      return lstatSync7(path).isFile();
+    } catch {
+      return false;
+    }
+  });
+  if (!metroConfigPath) {
+    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
+  }
+  const metroAdapterPath = join48(appRoot, METRO_ADAPTER);
+  const authorityModulePath = join48(appRoot, AUTHORITY_MODULE);
+  for (const path of [packagePath, integrationRoot, metroConfigPath]) {
+    try {
+      if (lstatSync7(path).isSymbolicLink()) {
+        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
+      }
+    } catch (error2) {
+      if (error2.code !== "ENOENT")
+        throw error2;
+    }
+  }
+  const packageJson = JSON.parse(readFileSync33(packagePath, "utf8"));
+  const existing = (() => {
+    try {
+      return JSON.parse(readFileSync33(manifestPath, "utf8"));
+    } catch {
+      return void 0;
+    }
+  })();
+  const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
+  const metroSource = readFileSync33(metroConfigPath, "utf8");
+  const nextMetroSource = previewMetroIntegration(metroSource);
+  preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
+  const snapshots = snapshotFiles([
+    packagePath,
+    manifestPath,
+    adapterPath,
+    metroAdapterPath,
+    authorityModulePath,
+    metroConfigPath
+  ]);
+  mkdirSync20(dirname18(adapterPath), { recursive: true, mode: 448 });
+  try {
+    atomicWrite(manifestPath, `${JSON.stringify(preview.manifest, null, 2)}
+`, 384);
+    atomicWrite(adapterPath, renderProjectAdapter(), 493);
+    atomicWrite(metroAdapterPath, renderMetroIntegrationAdapter(), 420);
+    atomicWrite(authorityModulePath, "globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n", 384);
+    atomicWrite(metroConfigPath, nextMetroSource, 420);
+    atomicWrite(packagePath, `${JSON.stringify(preview.packageJson, null, 2)}
+`, 420);
+  } catch (error2) {
+    restoreSnapshots(snapshots);
+    throw error2;
+  }
+  return preview;
+}
+function restorePackageIntegrationFiles(input) {
+  const appRoot = resolve6(input.appRoot);
+  const packagePath = join48(appRoot, "package.json");
+  const manifestPath = join48(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+  const manifest = JSON.parse(readFileSync33(manifestPath, "utf8"));
+  const metroConfigPath = join48(appRoot, manifest.metroConfig ?? "metro.config.js");
+  const generated = [
+    manifestPath,
+    join48(appRoot, ADAPTER),
+    join48(appRoot, METRO_ADAPTER),
+    join48(appRoot, AUTHORITY_MODULE)
+  ];
+  const snapshots = snapshotFiles([packagePath, metroConfigPath, ...generated]);
+  try {
+    const packageJson = JSON.parse(readFileSync33(packagePath, "utf8"));
+    atomicWrite(packagePath, `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
+`, 420);
+    atomicWrite(metroConfigPath, restoreMetroIntegration(readFileSync33(metroConfigPath, "utf8")), 420);
+    for (const path of generated)
+      rmSync7(path, { force: true });
+  } catch (error2) {
+    restoreSnapshots(snapshots);
+    throw error2;
+  }
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+import { readFileSync as readFileSync34 } from "node:fs";
+import { dirname as dirname19, join as join49 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+init_process_birth();
+
+// packages/rn-dev-agent-core/dist/session/managed-metro.js
+import { execFileSync as execFileSync13, spawn as spawn6 } from "node:child_process";
+init_process_birth();
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync13) {
+  return probeMetroListener(port, platform, execute);
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+function sameMetroAuthority(current, next) {
+  return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
+}
+async function waitForExactStopped(probe, timeoutMs, message) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const status = probe();
+    if (status === "stopped")
+      return;
+    if (status === "unknown") {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${message}; shutdown identity is unknown`);
+    }
+    if (Date.now() >= deadline) {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", message);
+    }
+    await new Promise((resolve8) => setTimeout(resolve8, 25));
+  }
+}
+async function stopHandoffObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3) {
+  const port = Number(binding.port);
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.cleanupCapability ?? "");
+  const stopRequestedAt = Number(binding.stopRequestedAt);
+  if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability || !Number.isFinite(stopRequestedAt)) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
+  }
+  const currentListener = listenerProbe(port);
+  if (currentListener.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener lookup is inconclusive");
+  }
+  if (currentListener.status === "absent" || currentListener.pid !== pid)
+    return;
+  const currentBirth = processProbe(pid);
+  if (currentBirth.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe process identity is unavailable");
+  }
+  if (currentBirth.status === "absent") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener identity is internally inconsistent");
+  }
+  if (currentBirth.birth.token !== expectedBirth) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener PID was reused before cleanup completed");
+  }
+  const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${capability}`,
+      "x-rn-observe-instance": instanceId
+    }
+  });
+  if (!response.ok) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe server refused fenced handoff cleanup");
+  }
+  await waitForExactStopped(() => {
+    const observed = listenerProbe(port);
+    if (observed.status === "unknown")
+      return "unknown";
+    return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
+  }, timeoutMs, "source Observe listener did not stop before the cleanup deadline");
+}
+async function stopHandoffRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.capability ?? "");
+  const claimKey = String(binding.claimKey ?? "");
+  const stopRequestedAt = Number(binding.stopRequestedAt);
+  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability || !claimKey || !Number.isFinite(stopRequestedAt)) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner cleanup identity is incomplete");
+  }
+  const current = processProbe(pid);
+  if (current.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner process identity is unavailable");
+  }
+  if (current.status === "absent" || current.birth.token !== expectedBirth)
+    return;
+  signalProcess(pid, "SIGTERM");
+  await waitForExactStopped(() => {
+    const observed = processProbe(pid);
+    if (observed.status === "unknown")
+      return "unknown";
+    return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
+  }, timeoutMs, "source runner process did not stop before the cleanup deadline");
+}
+function authorityFailure(error2) {
+  if (error2 instanceof SessionAuthorityError) {
+    return failResult(error2.message, error2.code, authorityErrorMeta(error2));
+  }
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? "SESSION_AUTHORITY_REQUIRED";
+  return failResult(message, code);
+}
+function required2(value, name) {
+  if (value === void 0 || value === "") {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${name} is required for this session transition`);
+  }
+  return value;
+}
+function createSessionHandler(runtime, dependencies = {}) {
+  return async (input) => {
+    if (input.action === "status") {
+      const authority = runtime.status();
+      return okResult({
+        authoritative: false,
+        authority: projectPublicAuthorityStatus(authority)
+      });
+    }
+    try {
+      const isRecovery = input.action === "accept_handoff" || input.action === "adopt_stale";
+      const { registry: registry2, session } = isRecovery ? runtime.requireRecovery() : runtime.requireOperational();
+      if (input.action === "bind_device") {
+        const platform = required2(input.platform, "platform");
+        const deviceId = required2(input.deviceId, "deviceId");
+        const appId = required2(input.appId, "appId");
+        const status = registry2.getSessionStatus(session.sessionId);
+        const signer = dependencies.getSignerCapability?.();
+        if (!status) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before device binding");
+        }
+        if (!input.buildReceipt) {
+          registry2.replaceDeviceAuthority(session, {
+            resource: { type: "device", key: `${platform}:${deviceId}` },
+            device: {
+              platform,
+              deviceId,
+              appId,
+              ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
+            }
+          });
+          return okResult({
+            session: projectPublicAuthorityStatus(runtime.status()),
+            buildReceiptRequired: true
+          });
+        }
+        if (!signer) {
+          throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "the session signer is unavailable for build receipt verification");
+        }
+        const receipt2 = verifyBuildReceipt(input.buildReceipt, signer, {
+          sessionId: session.sessionId,
+          sourceKey: status.sourceKey,
+          worktreeKey: status.worktreeKey,
+          appRootKey: status.appRootKey,
+          platform,
+          deviceId,
+          appId,
+          metroPort: Number(status.bindings.metroPort)
+        });
+        const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
+          platform,
+          deviceId,
+          appId
+        });
+        if (observedGeneration !== receipt2.installGeneration) {
+          throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact generation does not match the signed build receipt");
+        }
+        registry2.replaceDeviceAuthority(session, {
+          resource: { type: "device", key: `${platform}:${deviceId}` },
+          device: { platform, deviceId, appId },
+          install: { ...receipt2 }
+        });
+        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+      }
+      if (input.action === "bind_metro") {
+        const port = required2(input.metroPort, "metroPort");
+        const pid = required2(input.metroPid, "metroPid");
+        const instanceId = required2(input.metroInstanceId, "metroInstanceId");
+        const buildGeneration = required2(input.buildGeneration, "buildGeneration");
+        const status = registry2.getSessionStatus(session.sessionId);
+        if (status?.bindings.metroPort !== port) {
+          throw new SessionAuthorityError("METRO_PORT_CLAIM_CONFLICT", "requested Metro port does not match the session allocation");
+        }
+        const sourceRoot = String(status.source.contentRoot ?? "");
+        const metro = await (dependencies.captureMetro ?? captureMetroBinding)({
+          port,
+          pid,
+          instanceId,
+          sourceRoot,
+          buildGeneration
+        });
+        const nextMetro = { ...metro, mode: input.mode ?? "external" };
+        const priorMetro = status.bindings.metro;
+        const priorBundle = status.bindings.bundle;
+        const priorTargetId = priorBundle?.targetId;
+        const metroUnchanged = sameMetroAuthority(priorMetro, nextMetro);
+        registry2.claimResources(session, [{ type: "metro-port", key: String(port) }]);
+        registry2.updateBindings(session, {
+          state: metroUnchanged ? status.state : status.bindings.install ? "device_bound" : "metro_bound",
+          bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
+          releaseResources: !metroUnchanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status.bindings.metroPort)}:${priorTargetId}` }] : []
+        });
+        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+      }
+      if (input.action === "pin_dev_client") {
+        const status = registry2.getSessionStatus(session.sessionId);
+        if (!status || !dependencies.pinDevClient) {
+          throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "pinning integration is unavailable");
+        }
+        for (const requiredBinding of ["install", "metro", "device"]) {
+          if (!status.bindings[requiredBinding]) {
+            throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", `${requiredBinding} must be bound before pinning`);
+          }
+        }
+        const bundle = await dependencies.pinDevClient(status);
+        registry2.claimResources(session, [
+          { type: "target", key: `${bundle.metroPort}:${bundle.targetId}` }
+        ]);
+        registry2.updateBindings(session, {
+          state: "ready",
+          bindings: { bundle }
+        });
+        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+      }
+      if (input.action === "prepare_handoff") {
+        const targetHandle = required2(input.targetHandle, "targetHandle");
+        return okResult(registry2.prepareHandoffForHandle(session, { targetHandle }));
+      }
+      if (input.action === "cancel_handoff") {
+        const handoffId = required2(input.handoffId, "handoffId");
+        registry2.cancelHandoff(session, handoffId);
+        return okResult({
+          cancelled: true,
+          session: projectPublicAuthorityStatus(runtime.status())
+        });
+      }
+      if (input.action === "preview_integration" || input.action === "apply_integration" || input.action === "restore_integration") {
+        const status = registry2.getSessionStatus(session.sessionId);
+        const appRoot = String(status?.source.appRoot ?? "");
+        if (!status || !appRoot) {
+          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
+        }
+        const packagePath = join49(appRoot, "package.json");
+        const metroConfigPath = ["metro.config.js", "metro.config.cjs"].map((name) => join49(appRoot, name)).find((path) => {
+          try {
+            readFileSync34(path, "utf8");
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        if (!metroConfigPath) {
+          throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "metro.config.js or metro.config.cjs is required for integration");
+        }
+        const manifestPath = join49(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+        const packageJson = JSON.parse(readFileSync34(packagePath, "utf8"));
+        let existing;
+        try {
+          existing = JSON.parse(readFileSync34(manifestPath, "utf8"));
+        } catch {
+          existing = void 0;
+        }
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join49(dirname19(fileURLToPath4(import.meta.url)), "..", "rn-session.js");
+        if (input.action === "restore_integration") {
+          if (input.confirmed !== true) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "restore_integration requires confirmed=true");
+          }
+          if (!existing) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration manifest is unavailable for restoration");
+          }
+          restorePackageIntegrationFiles({ appRoot });
+          registry2.updateBindings(session, {
+            bindings: { packageIntegration: null }
+          });
+          return okResult({ restored: true, packagePath, manifestPath });
+        }
+        const preview = previewPackageIntegration(packageJson, existing, sessionCli);
+        const metroBefore = readFileSync34(metroConfigPath, "utf8");
+        const metroAfter = previewMetroIntegration(metroBefore);
+        if (input.action === "preview_integration") {
+          return okResult({
+            confirmed: false,
+            packagePath,
+            before: packageJson,
+            after: preview.packageJson,
+            metroConfigPath,
+            metroBefore,
+            metroAfter,
+            manifest: preview.manifest
+          });
+        }
+        if (input.confirmed !== true) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "apply_integration requires confirmed=true after reviewing preview_integration");
+        }
+        applyPackageIntegration({ appRoot, sessionCli });
+        registry2.updateBindings(session, {
+          bindings: { packageIntegration: { applied: true } }
+        });
+        return okResult({ applied: true, packagePath, manifestPath });
+      }
+      if (input.action === "accept_handoff") {
+        const handoffId = required2(input.handoffId, "handoffId");
+        const token2 = required2(input.token, "token");
+        const status = registry2.getSessionStatus(session.sessionId);
+        if (!status?.worker.instanceId) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "target worker identity is unavailable");
+        }
+        let cleanup = status.bindings.handoffCleanup;
+        const priorSessionId = registry2.getHandoffOwner(handoffId);
+        const priorStatus = priorSessionId ? registry2.getSessionStatus(priorSessionId) : null;
+        const priorRunner = cleanup?.runner ?? priorStatus?.bindings.runner;
+        if (status.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
+          sessionId: priorSessionId ?? "unknown",
+          pid: priorRunner.pid,
+          token: priorRunner.processBirth
+        }) !== "match")) {
+          throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "prior runner process identity cannot be proven for capability rotation");
+        }
+        if (status.state !== "handoff_cleanup") {
+          registry2.validateHandoffInto(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status.worker.instanceId
+          });
+          cleanup = registry2.acceptHandoffInto(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status.worker.instanceId
+          });
+        }
+        if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
+          const runnerCleanup = registry2.beginHandoffCleanupResource(session, status.worker.instanceId, "runner");
+          if (!runnerCleanup) {
+            throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(runnerCleanup);
+          } else {
+            await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, status.worker.instanceId, "runner");
+        }
+        const afterRunner = registry2.getSessionStatus(session.sessionId);
+        cleanup = afterRunner?.bindings.handoffCleanup;
+        if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
+          const observeCleanup = registry2.beginHandoffCleanupResource(session, status.worker.instanceId, "observe");
+          if (!observeCleanup) {
+            throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffObserve) {
+            await dependencies.stopHandoffObserve(observeCleanup);
+          } else {
+            await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, status.worker.instanceId, "observe");
+        }
+        registry2.finishHandoffCleanup(session, status.worker.instanceId);
+        return okResult({
+          accepted: true,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          runnerCapabilityRotated: Boolean(priorRunner),
+          nextAction: "Reopen the exact device runner and pin the dev client before authoritative tools."
+        });
+      }
+      if (input.action === "adopt_stale") {
+        const adoptionHandle = required2(input.adoptionHandle, "adoptionHandle");
+        const current = registry2.getSessionStatus(session.sessionId);
+        if (!current?.worker.instanceId) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "recovery worker identity is unavailable");
+        }
+        registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
+        return okResult({
+          adopted: true,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          runner: {
+            adopted: false,
+            reason: "runner capability is never crash-adopted; reopen the exact device to bind a fresh runner"
+          }
+        });
+      }
+      registry2.releaseSession(session);
+      return okResult({ released: true, sessionId: session.sessionId });
+    } catch (error2) {
+      return authorityFailure(error2);
+    }
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/runner-binding.js
+init_rn_fast_runner_client();
+init_rn_android_runner_client();
+function bindNativeRunner(runtime, target) {
+  const { registry: registry2, session } = runtime.requireAvailable();
+  const status = registry2.getSessionStatus(session.sessionId);
+  const expectedDevice = status?.bindings.device;
+  if (!status || expectedDevice?.platform !== target.platform || expectedDevice.deviceId !== target.deviceId || expectedDevice.appId !== target.appId) {
+    throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "native runner target does not match the exact claimed device and app");
+  }
+  const state = target.platform === "ios" ? getFastRunnerState() : getAndroidRunnerState();
+  const port = state && ("port" in state ? state.port : state.hostPort);
+  if (!state || !Number.isSafeInteger(port) || !state.instanceId || state.sessionId !== session.sessionId || state.claimEpoch !== session.claimEpoch || !state.capability || !state.processBirth || inspectSessionOwner({
+    sessionId: session.sessionId,
+    pid: state.pid,
+    token: state.processBirth
+  }) !== "match") {
+    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "native runner process and capability could not be bound to this claim epoch");
+  }
+  registry2.claimResources(session, [
+    { type: "runner", key: `${target.platform}:${target.deviceId}:${port}` }
+  ]);
+  registry2.updateBindings(session, {
+    state: status.bindings.bundle ? "ready" : "runtime_bound",
+    bindings: {
+      runner: {
+        platform: target.platform,
+        port,
+        pid: state.pid,
+        processBirth: state.processBirth,
+        instanceId: state.instanceId,
+        sessionId: state.sessionId,
+        claimEpoch: state.claimEpoch,
+        capability: state.capability,
+        deviceId: target.deviceId,
+        appId: target.appId,
+        protocolVersion: state.protocolVersion
+      }
+    }
+  });
+}
+function unbindNativeRunner(runtime) {
+  const { registry: registry2, session } = runtime.requireAvailable();
+  const status = registry2.getSessionStatus(session.sessionId);
+  const runner = status?.bindings.runner;
+  if (!status || !runner)
+    return;
+  registry2.releaseResources(session, [
+    {
+      type: "runner",
+      key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`
+    }
+  ]);
+  registry2.updateBindings(session, {
+    state: status.bindings.bundle ? "ready" : "device_bound",
+    bindings: { runner: null }
+  });
+}
+
+// packages/rn-dev-agent-core/dist/session/authority-gate.js
+init_utils();
+import { randomUUID as randomUUID5 } from "node:crypto";
+
+// packages/rn-dev-agent-core/dist/session/tool-profiles.js
+var diagnostic = ["cdp_status", "cdp_targets", "device_list"];
+var transition = ["rn_session", "cdp_connect", "cdp_disconnect"];
+var sourceState = [
+  "cdp_nav_graph",
+  "cdp_record_test_generate",
+  "cdp_record_test_list",
+  "cdp_record_test_load",
+  "cdp_record_test_save",
+  "cdp_record_test_save_as_action",
+  "maestro_generate"
+];
+var nativeRead = [
+  "cross_platform_verify",
+  "device_find",
+  "device_screenshot",
+  "device_snapshot"
+];
+var nativeMutation = [
+  "cdp_lock_e2e_test",
+  "cdp_repair_action",
+  "device_accept_system_dialog",
+  "device_back",
+  "device_batch",
+  "device_deeplink",
+  "device_dismiss_system_dialog",
+  "device_fill",
+  "device_focus_next",
+  "device_longpress",
+  "device_permission",
+  "device_pick_date",
+  "device_pick_value",
+  "device_pinch",
+  "device_press",
+  "device_record",
+  "device_reset_state",
+  "device_scroll",
+  "device_scrollintoview",
+  "device_swipe",
+  "maestro_run",
+  "maestro_test_all"
+];
+var hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
+var optionalHybridMutation = ["cdp_run_action"];
+var cdpRead = [
+  "cdp_component_state",
+  "cdp_component_tree",
+  "cdp_console_log",
+  "cdp_cpu_profile",
+  "cdp_diagnostic_renderers",
+  "cdp_error_log",
+  "cdp_heap_usage",
+  "cdp_metro_events",
+  "cdp_native_errors",
+  "cdp_navigation_state",
+  "cdp_network_body",
+  "cdp_network_log",
+  "cdp_object_inspect",
+  "cdp_open_devtools",
+  "cdp_store_state",
+  "cdp_wait_for_network",
+  "collect_logs",
+  "expect_redux",
+  "expect_route",
+  "expect_text",
+  "expect_visible_by_testid"
+];
+var cdpMutation = [
+  "cdp_dev_settings",
+  "cdp_dismiss_dev_client_picker",
+  "cdp_dispatch",
+  "cdp_evaluate",
+  "cdp_exception_breakpoint",
+  "cdp_interact",
+  "cdp_mmkv",
+  "cdp_navigate",
+  "cdp_record_test_annotate",
+  "cdp_record_test_start",
+  "cdp_record_test_stop",
+  "cdp_reload",
+  "cdp_restart",
+  "cdp_set_shared_value"
+];
+var observe = ["observe"];
+var proof = ["proof_capture", "proof_step"];
+var profiles = /* @__PURE__ */ new Map();
+function add(names, profile) {
+  for (const name of names) {
+    if (profiles.has(name))
+      throw new Error(`DUPLICATE_AUTHORITY_PROFILE: ${name}`);
+    profiles.set(name, profile);
+  }
+}
+add(diagnostic, {
+  kind: "diagnostic",
+  axes: [],
+  mutation: false,
+  liveBundleProbe: false
+});
+add(transition, {
+  kind: "transition",
+  axes: ["C", "S"],
+  mutation: true,
+  liveBundleProbe: false
+});
+add(sourceState, {
+  kind: "authoritative",
+  axes: ["C", "S"],
+  mutation: true,
+  liveBundleProbe: false
+});
+add(nativeRead, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "D", "R"],
+  mutation: false,
+  liveBundleProbe: false
+});
+add(nativeMutation, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "D", "R"],
+  mutation: true,
+  liveBundleProbe: false
+});
+add(hybridMutation, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "B", "D", "R"],
+  mutation: true,
+  liveBundleProbe: true
+});
+add(optionalHybridMutation, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "D", "R"],
+  optionalAxes: ["B"],
+  mutation: true,
+  liveBundleProbe: true
+});
+add(cdpRead, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "B", "D"],
+  mutation: false,
+  liveBundleProbe: true
+});
+add(cdpMutation, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "B", "D"],
+  mutation: true,
+  liveBundleProbe: true
+});
+add(observe, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "B", "D", "O"],
+  mutation: false,
+  liveBundleProbe: true
+});
+add(proof, {
+  kind: "authoritative",
+  axes: ["C", "S", "I", "M", "B", "D", "R", "P"],
+  mutation: true,
+  liveBundleProbe: true
+});
+function authorityProfileFor(tool, args = {}) {
+  if (tool === "cdp_nav_graph" && (args.action === "scan" || args.action === "go")) {
+    return profiles.get("cdp_interact");
+  }
+  const profile = profiles.get(tool);
+  if (!profile)
+    throw new Error(`UNPROFILED_AUTHORITY_TOOL: ${tool}`);
+  return profile;
+}
+
+// packages/rn-dev-agent-core/dist/session/authority-gate.js
+var optionalBundleAdmission = /* @__PURE__ */ Symbol("optionalBundleAdmission");
+async function claimOptionalBundleAuthority(args) {
+  return await args[optionalBundleAdmission]?.() ?? false;
+}
+var axisBinding = {
+  I: "install",
+  M: "metro",
+  B: "bundle",
+  D: "device",
+  R: "runner",
+  O: "observe",
+  P: "proof"
+};
+var axisErrors = {
+  C: "SESSION_AUTHORITY_REQUIRED",
+  S: "SOURCE_WORKTREE_MISMATCH",
+  I: "APP_INSTALL_IDENTITY_CHANGED",
+  M: "METRO_AUTHORITY_MISMATCH",
+  B: "BUNDLE_HANDSHAKE_UNAVAILABLE",
+  D: "DEVICE_AUTHORITY_MISMATCH",
+  R: "RUNNER_OWNERSHIP_MISMATCH",
+  O: "OBSERVE_AUTHORITY_MISMATCH",
+  P: "PROOF_AUTHORITY_MISMATCH"
+};
+function requireCompleteAxes(status, profile) {
+  for (const axis of profile.axes) {
+    if (axis === "C") {
+      if (!status.worker.instanceId || !status.worker.birthAvailable) {
+        throw new SessionAuthorityError(axisErrors.C, "worker controller identity is incomplete");
+      }
+      continue;
+    }
+    if (axis === "S") {
+      if (!status.source.kind) {
+        throw new SessionAuthorityError(axisErrors.S, "source identity is incomplete");
+      }
+      continue;
+    }
+    const binding = axisBinding[axis];
+    if (binding && !status.bindings[binding]) {
+      throw new SessionAuthorityError(axisErrors[axis], `${axis} authority is not bound`);
+    }
+  }
+}
+function requireDeviceTransition(status, args) {
+  const action = args.action ?? "snapshot";
+  if (action === "open") {
+    for (const binding of ["install", "metro", "device"]) {
+      if (!status.bindings[binding]) {
+        throw new SessionAuthorityError(binding === "install" ? "APP_INSTALL_IDENTITY_CHANGED" : "SESSION_AUTHORITY_REQUIRED", `${binding} authority must be bound before opening the native runner`);
+      }
+    }
+    const device = status.bindings.device;
+    if (args.platform !== device.platform || args.deviceId !== device.deviceId || args.appId !== device.appId) {
+      throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device_snapshot open arguments must equal the exact session device binding");
+    }
+  }
+}
+function bindExactArgument(args, field, expected, code) {
+  if (expected === void 0 || expected === null || expected === "")
+    return;
+  const supplied = args[field];
+  if (supplied !== void 0 && supplied !== expected) {
+    throw new SessionAuthorityError(code, `${field} contradicts the active session binding`, void 0, {
+      expected: shortAuthorityIdentity(expected),
+      observed: shortAuthorityIdentity(supplied)
+    });
+  }
+  args[field] = expected;
+}
+function bindSessionArguments(status, profile, args) {
+  const device = status.bindings.device;
+  const metro = status.bindings.metro;
+  const install = status.bindings.install;
+  if (device && (profile.axes.includes("D") || profile.kind === "transition")) {
+    bindExactArgument(args, "platform", device.platform, "DEVICE_AUTHORITY_MISMATCH");
+    bindExactArgument(args, "deviceId", device.deviceId, "DEVICE_AUTHORITY_MISMATCH");
+    bindExactArgument(args, "appId", device.appId, "APP_INSTALL_IDENTITY_CHANGED");
+    bindExactArgument(args, "bundleId", device.appId, "APP_INSTALL_IDENTITY_CHANGED");
+  }
+  if (install && profile.axes.includes("I")) {
+    bindExactArgument(args, "platform", install.platform, "APP_INSTALL_IDENTITY_CHANGED");
+    bindExactArgument(args, "deviceId", install.deviceId, "APP_INSTALL_IDENTITY_CHANGED");
+    bindExactArgument(args, "appId", install.appId, "APP_INSTALL_IDENTITY_CHANGED");
+    bindExactArgument(args, "bundleId", install.appId, "APP_INSTALL_IDENTITY_CHANGED");
+  }
+  if (metro && (profile.axes.includes("M") || profile.kind === "transition")) {
+    bindExactArgument(args, "metroPort", metro.port, "METRO_AUTHORITY_MISMATCH");
+  }
+}
+function authorityFailure2(error2) {
+  if (error2 instanceof SessionAuthorityError) {
+    return failResult(error2.message, error2.code, authorityErrorMeta(error2));
+  }
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1];
+  return failResult(message, code ?? "AUTHORITY_LOST_DURING_OPERATION");
+}
+function authorityErrorCode(error2) {
+  return error2 instanceof SessionAuthorityError ? error2.code : /^([A-Z][A-Z0-9_]+):/.exec(error2 instanceof Error ? error2.message : String(error2))?.[1];
+}
+function isOptionalBundleFailure(error2) {
+  const code = authorityErrorCode(error2);
+  return code === "BUNDLE_HANDSHAKE_UNAVAILABLE" || code === "BUNDLE_IDENTITY_MISMATCH" || code === "CDP_TARGET_AUTHORITY_MISMATCH" || code === "TARGET_CLAIM_CONFLICT";
+}
+function addMeta2(result, meta) {
+  if (!result || typeof result !== "object")
+    return result;
+  const toolResult = result;
+  const first = toolResult.content?.[0];
+  if (!first?.text)
+    return result;
+  try {
+    const envelope = JSON.parse(first.text);
+    envelope.meta = {
+      ...envelope.meta,
+      ...meta
+    };
+    return {
+      ...toolResult,
+      content: [{ ...first, text: JSON.stringify(envelope) }, ...toolResult.content.slice(1)]
+    };
+  } catch {
+    return result;
+  }
+}
+function resultSucceeded(result) {
+  const first = result?.content?.[0];
+  if (!first?.text)
+    return false;
+  try {
+    return JSON.parse(first.text).ok === true;
+  } catch {
+    return false;
+  }
+}
+function resultIsCanonicalSuccess(result) {
+  const first = result?.content?.[0];
+  if (!first?.text)
+    return false;
+  try {
+    const envelope = JSON.parse(first.text);
+    return envelope.ok === true && envelope.truncated !== true && !envelope.meta?.warning && envelope.data?.partial !== true && envelope.data?.truncated !== true && envelope.data?.inconclusive !== true;
+  } catch {
+    return false;
+  }
+}
+function receipt(status, profile, observations) {
+  return {
+    version: 1,
+    sessionId: status.sessionId.slice(0, 12),
+    claimEpoch: status.claimEpoch,
+    authorityVersion: status.authorityVersion,
+    axes: observations.map(({ axis, identity: identity2, detail }) => ({
+      axis,
+      identity: identity2.slice(0, 16),
+      ...detail ? { detail } : {}
+    })),
+    bundle: profile.axes.includes("B") ? { authorityScope: "initial-bundle", sourceFidelity: "not-proven" } : void 0
+  };
+}
+function createAuthorityGate(runtime, dependencies) {
+  return {
+    wrap: (tool, handler) => async (...handlerArgs) => {
+      const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
+      const baseProfile = authorityProfileFor(tool, args);
+      const profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
+        kind: "diagnostic",
+        axes: [],
+        mutation: false,
+        liveBundleProbe: false
+      } : tool === "observe" && args.action === "status" ? {
+        kind: "diagnostic",
+        axes: [],
+        mutation: false,
+        liveBundleProbe: false
+      } : tool === "proof_capture" && (args.action === "status" || args.action === "contract") ? {
+        kind: "diagnostic",
+        axes: [],
+        mutation: false,
+        liveBundleProbe: false
+      } : tool === "device_snapshot" && (args.action === "open" || args.action === "close") || tool === "observe" && (args.action === "start" || args.action === "restart" || args.action === "stop") || tool === "proof_capture" && args.action === "begin_rehearsal" ? {
+        kind: "transition",
+        axes: tool === "proof_capture" ? ["C", "S", "I", "M", "B", "D", "R"] : ["C", "S"],
+        mutation: true,
+        liveBundleProbe: tool === "proof_capture"
+      } : baseProfile;
+      if (profile.kind === "diagnostic") {
+        return addMeta2(await handler(...handlerArgs), { authoritative: false });
+      }
+      const runtimeStatus = runtime.status();
+      if (runtimeStatus.available && runtimeStatus.state === "blocked") {
+        return authorityFailure2(new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery"));
+      }
+      if (profile.kind === "transition") {
+        let operation2 = null;
+        let registry3 = null;
+        try {
+          const available = runtime.requireAvailable();
+          registry3 = available.registry;
+          const initialStatus = runtime.status();
+          if (!initialStatus.available) {
+            throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
+          }
+          let status = initialStatus;
+          const initialAuthorityVersion = status.authorityVersion;
+          bindSessionArguments(status, profile, args);
+          if (tool === "device_snapshot")
+            requireDeviceTransition(status, args);
+          const transitionAxes = tool === "device_snapshot" ? args.action === "open" ? {
+            before: ["C", "S", "I", "M", "D"],
+            after: ["C", "S", "I", "M", "D", "R"]
+          } : {
+            before: ["C", "S", "I", "M", "D", "R"],
+            after: ["C", "S", "I", "M", "D"]
+          } : tool === "observe" ? args.action === "stop" ? {
+            before: ["C", "S", "I", "M", "B", "D", "R", "O"],
+            after: ["C", "S", "I", "M", "B", "D", "R"]
+          } : {
+            before: ["C", "S", "I", "M", "B", "D", "R"],
+            after: ["C", "S", "I", "M", "B", "D", "R", "O"]
+          } : tool === "rn_session" && args.action === "prepare_handoff" ? { before: [...profile.axes], after: [] } : { before: [...profile.axes], after: [...profile.axes] };
+          requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
+          operation2 = registry3.beginOperation(available.session, {
+            operationId: randomUUID5(),
+            tool,
+            profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
+          });
+          const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+          registry3.verifyOperation(operation2);
+          const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
+          if (!resultIsCanonicalSuccess(result)) {
+            return addMeta2(result, { authoritative: false });
+          }
+          if (tool === "rn_session" && args.action === "release") {
+            operation2 = null;
+            return addMeta2(result, {
+              authoritative: false,
+              authorityTransition: true
+            });
+          }
+          const gateCommitsProof = tool === "proof_capture" && args.action === "begin_rehearsal";
+          if (!gateCommitsProof) {
+            registry3.verifyOperation(operation2);
+            const nextStatus = runtime.status();
+            if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
+              throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "transition did not advance the fenced authority generation");
+            }
+            status = nextStatus;
+          }
+          requireCompleteAxes(status, { ...profile, axes: transitionAxes.after });
+          const after = await Promise.all(transitionAxes.after.map((axis) => dependencies.probe({ axis, phase: "postflight", tool, profile, status, args })));
+          for (const observation of before) {
+            if (observation.axis === "C" || !transitionAxes.after.includes(observation.axis)) {
+              continue;
+            }
+            const postflight = after.find((candidate) => candidate.axis === observation.axis);
+            if (observation.identity !== postflight?.identity) {
+              throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", `${observation.axis} authority changed during the transition`);
+            }
+          }
+          if (gateCommitsProof) {
+            const runId = typeof args.runId === "string" ? args.runId : "";
+            if (!runId) {
+              throw new SessionAuthorityError("PROOF_AUTHORITY_MISMATCH", "proof transition did not provide a run ID");
+            }
+            const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
+            if (envelope.ok !== true)
+              return result;
+            const current = runtime.requireAvailable();
+            registry3.endOperation(operation2);
+            operation2 = null;
+            current.registry.updateBindings(current.session, {
+              bindings: { proof: { runId } },
+              expectedAuthorityVersion: status.authorityVersion
+            });
+            const proofStatus = runtime.status();
+            if (!proofStatus.available) {
+              throw new SessionAuthorityError(proofStatus.code, proofStatus.reason);
+            }
+            status = proofStatus;
+          }
+          if (operation2)
+            registry3.commitPlatformAuthorityReceipts(operation2);
+          return addMeta2(result, {
+            authorityTransition: true,
+            authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after)
+          });
+        } catch (error2) {
+          return authorityFailure2(error2);
+        } finally {
+          if (registry3 && operation2) {
+            try {
+              registry3.endOperation(operation2);
+            } catch {
+              registry3.cancelOperation(operation2);
+            }
+          }
+        }
+      }
+      let operation = null;
+      let registry2 = null;
+      try {
+        const available = runtime.requireAvailable();
+        registry2 = available.registry;
+        const initialStatus = runtime.status();
+        if (!initialStatus.available) {
+          throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
+        }
+        let status = initialStatus;
+        requireCompleteAxes(status, profile);
+        bindSessionArguments(status, profile, args);
+        operation = registry2.beginOperation(available.session, {
+          operationId: randomUUID5(),
+          tool,
+          profile: profile.axes.join("")
+        });
+        const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+        const optionalBefore = [];
+        let optionalBundleClaimed = false;
+        let optionalBundleRecoveryFailed = false;
+        if (profile.optionalAxes?.includes("B")) {
+          Object.defineProperty(args, optionalBundleAdmission, {
+            configurable: true,
+            value: async () => {
+              if (optionalBundleClaimed)
+                return true;
+              let currentStatus = runtime.status();
+              if (!currentStatus.available) {
+                throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+              }
+              if (!currentStatus.bindings.bundle)
+                return false;
+              let observation;
+              try {
+                observation = await dependencies.probe({
+                  axis: "B",
+                  phase: "preflight",
+                  tool,
+                  profile,
+                  status: currentStatus,
+                  args
+                });
+              } catch (error2) {
+                if (authorityErrorCode(error2) !== "CDP_TARGET_AUTHORITY_MISMATCH" || !dependencies.refreshRuntimeBinding) {
+                  if (!isOptionalBundleFailure(error2))
+                    throw error2;
+                  return false;
+                }
+                registry2.verifyOperation(operation);
+                let bundle;
+                try {
+                  bundle = await dependencies.refreshRuntimeBinding(currentStatus);
+                } catch (refreshError) {
+                  if (refreshError instanceof SessionAuthorityError) {
+                    if (!isOptionalBundleFailure(refreshError))
+                      throw refreshError;
+                  }
+                  optionalBundleRecoveryFailed = true;
+                  return false;
+                }
+                const priorBundle = currentStatus.bindings.bundle;
+                const metro = currentStatus.bindings.metro;
+                const oldTargetId = priorBundle?.targetId;
+                const newTargetId = bundle.targetId;
+                const metroPort = metro?.port;
+                if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+                  optionalBundleRecoveryFailed = true;
+                  return false;
+                }
+                const candidateStatus = {
+                  ...currentStatus,
+                  bindings: {
+                    ...currentStatus.bindings,
+                    bundle
+                  }
+                };
+                try {
+                  observation = await dependencies.probe({
+                    axis: "B",
+                    phase: "preflight",
+                    tool,
+                    profile,
+                    status: candidateStatus,
+                    args
+                  });
+                } catch (refreshedProbeError) {
+                  if (!isOptionalBundleFailure(refreshedProbeError)) {
+                    throw refreshedProbeError;
+                  }
+                  optionalBundleRecoveryFailed = true;
+                  return false;
+                }
+                registry2.verifyOperation(operation);
+                try {
+                  operation = registry2.replaceBindingsDuringOperation(operation, {
+                    state: "ready",
+                    bindings: { bundle },
+                    releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+                    claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+                  });
+                } catch (replacementError) {
+                  if (!isOptionalBundleFailure(replacementError))
+                    throw replacementError;
+                  optionalBundleRecoveryFailed = true;
+                  return false;
+                }
+                const refreshedStatus = runtime.status();
+                if (!refreshedStatus.available) {
+                  throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+                }
+                currentStatus = refreshedStatus;
+              }
+              registry2.verifyOperation(operation);
+              status = currentStatus;
+              optionalBefore.push(observation);
+              optionalBundleRecoveryFailed = false;
+              optionalBundleClaimed = true;
+              return true;
+            }
+          });
+        }
+        registry2.verifyOperation(operation);
+        const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
+        const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
+        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && Boolean(status.bindings.bundle);
+        const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
+        let authorityInvalidated = false;
+        if (directRuntimeReset && !resultSucceeded(result)) {
+          const priorBundle = status.bindings.bundle;
+          const metro = status.bindings.metro;
+          const oldTargetId = priorBundle?.targetId;
+          const metroPort = metro?.port;
+          operation = registry2.replaceBindingsDuringOperation(operation, {
+            state: "device_bound",
+            bindings: { bundle: null },
+            releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
+          });
+          return addMeta2(result, {
+            authorityInvalidated: true,
+            nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+          });
+        }
+        let runtimeTargetChanged = false;
+        if (reconcilesRuntimeTarget && (resultSucceeded(result) || nestedRuntimeReset)) {
+          const priorBundle = status.bindings.bundle;
+          const metro = status.bindings.metro;
+          let bundle = null;
+          try {
+            if (tool === "cdp_run_action" && optionalBundleRecoveryFailed) {
+              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "reactive bundle authority did not verify");
+            }
+            if (!dependencies.refreshRuntimeBinding) {
+              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime reset cannot commit without a binding refresh");
+            }
+            bundle = await dependencies.refreshRuntimeBinding(status);
+          } catch (error2) {
+            const oldTargetId = priorBundle?.targetId;
+            const metroPort = metro?.port;
+            operation = registry2.replaceBindingsDuringOperation(operation, {
+              state: "device_bound",
+              bindings: { bundle: null },
+              releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
+            });
+            const refreshedStatus = runtime.status();
+            if (!refreshedStatus.available) {
+              throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+            }
+            status = refreshedStatus;
+            if (!resultSucceeded(result)) {
+              return addMeta2(result, {
+                authorityInvalidated: true,
+                nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+              });
+            }
+            if (tool === "cdp_run_action" && !optionalBundleClaimed) {
+              authorityInvalidated = true;
+            } else {
+              throw error2;
+            }
+          }
+          if (!authorityInvalidated && bundle) {
+            const oldTargetId = priorBundle?.targetId;
+            const newTargetId = bundle.targetId;
+            const metroPort = metro?.port;
+            if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+              throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
+            }
+            runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
+            if (runtimeTargetChanged) {
+              operation = registry2.replaceBindingsDuringOperation(operation, {
+                state: "ready",
+                bindings: { bundle },
+                releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+                claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+              });
+              const refreshedStatus = runtime.status();
+              if (!refreshedStatus.available) {
+                throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+              }
+              status = refreshedStatus;
+            }
+          }
+        }
+        const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;
+        const allBefore = [...before, ...optionalBefore];
+        const after = await Promise.all(effectiveProfile.axes.map((axis) => dependencies.probe({
+          axis,
+          phase: "postflight",
+          tool,
+          profile: effectiveProfile,
+          status,
+          args
+        })));
+        for (let index = 0; index < allBefore.length; index += 1) {
+          if (runtimeTargetChanged && allBefore[index]?.axis === "B")
+            continue;
+          if (allBefore[index]?.identity !== after[index]?.identity) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", `${allBefore[index]?.axis ?? "unknown"} authority changed during the operation`);
+          }
+        }
+        registry2.verifyOperation(operation);
+        if (tool === "proof_capture" && (args.action === "finalize" || args.action === "discard")) {
+          const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
+          if (envelope.ok === true) {
+            registry2.endOperation(operation);
+            operation = null;
+            registry2.updateBindings(available.session, {
+              bindings: { proof: null },
+              expectedAuthorityVersion: status.authorityVersion
+            });
+          }
+        }
+        if (!resultIsCanonicalSuccess(result)) {
+          return addMeta2(result, {
+            authoritative: false,
+            ...authorityInvalidated ? {
+              authorityInvalidated: true,
+              nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+            } : {}
+          });
+        }
+        if (operation)
+          registry2.commitPlatformAuthorityReceipts(operation);
+        return addMeta2(result, {
+          authorityReceipt: receipt(status, effectiveProfile, after),
+          ...authorityInvalidated ? {
+            authorityInvalidated: true,
+            nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+          } : {}
+        });
+      } catch (error2) {
+        return authorityFailure2(error2);
+      } finally {
+        if (registry2 && operation) {
+          try {
+            registry2.endOperation(operation);
+          } catch {
+            registry2.cancelOperation(operation);
+          }
+        }
+      }
+    }
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/local-authority-probe.js
+init_metro_cwd();
+import { execFileSync as execFileSync15 } from "node:child_process";
+import { createHash as createHash14 } from "node:crypto";
+
+// packages/rn-dev-agent-core/dist/session/metro-authority.js
+import { createHmac as createHmac2, createSecretKey, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+function serializePayload(payload) {
+  return JSON.stringify(payload);
+}
+function signPayload(payload, signerCapability) {
+  const signingKey = createSecretKey(Buffer.from(signerCapability, "base64url"));
+  return createHmac2("sha256", signingKey).update(serializePayload(payload)).digest("hex");
+}
+function mismatch() {
+  return new Error("BUNDLE_IDENTITY_MISMATCH: signed initial-bundle binding did not match");
+}
+function verifyMetroAuthorityMarker(marker, signerCapability, expected = {}) {
+  if (marker.version !== 1 || !marker.payload || typeof marker.signature !== "string") {
+    throw mismatch();
+  }
+  const signature = Buffer.from(marker.signature, "hex");
+  const actual = Buffer.from(signPayload(marker.payload, signerCapability), "hex");
+  if (signature.length !== actual.length || !timingSafeEqual5(signature, actual)) {
+    throw mismatch();
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (marker.payload[key] !== value)
+      throw mismatch();
+  }
+  return marker.payload;
+}
+
+// packages/rn-dev-agent-core/dist/session/local-authority-probe.js
+init_process_birth();
+
+// packages/rn-dev-agent-core/dist/session/source-identity.js
+import { createHash as createHash13 } from "node:crypto";
+import { execFileSync as execFileSync14 } from "node:child_process";
+import { readFileSync as readFileSync35, realpathSync as realpathSync4 } from "node:fs";
+import { isAbsolute as isAbsolute4, join as join50, relative as relative2, resolve as resolve7 } from "node:path";
+function digest(parts) {
+  const hash = createHash13("sha256");
+  for (const part of parts) {
+    hash.update(part);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+function defaultGit(root, args) {
+  return execFileSync14("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5e3
+  }).trim();
+}
+function assertContained(root, candidate, code) {
+  const child = relative2(root, candidate);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute4(child)) {
+    throw new Error(`${code}: path is outside the declared content root`);
+  }
+}
+function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
+  if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
+    throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
+  }
+  const contentRoot = canonicalize(resolve7(dependencies.declaredRoot));
+  assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
+  const manifestParts = [];
+  for (const entry of [...dependencies.declaredManifests].sort()) {
+    const manifest = canonicalize(resolve7(contentRoot, entry));
+    assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
+    manifestParts.push(relative2(contentRoot, manifest), readFileSync35(manifest));
+  }
+  const manifestDigest = digest(manifestParts);
+  const appRelative = relative2(contentRoot, appRoot) || ".";
+  return {
+    kind: "declared-root",
+    contentRoot,
+    appRoot,
+    sourceKey: digest(["declared-source", contentRoot, manifestDigest]),
+    worktreeKey: digest(["declared-root", contentRoot]),
+    appRootKey: digest(["declared-app", appRelative]),
+    manifestDigest,
+    declaredManifests: [...dependencies.declaredManifests]
+  };
+}
+function resolveSourceIdentity(inputRoot, dependencies = {}) {
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
+  const appRoot = canonicalize(resolve7(inputRoot));
+  const git = dependencies.git ?? defaultGit;
+  try {
+    const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
+    assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
+    const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
+    const commonDirectory = canonicalize(isAbsolute4(commonRaw) ? commonRaw : join50(contentRoot, commonRaw));
+    const head = git(appRoot, ["rev-parse", "HEAD"]);
+    const appRelative = relative2(contentRoot, appRoot) || ".";
+    return {
+      kind: "git",
+      contentRoot,
+      appRoot,
+      sourceKey: digest(["git-source", commonDirectory]),
+      worktreeKey: digest(["git-worktree", contentRoot]),
+      appRootKey: digest(["git-app", appRelative]),
+      head
+    };
+  } catch (error2) {
+    if (error2 instanceof Error && (error2.message.startsWith("APP_ROOT_OUTSIDE_WORKTREE") || error2.message.startsWith("NON_GIT_"))) {
+      throw error2;
+    }
+    return resolveDeclaredIdentity(appRoot, dependencies, canonicalize);
+  }
+}
+function strictProofSourceIdentity(identity2, dependencies = {}) {
+  if (identity2.kind !== "git") {
+    throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
+  }
+  const git = dependencies.git ?? defaultGit;
+  const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
+  const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
+  const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
+  const dirtyParts = ["git-dirty-v1", diff];
+  for (const entry of untracked) {
+    const file = resolve7(identity2.contentRoot, entry);
+    assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
+    dirtyParts.push(entry, readFileSync35(file));
+  }
+  return {
+    kind: "git-strict-proof",
+    sourceKey: identity2.sourceKey,
+    worktreeKey: identity2.worktreeKey,
+    appRootKey: identity2.appRootKey,
+    head,
+    dirtyDigest: digest(dirtyParts)
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/local-authority-probe.js
+function identity(value) {
+  return createHash14("sha256").update(JSON.stringify(value)).digest("hex");
+}
+function objectBinding(status, name) {
+  const value = status.bindings[name];
+  if (!value || typeof value !== "object") {
+    throw new SessionAuthorityError(name === "bundle" ? "BUNDLE_HANDSHAKE_UNAVAILABLE" : "SESSION_AUTHORITY_REQUIRED", `${name} authority is not bound`);
+  }
+  return value;
+}
+function defaultSource(status) {
+  const stored = status.source;
+  return resolveSourceIdentity(stored.appRoot, stored.kind === "declared-root" ? {
+    declaredRoot: stored.contentRoot,
+    declaredManifests: stored.declaredManifests
+  } : {});
+}
+async function defaultFetchText(url, init) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function defaultFetchJson(url, init) {
+  return JSON.parse(await defaultFetchText(url, init));
+}
+function defaultDeviceExists(platform, deviceId) {
+  if (platform === "ios") {
+    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5e3
+    });
+    const parsed = JSON.parse(output2);
+    return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
+  }
+  const output = execFileSync15("adb", ["devices"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5e3
+  });
+  return output.split("\n").some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
+}
+function sameSource(expected, observed) {
+  return expected.kind === observed.kind && expected.sourceKey === observed.sourceKey && expected.worktreeKey === observed.worktreeKey && expected.appRootKey === observed.appRootKey && (expected.kind !== "declared-root" || observed.kind === "declared-root" && expected.manifestDigest === observed.manifestDigest);
+}
+function createLocalAuthorityProbe(dependencies) {
+  const fetchText = dependencies.fetchText ?? defaultFetchText;
+  const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
+  const sourceResolver = dependencies.resolveSource ?? defaultSource;
+  const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
+  const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+  return async ({ axis, phase, status, tool, args }) => {
+    if (axis === "C") {
+      const { registry: registry2, session } = dependencies.runtime.requireAvailable();
+      const controller = phase === "preflight" && tool === "rn_session" && args?.action === "cancel_handoff" ? registry2.getHandoffCancellationControllerBinding(session) : registry2.getControllerBinding(session);
+      const supervisor = inspectOwner({
+        sessionId: controller.sessionId,
+        pid: controller.supervisor.pid,
+        token: controller.supervisor.token
+      });
+      const workerBirth = controller.worker.pid === process.pid && controller.worker.token ? readProcessBirth(process.pid) : null;
+      if (supervisor !== "match" || !controller.worker.instanceId || !workerBirth || workerBirth.token !== controller.worker.token) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "controller process identity no longer matches the fenced session");
+      }
+      return { axis, identity: identity(controller) };
+    }
+    if (axis === "S") {
+      const expected = status.source;
+      const observed = sourceResolver(status);
+      if (!sameSource(expected, observed)) {
+        throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "current source root does not match the session worktree identity");
+      }
+      return {
+        axis,
+        identity: identity({
+          kind: observed.kind,
+          sourceKey: observed.sourceKey,
+          worktreeKey: observed.worktreeKey,
+          appRootKey: observed.appRootKey,
+          ...observed.kind === "declared-root" ? { manifestDigest: observed.manifestDigest } : {}
+        })
+      };
+    }
+    if (axis === "I") {
+      const expected = objectBinding(status, "install");
+      const observedGeneration = captureInstallGeneration(expected);
+      if (observedGeneration !== expected.installGeneration) {
+        throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact generation no longer matches the session build");
+      }
+      return {
+        axis,
+        identity: identity({
+          platform: expected.platform,
+          deviceId: expected.deviceId,
+          appId: expected.appId,
+          installGeneration: observedGeneration
+        })
+      };
+    }
+    if (axis === "M") {
+      const metro = objectBinding(status, "metro");
+      const port = Number(metro.port);
+      const pid = Number(metro.pid);
+      const birth = String(metro.birth ?? "");
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || metroListenerPid(port) !== pid || inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== "match") {
+        throw new SessionAuthorityError("METRO_INSTANCE_CHANGED", "Metro process identity no longer matches the bound instance");
+      }
+      const statusText = await fetchText(`http://127.0.0.1:${port}/status`);
+      if (!statusText.includes("packager-status:running")) {
+        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "claimed Metro endpoint is not running");
+      }
+      const servingRoot = cwdForPort(port) ?? (metro.mode === "managed" && typeof metro.servingRoot === "string" ? metro.servingRoot : null);
+      const expectedRoot = String(status.source.contentRoot ?? "");
+      if (!servingRoot || !pathMatchesRoot(servingRoot, expectedRoot)) {
+        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "Metro serving root cannot be proven for this worktree");
+      }
+      return {
+        axis,
+        identity: identity({
+          instanceId: metro.instanceId,
+          port,
+          pid,
+          birth,
+          servingRoot,
+          buildGeneration: metro.buildGeneration
+        })
+      };
+    }
+    if (axis === "B") {
+      const client2 = dependencies.getClient();
+      const bundle = objectBinding(status, "bundle");
+      if (!client2.isConnected || !client2.connectedTarget) {
+        throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "live CDP runtime is unavailable for bundle verification");
+      }
+      let evaluated;
+      try {
+        evaluated = await client2.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+      } catch {
+        throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "live CDP runtime could not be evaluated for bundle verification");
+      }
+      if (typeof evaluated.value !== "string") {
+        throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime did not expose a signed authority marker");
+      }
+      let outer;
+      try {
+        outer = JSON.parse(evaluated.value);
+      } catch {
+        throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "live CDP runtime returned an invalid bundle authority marker");
+      }
+      const signerCapability = dependencies.getSecret()?.signerCapability;
+      if (!outer?.marker || outer.status !== "signed" || !signerCapability) {
+        throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "signed authority marker or signer capability is unavailable");
+      }
+      verifyMetroAuthorityMarker(outer.marker, signerCapability, {
+        sessionId: status.sessionId,
+        metroInstanceId: String(bundle.metroInstanceId),
+        worktreeKey: status.worktreeKey,
+        appId: String(bundle.appId),
+        platform: bundle.platform,
+        buildGeneration: Number(bundle.buildGeneration)
+      });
+      if (client2.connectedTarget.id !== bundle.targetId || client2.connectionGeneration !== bundle.connectionGeneration) {
+        throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "CDP target generation no longer matches the pinned bundle");
+      }
+      return {
+        axis,
+        identity: identity({
+          payload: outer.marker.payload,
+          targetId: client2.connectedTarget.id,
+          connectionGeneration: client2.connectionGeneration
+        }),
+        detail: { authorityScope: "initial-bundle", sourceFidelity: "not-proven" }
+      };
+    }
+    if (axis === "D") {
+      const device = objectBinding(status, "device");
+      const platform = device.platform;
+      const deviceId = String(device.deviceId ?? "");
+      if (platform !== "ios" && platform !== "android" || !deviceId || !deviceExists(platform, deviceId)) {
+        throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "exact claimed device is no longer available");
+      }
+      return { axis, identity: identity({ platform, deviceId }) };
+    }
+    if (axis === "R") {
+      const runner = objectBinding(status, "runner");
+      const port = Number(runner.port);
+      const pid = Number(runner.pid);
+      const processBirth = String(runner.processBirth ?? "");
+      const capability = String(runner.capability ?? "");
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !processBirth || !capability || inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }) !== "match") {
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner process identity and endpoint capability no longer match the binding");
+      }
+      const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
+        headers: { authorization: `Bearer ${capability}` }
+      });
+      for (const key of ["instanceId", "sessionId", "claimEpoch", "deviceId", "appId"]) {
+        if (health[key] !== runner[key]) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", `runner ${key} no longer matches the session binding`);
+        }
+      }
+      return { axis, identity: identity({ health, pid, processBirth }) };
+    }
+    if (axis === "O") {
+      const observe2 = objectBinding(status, "observe");
+      const port = Number(observe2.port);
+      const capability = dependencies.getSecret()?.observeCapability ?? "";
+      const observed = await fetchJson(`http://127.0.0.1:${port}/api/authority`, {
+        headers: {
+          authorization: `Bearer ${capability}`,
+          "x-rn-observe-instance": String(observe2.instanceId ?? "")
+        }
+      });
+      if (observed.sessionId !== status.sessionId || observed.instanceId !== observe2.instanceId) {
+        throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe endpoint no longer matches the session binding");
+      }
+      return { axis, identity: identity(observed) };
+    }
+    const proof2 = objectBinding(status, "proof");
+    const runId = String(proof2.runId ?? "");
+    if (!runId || !dependencies.proofActive?.(runId)) {
+      throw new SessionAuthorityError("PROOF_AUTHORITY_MISMATCH", "strict proof run is not active under this session");
+    }
+    return { axis, identity: identity({ runId, claimEpoch: status.claimEpoch }) };
+  };
+}
+
 // packages/rn-dev-agent-core/dist/index.js
-var pkgPath = join46(dirname17(fileURLToPath4(import.meta.url)), "..", "package.json");
-var pkgVersion = JSON.parse(readFileSync31(pkgPath, "utf8")).version;
+init_secure_state_file();
+
+// packages/rn-dev-agent-core/dist/session/dev-client-authority.js
+async function pinExactDevClient(input, dependencies) {
+  if (input.devClientUrl !== input.expectedDevClientUrl) {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint");
+  }
+  if (input.devClientUrl) {
+    await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
+    if (input.platform === "ios")
+      await dependencies.acceptIosOpenDialog(input.deviceId);
+  } else {
+    await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
+  }
+  const connected = await dependencies.connectExact({
+    metroPort: input.metroPort,
+    platform: input.platform,
+    appId: input.appId,
+    deviceId: input.deviceId
+  });
+  if (connected.deviceId !== input.deviceId) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device");
+  }
+  const authority = await dependencies.readMarker();
+  if (!authority?.marker || authority.status !== "signed") {
+    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker");
+  }
+  verifyMetroAuthorityMarker(authority.marker, input.signerCapability, {
+    sessionId: input.sessionId,
+    metroInstanceId: input.metroInstanceId,
+    worktreeKey: input.worktreeKey,
+    appId: input.appId,
+    platform: input.platform,
+    buildGeneration: input.buildGeneration
+  });
+  return {
+    sessionId: input.sessionId,
+    metroInstanceId: input.metroInstanceId,
+    worktreeKey: input.worktreeKey,
+    appId: input.appId,
+    platform: input.platform,
+    buildGeneration: input.buildGeneration,
+    deviceId: input.deviceId,
+    metroPort: input.metroPort,
+    ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {},
+    launchMethod: input.devClientUrl ? "url" : "app",
+    targetId: connected.targetId,
+    connectionGeneration: connected.connectionGeneration,
+    authorityScope: "initial-bundle",
+    sourceFidelity: "not-proven"
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/target-device-authority.js
+async function proveTargetDeviceAssociation(input, dependencies) {
+  const targetDeviceName = input.targetDeviceName?.trim();
+  if (!targetDeviceName) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
+  }
+  if (input.platform === "ios") {
+    const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
+    const parsed = JSON.parse(output.stdout);
+    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && device.name === targetDeviceName);
+    if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
+      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
+    }
+    return;
+  }
+  const devices = (await dependencies.execute("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  const matching = [];
+  for (const serial of devices) {
+    const model = (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim();
+    if (model && (targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
+      matching.push(serial);
+    }
+  }
+  if (matching.length !== 1 || matching[0] !== input.deviceId) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+}
+
+// packages/rn-dev-agent-core/dist/index.js
+var pkgPath = join51(dirname20(fileURLToPath5(import.meta.url)), "..", "package.json");
+var pkgVersion = JSON.parse(readFileSync36(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
 var noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
@@ -64154,7 +68062,7 @@ var setClient = (c) => {
   client = c;
 };
 var createClient = (port) => new CDPClient(port);
-var execFileP = promisify29(execFile27);
+var execFileP = promisify28(execFile26);
 var mustOk = (res, what) => {
   const env = JSON.parse(res.content[0].text);
   if (env.ok === false)
@@ -64210,6 +68118,139 @@ var server2 = new McpServer({
 var strictProofMonitor = new StrictProofMonitor();
 addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
+var authorityRuntime = getWorkerAuthorityRuntime();
+setSnapshotAuthorityProvider({
+  current: () => {
+    const status = authorityRuntime.status();
+    if (!status.available)
+      return null;
+    const device = status.bindings.device;
+    const install = status.bindings.install;
+    const runner = status.bindings.runner;
+    return {
+      sessionId: status.sessionId,
+      claimEpoch: status.claimEpoch,
+      sourceKey: status.sourceKey,
+      worktreeKey: status.worktreeKey,
+      appRootKey: status.appRootKey,
+      platform: device?.platform,
+      deviceId: device?.deviceId,
+      appId: device?.appId,
+      buildGeneration: install?.buildGeneration,
+      installGeneration: install?.installGeneration,
+      artifactDigest: install?.artifactDigest,
+      runnerInstanceId: runner?.instanceId,
+      runnerPid: runner?.pid,
+      runnerProcessBirth: runner?.processBirth,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash15("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerPort: runner?.port,
+      runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
+      deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
+    };
+  },
+  record: (receipt2) => {
+    const { registry: registry2, session } = authorityRuntime.requireOperational();
+    registry2.recordPlatformAuthorityReceipt(session, String(receipt2.platform), {
+      ...receipt2
+    });
+  },
+  validate: (receipt2) => {
+    try {
+      const { registry: registry2, session } = authorityRuntime.requireOperational();
+      if (!registry2.validatePlatformAuthorityReceipt(session, String(receipt2.platform), {
+        ...receipt2
+      })) {
+        return false;
+      }
+      if (typeof receipt2.platform !== "string" || typeof receipt2.deviceId !== "string" || typeof receipt2.appId !== "string" || typeof receipt2.installGeneration !== "string" || captureInstallGeneration({
+        platform: receipt2.platform,
+        deviceId: receipt2.deviceId,
+        appId: receipt2.appId
+      }) !== receipt2.installGeneration) {
+        return false;
+      }
+      return typeof receipt2.runnerPid === "number" && typeof receipt2.runnerProcessBirth === "string" && readProcessBirth(receipt2.runnerPid)?.token === receipt2.runnerProcessBirth;
+    } catch {
+      return false;
+    }
+  },
+  validateLive: async (receipt2) => {
+    try {
+      const { registry: registry2, session } = authorityRuntime.requireOperational();
+      const probe = registry2.getPlatformAuthorityProbe(session, String(receipt2.platform), {
+        ...receipt2
+      });
+      if (!probe || captureInstallGeneration({
+        platform: probe.platform,
+        deviceId: probe.deviceId,
+        appId: probe.appId
+      }) !== probe.installGeneration || readProcessBirth(probe.pid)?.token !== probe.processBirth) {
+        return false;
+      }
+      if (probe.platform === "ios") {
+        return probeFastRunnerAuthority(probe);
+      }
+      if (probe.platform === "android") {
+        const health = await probeAndroidRunnerHealthInfo(probe.port, probe.capability);
+        return health.ok === true && androidHealthMatchesAuthority(health, probe);
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+});
+var localAuthorityProbe = createLocalAuthorityProbe({
+  runtime: authorityRuntime,
+  getClient,
+  getSecret: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null,
+  proofActive: (runId) => strictProofMonitor.ownsRun(runId)
+});
+var authorityGate = createAuthorityGate(authorityRuntime, {
+  probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
+  refreshRuntimeBinding: rebindSessionRuntime
+});
+setObserveAuthorityDeps({
+  resolve: () => {
+    const { registry: registry2, session } = authorityRuntime.requireAvailable();
+    const status = registry2.getSessionStatus(session.sessionId);
+    const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
+    const port = Number(status?.bindings.observePort);
+    if (!status || !secret?.observeCapability || !Number.isSafeInteger(port)) {
+      throw new Error("OBSERVE_AUTHORITY_MISMATCH: Observe authority is incomplete");
+    }
+    return {
+      port,
+      authority: {
+        sessionId: status.sessionId,
+        claimEpoch: status.claimEpoch,
+        instanceId: randomUUID6(),
+        capability: secret.observeCapability
+      }
+    };
+  },
+  bind: ({ port, authority }) => {
+    const { registry: registry2, session } = authorityRuntime.requireAvailable();
+    const controller = registry2.getControllerBinding(session);
+    registry2.updateBindings(session, {
+      bindings: {
+        observe: {
+          port,
+          sessionId: authority.sessionId,
+          claimEpoch: authority.claimEpoch,
+          instanceId: authority.instanceId,
+          cleanupCapability: authority.capability,
+          pid: controller.worker.pid,
+          processBirth: controller.worker.token
+        }
+      }
+    });
+  },
+  unbind: () => {
+    const { registry: registry2, session } = authorityRuntime.requireAvailable();
+    registry2.updateBindings(session, { bindings: { observe: null } });
+  }
+});
 setForeignGateUdidProvider(() => {
   const s = getActiveSession();
   return s?.platform === "ios" && s.deviceId ? s.deviceId : null;
@@ -64262,7 +68303,7 @@ var liveDeps = buildLiveDeps({
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
     try {
-      const buf = readFileSync31(path);
+      const buf = readFileSync36(path);
       const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
       return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
     } catch {
@@ -64272,7 +68313,7 @@ var liveDeps = buildLiveDeps({
   isMirrorActive: () => mirrorManager2?.isStreaming() ?? false
 });
 function trackedTool(name, desc, schema, handler) {
-  const base = instrumentTool(name, arbiterWrap(name, handler));
+  const base = instrumentTool(name, authorityGate.wrap(name, arbiterWrap(name, handler)));
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a) => {
     if (diagnosticContractProbe) {
@@ -64299,23 +68340,209 @@ function trackedTool(name, desc, schema, handler) {
     server2.tool(name, desc, schema, wrapped);
   }
 }
-trackedTool("cdp_status", "Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.", {
-  metroPort: external_exports.number().optional().describe("Override Metro port (default: auto-detect 8081/8082/19000/19006)"),
+async function pinSessionDevClient(status) {
+  const device = status.bindings.device;
+  const metro = status.bindings.metro;
+  const install = status.bindings.install;
+  const declaredDevice = status.bindings.device;
+  const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
+  const devClientUrl = install.devClientUrl ?? declaredDevice.devClientUrl;
+  if (!secret?.signerCapability) {
+    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable");
+  }
+  return pinExactDevClient({
+    sessionId: status.sessionId,
+    metroInstanceId: metro.instanceId,
+    worktreeKey: status.worktreeKey,
+    appId: device.appId,
+    platform: device.platform,
+    buildGeneration: metro.buildGeneration,
+    deviceId: device.deviceId,
+    metroPort: metro.port,
+    ...devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {},
+    signerCapability: secret.signerCapability
+  }, {
+    openUrl: async (platform, deviceId, url) => {
+      if (platform === "ios") {
+        await execFileP("xcrun", ["simctl", "openurl", deviceId, url]);
+      } else {
+        await execFileP("adb", androidDeeplinkCommandArgs(url, void 0, deviceId));
+      }
+    },
+    launchExactApp: async (platform, deviceId, appId) => {
+      if (platform === "ios") {
+        await execFileP("xcrun", ["simctl", "launch", deviceId, appId]);
+      } else {
+        await execFileP("adb", [
+          "-s",
+          deviceId,
+          "shell",
+          "monkey",
+          "--pct-syskeys",
+          "0",
+          "-p",
+          appId,
+          "-c",
+          "android.intent.category.LAUNCHER",
+          "1"
+        ]);
+      }
+    },
+    acceptIosOpenDialog: async () => {
+      const result = await acceptDeeplinkOpenConfirmation();
+      if (result && !result.tapped) {
+        throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action");
+      }
+    },
+    connectExact: async ({ metroPort, platform, appId, deviceId }) => {
+      let exactClient = getClient();
+      if (exactClient.metroPort !== metroPort) {
+        await exactClient.disconnect();
+        exactClient = createClient(metroPort);
+        setClient(exactClient);
+      }
+      await exactClient.autoConnect(metroPort, { platform, bundleId: appId });
+      const target = exactClient.connectedTarget;
+      if (!target || exactClient.metroPort !== metroPort || !targetMatchesSession(target, { platform, bundleId: appId })) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");
+      }
+      await proveTargetDeviceAssociation({ platform, deviceId, targetDeviceName: target.deviceName }, { execute: execFileP });
+      return {
+        targetId: target.id,
+        connectionGeneration: exactClient.connectionGeneration,
+        deviceId
+      };
+    },
+    readMarker: async () => {
+      const result = await getClient().evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+      if (typeof result.value !== "string")
+        return null;
+      const parsed = JSON.parse(result.value);
+      return parsed?.status === "signed" && parsed.marker ? { status: "signed", marker: parsed.marker } : null;
+    }
+  });
+}
+async function rebindSessionRuntime(status) {
+  const device = status.bindings.device;
+  const metro = status.bindings.metro;
+  const prior = status.bindings.bundle;
+  const client2 = getClient();
+  const target = client2.connectedTarget;
+  if (!client2.isConnected || !target || client2.metroPort !== metro.port || !targetMatchesSession(target, {
+    platform: device.platform,
+    bundleId: device.appId
+  })) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: runtime reset did not reconnect the exact session target");
+  }
+  await proveTargetDeviceAssociation({
+    platform: device.platform,
+    deviceId: device.deviceId,
+    targetDeviceName: target.deviceName
+  }, { execute: execFileP });
+  const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
+  const evaluated = await client2.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+  const outer = typeof evaluated.value === "string" ? JSON.parse(evaluated.value) : null;
+  if (outer?.status !== "signed" || !outer.marker || !secret?.signerCapability) {
+    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: runtime reset did not expose the signed session marker");
+  }
+  verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
+    sessionId: status.sessionId,
+    metroInstanceId: metro.instanceId,
+    worktreeKey: status.worktreeKey,
+    appId: device.appId,
+    platform: device.platform,
+    buildGeneration: metro.buildGeneration
+  });
+  return {
+    ...prior,
+    targetId: target.id,
+    connectionGeneration: client2.connectionGeneration,
+    authorityScope: "initial-bundle",
+    sourceFidelity: "not-proven"
+  };
+}
+var sessionHandler = createSessionHandler(authorityRuntime, {
+  getSignerCapability: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)?.signerCapability ?? null : null,
+  pinDevClient: pinSessionDevClient
+});
+var disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
+async function connectBoundSession(args) {
+  const status = authorityRuntime.status();
+  if (!status.available) {
+    return failResult(status.reason, status.code);
+  }
+  const currentTarget = status.bindings.bundle?.targetId;
+  if (typeof args.targetId === "string" && (typeof currentTarget !== "string" || args.targetId !== currentTarget)) {
+    return failResult("targetId is not the target already proven by this session", "CDP_TARGET_AUTHORITY_MISMATCH");
+  }
+  return sessionHandler({ action: "pin_dev_client" });
+}
+async function disconnectBoundSession() {
+  const disconnected = await disconnectClientHandler({});
+  if (disconnected.isError)
+    return disconnected;
+  const { registry: registry2, session } = authorityRuntime.requireAvailable();
+  const status = registry2.getSessionStatus(session.sessionId);
+  const targetId = status?.bindings.bundle?.targetId;
+  if (status && typeof targetId === "string") {
+    registry2.releaseResources(session, [
+      { type: "target", key: `${String(status.bindings.metroPort)}:${targetId}` }
+    ]);
+    registry2.updateBindings(session, {
+      state: "device_bound",
+      bindings: { bundle: null }
+    });
+  }
+  return disconnected;
+}
+trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, and release actions are fail-closed.", {
+  action: external_exports.enum([
+    "status",
+    "bind_device",
+    "bind_metro",
+    "pin_dev_client",
+    "prepare_handoff",
+    "cancel_handoff",
+    "accept_handoff",
+    "adopt_stale",
+    "preview_integration",
+    "apply_integration",
+    "restore_integration",
+    "release"
+  ]),
+  platform: external_exports.enum(["ios", "android"]).optional(),
+  deviceId: external_exports.string().optional(),
+  appId: external_exports.string().optional(),
+  devClientUrl: external_exports.string().url().optional(),
+  buildReceipt: external_exports.record(external_exports.unknown()).optional(),
+  metroPort: external_exports.number().int().min(1).max(65535).optional(),
+  metroPid: external_exports.number().int().positive().optional(),
+  metroInstanceId: external_exports.string().optional(),
+  buildGeneration: external_exports.number().int().nonnegative().optional(),
+  mode: external_exports.enum(["managed", "external"]).optional(),
+  targetHandle: external_exports.string().optional(),
+  handoffId: external_exports.string().optional(),
+  token: external_exports.string().optional(),
+  adoptionHandle: external_exports.string().optional(),
+  confirmed: external_exports.boolean().optional()
+}, sessionHandler);
+trackedTool("cdp_status", "Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.", {
+  metroPort: external_exports.number().optional().describe("Diagnostic comparison only; cdp_status never changes the active Metro port"),
   platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
   resetArbiter: external_exports.boolean().optional().describe("Clear a wedged in-memory device arbiter (a leaked plane lease refusing all flows). Escape hatch \u2014 cdp_status is unarbitrated so it always runs.")
-}, createStatusHandler(getClient, setClient, createClient));
+}, createPassiveStatusHandler(getClient, authorityRuntime));
 trackedTool("observe", "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.", observeSchema, observeHandler);
 trackedTool("cdp_diagnostic_renderers", 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {
   maxRendererId: external_exports.number().int().min(1).max(100).optional().describe("How many renderer IDs to scan. Default 20 (matches IIFE MAX_RENDERER_IDS).")
 }, createDiagnosticRenderersHandler(getClient));
-trackedTool("cdp_connect", 'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform, port, or bundle, or reconnect after a manual disconnect. When multiple Hermes targets exist (common after app restarts on Expo Dev Client \u2014 zombie `host.exp.Exponent` pages linger alongside fresh app pages), pass `targetId` (exact id from cdp_targets) or `bundleId` (e.g. "com.myapp") to disambiguate. Use force=true to always reconnect regardless of current state.', {
-  metroPort: external_exports.number().optional().describe("Metro port to connect to (default: auto-detect 8081/8082/19000/19006)"),
+trackedTool("cdp_connect", "Connect only the exact app target on the authority-bound Metro and commit its signed initial-bundle handshake. Omitted port/platform/app values come from the session; conflicts refuse.", {
+  metroPort: external_exports.number().optional().describe("Must equal the authority-bound Metro port; omitted uses that exact port"),
   platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android"). If already connected to a different platform, forces reconnection to the correct target.'),
-  targetId: external_exports.string().optional().describe("Exact Hermes target id (from cdp_targets). Highest-precedence filter \u2014 picks one target precisely. Use when multiple targets share a platform and bundleId is ambiguous."),
+  targetId: external_exports.string().optional().describe("Optional target already proven by this session; foreign or previously unbound IDs refuse"),
   bundleId: external_exports.string().optional().describe('App bundle id to match against target.description (e.g. "com.myapp.dev"). Filters out zombie Expo Go host pages when the real app target is present. B111/D635.'),
   force: external_exports.boolean().optional().default(false).describe("Force disconnect and reconnect even if already connected. Use to switch targets or recover from stale connections.")
-}, createConnectHandler(getClient, setClient, createClient));
-trackedTool("cdp_disconnect", "Cleanly disconnect from the current Hermes target. Closes WebSocket, stops auto-reconnect, and clears all state. A fresh connection can be established afterward via cdp_connect or cdp_status.", {}, createDisconnectHandler(getClient, setClient, createClient));
+}, connectBoundSession);
+trackedTool("cdp_disconnect", "Disconnect the authority-bound Hermes target and transactionally invalidate its bundle/target claim.", {}, disconnectBoundSession);
 trackedTool("cdp_targets", "List available Hermes debug targets without connecting. Shows all valid targets from Metro with their IDs, titles, and VM type. Highlights which target is currently connected (if any). Use to inspect what is available before calling cdp_connect.", {
   metroPort: external_exports.number().optional().describe("Metro port to scan (default: auto-detect)")
 }, createTargetsHandler(getClient));
@@ -64323,7 +68550,7 @@ trackedTool("cdp_evaluate", "CAUTION: Executes arbitrary JavaScript directly in 
   expression: external_exports.string().describe("JavaScript expression to evaluate"),
   awaitPromise: external_exports.boolean().default(false).describe("Wait for promise resolution")
 }, createEvaluateHandler(getClient));
-trackedTool("cdp_reload", 'Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 30s with 5 soft retries; on failure, falls back once to a 10s force-recreate that mirrors `cdp_connect force=true`). After Dev Client rebuilds, the app may need a manual restart (xcrun simctl terminate + launch) if both paths fail. When the force fallback recovers, `meta.recovered_via` is "force_reconnect" and `meta.proxy_was_active` indicates whether DevTools was attached (re-run cdp_open_devtools to re-attach).', {
+trackedTool("cdp_reload", "Reload the authority-bound app and atomically replace its exact Hermes target claim. Recovery uses only the session device/app/Metro bindings and returns a failure unless the signed runtime marker is re-proven.", {
   full: external_exports.boolean().default(true).describe("Always performs a full reload via DevSettings.reload()")
 }, createReloadHandler(getClient, setClient, createClient));
 trackedTool("cdp_component_tree", 'Get React component tree. Returns components with props, state, testIDs. Use filter to scope to a specific subtree \u2014 NEVER request full tree unless necessary (saves tokens). Detects RedBox and warns. Pass interactiveOnly=true for a compact "what can I act on here?" digest (only tappable/editable elements + their text, no props/state) \u2014 the cheapest way to perceive a novel screen for live interaction.', {
@@ -64347,8 +68574,9 @@ trackedTool("cdp_nav_graph", 'Navigation graph tool. PRIMARY: action="go" \u2014
 trackedTool("cdp_error_log", "Get unhandled JS errors and promise rejections. Hooked into ErrorUtils and Hermes rejection tracker. If empty but app crashed, the error is NATIVE \u2014 call cdp_native_errors to check native logs.", {
   clear: external_exports.boolean().default(false).describe("Clear all captured errors instead of reading them")
 }, createErrorLogHandler(getClient));
-trackedTool("cdp_native_errors", "Read native-level error logs for when JS-layer tools come up empty. iOS spawns `xcrun simctl log show`, Android uses `adb logcat -d`. Catches errors that fire BEFORE __RN_AGENT injects (missing native module, bundle load failure, native crash). Returns filtered + deduped error/fatal entries. Platform defaults to the CDP-connected target.", {
-  platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform. Defaults to the currently-connected CDP target platform."),
+trackedTool("cdp_native_errors", "Read native-level errors from the exact authority-bound device. iOS uses simctl spawn for the claimed simulator; Android uses adb -s for the claimed serial.", {
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
+  deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
   sinceSeconds: external_exports.number().int().min(5).max(3600).optional().describe("How far back to look (default 60s, max 3600)"),
   limit: external_exports.number().int().min(1).max(100).optional().describe("Max entries to return (default 10, max 100)")
 }, createNativeErrorsHandler(getClient));
@@ -64377,8 +68605,8 @@ trackedTool("cdp_heap_usage", "Get current JS heap memory usage. Single fast CDP
 trackedTool("cdp_cpu_profile", "Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count. Requires Profiler domain (check cdp_status domains.profiler).", {
   durationMs: external_exports.number().int().min(500).max(3e4).default(3e3).optional().describe("Profile duration in ms (default 3000, max 30000)")
 }, createCpuProfileHandler(getClient));
-trackedTool("cdp_object_inspect", "Inspect a JS object by expression without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.", {
-  expression: external_exports.string().describe('JS expression to evaluate and inspect (e.g. "globalThis.__REDUX_STORE__")'),
+trackedTool("cdp_object_inspect", "Inspect a JS object by property path without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.", {
+  expression: external_exports.string().describe("JS property path or primitive literal to inspect"),
   depth: external_exports.number().int().min(0).max(3).default(1).optional().describe("Property inspection depth (default 1, max 3)"),
   maxProperties: external_exports.number().int().min(1).max(100).default(20).optional().describe("Max properties per level (default 20)")
 }, createObjectInspectHandler(getClient));
@@ -64556,10 +68784,11 @@ trackedTool("collect_logs", "Collect logs from multiple sources in parallel: JS 
   logLevel: external_exports.enum(["all", "log", "warn", "error", "info", "debug"]).default("all").describe("Filter by log level (default: all)")
 }, createCollectLogsHandler(getClient));
 trackedTool("device_list", "List all available iOS simulators and Android emulators. Returns device name, UDID, platform, and status. Use before device_snapshot action=open to confirm the target device.", {}, createDeviceListHandler());
-trackedTool("device_screenshot", "Capture a screenshot of the active device screen. Returns the file path. Prefer JPEG for faster capture. When both iOS sim and Android emulator are booted, defaults to the platform of the currently connected CDP target. Output is auto-downscaled to maxWidth (default 800px) via macOS sips to keep LLM context costs predictable; pass maxWidth=0 to disable when full-resolution capture is needed (visual diffing). meta.resize describes what happened. Result may include meta.advisories[] (EPHEMERAL_PATH when saving to /tmp, FULL_RESOLUTION when maxWidth=0) \u2014 non-blocking nudges to use docs/proof/<feature>/<NN>-<step>.jpg for deliverables and the default 800px width for everyday captures.", {
+trackedTool("device_screenshot", "Capture the exact authority-bound device screen. Returns the file path and preserves the session device identity in the authority receipt.", {
   path: external_exports.string().optional().describe("Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG."),
   format: external_exports.enum(["jpeg", "png"]).optional().describe("Image format (default: auto-detect from path extension, or jpeg)"),
-  platform: external_exports.enum(["ios", "android"]).optional().describe("Target device platform. Defaults to the currently-connected CDP target platform."),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
+  deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
   maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
   quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
 }, createDeviceScreenshotHandler(getClient));
@@ -64571,6 +68800,8 @@ trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots.
   sessionName: external_exports.string().optional().describe("Session name override (default: auto-generated)"),
   attachOnly: external_exports.boolean().optional().describe("action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.")
 }, createDeviceSnapshotHandler({
+  bindRunner: (platform, deviceId, appId) => bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
+  unbindRunner: () => unbindNativeRunner(authorityRuntime),
   probeReactNativeUi: async (platform, deviceId, appId) => {
     const client2 = getClient();
     const filters = {
@@ -64589,7 +68820,7 @@ trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots.
       const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
       if (probe.value === true)
         return true;
-      await new Promise((resolve5) => setTimeout(resolve5, 250));
+      await new Promise((resolve8) => setTimeout(resolve8, 250));
     }
     return false;
   }
@@ -64650,15 +68881,17 @@ trackedTool("device_pinch", "Pinch/zoom gesture on the screen. scale < 1 zooms o
   x: external_exports.number().optional().describe("Center X coordinate (default: screen center)"),
   y: external_exports.number().optional().describe("Center Y coordinate (default: screen center)")
 }, createDevicePinchHandler());
-trackedTool("device_permission", 'Grant, revoke, reset, or query app permissions on simulator/emulator. Uses xcrun simctl privacy (iOS) and adb shell pm/dumpsys (Android). query returns current permission state (Android only \u2014 iOS returns "unknown"). Use before testing permission-gated flows to ensure correct starting state.', {
+trackedTool("device_permission", "Grant, revoke, reset, or query permissions for the authority-bound app on the exact claimed device.", {
   action: external_exports.enum(["grant", "revoke", "reset", "query"]).describe("grant: allow. revoke: deny. reset: restore default. query: check current state (Android: granted/denied/not_declared, iOS: unknown)."),
   permission: external_exports.string().describe("Permission key: notifications, camera, microphone, location, location-always, photos, contacts, calendar, reminders, storage, all"),
-  appId: external_exports.string().describe('App bundle ID (e.g. "com.example.app")'),
-  platform: external_exports.string().optional().describe('Force platform: "ios" or "android". Auto-detected if omitted.')
+  appId: external_exports.string().optional().describe("Authority-bound app identifier; normally injected by the session"),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
+  deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session")
 }, createDevicePermissionHandler());
-trackedTool("device_reset_state", "One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-stop the app, then relaunch + reconnect CDP. Composes device_permission + cdp_mmkv + simctl/adb terminate+launch in one atomic call. Best-effort with per-step status \u2014 never silently rolls back. Sequence: permission \u2192 storage \u2192 terminate \u2192 launch \u2192 reconnect \u2192 helpers (\u2192 optional nav_ready). On iOS, permission state is not queryable post-revoke (simctl limitation) \u2014 `ok: true` only means the shell-out exited 0. Returns { summary: {ok, failed, skipped}, steps: [...], reconnected, helpersInjected }.", {
-  appId: external_exports.string().describe('App bundle ID, e.g. "com.example.app".'),
-  platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from booted devices if omitted."),
+trackedTool("device_reset_state", "Reset permissions/storage and relaunch the authority-bound app on its exact claimed device, then reconnect and re-prove the session target.", {
+  appId: external_exports.string().optional().describe("Authority-bound app identifier; normally injected by the session"),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
+  deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
   permissions: external_exports.array(external_exports.union([
     external_exports.string(),
     external_exports.object({ name: external_exports.string(), action: external_exports.enum(["revoke", "reset"]).optional() })
@@ -64669,23 +68902,24 @@ trackedTool("device_reset_state", "One-shot preflight: revoke/reset permissions,
   waitForReady: external_exports.boolean().optional().describe("After relaunch, wait for CDP reconnect + helpers injection. Default true. Set false to return immediately and let the caller poll."),
   waitForNavReady: external_exports.boolean().optional().describe("After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.")
 }, createDeviceResetStateHandler(getClient, { getSession: getActiveSession }));
-trackedTool("device_deeplink", "Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less \u2014 no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.", {
+trackedTool("device_deeplink", "Open a deep link on the exact authority-bound iOS simulator or Android device.", {
   url: external_exports.string().describe('URL to open, e.g. "myapp://claims/new" or "https://example.com/page".'),
-  platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
-  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS simulator UDID or Android adb serial to receive the deep link."),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
+  deviceId: external_exports.string().min(1).max(256).optional().describe("Authority-bound exact iOS simulator UDID or Android adb serial; normally injected by the session"),
+  metroPort: external_exports.number().int().min(1).max(65535).optional().describe("Authority-bound Metro port used only for an exact picker row match"),
   packageName: external_exports.string().optional().describe('(Android only) Explicit package/activity, e.g. "com.example/.MainActivity". Usually not needed \u2014 intent resolution picks the right app.')
 }, createDeviceDeeplinkHandler());
 trackedTool("cdp_dismiss_dev_client_picker", 'Dismiss the Expo Dev Client "Development servers" picker on demand. The picker is a native expo-dev-menu screen that blocks the JS bundle after deep links, restarts, permission changes, or clearState; this taps the Metro server entry (preferring the row matching the project\'s Metro port, deprioritizing stale link-local addresses) so CDP/the bundle can proceed. Also clears the native stale-server "Error loading app" dialog that can hide the picker after a network change. iOS + Android (requires an open device session \u2014 call device_snapshot action="open" first). Prefer this over a racy Maestro `runFlow when: visible: "DEVELOPMENT SERVERS"` block.', {
-  platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Otherwise resolved from the active session or the booted device.")
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused")
 }, createDismissDevClientPickerHandler(() => getClient().metroPort));
-trackedTool("device_accept_system_dialog", 'Tap an OS-level system dialog button (outside the app accessibility tree) \u2014 e.g. "Open in App?", "Allow notifications", biometric prompts. On iOS with an open device session, the tap routes through the native rn-fast-runner, which sees SpringBoard-owned dialogs Maestro cannot; otherwise falls back to a Maestro label probe (SystemUI on Android, in-app alerts on iOS). Tries common accept labels by default (Allow, OK, Open, Continue, Yes). Call immediately after a permission trigger or deep link is expected to surface a system prompt.', {
+trackedTool("device_accept_system_dialog", "Tap an OS-level accept button through the capability-bound runner on the exact session device.", {
   label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Allow, OK, Open, Continue, Yes, Accept)."),
-  platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
   timeoutMs: external_exports.number().int().min(1e3).max(6e4).optional().describe("Maestro invocation timeout (default 15000ms).")
 }, createDeviceAcceptSystemDialogHandler());
-trackedTool("device_dismiss_system_dialog", 'Tap an OS-level system dialog dismiss button \u2014 e.g. "Cancel", "Don\u2019t Allow", "Deny", "Not Now". Same mechanism as device_accept_system_dialog (native rn-fast-runner path on iOS with a session, Maestro fallback) but for the negative action. Handles both ASCII and typographic apostrophes in "Don\u2019t Allow".', {
+trackedTool("device_dismiss_system_dialog", "Tap an OS-level dismiss button through the capability-bound runner on the exact session device.", {
   label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Cancel, Don\u2019t Allow, Deny, No, Not Now)."),
-  platform: external_exports.enum(["ios", "android"]).optional().describe("Force platform. Auto-detected from the active session or booted devices if omitted."),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
   timeoutMs: external_exports.number().int().min(1e3).max(6e4).optional().describe("Maestro invocation timeout (default 15000ms).")
 }, createDeviceDismissSystemDialogHandler());
 var resolveNativeProofDevice = async () => {
@@ -64743,7 +68977,7 @@ var proofReadiness = async () => {
   const metroBuildFailed = metroEvents?.lastBuild?.status === "failed" || (metroEvents?.buildErrors ?? 0) > 0;
   const metroReady = current.isConnected && await probeMetro(current.metroPort) && !metroBuildPending && !metroBuildFailed;
   const errorBytes = JSON.stringify(errors);
-  const identity = resolveProofIdentity({
+  const identity2 = resolveProofIdentity({
     session,
     target,
     nativeDevice: await resolveNativeProofDevice(),
@@ -64751,7 +68985,7 @@ var proofReadiness = async () => {
     pluginVersion: pkgVersion,
     metroReady
   });
-  if (!identity)
+  if (!identity2)
     throw new Error("PROOF_DEVICE_IDENTITY_UNRESOLVED");
   return {
     cdpAttached: current.isConnected,
@@ -64766,11 +69000,75 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash10("sha256").update(errorBytes).digest("hex"),
-    device: identity.device,
-    runtime: identity.runtime
+    errorSha256: createHash15("sha256").update(errorBytes).digest("hex"),
+    device: identity2.device,
+    runtime: identity2.runtime
   };
 };
+function proofAuthority(runId) {
+  const { registry: registry2, session } = authorityRuntime.requireAvailable();
+  const status = registry2.getSessionStatus(session.sessionId);
+  if (!status)
+    throw new Error("PROOF_AUTHORITY_MISMATCH: session is unavailable");
+  const controller = registry2.getControllerBinding(session);
+  const source = strictProofSourceIdentity(status.source);
+  const install = status.bindings.install;
+  const metro = status.bindings.metro;
+  const bundle = status.bindings.bundle;
+  const device = status.bindings.device;
+  const runner = status.bindings.runner;
+  if (!install || !metro || !bundle || !device || !runner || !controller.worker.instanceId || !controller.worker.pid || !controller.worker.token) {
+    throw new Error("PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete");
+  }
+  const pendingProof = status.bindings.proof?.runId;
+  return {
+    sessionId: status.sessionId,
+    claimEpoch: status.claimEpoch,
+    authorityVersion: status.authorityVersion + (pendingProof === runId ? 0 : 1),
+    controller: {
+      instanceId: controller.worker.instanceId,
+      pid: controller.worker.pid,
+      birthDigest: hashProofValue(controller.worker.token)
+    },
+    source: {
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      head: source.head,
+      dirtyDigest: source.dirtyDigest
+    },
+    install: {
+      artifactDigest: String(install.artifactDigest),
+      buildGeneration: Number(install.buildGeneration),
+      appId: String(install.appId)
+    },
+    metro: {
+      port: Number(metro.port),
+      instanceId: String(metro.instanceId),
+      pid: Number(metro.pid),
+      birthDigest: hashProofValue(String(metro.birth)),
+      buildGeneration: Number(metro.buildGeneration)
+    },
+    bundle: {
+      targetId: String(bundle.targetId),
+      connectionGeneration: Number(bundle.connectionGeneration),
+      markerDigest: hashProofValue(bundle),
+      authorityScope: "initial-bundle",
+      sourceFidelity: "not-proven"
+    },
+    device: {
+      platform: device.platform,
+      deviceId: String(device.deviceId)
+    },
+    runner: {
+      instanceId: String(runner.instanceId),
+      protocolVersion: Number(runner.protocolVersion),
+      capabilityDigest: hashProofValue(String(runner.capability)),
+      processBirthDigest: hashProofValue(String(runner.processBirth))
+    },
+    proof: { runId }
+  };
+}
 var proofCaptureHandler = createProofCaptureHandler({
   monitor: strictProofMonitor,
   projectRoot: () => resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
@@ -64781,6 +69079,7 @@ var proofCaptureHandler = createProofCaptureHandler({
   getGitInfo: readProofGitInfo,
   proofRootTracked: proofRootHasTrackedEntries,
   readiness: proofReadiness,
+  authority: proofAuthority,
   record: createDeviceRecordHandler(),
   mediaProcess: {
     run: async (command, args) => {
@@ -64793,14 +69092,14 @@ var proofCaptureHandler = createProofCaptureHandler({
   validateMedia,
   now: () => /* @__PURE__ */ new Date(),
   writeReceipt: writeProofReceiptAtomic,
-  removeArtifact: (path) => rmSync7(path, { force: true })
+  removeArtifact: (path) => rmSync8(path, { force: true })
 });
 trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCapturePublishedInputSchema, proofCaptureHandler);
-trackedTool("device_record", 'Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path + the deviceId actually used); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. GH #173: when more than one simulator is booted (or more than one Android device connected), start refuses to auto-pick to avoid recording the wrong device \u2014 pass deviceId=<UDID|serial> to disambiguate; the response echoes the deviceId actually used so you can verify. Session-less.', {
+trackedTool("device_record", "Record the exact authority-bound device for proof capture. Start validates that the claimed device is currently available and always forwards its literal identifier.", {
   action: external_exports.enum(["start", "stop", "status"]).describe("start: begin recording. stop: finalize and save (all active recordings). status: list active recordings."),
-  platform: external_exports.enum(["ios", "android"]).optional().describe("(start only) Force platform. Auto-detected from booted devices if omitted."),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
   outputPath: external_exports.string().optional().describe("(start only) Absolute output path. Defaults to /tmp/rn-dev-agent-proof-<platform>-<timestamp>.mp4."),
-  deviceId: external_exports.string().optional().describe("(start only) Explicit target identifier (iOS UDID or Android serial). Required when more than one device of the same platform is booted/connected \u2014 without it, start fails with code=DEVICE_AMBIGUOUS and lists the candidates. Auto-selected when exactly one device is available."),
+  deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
   gif: external_exports.boolean().optional().describe("(stop only) When true, also convert each saved recording to GIF via ffmpeg."),
   gifPath: external_exports.string().optional().describe("(stop only) Override GIF output path. Defaults to the recording path with .gif extension.")
 }, createDeviceRecordHandler());
@@ -64934,11 +69233,13 @@ trackedTool("cdp_record_test_load", "Restore a previously-saved recording from <
   filename: external_exports.string().min(1).describe("Recording name (without .json)")
 }, createRecordTestLoadHandler(getClient));
 trackedTool("cdp_record_test_list", "List saved recordings under <projectRoot>/.rn-agent/recordings/. Returns the directory path and an array of recording names (without .json extension), sorted alphabetically.", {}, createRecordTestListHandler(getClient));
-trackedTool("cdp_restart", 'In-process soft state reset. Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary \u2014 to load new dist/ after npm run build, fully quit and relaunch Claude Code. Pass hardReset=true to also kill the fast-runner xcodebuild rig and terminate+relaunch the target app via simctl \u2014 recovers from the "JS thread paused / app backgrounded" wedge (B154 shape) without requiring a manual /reload-plugins. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.', {
+trackedTool("cdp_restart", "Reset and reconnect the authority-bound Hermes client. hardReset relaunches only the exact claimed iOS simulator or Android device/app; success requires a fresh signed runtime binding committed under the operation fence.", {
   metroPort: external_exports.number().optional().describe("Override Metro port for reconnection (default: keep current)"),
-  platform: external_exports.string().optional().describe('Platform filter for reconnection (e.g. "ios", "android")'),
-  hardReset: external_exports.boolean().optional().describe("Also kill fast-runner + simctl terminate+launch the connected bundle before reconnecting. iOS only for now. Use when the JS thread is paused (B154 shape)."),
-  bundleId: external_exports.string().optional().describe('Manual bundleId override for hardReset (e.g. "com.example.app"). Use when the previous restart left the connectedTarget null and the module-cached bundleId is also missing.')
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
+  deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
+  appId: external_exports.string().optional().describe("Authority-bound exact app identifier; normally injected by the session"),
+  hardReset: external_exports.boolean().optional().describe("Relaunch the exact session app on its claimed iOS or Android device before reconnecting."),
+  bundleId: external_exports.string().optional().describe("Compatibility alias for the authority-bound appId; conflicting values are refused.")
 }, createRestartHandler(getClient, setClient, createClient));
 trackedTool("cross_platform_verify", "Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.", {
   elements: external_exports.array(external_exports.string()).optional().describe("List of testIDs or labels to check on both platforms. Optional if scanDir is provided."),
@@ -64994,13 +69295,16 @@ trackedTool("cdp_record_test_save_as_action", 'Promote the in-memory recording (
   testName: external_exports.string().optional().describe("Optional one-line description shown as a comment above the M7 header. Falls back to intent."),
   produces: external_exports.record(external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()])).optional().describe('D1209 \u2014 state postconditions this action establishes when it runs cleanly. Flat map of primitive values for hybrid composition (e.g. { authenticated: true, route: "home" }). Optional. Values containing commas or newlines are not supported; use multiple keys instead.')
 }, createSaveAsActionHandler());
-trackedTool("cdp_repair_action", 'Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND. Loads the action from .rn-agent/actions/<actionId>.yaml, snapshots the live device, fuzzy-matches the failed testID against current testIDs (Levenshtein-based), and patches the YAML in place. Guardrails: refuses if a human edited the YAML since the agent last wrote (mtime check), refuses if the rolling-24h repair budget is exhausted (3 attempts/24h). On success, bumps revision, demotes status to "experimental" until the next clean replay re-validates, and appends a RepairRecord to the sidecar. Pass dryRun=true to preview the diff without writing.', {
+trackedTool("cdp_repair_action", "Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner.", {
   actionId: external_exports.string().describe("Action id matching <projectRoot>/.rn-agent/actions/<actionId>.yaml."),
   failedSelector: external_exports.string().describe(`The testID that the prior maestro_run reported as missing. Parse it from stderr like "Element with id 'X' not found" \u2192 X.`),
   projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
   threshold: external_exports.number().min(0).max(1).optional().describe("Fuzzy-match similarity threshold (0..1). Default 0.6. Lower if the screen has many similar testIDs and Levenshtein on the original is too strict."),
   dryRun: external_exports.boolean().optional().describe("Don't write changes \u2014 return the diff that WOULD be applied. Useful for previewing repairs before committing."),
-  agentReasoning: external_exports.string().optional().describe('Free-form one-liner the agent records in the RepairRecord. Helps audit "why did this repair happen". Max ~200 chars recommended.')
+  agentReasoning: external_exports.string().optional().describe('Free-form one-liner the agent records in the RepairRecord. Helps audit "why did this repair happen". Max ~200 chars recommended.'),
+  platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
+  deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
+  appId: external_exports.string().optional().describe("Authority-bound app identifier; normally injected by the session")
 }, createRepairActionHandler());
 trackedTool(
   "cdp_run_action",
@@ -65025,7 +69329,8 @@ trackedTool(
     getLiveRoute: () => readLiveRoute(getClient()),
     replayDeps: makeReplayDeps,
     blindProbeContext,
-    targetContext: getActiveSession
+    targetContext: getActiveSession,
+    claimBundleAuthority: claimOptionalBundleAuthority
   })
 );
 trackedTool("cdp_lock_e2e_test", "Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.", {
@@ -65050,8 +69355,15 @@ var e2ePreflight = async () => {
 var e2eReload = async () => {
   if (!getClient().isConnected)
     return false;
+  const session = getActiveSession();
+  if (!session?.deviceId || !session.appId)
+    return false;
   try {
-    const r = await createReloadHandler(getClient, setClient, createClient)({ full: true });
+    const r = await createReloadHandler(getClient, setClient, createClient)({
+      full: true,
+      deviceId: session.deviceId,
+      appId: session.appId
+    });
     return JSON.parse(r.content[0].text)?.ok === true;
   } catch {
     return false;
@@ -65062,7 +69374,7 @@ var e2eSuiteHandler = createRunE2eSuiteHandler({
   runReload: e2eReload,
   onProgress: (c, t, id) => recorder.push({ type: "e2e-progress", completed: c, total: t, lastTestId: id })
 });
-trackedTool("cdp_run_e2e_suite", "Run all locked e2e tests strict (no repair) on the booted sim; persist a suite-run report with verdict + per-test results.", {
+trackedTool("cdp_run_e2e_suite", "Run locked e2e tests strictly on the authority-bound session device and persist a session-scoped report.", {
   pattern: external_exports.string().optional().describe("Regex filter over locked-test ids"),
   projectRoot: external_exports.string().optional(),
   deviceId: external_exports.string().optional()
@@ -65090,11 +69402,18 @@ var runActionHandler = createRunActionHandler({
   getLiveRoute: () => readLiveRoute(getClient()),
   replayDeps: makeReplayDeps,
   blindProbeContext,
-  targetContext: getActiveSession
+  targetContext: getActiveSession,
+  claimBundleAuthority: claimOptionalBundleAuthority
 });
+var observeRunActionHandler = authorityGate.wrap("cdp_run_action", runActionHandler);
+var observeTriggerRun = authorityGate.wrap("cdp_run_e2e_suite", async (...raw) => {
+  const args = raw[0] ?? {};
+  return okResult(await triggerE2eRun(args.pattern));
+});
+var gatedObserveState = (tool, handler, args) => authorityGate.wrap(tool, handler)(args);
 setObserveE2eDeps({
   token: e2eCsrfToken,
-  triggerRun: triggerE2eRun,
+  triggerRun: async (pattern) => observeTriggerRun({ pattern }),
   listRuns: async () => loadIndex(projectRootFor()),
   loadRun: async (id) => loadRunRecord(projectRootFor(), id),
   listActions: async () => listActions(projectRootFor()),
@@ -65103,10 +69422,10 @@ setObserveE2eDeps({
     const action = loadAction(root, actionId);
     if (!action)
       return { ok: false, error: `action not found: ${actionId}` };
-    const required2 = action.metadata.params ?? [];
-    if (required2.length > 0) {
+    const required3 = action.metadata.params ?? [];
+    if (required3.length > 0) {
       const config2 = loadE2eConfig(root);
-      const resolved = resolveParams(config2, actionId, required2, params);
+      const resolved = resolveParams(config2, actionId, required3, params);
       if (!resolved.ok)
         return { ok: false, missingParams: resolved.missing };
       params = resolved.params;
@@ -65115,7 +69434,7 @@ setObserveE2eDeps({
     if (!L.ok)
       return { ok: false, error: "device busy" };
     try {
-      const result = await runActionHandler({
+      const result = await observeRunActionHandler({
         actionId,
         params,
         projectRoot: root,
@@ -65123,7 +69442,7 @@ setObserveE2eDeps({
         trigger: "human"
       });
       const text = result.content?.[0]?.text ?? "";
-      return { ok: true, output: text };
+      return result.isError ? { ok: false, error: text } : { ok: true, output: text };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     } finally {
@@ -65138,9 +69457,9 @@ setObserveStateDeps({
       return r.ok ? { ok: true, release: () => arbiter.release(r.lease) } : { ok: false, code: r.code };
     },
     handlers: {
-      route: () => createNavigationStateHandler(getClient, { annotate: false })({}),
-      store: () => createStoreStateHandler(getClient)({}),
-      tree: () => createComponentTreeHandler(getClient)({ depth: 4 })
+      route: () => gatedObserveState("cdp_navigation_state", createNavigationStateHandler(getClient, { annotate: false }), {}),
+      store: () => gatedObserveState("cdp_store_state", createStoreStateHandler(getClient), {}),
+      tree: () => gatedObserveState("cdp_component_tree", createComponentTreeHandler(getClient), { depth: 4 })
     }
   })
 });
@@ -65194,6 +69513,7 @@ var stopParentWatch = diagnosticContractProbe ? () => {
   }
 });
 process.on("exit", () => stopParentWatch());
+process.on("exit", () => authorityRuntime.close());
 if (!diagnosticContractProbe)
   process.on("exit", () => removeObserveState());
 if (!diagnosticContractProbe) {

@@ -267,15 +267,53 @@ export function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
         return false;
     return true;
 }
+export function proofCandidateCheckoutMatchesHead(candidateRoot, artifactPaths) {
+    return readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) !== null;
+}
+export function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
+    try {
+        const root = realpathSync(candidateRoot);
+        const statusArgs = [
+            '-C',
+            root,
+            'status',
+            '--porcelain=v1',
+            '--untracked-files=all',
+            '--ignore-submodules=none',
+        ];
+        if (execFileSync('git', statusArgs, { encoding: 'utf8' }).trim())
+            return null;
+        const verifiedBytes = [];
+        for (const artifactPath of artifactPaths) {
+            const resolvedArtifactPath = realpathSync(artifactPath);
+            const artifactRelativePath = relative(root, resolvedArtifactPath).split(sep).join('/');
+            if (!artifactRelativePath ||
+                artifactRelativePath === '..' ||
+                artifactRelativePath.startsWith('../')) {
+                return null;
+            }
+            execFileSync('git', ['-C', root, 'ls-files', '--error-unmatch', artifactRelativePath]);
+            const headBytes = execFileSync('git', ['-C', root, 'show', `HEAD:${artifactRelativePath}`], {
+                maxBuffer: 128 * 1024 * 1024,
+            });
+            const artifactBytes = readFileSync(resolvedArtifactPath);
+            if (hashBytes(artifactBytes) !== hashBytes(headBytes))
+                return null;
+            verifiedBytes.push(artifactBytes);
+        }
+        return execFileSync('git', statusArgs, { encoding: 'utf8' }).trim() ? null : verifiedBytes;
+    }
+    catch {
+        return null;
+    }
+}
 /**
  * Read dual proof authority from immutable candidate bytes. Nothing in this
  * block is caller-authored prose: Git, package digests, and the live MCP
  * process identity are captured at the strict-proof boundary.
  */
 export function readProofCandidateRuntime(candidateRoot) {
-    const root = resolve(candidateRoot);
-    if (root !== candidateRoot)
-        throw new Error('CANDIDATE_ROOT_NOT_NORMALIZED');
+    const root = realpathSync(resolve(candidateRoot));
     const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
         encoding: 'utf8',
     }).trim();
@@ -292,11 +330,20 @@ export function readProofCandidateRuntime(candidateRoot) {
     }
     const { host, coreBundle } = entrypoint;
     const runnerManifest = join(root, 'packages', host, 'runner-manifest.json');
+    const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
+    if (!artifacts) {
+        throw new Error('CANDIDATE_CHECKOUT_NOT_CLEAN');
+    }
+    const confirmedSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+    }).trim();
+    if (confirmedSha !== sha)
+        throw new Error('CANDIDATE_SHA_CHANGED');
     return proofCandidateRuntimeSchema.parse({
         repo: 'Lykhoyda/rn-dev-agent',
         sha,
-        coreBundleSha256: hashBytes(readFileSync(coreBundle)),
-        runnerManifestSha256: hashBytes(readFileSync(runnerManifest)),
+        coreBundleSha256: hashBytes(artifacts[0]),
+        runnerManifestSha256: hashBytes(artifacts[1]),
         mcp: { pid: process.pid, argv, cwd: process.cwd() },
     });
 }
@@ -683,7 +730,7 @@ export function createProofCaptureHandler(deps) {
         active.mayOwnRecorder = false;
         active.baseline = null;
         active.mechanicalReceipt = null;
-        deps.monitor.begin();
+        deps.monitor.begin(active.context.runId);
     };
     const rejectCapture = async (active, reasons) => {
         deps.monitor.stop();
@@ -961,11 +1008,19 @@ export function createProofCaptureHandler(deps) {
                     return proofFailure(['CANDIDATE_SHA_MISMATCH'], 'idle');
                 }
             }
+            let authority;
+            try {
+                authority = deps.authority(args.runId);
+            }
+            catch {
+                return proofFailure(['PROOF_AUTHORITY_UNAVAILABLE'], 'idle');
+            }
             const startedAt = deps.now();
             session = {
                 context: args,
                 actionIdentity,
                 candidateRuntime,
+                authority,
                 stage: 'rehearsing',
                 invalidationReasons: [],
                 rehearsalStartedAt: startedAt,
@@ -983,7 +1038,7 @@ export function createProofCaptureHandler(deps) {
                 baseline: null,
                 mechanicalReceipt: null,
             };
-            deps.monitor.begin();
+            deps.monitor.begin(args.runId);
             return okResult({ stage: session.stage, runId: args.runId });
         }
         if (!session)
@@ -1035,7 +1090,7 @@ export function createProofCaptureHandler(deps) {
             active.invalidationReasons = [];
             active.armedObservationCount = null;
             active.freshStartAssertion = null;
-            deps.monitor.begin();
+            deps.monitor.begin(active.context.runId);
             return okResult({ stage: active.stage, durationMs });
         }
         if (args.action === 'arm') {
@@ -1194,7 +1249,7 @@ export function createProofCaptureHandler(deps) {
             active.recordingStartedAt = deps.now();
             active.stage = 'recording';
             active.invalidationReasons = [];
-            deps.monitor.begin();
+            deps.monitor.begin(active.context.runId);
             return okResult({ stage: active.stage, deviceId: started.deviceId, output: started.output });
         }
         if (args.action === 'stop_recording') {
@@ -1251,6 +1306,9 @@ export function createProofCaptureHandler(deps) {
             const evidenceReasons = [...derived.reasons];
             const trace = traceFor(active.context.storyboard, active.recordingEvents);
             evidenceReasons.push(...trace.reasons);
+            if (active.recordingEvents.some((event) => !event.authorityReceiptHash)) {
+                evidenceReasons.push('AUTHORITY_RECEIPT_MISSING');
+            }
             if (!derived.evidence)
                 evidenceReasons.push('STEP_EVIDENCE_MISSING');
             const mediaInput = {
@@ -1286,6 +1344,14 @@ export function createProofCaptureHandler(deps) {
             }
             const git = readGit(active);
             const ready = await readReadiness();
+            try {
+                if (hashProofValue(deps.authority(active.context.runId)) !== hashProofValue(active.authority)) {
+                    evidenceReasons.push('PROOF_AUTHORITY_CHANGED');
+                }
+            }
+            catch {
+                evidenceReasons.push('PROOF_AUTHORITY_UNAVAILABLE');
+            }
             evidenceReasons.push(...(git.ok ? gitReasons(active, git.value, 'validation') : git.reasons));
             evidenceReasons.push(...(ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons));
             if (evidenceReasons.length > 0 || !media.ok || !ready.ok || !git.ok) {
@@ -1295,7 +1361,7 @@ export function createProofCaptureHandler(deps) {
             let receipt;
             try {
                 receipt = mechanicallyAcceptedProofReceiptSchema.parse({
-                    schemaVersion: 1,
+                    schemaVersion: 2,
                     runId: active.context.runId,
                     issue: active.context.issue,
                     pullRequest: active.context.pullRequest,
@@ -1308,6 +1374,7 @@ export function createProofCaptureHandler(deps) {
                     },
                     device: ready.value.device,
                     runtime: ready.value.runtime,
+                    authority: active.authority,
                     ...(active.candidateRuntime ? { candidateRuntime: active.candidateRuntime } : {}),
                     fixture: active.context.fixture,
                     action: active.context.proofAction,
