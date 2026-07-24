@@ -374,6 +374,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                 const optionalBefore = [];
                 let optionalBundleClaimed = false;
+                let optionalBundleRecoveryFailed = false;
                 if (profile.optionalAxes?.includes('B')) {
                     Object.defineProperty(args, optionalBundleAdmission, {
                         configurable: true,
@@ -414,6 +415,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                         if (!isOptionalBundleFailure(refreshError))
                                             throw refreshError;
                                     }
+                                    optionalBundleRecoveryFailed = true;
                                     return false;
                                 }
                                 const priorBundle = currentStatus.bindings.bundle;
@@ -424,8 +426,34 @@ export function createAuthorityGate(runtime, dependencies) {
                                 if (typeof oldTargetId !== 'string' ||
                                     typeof newTargetId !== 'string' ||
                                     !Number.isSafeInteger(metroPort)) {
+                                    optionalBundleRecoveryFailed = true;
                                     return false;
                                 }
+                                const candidateStatus = {
+                                    ...currentStatus,
+                                    bindings: {
+                                        ...currentStatus.bindings,
+                                        bundle,
+                                    },
+                                };
+                                try {
+                                    observation = await dependencies.probe({
+                                        axis: 'B',
+                                        phase: 'preflight',
+                                        tool,
+                                        profile,
+                                        status: candidateStatus,
+                                        args,
+                                    });
+                                }
+                                catch (refreshedProbeError) {
+                                    if (!isOptionalBundleFailure(refreshedProbeError)) {
+                                        throw refreshedProbeError;
+                                    }
+                                    optionalBundleRecoveryFailed = true;
+                                    return false;
+                                }
+                                registry.verifyOperation(operation);
                                 try {
                                     operation = registry.replaceBindingsDuringOperation(operation, {
                                         state: 'ready',
@@ -441,6 +469,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                 catch (replacementError) {
                                     if (!isOptionalBundleFailure(replacementError))
                                         throw replacementError;
+                                    optionalBundleRecoveryFailed = true;
                                     return false;
                                 }
                                 const refreshedStatus = runtime.status();
@@ -448,22 +477,6 @@ export function createAuthorityGate(runtime, dependencies) {
                                     throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
                                 }
                                 currentStatus = refreshedStatus;
-                                try {
-                                    observation = await dependencies.probe({
-                                        axis: 'B',
-                                        phase: 'preflight',
-                                        tool,
-                                        profile,
-                                        status: currentStatus,
-                                        args,
-                                    });
-                                }
-                                catch (refreshedProbeError) {
-                                    if (!isOptionalBundleFailure(refreshedProbeError)) {
-                                        throw refreshedProbeError;
-                                    }
-                                    return false;
-                                }
                             }
                             registry.verifyOperation(operation);
                             status = currentStatus;
@@ -505,6 +518,9 @@ export function createAuthorityGate(runtime, dependencies) {
                     const metro = status.bindings.metro;
                     let bundle = null;
                     try {
+                        if (tool === 'cdp_run_action' && optionalBundleRecoveryFailed) {
+                            throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'reactive bundle authority did not verify');
+                        }
                         if (!dependencies.refreshRuntimeBinding) {
                             throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'runtime reset cannot commit without a binding refresh');
                         }

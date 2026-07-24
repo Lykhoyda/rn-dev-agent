@@ -8532,6 +8532,13 @@ var SessionRegistry = class {
   }
   getControllerBinding(session) {
     const row = this.#requireSession(session);
+    return this.#controllerBinding(row);
+  }
+  getHandoffCancellationControllerBinding(session) {
+    const row = this.#requireHandoffSession(session);
+    return this.#controllerBinding(row);
+  }
+  #controllerBinding(row) {
     return {
       sessionId: row.session_id,
       claimEpoch: row.claim_epoch,
@@ -9302,6 +9309,13 @@ var SessionRegistry = class {
            FROM sessions WHERE session_id = ?`).get(session.sessionId));
     if (!row || !isFenceableState(row.state) || row.claim_epoch !== session.claimEpoch) {
       throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
+    }
+    return row;
+  }
+  #requireHandoffSession(session) {
+    const row = this.#requireFenceableSession(session);
+    if (row.state !== "handoff") {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the handoff claim epoch");
     }
     return row;
   }

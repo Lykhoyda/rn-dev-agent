@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createLocalAuthorityProbe } from '../../../dist/session/local-authority-probe.js';
+import { readProcessBirth } from '../../../dist/session/process-birth.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
 
 function statusWith(bindings) {
@@ -84,4 +85,52 @@ test('bundle probe normalizes CDP transport failure to optional bundle unavailab
     () => probe({ axis: 'B', status }),
     (error) => error instanceof SessionAuthorityError && error.code === 'BUNDLE_HANDSHAKE_UNAVAILABLE',
   );
+});
+
+test('controller probe uses the handoff-only lookup solely for cancellation', async () => {
+  const processBirth = readProcessBirth(process.pid);
+  assert.ok(processBirth);
+  const calls = [];
+  const controller = {
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    authorityVersion: 9,
+    supervisor: { pid: process.pid, token: processBirth.token },
+    worker: { instanceId: 'worker', pid: process.pid, token: processBirth.token },
+  };
+  const registry = {
+    getControllerBinding: () => {
+      calls.push('operational');
+      throw new SessionAuthorityError('SESSION_OWNER_LOST', 'handoff is not operational');
+    },
+    getHandoffCancellationControllerBinding: () => {
+      calls.push('handoff-cancellation');
+      return controller;
+    },
+  };
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      runtime: {
+        requireAvailable: () => ({
+          registry,
+          session: { sessionId: 'session-a', claimEpoch: 4 },
+        }),
+      },
+      inspectOwner: () => 'match',
+    }),
+  );
+  const status = statusWith({});
+  status.state = 'handoff';
+
+  await probe({
+    axis: 'C',
+    status,
+    tool: 'rn_session',
+    args: { action: 'cancel_handoff' },
+  });
+  await assert.rejects(
+    () => probe({ axis: 'C', status, tool: 'rn_session', args: { action: 'bind_metro' } }),
+    (error) => error instanceof SessionAuthorityError && error.code === 'SESSION_OWNER_LOST',
+  );
+  assert.deepEqual(calls, ['handoff-cancellation', 'operational']);
 });

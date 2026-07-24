@@ -340,6 +340,54 @@ test('reactive bundle admission reconciles the target replaced by the native att
   assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), true);
 });
 
+test('reactive bundle admission verifies the refreshed target before replacing ownership', async () => {
+  const { calls, registry, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  status.bindings.bundle.connectionGeneration = 1;
+  let bundleProbes = 0;
+  const replacements = [];
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push('replace-binding');
+    replacements.push(input);
+    status.bindings = { ...status.bindings, ...input.bindings };
+    return operation;
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        bundleProbes += 1;
+        if (bundleProbes === 1) {
+          throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: native attempt not started');
+        }
+        if (bundleProbes === 2) {
+          throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: native attempt replaced the target');
+        }
+        throw new Error('BUNDLE_IDENTITY_MISMATCH: refreshed target did not verify');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'target-b',
+      connectionGeneration: 2,
+    }),
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    return okResult({ transport: 'maestro' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityInvalidated, true);
+  assert.equal(replacements.length, 1);
+  assert.equal(replacements[0].bindings.bundle, null);
+  assert.deepEqual(replacements[0].claimResources, undefined);
+  assert.equal(status.bindings.bundle, null);
+});
+
 test('native run-action invalidates an unrecoverable prior bundle without losing native proof', async () => {
   const { calls, registry, runtime, status } = fixture();
   status.bindings.bundle.targetId = 'target-a';

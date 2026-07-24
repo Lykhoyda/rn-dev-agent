@@ -492,6 +492,7 @@ export function createAuthorityGate(
           );
           const optionalBefore: AuthorityObservation[] = [];
           let optionalBundleClaimed = false;
+          let optionalBundleRecoveryFailed = false;
           if (profile.optionalAxes?.includes('B')) {
             Object.defineProperty(args, optionalBundleAdmission, {
               configurable: true,
@@ -528,6 +529,7 @@ export function createAuthorityGate(
                     if (refreshError instanceof SessionAuthorityError) {
                       if (!isOptionalBundleFailure(refreshError)) throw refreshError;
                     }
+                    optionalBundleRecoveryFailed = true;
                     return false;
                   }
                   const priorBundle = currentStatus.bindings.bundle as
@@ -544,8 +546,33 @@ export function createAuthorityGate(
                     typeof newTargetId !== 'string' ||
                     !Number.isSafeInteger(metroPort)
                   ) {
+                    optionalBundleRecoveryFailed = true;
                     return false;
                   }
+                  const candidateStatus: SessionStatus = {
+                    ...currentStatus,
+                    bindings: {
+                      ...currentStatus.bindings,
+                      bundle,
+                    },
+                  };
+                  try {
+                    observation = await dependencies.probe({
+                      axis: 'B',
+                      phase: 'preflight',
+                      tool,
+                      profile,
+                      status: candidateStatus,
+                      args,
+                    });
+                  } catch (refreshedProbeError) {
+                    if (!isOptionalBundleFailure(refreshedProbeError)) {
+                      throw refreshedProbeError;
+                    }
+                    optionalBundleRecoveryFailed = true;
+                    return false;
+                  }
+                  registry!.verifyOperation(operation!);
                   try {
                     operation = registry!.replaceBindingsDuringOperation(operation!, {
                       state: 'ready',
@@ -561,6 +588,7 @@ export function createAuthorityGate(
                     });
                   } catch (replacementError) {
                     if (!isOptionalBundleFailure(replacementError)) throw replacementError;
+                    optionalBundleRecoveryFailed = true;
                     return false;
                   }
                   const refreshedStatus = runtime.status();
@@ -568,21 +596,6 @@ export function createAuthorityGate(
                     throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
                   }
                   currentStatus = refreshedStatus;
-                  try {
-                    observation = await dependencies.probe({
-                      axis: 'B',
-                      phase: 'preflight',
-                      tool,
-                      profile,
-                      status: currentStatus,
-                      args,
-                    });
-                  } catch (refreshedProbeError) {
-                    if (!isOptionalBundleFailure(refreshedProbeError)) {
-                      throw refreshedProbeError;
-                    }
-                    return false;
-                  }
                 }
                 registry!.verifyOperation(operation!);
                 status = currentStatus;
@@ -626,6 +639,12 @@ export function createAuthorityGate(
             const metro = status.bindings.metro as Record<string, unknown> | undefined;
             let bundle: Record<string, unknown> | null = null;
             try {
+              if (tool === 'cdp_run_action' && optionalBundleRecoveryFailed) {
+                throw new SessionAuthorityError(
+                  'BUNDLE_HANDSHAKE_UNAVAILABLE',
+                  'reactive bundle authority did not verify',
+                );
+              }
               if (!dependencies.refreshRuntimeBinding) {
                 throw new SessionAuthorityError(
                   'BUNDLE_HANDSHAKE_UNAVAILABLE',

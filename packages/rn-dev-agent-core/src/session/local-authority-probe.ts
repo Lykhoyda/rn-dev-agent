@@ -106,18 +106,26 @@ function sameSource(expected: SourceIdentity, observed: SourceIdentity): boolean
 
 export function createLocalAuthorityProbe(
   dependencies: LocalAuthorityProbeDependencies,
-): (input: { axis: AuthorityAxis; status: SessionStatus }) => Promise<AuthorityObservation> {
+): (input: {
+  axis: AuthorityAxis;
+  status: SessionStatus;
+  tool?: string;
+  args?: Record<string, unknown>;
+}) => Promise<AuthorityObservation> {
   const fetchText = dependencies.fetchText ?? defaultFetchText;
   const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
 
-  return async ({ axis, status }) => {
+  return async ({ axis, status, tool, args }) => {
     if (axis === 'C') {
       const { registry, session } = dependencies.runtime.requireAvailable();
-      const controller = registry.getControllerBinding(session);
-      const supervisor = inspectSessionOwner({
+      const controller =
+        tool === 'rn_session' && args?.action === 'cancel_handoff'
+          ? registry.getHandoffCancellationControllerBinding(session)
+          : registry.getControllerBinding(session);
+      const supervisor = inspectOwner({
         sessionId: controller.sessionId,
         pid: controller.supervisor.pid,
         token: controller.supervisor.token,

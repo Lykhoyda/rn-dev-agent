@@ -54716,6 +54716,13 @@ var SessionRegistry = class {
   }
   getControllerBinding(session) {
     const row = this.#requireSession(session);
+    return this.#controllerBinding(row);
+  }
+  getHandoffCancellationControllerBinding(session) {
+    const row = this.#requireHandoffSession(session);
+    return this.#controllerBinding(row);
+  }
+  #controllerBinding(row) {
     return {
       sessionId: row.session_id,
       claimEpoch: row.claim_epoch,
@@ -55486,6 +55493,13 @@ var SessionRegistry = class {
            FROM sessions WHERE session_id = ?`).get(session.sessionId));
     if (!row || !isFenceableState(row.state) || row.claim_epoch !== session.claimEpoch) {
       throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
+    }
+    return row;
+  }
+  #requireHandoffSession(session) {
+    const row = this.#requireFenceableSession(session);
+    if (row.state !== "handoff") {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the handoff claim epoch");
     }
     return row;
   }
@@ -67292,6 +67306,7 @@ function createAuthorityGate(runtime, dependencies) {
         const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
         const optionalBefore = [];
         let optionalBundleClaimed = false;
+        let optionalBundleRecoveryFailed = false;
         if (profile.optionalAxes?.includes("B")) {
           Object.defineProperty(args, optionalBundleAdmission, {
             configurable: true,
@@ -67329,6 +67344,7 @@ function createAuthorityGate(runtime, dependencies) {
                     if (!isOptionalBundleFailure(refreshError))
                       throw refreshError;
                   }
+                  optionalBundleRecoveryFailed = true;
                   return false;
                 }
                 const priorBundle = currentStatus.bindings.bundle;
@@ -67337,8 +67353,33 @@ function createAuthorityGate(runtime, dependencies) {
                 const newTargetId = bundle.targetId;
                 const metroPort = metro?.port;
                 if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+                  optionalBundleRecoveryFailed = true;
                   return false;
                 }
+                const candidateStatus = {
+                  ...currentStatus,
+                  bindings: {
+                    ...currentStatus.bindings,
+                    bundle
+                  }
+                };
+                try {
+                  observation = await dependencies.probe({
+                    axis: "B",
+                    phase: "preflight",
+                    tool,
+                    profile,
+                    status: candidateStatus,
+                    args
+                  });
+                } catch (refreshedProbeError) {
+                  if (!isOptionalBundleFailure(refreshedProbeError)) {
+                    throw refreshedProbeError;
+                  }
+                  optionalBundleRecoveryFailed = true;
+                  return false;
+                }
+                registry2.verifyOperation(operation);
                 try {
                   operation = registry2.replaceBindingsDuringOperation(operation, {
                     state: "ready",
@@ -67349,6 +67390,7 @@ function createAuthorityGate(runtime, dependencies) {
                 } catch (replacementError) {
                   if (!isOptionalBundleFailure(replacementError))
                     throw replacementError;
+                  optionalBundleRecoveryFailed = true;
                   return false;
                 }
                 const refreshedStatus = runtime.status();
@@ -67356,21 +67398,6 @@ function createAuthorityGate(runtime, dependencies) {
                   throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
                 }
                 currentStatus = refreshedStatus;
-                try {
-                  observation = await dependencies.probe({
-                    axis: "B",
-                    phase: "preflight",
-                    tool,
-                    profile,
-                    status: currentStatus,
-                    args
-                  });
-                } catch (refreshedProbeError) {
-                  if (!isOptionalBundleFailure(refreshedProbeError)) {
-                    throw refreshedProbeError;
-                  }
-                  return false;
-                }
               }
               registry2.verifyOperation(operation);
               status = currentStatus;
@@ -67407,6 +67434,9 @@ function createAuthorityGate(runtime, dependencies) {
           const metro = status.bindings.metro;
           let bundle = null;
           try {
+            if (tool === "cdp_run_action" && optionalBundleRecoveryFailed) {
+              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "reactive bundle authority did not verify");
+            }
             if (!dependencies.refreshRuntimeBinding) {
               throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime reset cannot commit without a binding refresh");
             }
@@ -67717,11 +67747,11 @@ function createLocalAuthorityProbe(dependencies) {
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
-  return async ({ axis, status }) => {
+  return async ({ axis, status, tool, args }) => {
     if (axis === "C") {
       const { registry: registry2, session } = dependencies.runtime.requireAvailable();
-      const controller = registry2.getControllerBinding(session);
-      const supervisor = inspectSessionOwner({
+      const controller = tool === "rn_session" && args?.action === "cancel_handoff" ? registry2.getHandoffCancellationControllerBinding(session) : registry2.getControllerBinding(session);
+      const supervisor = inspectOwner({
         sessionId: controller.sessionId,
         pid: controller.supervisor.pid,
         token: controller.supervisor.token
@@ -68156,7 +68186,7 @@ var localAuthorityProbe = createLocalAuthorityProbe({
   proofActive: (runId) => strictProofMonitor.ownsRun(runId)
 });
 var authorityGate = createAuthorityGate(authorityRuntime, {
-  probe: async ({ axis, status }) => localAuthorityProbe({ axis, status }),
+  probe: async ({ axis, status, tool, args }) => localAuthorityProbe({ axis, status, tool, args }),
   refreshRuntimeBinding: rebindSessionRuntime
 });
 setObserveAuthorityDeps({

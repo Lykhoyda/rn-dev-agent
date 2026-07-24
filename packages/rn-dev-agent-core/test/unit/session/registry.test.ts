@@ -664,6 +664,21 @@ test('handoff cancellation advances its active controller operation fence', asyn
   registry.endOperation(operation);
 });
 
+test('handoff cancellation controller lookup does not widen operational access', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+
+  assert.throws(
+    () => registry.getControllerBinding(owner),
+    (error) => error.code === 'SESSION_OWNER_LOST',
+  );
+  assert.equal(
+    registry.getHandoffCancellationControllerBinding(owner).sessionId,
+    owner.sessionId,
+  );
+});
+
 test('opaque recovery handles authorize only their bounded transition', () => {
   const { registry, create } = fixture();
   const owner = create('a', 'shared-worktree');
