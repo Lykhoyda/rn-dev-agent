@@ -1,7 +1,7 @@
 import { createBuildLaunchPlan } from './build-adapter.js';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { assertBoundDirectoryCurrent, casBoundDirectoryFiles, closeBoundDirectory, openBoundDirectory, openBoundSubdirectory, openOptionalBoundSubdirectory, readBoundDirectoryFiles, } from './bound-directory.js';
+import { assertBoundDirectoryCurrent, casBoundDirectoryFiles, closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, openOptionalBoundSubdirectory, readBoundDirectoryFiles, } from './bound-directory.js';
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
 const AUTHORITY_MODULE = '.rn-agent/integration/authority-marker.js';
@@ -367,6 +367,7 @@ export function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
     const app = openBoundDirectory(appRoot);
     let agent = null;
     let integration = null;
+    let primaryError;
     try {
         const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
             'package.json',
@@ -397,12 +398,12 @@ export function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
             ...(manifest ? { manifest: manifest.toString('utf8') } : {}),
         };
     }
+    catch (error) {
+        primaryError = error;
+        throw error;
+    }
     finally {
-        if (integration)
-            closeBoundDirectory(integration);
-        if (agent)
-            closeBoundDirectory(agent);
-        closeBoundDirectory(app);
+        closeBoundDirectories([integration, agent, app], primaryError);
     }
 }
 function openIntegrationDirectories(appRoot) {
@@ -414,12 +415,12 @@ function openIntegrationDirectories(appRoot) {
             return { app, agent, integration };
         }
         catch (error) {
-            closeBoundDirectory(agent);
+            closeBoundDirectories([agent], error);
             throw error;
         }
     }
     catch (error) {
-        closeBoundDirectory(app);
+        closeBoundDirectories([app], error);
         throw error;
     }
 }
@@ -465,6 +466,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
         'authority-marker.js',
     ];
     const applied = [];
+    let primaryError;
     try {
         const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
             basename(packagePath),
@@ -565,14 +567,12 @@ export function applyPackageIntegration(input, dependencies = {}) {
     }
     catch (error) {
         const rollbackErrors = rollbackWrites(applied);
-        if (rollbackErrors.length > 0)
-            throw new AggregateError([error, ...rollbackErrors]);
-        throw error;
+        primaryError =
+            rollbackErrors.length > 0 ? new AggregateError([error, ...rollbackErrors]) : error;
+        throw primaryError;
     }
     finally {
-        closeBoundDirectory(directories.integration);
-        closeBoundDirectory(directories.agent);
-        closeBoundDirectory(directories.app);
+        closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
     }
 }
 export function restorePackageIntegrationFiles(input, dependencies = {}) {
@@ -586,6 +586,7 @@ export function restorePackageIntegrationFiles(input, dependencies = {}) {
         'authority-marker.js',
     ];
     const applied = [];
+    let primaryError;
     try {
         const generatedSnapshots = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
         if (!generatedSnapshots[0]?.contents) {
@@ -662,13 +663,11 @@ export function restorePackageIntegrationFiles(input, dependencies = {}) {
     }
     catch (error) {
         const rollbackErrors = rollbackWrites(applied);
-        if (rollbackErrors.length > 0)
-            throw new AggregateError([error, ...rollbackErrors]);
-        throw error;
+        primaryError =
+            rollbackErrors.length > 0 ? new AggregateError([error, ...rollbackErrors]) : error;
+        throw primaryError;
     }
     finally {
-        closeBoundDirectory(directories.integration);
-        closeBoundDirectory(directories.agent);
-        closeBoundDirectory(directories.app);
+        closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
     }
 }

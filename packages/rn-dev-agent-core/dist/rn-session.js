@@ -13,7 +13,7 @@ import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
-import { closeBoundDirectory, openBoundDirectory, openBoundSubdirectory, writeBoundDirectoryFile, } from './session/bound-directory.js';
+import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, writeBoundDirectoryFile, } from './session/bound-directory.js';
 function resolveStatus() {
     const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
     const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
@@ -61,17 +61,18 @@ function writeMarker(status, input) {
         buildGeneration: input.buildGeneration,
     }, input.signerCapability);
     const agent = openBoundDirectory(join(appRoot, '.rn-agent'));
+    let integration;
+    let primaryError;
     try {
-        const integration = openBoundSubdirectory(agent, 'integration');
-        try {
-            writeBoundDirectoryFile(integration, 'authority-marker.js', Buffer.from(createMetroAuthorityModule(marker)), 0o600);
-        }
-        finally {
-            closeBoundDirectory(integration);
-        }
+        integration = openBoundSubdirectory(agent, 'integration');
+        writeBoundDirectoryFile(integration, 'authority-marker.js', Buffer.from(createMetroAuthorityModule(marker)), 0o600);
+    }
+    catch (error) {
+        primaryError = error;
+        throw error;
     }
     finally {
-        closeBoundDirectory(agent);
+        closeBoundDirectories([integration, agent], primaryError);
     }
 }
 async function ensureManagedMetro(status) {

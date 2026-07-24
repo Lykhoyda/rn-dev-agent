@@ -31,6 +31,7 @@ import {
 } from '../../../dist/session/package-integration.js';
 import {
   casBoundDirectoryFiles,
+  closeBoundDirectories,
   closeBoundDirectory,
   openBoundDirectory,
   openBoundSubdirectory,
@@ -683,6 +684,115 @@ test('bound CAS replaces a blocked cleanup worker before returning', () => {
   } finally {
     closeBoundDirectory(directory);
     rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bound CAS preserves known commit after cleanup retry failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-cleanup-retry-failure-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const directory = openBoundDirectory(root);
+  try {
+    const result = casBoundDirectoryFiles(
+      directory,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          expectedMode: 0o600,
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      {
+        cleanupRecoveryDelayMs: 5_000,
+        failCleanupAfterCommit: true,
+        failCleanupRecovery: true,
+        recoveryTimeoutMs: 100,
+      },
+    );
+    assert.equal(result.committed, true);
+    assert.equal(result.cleanupPending, true);
+    assert.match(result.cleanupObligation?.transactionId ?? '', /^[0-9a-f-]{36}$/);
+    assert.match(result.cleanupError ?? '', /cleanup recovery unavailable/);
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test(
+  'bound cleanup obligations survive close and reopen',
+  { skip: process.platform === 'win32' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-cleanup-reopen-'));
+    const markerPath = join(root, 'authority-marker.js');
+    writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+    const directory = openBoundDirectory(root);
+    try {
+      const result = casBoundDirectoryFiles(
+        directory,
+        [
+          {
+            expected: Buffer.from('before\n'),
+            expectedMode: 0o600,
+            mode: 0o600,
+            name: 'authority-marker.js',
+            replacement: Buffer.from('after\n'),
+          },
+        ],
+        { failCleanupAfterCommit: true, failCleanupRecovery: true },
+      );
+      assert.equal(result.cleanupPending, true);
+      chmodSync(root, 0o500);
+      assert.throws(() => closeBoundDirectory(directory), /bound-directory cleanup/);
+      chmodSync(root, 0o700);
+      const reopened = openBoundDirectory(root);
+      try {
+        assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+        assert.deepEqual(readdirSync(root), ['authority-marker.js']);
+      } finally {
+        closeBoundDirectory(reopened);
+      }
+    } finally {
+      chmodSync(root, 0o700);
+      if (!directory.closed) closeBoundDirectory(directory);
+      rmSync(root, { force: true, recursive: true });
+    }
+  },
+);
+
+test('bound directory groups attempt every close and preserve the primary error', () => {
+  const firstRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-close-first-'));
+  const secondRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-close-second-'));
+  const first = openBoundDirectory(firstRoot);
+  const second = openBoundDirectory(secondRoot);
+  first.pendingCleanups.set('11111111-1111-1111-1111-111111111111', {
+    journal: '.rn-bound-11111111-1111-1111-1111-111111111111.journal',
+    knownCommitted: false,
+    writes: [],
+  });
+  second.pendingCleanups.set('22222222-2222-2222-2222-222222222222', {
+    journal: '.rn-bound-22222222-2222-2222-2222-222222222222.journal',
+    knownCommitted: false,
+    writes: [],
+  });
+  try {
+    assert.throws(
+      () => closeBoundDirectories([first, second], new Error('primary failure')),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, 3);
+        assert.match(error.errors[0].message, /primary failure/);
+        return true;
+      },
+    );
+    assert.equal(first.closed, true);
+    assert.equal(second.closed, true);
+  } finally {
+    rmSync(firstRoot, { force: true, recursive: true });
+    rmSync(secondRoot, { force: true, recursive: true });
   }
 });
 

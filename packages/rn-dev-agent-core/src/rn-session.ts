@@ -18,7 +18,8 @@ import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/s
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
 import {
-  closeBoundDirectory,
+  closeBoundDirectories,
+  type BoundDirectory,
   openBoundDirectory,
   openBoundSubdirectory,
   writeBoundDirectoryFile,
@@ -100,20 +101,21 @@ function writeMarker(
     input.signerCapability,
   );
   const agent = openBoundDirectory(join(appRoot, '.rn-agent'));
+  let integration: BoundDirectory | undefined;
+  let primaryError: unknown;
   try {
-    const integration = openBoundSubdirectory(agent, 'integration');
-    try {
-      writeBoundDirectoryFile(
-        integration,
-        'authority-marker.js',
-        Buffer.from(createMetroAuthorityModule(marker)),
-        0o600,
-      );
-    } finally {
-      closeBoundDirectory(integration);
-    }
+    integration = openBoundSubdirectory(agent, 'integration');
+    writeBoundDirectoryFile(
+      integration,
+      'authority-marker.js',
+      Buffer.from(createMetroAuthorityModule(marker)),
+      0o600,
+    );
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    closeBoundDirectory(agent);
+    closeBoundDirectories([integration, agent], primaryError);
   }
 }
 

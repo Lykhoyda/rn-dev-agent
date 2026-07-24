@@ -52989,7 +52989,7 @@ var init_action_state_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
-import { execFileSync as execFileSync11, spawn as spawn5 } from "node:child_process";
+import { spawn as spawn5 } from "node:child_process";
 import { randomUUID as randomUUID5 } from "node:crypto";
 import { closeSync as closeSync3, constants, existsSync as existsSync21, fstatSync, lstatSync as lstatSync8, mkdtempSync, openSync as openSync3, readFileSync as readFileSync21, realpathSync as realpathSync4, renameSync as renameSync6, rmSync as rmSync8, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir10 } from "node:os";
@@ -53006,109 +53006,75 @@ function waitForFile(path, timeoutMs) {
   }
   return existsSync21(path);
 }
-function workerProcessStopped(worker) {
-  const probe = probeProcessBirth(worker.pid);
-  if (probe.status === "absent" || probe.status === "present" && probe.birth.token !== worker.birth.token) {
-    return true;
-  }
-  if (probe.status !== "present")
-    return false;
-  try {
-    if (process.platform === "linux") {
-      const stat2 = readFileSync21(`/proc/${worker.pid}/stat`, "utf8");
-      const commandEnd = stat2.lastIndexOf(")");
-      const state = commandEnd >= 0 ? stat2.slice(commandEnd + 1).trim().split(/\s+/, 1)[0] : "";
-      return state === "Z" || state === "X";
-    }
-    if (process.platform === "darwin") {
-      const state = execFileSync11("/bin/ps", ["-o", "stat=", "-p", String(worker.pid)], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2e3
-      }).trim();
-      return state.startsWith("Z");
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
-function waitForWorkerExit(worker, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (workerProcessStopped(worker))
-      return true;
-    Atomics.wait(WAIT_BUFFER, 0, 0, 10);
-  }
-  return workerProcessStopped(worker);
-}
-function signalWorker(worker, signal) {
-  if (workerProcessStopped(worker))
-    return false;
-  const probe = probeProcessBirth(worker.pid);
-  if (probe.status === "absent")
-    return false;
-  if (probe.status === "present" && probe.birth.token !== worker.birth.token)
-    return false;
-  if (probe.status !== "present") {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker identity is inconclusive");
-  }
-  process.kill(worker.pid, signal);
-  return true;
-}
 function stopWorker(worker, signal = "SIGTERM") {
+  const stoppedPath = join30(worker.controlPath, "stopped");
+  if (signal === "SIGTERM") {
+    try {
+      writeFileSync13(join30(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
+    } catch {
+    }
+    if (waitForFile(stoppedPath, 1e3)) {
+      rmSync8(worker.controlPath, { force: true, recursive: true });
+      return;
+    }
+  }
   try {
-    writeFileSync13(join30(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
+    writeFileSync13(join30(worker.controlPath, "terminate"), JSON.stringify({
+      lifecycleCapability: worker.lifecycleCapability,
+      signal: "SIGKILL"
+    }), { flag: "wx", mode: 384 });
   } catch {
   }
-  const signaled = signalWorker(worker, signal);
-  if (signaled && !waitForWorkerExit(worker, 5e3)) {
-    if (signal !== "SIGKILL") {
-      signalWorker(worker, "SIGKILL");
-    }
-    if (!waitForWorkerExit(worker, 5e3)) {
-      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
-    }
+  if (!waitForFile(stoppedPath, 1e4)) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
   rmSync8(worker.controlPath, { force: true, recursive: true });
 }
-function bindWorker(controlPath, child, owner, childId) {
+function bindWorker(controlPath, child, owner, childId, lifecycleCapability = "") {
+  const rejectWorker = (message) => {
+    if (typeof lifecycleCapability === "string") {
+      try {
+        stopWorker({
+          child,
+          childId,
+          controlPath,
+          lifecycleCapability,
+          owner,
+          pid: child?.pid ?? 0,
+          sequence: 0
+        }, "SIGKILL");
+      } catch {
+      }
+    }
+    throw new Error(message);
+  };
   const readyPath = join30(controlPath, "ready");
   if (!waitForFile(readyPath, 5e3)) {
-    child?.kill("SIGKILL");
-    rmSync8(controlPath, { force: true, recursive: true });
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
+    rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
-  let ready;
+  let ready = {};
   try {
     ready = JSON.parse(readFileSync21(readyPath, "utf8"));
   } catch {
-    child?.kill("SIGKILL");
-    rmSync8(controlPath, { force: true, recursive: true });
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
+    rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
-  if (ready.ok !== true || typeof ready.pid !== "number" || !Number.isSafeInteger(ready.pid) || ready.pid <= 0 || child?.pid !== void 0 && child.pid !== ready.pid) {
-    child?.kill("SIGKILL");
-    rmSync8(controlPath, { force: true, recursive: true });
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker rejected path");
-  }
-  const birthProbe = probeProcessBirth(ready.pid);
-  if (birthProbe.status !== "present") {
-    child?.kill("SIGKILL");
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker identity is unavailable");
+  const readyPid = ready.pid;
+  if (ready.ok !== true || lifecycleCapability.length === 0 || ready.lifecycleCapability !== lifecycleCapability || typeof readyPid !== "number" || !Number.isSafeInteger(readyPid) || readyPid <= 0 || child?.pid !== void 0 && child.pid !== readyPid) {
+    rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker rejected path");
   }
   return {
-    birth: birthProbe.birth,
     child,
     childId,
     controlPath,
+    lifecycleCapability,
     owner,
-    pid: ready.pid,
+    pid: readyPid,
     sequence: 0
   };
 }
 function startWorker(path, identity2, realPath) {
   const controlPath = mkdtempSync(join30(tmpdir10(), "rn-bound-directory-"));
+  const lifecycleCapability = randomUUID5();
   const binding = Buffer.from(JSON.stringify({
     dev: identity2.dev.toString(),
     ino: identity2.ino.toString(),
@@ -53120,6 +53086,7 @@ function startWorker(path, identity2, realPath) {
         realPath
       }
     ],
+    lifecycleCapability,
     publicPath: path,
     realPath
   })).toString("base64url");
@@ -53131,41 +53098,52 @@ function startWorker(path, identity2, realPath) {
   });
   child.channel?.unref();
   child.unref();
-  return bindWorker(controlPath, child);
+  return bindWorker(controlPath, child, void 0, void 0, lifecycleCapability);
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
   const controlPath = mkdtempSync(join30(tmpdir10(), "rn-bound-directory-"));
   const childId = randomUUID5();
+  const lifecycleCapability = randomUUID5();
   let worker;
+  let childStarted = false;
   try {
     const result = runBoundOperation(parent, {
       operation: "directory",
       childId,
       controlPath,
+      lifecycleCapability,
       name,
       publicPath: join30(parent.path, name),
       create: false,
       mode: 448
     });
-    worker = bindWorker(controlPath, void 0, parent, childId);
+    childStarted = true;
+    worker = bindWorker(controlPath, void 0, parent, childId, lifecycleCapability);
     if (!result.directoryIdentity || BigInt(result.directoryIdentity.dev) !== expectedIdentity.dev || BigInt(result.directoryIdentity.ino) !== expectedIdentity.ino || result.directoryIdentity.realPath !== expectedRealPath) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory child identity changed");
     }
     return worker;
   } catch (error2) {
-    if (worker)
-      stopWorker(worker, "SIGKILL");
-    else {
-      try {
-        sendOperation(parent, {
-          operation: "child-stop",
+    try {
+      if (worker)
+        stopWorker(worker, "SIGKILL");
+      else if (childStarted || error2 instanceof Error && error2.message === "SESSION_INTEGRATION_WORKER_TIMEOUT") {
+        stopWorker({
           childId,
           controlPath,
-          signal: "SIGKILL"
-        }, 5e3);
-      } catch {
+          lifecycleCapability,
+          owner: parent,
+          pid: 0,
+          sequence: 0
+        }, "SIGKILL");
+      } else {
+        rmSync8(controlPath, { force: true, recursive: true });
       }
-      rmSync8(controlPath, { force: true, recursive: true });
+    } catch (cleanupError) {
+      throw new AggregateError([
+        error2 instanceof Error ? error2 : new Error(String(error2)),
+        cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))
+      ], "bound-directory child cleanup failed");
     }
     throw error2;
   }
@@ -53264,24 +53242,30 @@ function runBoundOperation(directory, request2, dependencies = {}) {
         }
         return { ...result, cleanupPending: false };
       } catch (cleanupError) {
+        let unresolvedCleanup = cleanupError;
         if (cleanupError instanceof Error && cleanupError.message === "SESSION_INTEGRATION_WORKER_TIMEOUT") {
-          restartWorker(directory);
-          const cleanup = sendOperation(directory, {
-            operation: "recover",
-            failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
-            journal: request2.journal,
-            writes: request2.writes
-          }, dependencies.recoveryTimeoutMs ?? 5e3);
-          if (!cleanup.ok)
-            throwOperationFailure(cleanup);
-          if (!cleanup.committed) {
-            throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+          try {
+            restartWorker(directory);
+            const cleanup = sendOperation(directory, {
+              operation: "recover",
+              failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
+              journal: request2.journal,
+              writes: request2.writes
+            }, dependencies.recoveryTimeoutMs ?? 5e3);
+            if (!cleanup.ok)
+              throwOperationFailure(cleanup);
+            if (!cleanup.committed) {
+              throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+            }
+            return { ...result, cleanupPending: false };
+          } catch (retryError) {
+            unresolvedCleanup = retryError;
           }
-          return { ...result, cleanupPending: false };
         }
         return {
           ...result,
-          cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          cleanupPending: true,
+          cleanupError: unresolvedCleanup instanceof Error ? unresolvedCleanup.message : String(unresolvedCleanup)
         };
       }
     }
@@ -53318,6 +53302,25 @@ function runBoundOperation(directory, request2, dependencies = {}) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable");
   }
 }
+function recoverDiscoveredTransactions(directory) {
+  const result = runBoundOperation(directory, { operation: "discover" });
+  if (!result.transactions) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory discovery returned invalid output");
+  }
+  for (const transaction of result.transactions) {
+    if (!/^[0-9a-f-]{36}$/.test(transaction.transactionId) || transaction.journal !== `.rn-bound-${transaction.transactionId}.journal` || transaction.state !== "applying" && transaction.state !== "committed") {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory discovery returned invalid transaction");
+    }
+    directory.pendingCleanups.set(transaction.transactionId, {
+      journal: transaction.journal,
+      knownCommitted: transaction.state === "committed",
+      writes: transaction.writes
+    });
+    retryBoundDirectoryCleanup(directory, {
+      transactionId: transaction.transactionId
+    });
+  }
+}
 function openValidatedDirectory(path, expected) {
   let descriptor;
   let worker;
@@ -53335,7 +53338,7 @@ function openValidatedDirectory(path, expected) {
     }
     const identity2 = { dev: opened.dev, ino: opened.ino };
     worker = startWorker(path, identity2, realPath);
-    return {
+    const directory = {
       children: /* @__PURE__ */ new Set(),
       descriptor,
       identity: identity2,
@@ -53345,11 +53348,27 @@ function openValidatedDirectory(path, expected) {
       worker,
       closed: false
     };
+    recoverDiscoveredTransactions(directory);
+    return directory;
   } catch (error2) {
-    if (worker !== void 0)
-      stopWorker(worker, "SIGKILL");
-    if (descriptor !== void 0)
-      closeSync3(descriptor);
+    const cleanupErrors = [];
+    if (worker !== void 0) {
+      try {
+        stopWorker(worker, "SIGKILL");
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)));
+      }
+    }
+    if (descriptor !== void 0) {
+      try {
+        closeSync3(descriptor);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)));
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError([error2 instanceof Error ? error2 : new Error(String(error2)), ...cleanupErrors], "bound-directory open cleanup failed");
+    }
     if (error2 instanceof Error && error2.message.includes("SESSION_INTEGRATION_PATH_UNSAFE")) {
       throw error2;
     }
@@ -53363,6 +53382,13 @@ function closeBoundDirectory(directory) {
   if (directory.closed)
     return;
   const cleanupErrors = [];
+  for (const child of [...directory.children]) {
+    try {
+      closeBoundDirectory(child);
+    } catch (error2) {
+      cleanupErrors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
+    }
+  }
   for (const transactionId of directory.pendingCleanups.keys()) {
     try {
       retryBoundDirectoryCleanup(directory, { transactionId });
@@ -53377,11 +53403,35 @@ function closeBoundDirectory(directory) {
     cleanupErrors.push(error2 instanceof Error ? error2 : new Error(`bound-directory close failed: ${String(error2)}`));
   }
   directory.parent?.children.delete(directory);
-  if (directory.descriptor !== void 0)
-    closeSync3(directory.descriptor);
+  if (directory.descriptor !== void 0) {
+    try {
+      closeSync3(directory.descriptor);
+    } catch (error2) {
+      cleanupErrors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
+    }
+  }
   if (cleanupErrors.length > 0) {
     throw new AggregateError(cleanupErrors, "bound-directory cleanup failed");
   }
+}
+function closeBoundDirectories(directories, primaryError) {
+  const closeErrors = [];
+  for (const directory of directories) {
+    if (!directory)
+      continue;
+    try {
+      closeBoundDirectory(directory);
+    } catch (error2) {
+      closeErrors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
+    }
+  }
+  if (closeErrors.length === 0)
+    return;
+  const errors = primaryError === void 0 ? closeErrors : [
+    primaryError instanceof Error ? primaryError : new Error(String(primaryError)),
+    ...closeErrors
+  ];
+  throw new AggregateError(errors, "bound-directory cleanup failed");
 }
 function assertBoundDirectoryCurrent(directory) {
   runBoundOperation(directory, { operation: "identity" });
@@ -53389,23 +53439,27 @@ function assertBoundDirectoryCurrent(directory) {
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
   const controlPath = mkdtempSync(join30(tmpdir10(), "rn-bound-directory-"));
   const childId = randomUUID5();
+  const lifecycleCapability = randomUUID5();
   let worker;
+  let childStarted = false;
   try {
     const result = runBoundOperation(parent, {
       operation: "directory",
       childId,
       controlPath,
+      lifecycleCapability,
       name,
       publicPath: join30(parent.path, name),
       create: options.create ?? false,
       mode: options.mode ?? 448,
       optional: options.optional ?? false
     });
+    childStarted = !result.directoryMissing;
     if (result.directoryMissing) {
       rmSync8(controlPath, { force: true, recursive: true });
       return null;
     }
-    worker = bindWorker(controlPath, void 0, parent, childId);
+    worker = bindWorker(controlPath, void 0, parent, childId, lifecycleCapability);
     options.afterChildBind?.();
     if (!result.directoryIdentity) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output");
@@ -53424,23 +53478,31 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       worker,
       closed: false
     };
+    recoverDiscoveredTransactions(directory);
     runBoundOperation(parent, { operation: "child-identity", childId });
     parent.children.add(directory);
     return directory;
   } catch (error2) {
-    if (worker)
-      stopWorker(worker, "SIGKILL");
-    else {
-      try {
-        sendOperation(parent, {
-          operation: "child-stop",
+    try {
+      if (worker)
+        stopWorker(worker, "SIGKILL");
+      else if (childStarted || error2 instanceof Error && error2.message === "SESSION_INTEGRATION_WORKER_TIMEOUT") {
+        stopWorker({
           childId,
           controlPath,
-          signal: "SIGKILL"
-        }, 5e3);
-      } catch {
+          lifecycleCapability,
+          owner: parent,
+          pid: 0,
+          sequence: 0
+        }, "SIGKILL");
+      } else {
+        rmSync8(controlPath, { force: true, recursive: true });
       }
-      rmSync8(controlPath, { force: true, recursive: true });
+    } catch (cleanupError) {
+      throw new AggregateError([
+        error2 instanceof Error ? error2 : new Error(String(error2)),
+        cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))
+      ], "bound-directory child cleanup failed");
     }
     throw error2;
   }
@@ -53488,6 +53550,7 @@ function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
   if (result.cleanupPending) {
     directory.pendingCleanups.set(transactionId, {
       journal,
+      knownCommitted: true,
       writes: serializedWrites
     });
   } else {
@@ -53523,21 +53586,57 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
       cleanupRecoveryDelayMs: 0
     });
   }
-  if (!result.committed) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+  if (result.committed !== transaction.knownCommitted) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory recovery changed transaction outcome");
   }
   directory.pendingCleanups.delete(obligation.transactionId);
 }
-var WAIT_BUFFER, BOUND_DIRECTORY_WORKER;
+var WAIT_BUFFER, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
   "packages/rn-dev-agent-core/dist/session/bound-directory.js"() {
     "use strict";
-    init_process_birth();
     WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+    BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+
+const controlPath = process.argv[1];
+process.on('disconnect', () => {
+  try {
+    fs.writeFileSync(path.join(controlPath, 'stopped'), '', { flag: 'wx', mode: 0o600 });
+  } catch {}
+  process.exit(0);
+});
+fs.writeFileSync(path.join(controlPath, 'monitor-ready'), '', { flag: 'wx', mode: 0o600 });
+`;
+    BOUND_DIRECTORY_TERMINATION_WATCHDOG = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const { workerData } = require('node:worker_threads');
+
+function poll() {
+  try {
+    const request = JSON.parse(
+      fs.readFileSync(path.join(workerData.controlPath, 'terminate'), 'utf8'),
+    );
+    if (
+      request.lifecycleCapability === workerData.lifecycleCapability &&
+      (request.signal === 'SIGTERM' || request.signal === 'SIGKILL')
+    ) {
+      process.kill(process.pid, request.signal);
+      return;
+    }
+  } catch {}
+  setTimeout(poll, 5);
+}
+
+poll();
+`;
     BOUND_DIRECTORY_WORKER = String.raw`
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { Worker } = require('node:worker_threads');
 
 class ConflictError extends Error {}
 
@@ -53545,6 +53644,26 @@ const controlPath = process.argv[1];
 const binding = JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8'));
 const childWorkers = new Map();
 process.on('disconnect', () => process.exit(0));
+process.channel?.unref();
+
+const lifecycleMonitor = childProcess.spawn(
+  process.execPath,
+  ['-e', ${JSON.stringify(BOUND_DIRECTORY_LIFECYCLE_MONITOR)}, controlPath],
+  { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] },
+);
+lifecycleMonitor.on('error', () => {});
+lifecycleMonitor.on('exit', () => process.exit(1));
+lifecycleMonitor.channel?.unref();
+lifecycleMonitor.unref();
+const terminationWatchdog = new Worker(${JSON.stringify(BOUND_DIRECTORY_TERMINATION_WATCHDOG)}, {
+  eval: true,
+  workerData: {
+    controlPath,
+    lifecycleCapability: binding.lifecycleCapability,
+  },
+});
+terminationWatchdog.on('error', () => process.exit(1));
+terminationWatchdog.unref();
 
 function wait(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -53807,6 +53926,49 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   return { committed: false };
 }
 
+function discoverTransactions() {
+  return fs
+    .readdirSync('.')
+    .filter((name) => /^\.rn-bound-([0-9a-f-]{36})\.journal$/.test(name))
+    .map((journalName) => {
+      const journal = readJournal(journalName);
+      if (
+        journal === null ||
+        journal.version !== 1 ||
+        journal.name !== journalName ||
+        (journal.state !== 'applying' && journal.state !== 'committed') ||
+        !Array.isArray(journal.writes)
+      ) {
+        throw new Error('bound-directory transaction journal is invalid');
+      }
+      const transactionId = journalName.slice('.rn-bound-'.length, -'.journal'.length);
+      if (journal.writes.length > 100) {
+        throw new Error('bound-directory transaction journal is too large');
+      }
+      for (const [index, write] of journal.writes.entries()) {
+        validateName(write.name);
+        validateName(write.temporary);
+        validateName(write.captured);
+        if (
+          write.temporary !== '.rn-bound-' + transactionId + '-' + index + '.tmp' ||
+          write.captured !== '.rn-bound-' + transactionId + '-' + index + '.captured' ||
+          (write.expected !== null && typeof write.expected !== 'string') ||
+          (write.replacement !== null && typeof write.replacement !== 'string') ||
+          !Number.isSafeInteger(write.mode) ||
+          (write.expectedMode !== undefined && !Number.isSafeInteger(write.expectedMode))
+        ) {
+          throw new Error('bound-directory transaction journal write is invalid');
+        }
+      }
+      return {
+        journal: journalName,
+        state: journal.state,
+        transactionId,
+        writes: journal.writes,
+      };
+    });
+}
+
 function applyBatch(request) {
   const journal = {
     version: 1,
@@ -53841,8 +54003,7 @@ function applyBatch(request) {
 function spawnChildWorker(request, directory) {
   const existing = childWorkers.get(request.childId);
   if (existing) {
-    existing.kill('SIGKILL');
-    childWorkers.delete(request.childId);
+    throw new Error('bound-directory child worker already exists');
   }
   const childBinding = Buffer.from(
     JSON.stringify({
@@ -53857,6 +54018,7 @@ function spawnChildWorker(request, directory) {
           realPath: directory.realPath,
         },
       ],
+      lifecycleCapability: request.lifecycleCapability,
       publicPath: request.publicPath,
       realPath: directory.realPath,
     }),
@@ -53880,24 +54042,7 @@ function spawnChildWorker(request, directory) {
   childWorkers.set(request.childId, child);
 }
 
-function stopChildWorker(request) {
-  const child = childWorkers.get(request.childId);
-  if (!child) return {};
-  try {
-    fs.writeFileSync(path.join(request.controlPath, 'stop'), '', {
-      flag: 'wx',
-      mode: 0o600,
-    });
-  } catch {}
-  child.kill(request.signal);
-  childWorkers.delete(request.childId);
-  return {};
-}
-
 function execute(request) {
-  if (request.operation === 'child-stop') {
-    return stopChildWorker(request);
-  }
   assertBoundDirectory();
   if (request.operation === 'directory') {
     validateName(request.childId);
@@ -53973,6 +54118,9 @@ function execute(request) {
       request.recoveryDelayAfterUnlinkMs,
     );
   }
+  if (request.operation === 'discover') {
+    return { transactions: discoverTransactions() };
+  }
   if (request.operation === 'identity') return {};
   throw new Error('invalid bound-directory operation');
 }
@@ -54005,9 +54153,16 @@ function respond(requestPath, responsePath) {
 
 async function run() {
   assertBoundDirectory();
+  while (!fs.existsSync(path.join(controlPath, 'monitor-ready'))) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   fs.writeFileSync(
     path.join(controlPath, 'ready'),
-    JSON.stringify({ ok: true, pid: process.pid }),
+    JSON.stringify({
+      lifecycleCapability: binding.lifecycleCapability,
+      ok: true,
+      pid: process.pid,
+    }),
     {
       flag: 'wx',
       mode: 0o600,
@@ -54054,16 +54209,17 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
     return readText(manifestPath);
   }
   const agent = openBoundDirectory(join31(appRoot, ".rn-agent"));
+  let integration;
+  let primaryError;
   try {
-    const integration = openBoundSubdirectory(agent, "integration");
-    try {
-      const [manifest] = readBoundDirectoryFiles(integration, ["rn-session-integration.json"]);
-      return manifest?.contents?.toString("utf8");
-    } finally {
-      closeBoundDirectory(integration);
-    }
+    integration = openBoundSubdirectory(agent, "integration");
+    const [manifest] = readBoundDirectoryFiles(integration, ["rn-session-integration.json"]);
+    return manifest?.contents?.toString("utf8");
+  } catch (error2) {
+    primaryError = error2;
+    throw error2;
   } finally {
-    closeBoundDirectory(agent);
+    closeBoundDirectories([integration, agent], primaryError);
   }
 }
 function inspectAuthorityMigration(status, dependencies = {}) {
@@ -62478,7 +62634,7 @@ var init_proof_receipt = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash11, randomUUID as randomUUID6 } from "node:crypto";
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync11 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync5, existsSync as existsSync27, fsyncSync, lstatSync as lstatSync9, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync24, realpathSync as realpathSync5, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename5, dirname as dirname14, extname, isAbsolute as isAbsolute4, join as join36, relative as relative2, resolve as resolve7, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -62602,7 +62758,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync12("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync11("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
@@ -62611,8 +62767,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync12("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync12("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync11("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync11("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
       const artifactBytes = readFileSync24(resolvedArtifactPath);
@@ -62620,17 +62776,17 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync12("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync11("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot) {
   const root = realpathSync5(resolve7(candidateRoot));
-  const sha = execFileSync12("git", ["-C", root, "rev-parse", "HEAD"], {
+  const sha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync12("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync11("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
@@ -62647,7 +62803,7 @@ function readProofCandidateRuntime(candidateRoot) {
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
   }
-  const confirmedSha = execFileSync12("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -62743,7 +62899,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync12("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync11("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
@@ -62775,8 +62931,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync12("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync12("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync11("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync11("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -62787,7 +62943,7 @@ function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
   const path = relative2(root, proofRoot).replaceAll(sep5, "/");
-  return execFileSync12("git", ["ls-files", "-z", "--", path], {
+  return execFileSync11("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -64466,10 +64622,10 @@ var init_query = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
-import { execFileSync as execFileSync13 } from "node:child_process";
+import { execFileSync as execFileSync12 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync13("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync12("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -66408,12 +66564,12 @@ var init_metro_events = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
 import { readFileSync as readFileSync28, statSync as statSync12 } from "node:fs";
 import { join as join42 } from "node:path";
 function runText(command, args) {
-  return execFileSync14(command, [...args], {
+  return execFileSync13(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
@@ -68175,7 +68331,7 @@ var init_e2e_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync15 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -68189,7 +68345,7 @@ var defaultExec3;
 var init_git_info = __esm({
   "packages/rn-dev-agent-core/dist/e2e/git-info.js"() {
     "use strict";
-    defaultExec3 = (cmd, args) => execFileSync15(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    defaultExec3 = (cmd, args) => execFileSync14(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   }
 });
 
@@ -69358,6 +69514,7 @@ function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
   const app = openBoundDirectory(appRoot);
   let agent = null;
   let integration = null;
+  let primaryError;
   try {
     const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
       "package.json",
@@ -69385,12 +69542,11 @@ function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
       },
       ...manifest ? { manifest: manifest.toString("utf8") } : {}
     };
+  } catch (error2) {
+    primaryError = error2;
+    throw error2;
   } finally {
-    if (integration)
-      closeBoundDirectory(integration);
-    if (agent)
-      closeBoundDirectory(agent);
-    closeBoundDirectory(app);
+    closeBoundDirectories([integration, agent, app], primaryError);
   }
 }
 function openIntegrationDirectories(appRoot) {
@@ -69401,11 +69557,11 @@ function openIntegrationDirectories(appRoot) {
       const integration = openBoundSubdirectory(agent, "integration", { create: true });
       return { app, agent, integration };
     } catch (error2) {
-      closeBoundDirectory(agent);
+      closeBoundDirectories([agent], error2);
       throw error2;
     }
   } catch (error2) {
-    closeBoundDirectory(app);
+    closeBoundDirectories([app], error2);
     throw error2;
   }
 }
@@ -69450,6 +69606,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     "authority-marker.js"
   ];
   const applied = [];
+  let primaryError;
   try {
     const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
       basename6(packagePath),
@@ -69550,13 +69707,10 @@ function applyPackageIntegration(input, dependencies = {}) {
     return preview;
   } catch (error2) {
     const rollbackErrors = rollbackWrites(applied);
-    if (rollbackErrors.length > 0)
-      throw new AggregateError([error2, ...rollbackErrors]);
-    throw error2;
+    primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
+    throw primaryError;
   } finally {
-    closeBoundDirectory(directories.integration);
-    closeBoundDirectory(directories.agent);
-    closeBoundDirectory(directories.app);
+    closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
   }
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
@@ -69570,6 +69724,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     "authority-marker.js"
   ];
   const applied = [];
+  let primaryError;
   try {
     const generatedSnapshots = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
     if (!generatedSnapshots[0]?.contents) {
@@ -69646,13 +69801,10 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     assertBoundDirectoryCurrent(directories.integration);
   } catch (error2) {
     const rollbackErrors = rollbackWrites(applied);
-    if (rollbackErrors.length > 0)
-      throw new AggregateError([error2, ...rollbackErrors]);
-    throw error2;
+    primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
+    throw primaryError;
   } finally {
-    closeBoundDirectory(directories.integration);
-    closeBoundDirectory(directories.agent);
-    closeBoundDirectory(directories.app);
+    closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
   }
 }
 var ADAPTER, METRO_ADAPTER, AUTHORITY_MODULE, METRO_START, METRO_END, SENTINELS;
@@ -70941,7 +71093,7 @@ var init_metro_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
-import { execFileSync as execFileSync16 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 import { createHash as createHash15 } from "node:crypto";
 function identity(value) {
   return createHash15("sha256").update(JSON.stringify(value)).digest("hex");
@@ -70977,7 +71129,7 @@ async function defaultFetchJson(url, init) {
 }
 function defaultDeviceExists(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync16("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -70985,7 +71137,7 @@ function defaultDeviceExists(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync16("adb", ["devices"], {
+  const output = execFileSync15("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3

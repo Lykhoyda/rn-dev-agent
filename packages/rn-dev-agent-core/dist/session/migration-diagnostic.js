@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { closeBoundDirectory, openBoundDirectory, openBoundSubdirectory, readBoundDirectoryFiles, } from './bound-directory.js';
+import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, readBoundDirectoryFiles, } from './bound-directory.js';
 function readPackageIntegrationManifest(appRoot, dependencies) {
     const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
     if (dependencies.exists || dependencies.readText) {
@@ -11,18 +11,19 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
         return readText(manifestPath);
     }
     const agent = openBoundDirectory(join(appRoot, '.rn-agent'));
+    let integration;
+    let primaryError;
     try {
-        const integration = openBoundSubdirectory(agent, 'integration');
-        try {
-            const [manifest] = readBoundDirectoryFiles(integration, ['rn-session-integration.json']);
-            return manifest?.contents?.toString('utf8');
-        }
-        finally {
-            closeBoundDirectory(integration);
-        }
+        integration = openBoundSubdirectory(agent, 'integration');
+        const [manifest] = readBoundDirectoryFiles(integration, ['rn-session-integration.json']);
+        return manifest?.contents?.toString('utf8');
+    }
+    catch (error) {
+        primaryError = error;
+        throw error;
     }
     finally {
-        closeBoundDirectory(agent);
+        closeBoundDirectories([integration, agent], primaryError);
     }
 }
 export function inspectAuthorityMigration(status, dependencies = {}) {

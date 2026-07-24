@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   assertBoundDirectoryCurrent,
   casBoundDirectoryFiles,
-  closeBoundDirectory,
+  closeBoundDirectories,
   openBoundDirectory,
   openBoundSubdirectory,
   openOptionalBoundSubdirectory,
@@ -471,6 +471,7 @@ export function readPackageIntegrationInputs(
   const app = openBoundDirectory(appRoot);
   let agent: BoundDirectory | null = null;
   let integration: BoundDirectory | null = null;
+  let primaryError: unknown;
   try {
     const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
       'package.json',
@@ -502,10 +503,11 @@ export function readPackageIntegrationInputs(
       },
       ...(manifest ? { manifest: manifest.toString('utf8') } : {}),
     };
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    if (integration) closeBoundDirectory(integration);
-    if (agent) closeBoundDirectory(agent);
-    closeBoundDirectory(app);
+    closeBoundDirectories([integration, agent, app], primaryError);
   }
 }
 
@@ -521,11 +523,11 @@ function openIntegrationDirectories(appRoot: string): {
       const integration = openBoundSubdirectory(agent, 'integration', { create: true });
       return { app, agent, integration };
     } catch (error) {
-      closeBoundDirectory(agent);
+      closeBoundDirectories([agent], error);
       throw error;
     }
   } catch (error) {
-    closeBoundDirectory(app);
+    closeBoundDirectories([app], error);
     throw error;
   }
 }
@@ -593,6 +595,7 @@ export function applyPackageIntegration(
     'authority-marker.js',
   ] as const;
   const applied: AppliedWrite[] = [];
+  let primaryError: unknown;
   try {
     const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
       basename(packagePath),
@@ -704,12 +707,14 @@ export function applyPackageIntegration(
     return preview;
   } catch (error) {
     const rollbackErrors = rollbackWrites(applied);
-    if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors]);
-    throw error;
+    primaryError =
+      rollbackErrors.length > 0 ? new AggregateError([error, ...rollbackErrors]) : error;
+    throw primaryError;
   } finally {
-    closeBoundDirectory(directories.integration);
-    closeBoundDirectory(directories.agent);
-    closeBoundDirectory(directories.app);
+    closeBoundDirectories(
+      [directories.integration, directories.agent, directories.app],
+      primaryError,
+    );
   }
 }
 
@@ -727,6 +732,7 @@ export function restorePackageIntegrationFiles(
     'authority-marker.js',
   ] as const;
   const applied: AppliedWrite[] = [];
+  let primaryError: unknown;
   try {
     const generatedSnapshots = snapshotBoundFiles(
       directories.integration,
@@ -817,11 +823,13 @@ export function restorePackageIntegrationFiles(
     assertBoundDirectoryCurrent(directories.integration);
   } catch (error) {
     const rollbackErrors = rollbackWrites(applied);
-    if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors]);
-    throw error;
+    primaryError =
+      rollbackErrors.length > 0 ? new AggregateError([error, ...rollbackErrors]) : error;
+    throw primaryError;
   } finally {
-    closeBoundDirectory(directories.integration);
-    closeBoundDirectory(directories.agent);
-    closeBoundDirectory(directories.app);
+    closeBoundDirectories(
+      [directories.integration, directories.agent, directories.app],
+      primaryError,
+    );
   }
 }

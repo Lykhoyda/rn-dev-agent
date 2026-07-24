@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  closeBoundDirectory,
+  closeBoundDirectories,
+  type BoundDirectory,
   openBoundDirectory,
   openBoundSubdirectory,
   readBoundDirectoryFiles,
@@ -43,16 +44,17 @@ function readPackageIntegrationManifest(
     return readText(manifestPath);
   }
   const agent = openBoundDirectory(join(appRoot, '.rn-agent'));
+  let integration: BoundDirectory | undefined;
+  let primaryError: unknown;
   try {
-    const integration = openBoundSubdirectory(agent, 'integration');
-    try {
-      const [manifest] = readBoundDirectoryFiles(integration, ['rn-session-integration.json']);
-      return manifest?.contents?.toString('utf8');
-    } finally {
-      closeBoundDirectory(integration);
-    }
+    integration = openBoundSubdirectory(agent, 'integration');
+    const [manifest] = readBoundDirectoryFiles(integration, ['rn-session-integration.json']);
+    return manifest?.contents?.toString('utf8');
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    closeBoundDirectory(agent);
+    closeBoundDirectories([integration, agent], primaryError);
   }
 }
 
