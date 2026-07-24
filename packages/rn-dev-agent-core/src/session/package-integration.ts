@@ -1,22 +1,6 @@
 import { createBuildLaunchPlan } from './build-adapter.js';
-import { randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fstatSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   assertBoundDirectoryCurrent,
   casBoundDirectoryFiles,
@@ -343,85 +327,25 @@ process.exit(0);
 `;
 }
 
-interface FileSnapshot {
+interface DescriptorFileSnapshot {
   path: string;
   contents: Buffer | null;
   mode: number;
-}
-
-interface DescriptorFileSnapshot extends FileSnapshot {
   name: string;
 }
 
-function snapshotFiles(root: string, paths: readonly string[]): FileSnapshot[] {
-  return paths.map((path) => {
-    const contents = readOptionalRegularFile(root, path);
-    return {
-      path,
-      contents: contents === undefined ? null : Buffer.from(contents),
-      mode: contents === undefined ? 0o600 : statSync(path).mode & 0o777,
-    };
-  });
-}
-
-function casReplace(
-  root: string,
-  snapshot: FileSnapshot,
-  expected: Buffer | null,
-  next: Buffer | null,
-  mode: number,
-  expectedMode: number | undefined = snapshot.mode,
-): void {
-  const temporary = join(dirname(snapshot.path), `.${randomUUID()}.tmp`);
-  const captured = join(dirname(snapshot.path), `.${randomUUID()}.captured`);
-  if (next) {
-    writeFileSync(temporary, next, { flag: 'wx', mode });
-    chmodSync(temporary, mode);
-  }
-  try {
-    if (expected === null) {
-      if (readOptionalRegularFile(root, snapshot.path) !== undefined) {
-        throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
-      }
-    } else {
-      renameSync(snapshot.path, captured);
-      const observed = readRegularFile(root, captured);
-      const observedMode = statSync(captured).mode & 0o777;
-      if (
-        !expected.equals(Buffer.from(observed)) ||
-        (process.platform !== 'win32' &&
-          expectedMode !== undefined &&
-          observedMode !== expectedMode)
-      ) {
-        linkSync(captured, snapshot.path);
-        throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
-      }
-    }
-    if (next) {
-      linkSync(temporary, snapshot.path);
-    }
-    if (expected !== null) rmSync(captured, { force: true });
-  } finally {
-    rmSync(temporary, { force: true });
-    if (existsSync(captured)) {
-      if (!existsSync(snapshot.path)) linkSync(captured, snapshot.path);
-      rmSync(captured, { force: true });
-    }
-  }
-}
-
-function snapshotIntegrationFiles(
+function snapshotBoundFiles(
   directory: BoundDirectory,
-  integrationPath: string,
+  directoryPath: string,
   names: readonly string[],
 ): DescriptorFileSnapshot[] {
   return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
     ...snapshot,
-    path: join(integrationPath, snapshot.name),
+    path: join(directoryPath, snapshot.name),
   }));
 }
 
-function casReplaceIntegrationBatch(
+function casReplaceBoundBatch(
   directory: BoundDirectory,
   writes: ReadonlyArray<{
     snapshot: DescriptorFileSnapshot;
@@ -435,8 +359,7 @@ function casReplaceIntegrationBatch(
     directory,
     writes.map((write) => ({
       expected: write.expected,
-      expectedMode:
-        process.platform === 'win32' ? undefined : (write.expectedMode ?? write.snapshot.mode),
+      expectedMode: write.expectedMode ?? write.snapshot.mode,
       mode: write.mode,
       name: write.snapshot.name,
       replacement: write.replacement,
@@ -523,21 +446,22 @@ export function readOptionalRegularFileNoFollow(
 }
 
 function openIntegrationDirectories(appRoot: string): {
+  app: BoundDirectory;
   agent: BoundDirectory;
   integration: BoundDirectory;
 } {
-  const agentRoot = join(appRoot, '.rn-agent');
+  const app = openBoundDirectory(appRoot);
   try {
-    mkdirSync(agentRoot, { mode: 0o700 });
+    const agent = openBoundSubdirectory(app, '.rn-agent', { create: true });
+    try {
+      const integration = openBoundSubdirectory(agent, 'integration', { create: true });
+      return { app, agent, integration };
+    } catch (error) {
+      closeBoundDirectory(agent);
+      throw error;
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-  }
-  const agent = openBoundDirectory(agentRoot);
-  try {
-    const integration = openBoundSubdirectory(agent, 'integration', { create: true });
-    return { agent, integration };
-  } catch (error) {
-    closeBoundDirectory(agent);
+    closeBoundDirectory(app);
     throw error;
   }
 }
@@ -548,37 +472,25 @@ interface PackageIntegrationDependencies {
 }
 
 interface AppliedWrite {
-  root: string;
-  snapshot: FileSnapshot;
+  snapshot: DescriptorFileSnapshot;
   written: Buffer | null;
   writtenMode?: number;
-  directory?: BoundDirectory;
+  directory: BoundDirectory;
 }
 
 function rollbackWrites(writes: readonly AppliedWrite[]): Error[] {
   const errors: Error[] = [];
   for (const write of [...writes].reverse()) {
     try {
-      if (write.directory) {
-        casReplaceIntegrationBatch(write.directory, [
-          {
-            snapshot: write.snapshot as DescriptorFileSnapshot,
-            expected: write.written,
-            expectedMode: write.writtenMode,
-            replacement: write.snapshot.contents,
-            mode: write.snapshot.mode,
-          },
-        ]);
-      } else {
-        casReplace(
-          write.root,
-          write.snapshot,
-          write.written,
-          write.snapshot.contents,
-          write.snapshot.mode,
-          write.writtenMode,
-        );
-      }
+      casReplaceBoundBatch(write.directory, [
+        {
+          snapshot: write.snapshot,
+          expected: write.written,
+          expectedMode: write.writtenMode,
+          replacement: write.snapshot.contents,
+          mode: write.snapshot.mode,
+        },
+      ]);
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
     }
@@ -616,8 +528,11 @@ export function applyPackageIntegration(
   ] as const;
   const applied: AppliedWrite[] = [];
   try {
-    const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
-    const generated = snapshotIntegrationFiles(
+    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
+      basename(packagePath),
+      basename(metroConfigPath),
+    ]);
+    const generated = snapshotBoundFiles(
       directories.integration,
       directories.integration.path,
       generatedNames,
@@ -664,7 +579,7 @@ export function applyPackageIntegration(
     ];
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceIntegrationBatch(
+    casReplaceBoundBatch(
       directories.integration,
       outputs.map((output) => ({
         snapshot: output.snapshot,
@@ -675,30 +590,43 @@ export function applyPackageIntegration(
     );
     for (const output of outputs) {
       applied.push({
-        root: directories.integration.path,
         snapshot: output.snapshot,
         written: output.contents,
-        writtenMode: process.platform === 'win32' ? undefined : output.mode,
+        writtenMode: output.mode,
         directory: directories.integration,
       });
       dependencies.afterWrite?.(output.snapshot.path);
     }
     const metroOutput = Buffer.from(nextMetroSource);
-    casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 0o644);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: metroSnapshot,
+        expected: metroSnapshot.contents,
+        replacement: metroOutput,
+        mode: 0o644,
+      },
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: metroSnapshot,
       written: metroOutput,
-      writtenMode: process.platform === 'win32' ? undefined : 0o644,
+      writtenMode: 0o644,
+      directory: directories.app,
     });
     dependencies.afterWrite?.(metroConfigPath);
     const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}\n`);
-    casReplace(appRoot, packageSnapshot, packageSnapshot.contents, packageOutput, 0o644);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: packageSnapshot,
+        expected: packageSnapshot.contents,
+        replacement: packageOutput,
+        mode: 0o644,
+      },
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: packageSnapshot,
       written: packageOutput,
-      writtenMode: process.platform === 'win32' ? undefined : 0o644,
+      writtenMode: 0o644,
+      directory: directories.app,
     });
     dependencies.afterWrite?.(packagePath);
     assertBoundDirectoryCurrent(directories.agent);
@@ -711,6 +639,7 @@ export function applyPackageIntegration(
   } finally {
     closeBoundDirectory(directories.integration);
     closeBoundDirectory(directories.agent);
+    closeBoundDirectory(directories.app);
   }
 }
 
@@ -729,7 +658,7 @@ export function restorePackageIntegrationFiles(
   ] as const;
   const applied: AppliedWrite[] = [];
   try {
-    const generatedSnapshots = snapshotIntegrationFiles(
+    const generatedSnapshots = snapshotBoundFiles(
       directories.integration,
       directories.integration.path,
       generatedNames,
@@ -748,7 +677,10 @@ export function restorePackageIntegrationFiles(
       );
     }
     const metroConfigPath = join(appRoot, metroConfig);
-    const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
+    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
+      basename(packagePath),
+      basename(metroConfigPath),
+    ]);
     if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
       throw new Error('SESSION_INTEGRATION_CONFLICT: integration input changed before commit');
     }
@@ -758,26 +690,40 @@ export function restorePackageIntegrationFiles(
     const packageOutput = Buffer.from(
       `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}\n`,
     );
-    casReplace(appRoot, packageSnapshot, packageSnapshot.contents, packageOutput, 0o644);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: packageSnapshot,
+        expected: packageSnapshot.contents,
+        replacement: packageOutput,
+        mode: 0o644,
+      },
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: packageSnapshot,
       written: packageOutput,
-      writtenMode: process.platform === 'win32' ? undefined : 0o644,
+      writtenMode: 0o644,
+      directory: directories.app,
     });
     dependencies.afterWrite?.(packagePath);
     const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
-    casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 0o644);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: metroSnapshot,
+        expected: metroSnapshot.contents,
+        replacement: metroOutput,
+        mode: 0o644,
+      },
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: metroSnapshot,
       written: metroOutput,
-      writtenMode: process.platform === 'win32' ? undefined : 0o644,
+      writtenMode: 0o644,
+      directory: directories.app,
     });
     dependencies.afterWrite?.(metroConfigPath);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceIntegrationBatch(
+    casReplaceBoundBatch(
       directories.integration,
       generatedSnapshots.map((snapshot) => ({
         snapshot,
@@ -788,7 +734,6 @@ export function restorePackageIntegrationFiles(
     );
     for (const snapshot of generatedSnapshots) {
       applied.push({
-        root: directories.integration.path,
         snapshot,
         written: null,
         directory: directories.integration,
@@ -803,5 +748,6 @@ export function restorePackageIntegrationFiles(
   } finally {
     closeBoundDirectory(directories.integration);
     closeBoundDirectory(directories.agent);
+    closeBoundDirectory(directories.app);
   }
 }

@@ -642,6 +642,43 @@ test('confirmed integration preserves concurrent package inputs', () => {
   }
 });
 
+test('confirmed integration rejects app-root replacement before commit', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'rn-session-app-root-parent-'));
+  const root = join(parent, 'app');
+  const displaced = join(parent, 'displaced');
+  mkdirSync(root);
+  try {
+    const packagePath = join(root, 'package.json');
+    const metroPath = join(root, 'metro.config.js');
+    writeFileSync(packagePath, `${JSON.stringify(packageJson)}\n`);
+    writeFileSync(metroPath, 'module.exports = {};\n');
+
+    assert.throws(
+      () =>
+        applyPackageIntegration(
+          { appRoot: root, sessionCli: join(root, 'rn-session.js') },
+          {
+            beforeCommit: () => {
+              renameSync(root, displaced);
+              mkdirSync(root);
+            },
+          },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(
+      readFileSync(join(displaced, 'package.json'), 'utf8'),
+      `${JSON.stringify(packageJson)}\n`,
+    );
+    assert.equal(
+      readFileSync(join(displaced, 'metro.config.js'), 'utf8'),
+      'module.exports = {};\n',
+    );
+  } finally {
+    rmSync(parent, { force: true, recursive: true });
+  }
+});
+
 test(
   'confirmed integration preserves concurrent Metro mode changes',
   { skip: process.platform === 'win32' },

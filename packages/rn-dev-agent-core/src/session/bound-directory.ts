@@ -20,7 +20,9 @@ import { join } from 'node:path';
 
 interface BoundDirectoryWorker {
   child?: ChildProcess;
+  childId?: string;
   controlPath: string;
+  owner?: BoundDirectory;
   pid: number;
   sequence: number;
 }
@@ -80,6 +82,7 @@ class ConflictError extends Error {}
 
 const controlPath = process.argv[1];
 const binding = JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8'));
+const childWorkers = new Map();
 process.on('disconnect', () => process.exit(0));
 
 function wait(milliseconds) {
@@ -107,6 +110,18 @@ function assertBoundDirectory() {
     fs.realpathSync('.') !== binding.realPath
   ) {
     throw new Error('bound-directory identity changed');
+  }
+  for (const ancestor of binding.ancestors) {
+    const publicPath = fs.lstatSync(ancestor.publicPath, { bigint: true });
+    if (
+      !publicPath.isDirectory() ||
+      publicPath.isSymbolicLink() ||
+      publicPath.dev.toString() !== ancestor.dev ||
+      publicPath.ino.toString() !== ancestor.ino ||
+      fs.realpathSync(ancestor.publicPath) !== ancestor.realPath
+    ) {
+      throw new Error('bound-directory ancestor changed');
+    }
   }
 }
 
@@ -156,7 +171,10 @@ function sameContentsAndMode(snapshot, encoded, mode) {
   return (
     snapshot !== null &&
     encoded !== null &&
-    (mode === undefined || process.platform === 'win32' || snapshot.mode === mode) &&
+    (mode === undefined ||
+      (process.platform === 'win32'
+        ? ((snapshot.mode & 0o222) !== 0) === ((mode & 0o222) !== 0)
+        : snapshot.mode === mode)) &&
     Buffer.from(encoded, 'base64').equals(Buffer.from(snapshot.contents, 'base64'))
   );
 }
@@ -360,10 +378,25 @@ function applyBatch(request) {
 }
 
 function spawnChildWorker(request, directory) {
+  const existing = childWorkers.get(request.childId);
+  if (existing) {
+    existing.kill('SIGKILL');
+    childWorkers.delete(request.childId);
+  }
   const childBinding = Buffer.from(
     JSON.stringify({
       dev: directory.dev.toString(),
       ino: directory.ino.toString(),
+      ancestors: [
+        ...binding.ancestors,
+        {
+          dev: directory.dev.toString(),
+          ino: directory.ino.toString(),
+          publicPath: request.publicPath,
+          realPath: fs.realpathSync(request.name),
+        },
+      ],
+      publicPath: request.publicPath,
       realPath: fs.realpathSync(request.name),
     }),
   ).toString('base64url');
@@ -376,13 +409,37 @@ function spawnChildWorker(request, directory) {
     },
   );
   child.on('error', () => {});
+  child.on('exit', () => {
+    if (childWorkers.get(request.childId) === child) {
+      childWorkers.delete(request.childId);
+    }
+  });
   child.channel?.unref();
   child.unref();
+  childWorkers.set(request.childId, child);
+}
+
+function stopChildWorker(request) {
+  const child = childWorkers.get(request.childId);
+  if (!child) return {};
+  try {
+    fs.writeFileSync(path.join(request.controlPath, 'stop'), '', {
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch {}
+  child.kill(request.signal);
+  childWorkers.delete(request.childId);
+  return {};
 }
 
 function execute(request) {
+  if (request.operation === 'child-stop') {
+    return stopChildWorker(request);
+  }
   assertBoundDirectory();
   if (request.operation === 'directory') {
+    validateName(request.childId);
     validateName(request.name);
     if (request.create) {
       try {
@@ -403,6 +460,13 @@ function execute(request) {
         realPath: fs.realpathSync(request.name),
       },
     };
+  }
+  if (request.operation === 'child-identity') {
+    const child = childWorkers.get(request.childId);
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
+      throw new Error('bound-directory child worker is unavailable');
+    }
+    return {};
   }
   if (request.operation === 'read') {
     return {
@@ -508,13 +572,31 @@ function stopWorker(worker: BoundDirectoryWorker, signal: NodeJS.Signals = 'SIGT
   try {
     writeFileSync(join(worker.controlPath, 'stop'), '', { flag: 'wx', mode: 0o600 });
   } catch {}
-  try {
-    process.kill(worker.pid, signal);
-  } catch {}
+  if (worker.child) {
+    worker.child.kill(signal);
+  } else if (worker.owner && worker.childId) {
+    try {
+      sendOperation(
+        worker.owner,
+        {
+          operation: 'child-stop',
+          childId: worker.childId,
+          controlPath: worker.controlPath,
+          signal,
+        },
+        5_000,
+      );
+    } catch {}
+  }
   rmSync(worker.controlPath, { force: true, recursive: true });
 }
 
-function bindWorker(controlPath: string, child?: ChildProcess): BoundDirectoryWorker {
+function bindWorker(
+  controlPath: string,
+  child?: ChildProcess,
+  owner?: BoundDirectory,
+  childId?: string,
+): BoundDirectoryWorker {
   const readyPath = join(controlPath, 'ready');
   if (!waitForFile(readyPath, 5_000)) {
     child?.kill('SIGKILL');
@@ -540,7 +622,7 @@ function bindWorker(controlPath: string, child?: ChildProcess): BoundDirectoryWo
     rmSync(controlPath, { force: true, recursive: true });
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker rejected path');
   }
-  return { child, controlPath, pid: ready.pid, sequence: 0 };
+  return { child, childId, controlPath, owner, pid: ready.pid, sequence: 0 };
 }
 
 function startWorker(
@@ -553,6 +635,15 @@ function startWorker(
     JSON.stringify({
       dev: identity.dev.toString(),
       ino: identity.ino.toString(),
+      ancestors: [
+        {
+          dev: identity.dev.toString(),
+          ino: identity.ino.toString(),
+          publicPath: path,
+          realPath,
+        },
+      ],
+      publicPath: path,
       realPath,
     }),
   ).toString('base64url');
@@ -573,16 +664,19 @@ function startSubdirectoryWorker(
   expectedRealPath: string,
 ): BoundDirectoryWorker {
   const controlPath = mkdtempSync(join(tmpdir(), 'rn-bound-directory-'));
+  const childId = randomUUID();
   let worker: BoundDirectoryWorker | undefined;
   try {
     const result = runBoundOperation(parent, {
       operation: 'directory',
+      childId,
       controlPath,
       name,
+      publicPath: join(parent.path, name),
       create: false,
       mode: 0o700,
     });
-    worker = bindWorker(controlPath);
+    worker = bindWorker(controlPath, undefined, parent, childId);
     if (
       !result.directoryIdentity ||
       BigInt(result.directoryIdentity.dev) !== expectedIdentity.dev ||
@@ -594,7 +688,21 @@ function startSubdirectoryWorker(
     return worker;
   } catch (error) {
     if (worker) stopWorker(worker, 'SIGKILL');
-    else rmSync(controlPath, { force: true, recursive: true });
+    else {
+      try {
+        sendOperation(
+          parent,
+          {
+            operation: 'child-stop',
+            childId,
+            controlPath,
+            signal: 'SIGKILL',
+          },
+          5_000,
+        );
+      } catch {}
+      rmSync(controlPath, { force: true, recursive: true });
+    }
     throw error;
   }
 }
@@ -685,17 +793,21 @@ function runBoundOperation(
     const result = sendOperation(directory, request, dependencies.timeoutMs ?? 5_000);
     if (!result.ok) throwOperationFailure(result);
     if (request.operation === 'cas' && result.cleanupPending) {
-      try {
-        sendOperation(
-          directory,
-          {
-            operation: 'recover',
-            journal: request.journal,
-            writes: request.writes,
-          },
-          dependencies.recoveryTimeoutMs ?? 5_000,
+      const cleanup = sendOperation(
+        directory,
+        {
+          operation: 'recover',
+          journal: request.journal,
+          writes: request.writes,
+        },
+        dependencies.recoveryTimeoutMs ?? 5_000,
+      );
+      if (!cleanup.ok) throwOperationFailure(cleanup);
+      if (!cleanup.committed) {
+        throw new Error(
+          'SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved',
         );
-      } catch {}
+      }
     }
     return result;
   } catch (error) {
@@ -810,16 +922,19 @@ export function openBoundSubdirectory(
   options: { afterChildBind?: () => void; create?: boolean; mode?: number } = {},
 ): BoundDirectory {
   const controlPath = mkdtempSync(join(tmpdir(), 'rn-bound-directory-'));
+  const childId = randomUUID();
   let worker: BoundDirectoryWorker | undefined;
   try {
     const result = runBoundOperation(parent, {
       operation: 'directory',
+      childId,
       controlPath,
       name,
+      publicPath: join(parent.path, name),
       create: options.create ?? false,
       mode: options.mode ?? 0o700,
     });
-    worker = bindWorker(controlPath);
+    worker = bindWorker(controlPath, undefined, parent, childId);
     options.afterChildBind?.();
     if (!result.directoryIdentity) {
       throw new Error(
@@ -838,12 +953,25 @@ export function openBoundSubdirectory(
       worker,
       closed: false,
     };
-    assertBoundDirectoryCurrent(parent);
-    assertBoundDirectoryCurrent(directory);
+    runBoundOperation(parent, { operation: 'child-identity', childId });
     return directory;
   } catch (error) {
     if (worker) stopWorker(worker, 'SIGKILL');
-    else rmSync(controlPath, { force: true, recursive: true });
+    else {
+      try {
+        sendOperation(
+          parent,
+          {
+            operation: 'child-stop',
+            childId,
+            controlPath,
+            signal: 'SIGKILL',
+          },
+          5_000,
+        );
+      } catch {}
+      rmSync(controlPath, { force: true, recursive: true });
+    }
     throw error;
   }
 }

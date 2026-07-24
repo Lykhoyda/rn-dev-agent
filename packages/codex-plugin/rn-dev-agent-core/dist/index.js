@@ -28976,12 +28976,12 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash15, randomUUID as randomUUID8 } from "node:crypto";
-import { readFileSync as readFileSync36, rmSync as rmSync9 } from "node:fs";
+import { createHash as createHash15, randomUUID as randomUUID7 } from "node:crypto";
+import { readFileSync as readFileSync36, rmSync as rmSync8 } from "node:fs";
 import { execFile as execFile26 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
-import { dirname as dirname20, join as join52 } from "node:path";
+import { dirname as dirname19, join as join52 } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -49752,6 +49752,7 @@ class ConflictError extends Error {}
 
 const controlPath = process.argv[1];
 const binding = JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8'));
+const childWorkers = new Map();
 process.on('disconnect', () => process.exit(0));
 
 function wait(milliseconds) {
@@ -49779,6 +49780,18 @@ function assertBoundDirectory() {
     fs.realpathSync('.') !== binding.realPath
   ) {
     throw new Error('bound-directory identity changed');
+  }
+  for (const ancestor of binding.ancestors) {
+    const publicPath = fs.lstatSync(ancestor.publicPath, { bigint: true });
+    if (
+      !publicPath.isDirectory() ||
+      publicPath.isSymbolicLink() ||
+      publicPath.dev.toString() !== ancestor.dev ||
+      publicPath.ino.toString() !== ancestor.ino ||
+      fs.realpathSync(ancestor.publicPath) !== ancestor.realPath
+    ) {
+      throw new Error('bound-directory ancestor changed');
+    }
   }
 }
 
@@ -49828,7 +49841,10 @@ function sameContentsAndMode(snapshot, encoded, mode) {
   return (
     snapshot !== null &&
     encoded !== null &&
-    (mode === undefined || process.platform === 'win32' || snapshot.mode === mode) &&
+    (mode === undefined ||
+      (process.platform === 'win32'
+        ? ((snapshot.mode & 0o222) !== 0) === ((mode & 0o222) !== 0)
+        : snapshot.mode === mode)) &&
     Buffer.from(encoded, 'base64').equals(Buffer.from(snapshot.contents, 'base64'))
   );
 }
@@ -50032,10 +50048,25 @@ function applyBatch(request) {
 }
 
 function spawnChildWorker(request, directory) {
+  const existing = childWorkers.get(request.childId);
+  if (existing) {
+    existing.kill('SIGKILL');
+    childWorkers.delete(request.childId);
+  }
   const childBinding = Buffer.from(
     JSON.stringify({
       dev: directory.dev.toString(),
       ino: directory.ino.toString(),
+      ancestors: [
+        ...binding.ancestors,
+        {
+          dev: directory.dev.toString(),
+          ino: directory.ino.toString(),
+          publicPath: request.publicPath,
+          realPath: fs.realpathSync(request.name),
+        },
+      ],
+      publicPath: request.publicPath,
       realPath: fs.realpathSync(request.name),
     }),
   ).toString('base64url');
@@ -50048,13 +50079,37 @@ function spawnChildWorker(request, directory) {
     },
   );
   child.on('error', () => {});
+  child.on('exit', () => {
+    if (childWorkers.get(request.childId) === child) {
+      childWorkers.delete(request.childId);
+    }
+  });
   child.channel?.unref();
   child.unref();
+  childWorkers.set(request.childId, child);
+}
+
+function stopChildWorker(request) {
+  const child = childWorkers.get(request.childId);
+  if (!child) return {};
+  try {
+    fs.writeFileSync(path.join(request.controlPath, 'stop'), '', {
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch {}
+  child.kill(request.signal);
+  childWorkers.delete(request.childId);
+  return {};
 }
 
 function execute(request) {
+  if (request.operation === 'child-stop') {
+    return stopChildWorker(request);
+  }
   assertBoundDirectory();
   if (request.operation === 'directory') {
+    validateName(request.childId);
     validateName(request.name);
     if (request.create) {
       try {
@@ -50075,6 +50130,13 @@ function execute(request) {
         realPath: fs.realpathSync(request.name),
       },
     };
+  }
+  if (request.operation === 'child-identity') {
+    const child = childWorkers.get(request.childId);
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
+      throw new Error('bound-directory child worker is unavailable');
+    }
+    return {};
   }
   if (request.operation === 'read') {
     return {
@@ -50176,13 +50238,22 @@ function stopWorker(worker, signal = "SIGTERM") {
     writeFileSync11(join26(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
   } catch {
   }
-  try {
-    process.kill(worker.pid, signal);
-  } catch {
+  if (worker.child) {
+    worker.child.kill(signal);
+  } else if (worker.owner && worker.childId) {
+    try {
+      sendOperation(worker.owner, {
+        operation: "child-stop",
+        childId: worker.childId,
+        controlPath: worker.controlPath,
+        signal
+      }, 5e3);
+    } catch {
+    }
   }
   rmSync7(worker.controlPath, { force: true, recursive: true });
 }
-function bindWorker(controlPath, child) {
+function bindWorker(controlPath, child, owner, childId) {
   const readyPath = join26(controlPath, "ready");
   if (!waitForFile(readyPath, 5e3)) {
     child?.kill("SIGKILL");
@@ -50202,13 +50273,22 @@ function bindWorker(controlPath, child) {
     rmSync7(controlPath, { force: true, recursive: true });
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker rejected path");
   }
-  return { child, controlPath, pid: ready.pid, sequence: 0 };
+  return { child, childId, controlPath, owner, pid: ready.pid, sequence: 0 };
 }
 function startWorker(path, identity2, realPath) {
   const controlPath = mkdtempSync(join26(tmpdir9(), "rn-bound-directory-"));
   const binding = Buffer.from(JSON.stringify({
     dev: identity2.dev.toString(),
     ino: identity2.ino.toString(),
+    ancestors: [
+      {
+        dev: identity2.dev.toString(),
+        ino: identity2.ino.toString(),
+        publicPath: path,
+        realPath
+      }
+    ],
+    publicPath: path,
     realPath
   })).toString("base64url");
   const child = spawn4(process.execPath, ["-e", BOUND_DIRECTORY_WORKER, controlPath, binding], {
@@ -50223,16 +50303,19 @@ function startWorker(path, identity2, realPath) {
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
   const controlPath = mkdtempSync(join26(tmpdir9(), "rn-bound-directory-"));
+  const childId = randomUUID4();
   let worker;
   try {
     const result = runBoundOperation(parent, {
       operation: "directory",
+      childId,
       controlPath,
       name,
+      publicPath: join26(parent.path, name),
       create: false,
       mode: 448
     });
-    worker = bindWorker(controlPath);
+    worker = bindWorker(controlPath, void 0, parent, childId);
     if (!result.directoryIdentity || BigInt(result.directoryIdentity.dev) !== expectedIdentity.dev || BigInt(result.directoryIdentity.ino) !== expectedIdentity.ino || result.directoryIdentity.realPath !== expectedRealPath) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory child identity changed");
     }
@@ -50240,8 +50323,18 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
   } catch (error2) {
     if (worker)
       stopWorker(worker, "SIGKILL");
-    else
+    else {
+      try {
+        sendOperation(parent, {
+          operation: "child-stop",
+          childId,
+          controlPath,
+          signal: "SIGKILL"
+        }, 5e3);
+      } catch {
+      }
       rmSync7(controlPath, { force: true, recursive: true });
+    }
     throw error2;
   }
 }
@@ -50304,13 +50397,15 @@ function runBoundOperation(directory, request2, dependencies = {}) {
     if (!result.ok)
       throwOperationFailure(result);
     if (request2.operation === "cas" && result.cleanupPending) {
-      try {
-        sendOperation(directory, {
-          operation: "recover",
-          journal: request2.journal,
-          writes: request2.writes
-        }, dependencies.recoveryTimeoutMs ?? 5e3);
-      } catch {
+      const cleanup = sendOperation(directory, {
+        operation: "recover",
+        journal: request2.journal,
+        writes: request2.writes
+      }, dependencies.recoveryTimeoutMs ?? 5e3);
+      if (!cleanup.ok)
+        throwOperationFailure(cleanup);
+      if (!cleanup.committed) {
+        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
       }
     }
     return result;
@@ -50398,16 +50493,19 @@ function assertBoundDirectoryCurrent(directory) {
 }
 function openBoundSubdirectory(parent, name, options = {}) {
   const controlPath = mkdtempSync(join26(tmpdir9(), "rn-bound-directory-"));
+  const childId = randomUUID4();
   let worker;
   try {
     const result = runBoundOperation(parent, {
       operation: "directory",
+      childId,
       controlPath,
       name,
+      publicPath: join26(parent.path, name),
       create: options.create ?? false,
       mode: options.mode ?? 448
     });
-    worker = bindWorker(controlPath);
+    worker = bindWorker(controlPath, void 0, parent, childId);
     options.afterChildBind?.();
     if (!result.directoryIdentity) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output");
@@ -50424,14 +50522,23 @@ function openBoundSubdirectory(parent, name, options = {}) {
       worker,
       closed: false
     };
-    assertBoundDirectoryCurrent(parent);
-    assertBoundDirectoryCurrent(directory);
+    runBoundOperation(parent, { operation: "child-identity", childId });
     return directory;
   } catch (error2) {
     if (worker)
       stopWorker(worker, "SIGKILL");
-    else
+    else {
+      try {
+        sendOperation(parent, {
+          operation: "child-stop",
+          childId,
+          controlPath,
+          signal: "SIGKILL"
+        }, 5e3);
+      } catch {
+      }
       rmSync7(controlPath, { force: true, recursive: true });
+    }
     throw error2;
   }
 }
@@ -66770,9 +66877,8 @@ function createBuildLaunchPlan(input) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { randomUUID as randomUUID6 } from "node:crypto";
-import { chmodSync as chmodSync4, closeSync as closeSync6, constants as constants3, existsSync as existsSync34, fstatSync as fstatSync3, linkSync, lstatSync as lstatSync8, mkdirSync as mkdirSync20, openSync as openSync6, readFileSync as readFileSync34, renameSync as renameSync10, rmSync as rmSync8, statSync as statSync11, writeFileSync as writeFileSync21 } from "node:fs";
-import { dirname as dirname18, isAbsolute as isAbsolute4, join as join49, relative as relative2, resolve as resolve6, sep as sep6 } from "node:path";
+import { closeSync as closeSync6, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync8, openSync as openSync6, readFileSync as readFileSync34 } from "node:fs";
+import { basename as basename6, isAbsolute as isAbsolute4, join as join49, relative as relative2, resolve as resolve6, sep as sep6 } from "node:path";
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
@@ -67046,61 +67152,16 @@ if (session) {
 process.exit(0);
 `;
 }
-function snapshotFiles(root, paths) {
-  return paths.map((path) => {
-    const contents = readOptionalRegularFile(root, path);
-    return {
-      path,
-      contents: contents === void 0 ? null : Buffer.from(contents),
-      mode: contents === void 0 ? 384 : statSync11(path).mode & 511
-    };
-  });
-}
-function casReplace(root, snapshot, expected, next, mode, expectedMode = snapshot.mode) {
-  const temporary = join49(dirname18(snapshot.path), `.${randomUUID6()}.tmp`);
-  const captured = join49(dirname18(snapshot.path), `.${randomUUID6()}.captured`);
-  if (next) {
-    writeFileSync21(temporary, next, { flag: "wx", mode });
-    chmodSync4(temporary, mode);
-  }
-  try {
-    if (expected === null) {
-      if (readOptionalRegularFile(root, snapshot.path) !== void 0) {
-        throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
-      }
-    } else {
-      renameSync10(snapshot.path, captured);
-      const observed = readRegularFile(root, captured);
-      const observedMode = statSync11(captured).mode & 511;
-      if (!expected.equals(Buffer.from(observed)) || process.platform !== "win32" && expectedMode !== void 0 && observedMode !== expectedMode) {
-        linkSync(captured, snapshot.path);
-        throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
-      }
-    }
-    if (next) {
-      linkSync(temporary, snapshot.path);
-    }
-    if (expected !== null)
-      rmSync8(captured, { force: true });
-  } finally {
-    rmSync8(temporary, { force: true });
-    if (existsSync34(captured)) {
-      if (!existsSync34(snapshot.path))
-        linkSync(captured, snapshot.path);
-      rmSync8(captured, { force: true });
-    }
-  }
-}
-function snapshotIntegrationFiles(directory, integrationPath, names) {
+function snapshotBoundFiles(directory, directoryPath, names) {
   return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
     ...snapshot,
-    path: join49(integrationPath, snapshot.name)
+    path: join49(directoryPath, snapshot.name)
   }));
 }
-function casReplaceIntegrationBatch(directory, writes) {
+function casReplaceBoundBatch(directory, writes) {
   casBoundDirectoryFiles(directory, writes.map((write) => ({
     expected: write.expected,
-    expectedMode: process.platform === "win32" ? void 0 : write.expectedMode ?? write.snapshot.mode,
+    expectedMode: write.expectedMode ?? write.snapshot.mode,
     mode: write.mode,
     name: write.snapshot.name,
     replacement: write.replacement
@@ -67163,19 +67224,18 @@ function readOptionalRegularFileNoFollow(root, candidate) {
   return readOptionalRegularFile(root, candidate);
 }
 function openIntegrationDirectories(appRoot) {
-  const agentRoot = join49(appRoot, ".rn-agent");
+  const app = openBoundDirectory(appRoot);
   try {
-    mkdirSync20(agentRoot, { mode: 448 });
-  } catch (error2) {
-    if (error2.code !== "EEXIST")
+    const agent = openBoundSubdirectory(app, ".rn-agent", { create: true });
+    try {
+      const integration = openBoundSubdirectory(agent, "integration", { create: true });
+      return { app, agent, integration };
+    } catch (error2) {
+      closeBoundDirectory(agent);
       throw error2;
-  }
-  const agent = openBoundDirectory(agentRoot);
-  try {
-    const integration = openBoundSubdirectory(agent, "integration", { create: true });
-    return { agent, integration };
+    }
   } catch (error2) {
-    closeBoundDirectory(agent);
+    closeBoundDirectory(app);
     throw error2;
   }
 }
@@ -67183,19 +67243,15 @@ function rollbackWrites(writes) {
   const errors = [];
   for (const write of [...writes].reverse()) {
     try {
-      if (write.directory) {
-        casReplaceIntegrationBatch(write.directory, [
-          {
-            snapshot: write.snapshot,
-            expected: write.written,
-            expectedMode: write.writtenMode,
-            replacement: write.snapshot.contents,
-            mode: write.snapshot.mode
-          }
-        ]);
-      } else {
-        casReplace(write.root, write.snapshot, write.written, write.snapshot.contents, write.snapshot.mode, write.writtenMode);
-      }
+      casReplaceBoundBatch(write.directory, [
+        {
+          snapshot: write.snapshot,
+          expected: write.written,
+          expectedMode: write.writtenMode,
+          replacement: write.snapshot.contents,
+          mode: write.snapshot.mode
+        }
+      ]);
     } catch (error2) {
       errors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
     }
@@ -67224,8 +67280,11 @@ function applyPackageIntegration(input, dependencies = {}) {
   ];
   const applied = [];
   try {
-    const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
-    const generated = snapshotIntegrationFiles(directories.integration, directories.integration.path, generatedNames);
+    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
+      basename6(packagePath),
+      basename6(metroConfigPath)
+    ]);
+    const generated = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
     if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
       throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
     }
@@ -67264,7 +67323,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     ];
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceIntegrationBatch(directories.integration, outputs.map((output) => ({
+    casReplaceBoundBatch(directories.integration, outputs.map((output) => ({
       snapshot: output.snapshot,
       expected: output.snapshot.contents,
       replacement: output.contents,
@@ -67272,31 +67331,44 @@ function applyPackageIntegration(input, dependencies = {}) {
     })));
     for (const output of outputs) {
       applied.push({
-        root: directories.integration.path,
         snapshot: output.snapshot,
         written: output.contents,
-        writtenMode: process.platform === "win32" ? void 0 : output.mode,
+        writtenMode: output.mode,
         directory: directories.integration
       });
       dependencies.afterWrite?.(output.snapshot.path);
     }
     const metroOutput = Buffer.from(nextMetroSource);
-    casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 420);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: metroSnapshot,
+        expected: metroSnapshot.contents,
+        replacement: metroOutput,
+        mode: 420
+      }
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: metroSnapshot,
       written: metroOutput,
-      writtenMode: process.platform === "win32" ? void 0 : 420
+      writtenMode: 420,
+      directory: directories.app
     });
     dependencies.afterWrite?.(metroConfigPath);
     const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}
 `);
-    casReplace(appRoot, packageSnapshot, packageSnapshot.contents, packageOutput, 420);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: packageSnapshot,
+        expected: packageSnapshot.contents,
+        replacement: packageOutput,
+        mode: 420
+      }
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: packageSnapshot,
       written: packageOutput,
-      writtenMode: process.platform === "win32" ? void 0 : 420
+      writtenMode: 420,
+      directory: directories.app
     });
     dependencies.afterWrite?.(packagePath);
     assertBoundDirectoryCurrent(directories.agent);
@@ -67310,6 +67382,7 @@ function applyPackageIntegration(input, dependencies = {}) {
   } finally {
     closeBoundDirectory(directories.integration);
     closeBoundDirectory(directories.agent);
+    closeBoundDirectory(directories.app);
   }
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
@@ -67324,7 +67397,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
   ];
   const applied = [];
   try {
-    const generatedSnapshots = snapshotIntegrationFiles(directories.integration, directories.integration.path, generatedNames);
+    const generatedSnapshots = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
     if (!generatedSnapshots[0]?.contents) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration manifest is missing");
     }
@@ -67334,7 +67407,10 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
     }
     const metroConfigPath = join49(appRoot, metroConfig);
-    const [packageSnapshot, metroSnapshot] = snapshotFiles(appRoot, [packagePath, metroConfigPath]);
+    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
+      basename6(packagePath),
+      basename6(metroConfigPath)
+    ]);
     if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
       throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
     }
@@ -67343,26 +67419,40 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     dependencies.beforeCommit?.();
     const packageOutput = Buffer.from(`${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
 `);
-    casReplace(appRoot, packageSnapshot, packageSnapshot.contents, packageOutput, 420);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: packageSnapshot,
+        expected: packageSnapshot.contents,
+        replacement: packageOutput,
+        mode: 420
+      }
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: packageSnapshot,
       written: packageOutput,
-      writtenMode: process.platform === "win32" ? void 0 : 420
+      writtenMode: 420,
+      directory: directories.app
     });
     dependencies.afterWrite?.(packagePath);
     const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
-    casReplace(appRoot, metroSnapshot, metroSnapshot.contents, metroOutput, 420);
+    casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: metroSnapshot,
+        expected: metroSnapshot.contents,
+        replacement: metroOutput,
+        mode: 420
+      }
+    ]);
     applied.push({
-      root: appRoot,
       snapshot: metroSnapshot,
       written: metroOutput,
-      writtenMode: process.platform === "win32" ? void 0 : 420
+      writtenMode: 420,
+      directory: directories.app
     });
     dependencies.afterWrite?.(metroConfigPath);
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
-    casReplaceIntegrationBatch(directories.integration, generatedSnapshots.map((snapshot) => ({
+    casReplaceBoundBatch(directories.integration, generatedSnapshots.map((snapshot) => ({
       snapshot,
       expected: snapshot.contents,
       replacement: null,
@@ -67370,7 +67460,6 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     })));
     for (const snapshot of generatedSnapshots) {
       applied.push({
-        root: directories.integration.path,
         snapshot,
         written: null,
         directory: directories.integration
@@ -67386,11 +67475,12 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
   } finally {
     closeBoundDirectory(directories.integration);
     closeBoundDirectory(directories.agent);
+    closeBoundDirectory(directories.app);
   }
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname19, join as join50 } from "node:path";
+import { dirname as dirname18, join as join50 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 init_process_birth();
 
@@ -67785,7 +67875,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
         }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join50(dirname19(fileURLToPath4(import.meta.url)), "..", "rn-session.js");
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join50(dirname18(fileURLToPath4(import.meta.url)), "..", "rn-session.js");
         if (input.action === "restore_integration") {
           if (input.confirmed !== true) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "restore_integration requires confirmed=true");
@@ -67988,7 +68078,7 @@ function unbindNativeRunner(runtime) {
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 init_utils();
-import { randomUUID as randomUUID7 } from "node:crypto";
+import { randomUUID as randomUUID6 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/tool-profiles.js
 var diagnostic = ["cdp_status", "cdp_targets", "device_list"];
@@ -68385,7 +68475,7 @@ function createAuthorityGate(runtime, dependencies) {
           } : tool === "rn_session" && args.action === "prepare_handoff" ? { before: [...profile.axes], after: [] } : { before: [...profile.axes], after: [...profile.axes] };
           requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
           operation2 = registry3.beginOperation(available.session, {
-            operationId: randomUUID7(),
+            operationId: randomUUID6(),
             tool,
             profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
           });
@@ -68474,7 +68564,7 @@ function createAuthorityGate(runtime, dependencies) {
         requireCompleteAxes(status, profile);
         bindSessionArguments(status, profile, args);
         operation = registry2.beginOperation(available.session, {
-          operationId: randomUUID7(),
+          operationId: randomUUID6(),
           tool,
           profile: profile.axes.join("")
         });
@@ -69220,7 +69310,7 @@ async function proveTargetDeviceAssociation(input, dependencies) {
 }
 
 // packages/rn-dev-agent-core/dist/index.js
-var pkgPath = join52(dirname20(fileURLToPath5(import.meta.url)), "..", "package.json");
+var pkgPath = join52(dirname19(fileURLToPath5(import.meta.url)), "..", "package.json");
 var pkgVersion = JSON.parse(readFileSync36(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
@@ -69418,7 +69508,7 @@ setObserveAuthorityDeps({
       authority: {
         sessionId: status.sessionId,
         claimEpoch: status.claimEpoch,
-        instanceId: randomUUID8(),
+        instanceId: randomUUID7(),
         capability: secret.observeCapability
       }
     };
@@ -70290,7 +70380,7 @@ var proofCaptureHandler = createProofCaptureHandler({
   validateMedia,
   now: () => /* @__PURE__ */ new Date(),
   writeReceipt: writeProofReceiptAtomic,
-  removeArtifact: (path) => rmSync9(path, { force: true })
+  removeArtifact: (path) => rmSync8(path, { force: true })
 });
 trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCapturePublishedInputSchema, proofCaptureHandler);
 trackedTool("device_record", "Record the exact authority-bound device for proof capture. Start validates that the claimed device is currently available and always forwards its literal identifier.", {
