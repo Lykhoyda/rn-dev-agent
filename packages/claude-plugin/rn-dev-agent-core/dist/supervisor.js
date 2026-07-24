@@ -53735,6 +53735,7 @@ const { workerData } = require('node:worker_threads');
 
 const state = new Int32Array(workerData.stateBuffer);
 const watchers = [];
+const records = [];
 
 function invalidate() {
   Atomics.add(state, 1, 1);
@@ -53751,14 +53752,15 @@ try {
     const watchedName = path.basename(ancestor.publicPath);
     const parentPath = path.dirname(ancestor.publicPath);
     let parent = fs.statSync(parentPath, { bigint: true });
-    const sameParent = (current) =>
-      current.isDirectory() &&
-      current.dev === parent.dev &&
-      current.ino === parent.ino &&
-      current.ctimeNs === parent.ctimeNs &&
-      current.mtimeNs === parent.mtimeNs;
-    const batch = { entryEvents: 0, scheduled: false };
-    const inspectEntry = () => {
+    const sameParent = (left, right) =>
+      left.isDirectory() &&
+      right.isDirectory() &&
+      left.dev === right.dev &&
+      left.ino === right.ino &&
+      left.ctimeNs === right.ctimeNs &&
+      left.mtimeNs === right.mtimeNs;
+    const record = { unrelatedEvents: 0 };
+    const inspectFence = () => {
       let current;
       try {
         current = fs.statSync(parentPath, { bigint: true });
@@ -53766,21 +53768,13 @@ try {
         invalidate();
         return;
       }
-      if (!sameParent(current)) {
-        invalidate();
+      if (!sameParent(current, parent)) {
+        if (record.unrelatedEvents === 0) {
+          invalidate();
+        }
         parent = current;
       }
-    };
-    const scheduleBatch = () => {
-      if (batch.scheduled) return;
-      batch.scheduled = true;
-      setImmediate(() => {
-        setImmediate(() => {
-          if (batch.entryEvents > 0) inspectEntry();
-          batch.entryEvents = 0;
-          batch.scheduled = false;
-        });
-      });
+      record.unrelatedEvents = 0;
     };
     const parentWatcher = fs.watch(parentPath, (eventType, filename) => {
       if (eventType !== 'rename') return;
@@ -53788,15 +53782,15 @@ try {
         invalidate();
         return;
       }
-      if (String(filename) === watchedName) {
-        batch.entryEvents += 1;
-        scheduleBatch();
+      if (String(filename) !== watchedName) {
+        record.unrelatedEvents += 1;
       }
     });
     const contentWatcher = fs.watch(ancestor.publicPath, () => {});
     parentWatcher.on('error', fail);
     contentWatcher.on('error', fail);
     watchers.push(parentWatcher, contentWatcher);
+    records.push({ inspectFence });
   }
   let barrierPending = false;
   const barrier = setInterval(() => {
@@ -53806,6 +53800,7 @@ try {
     setImmediate(() => {
       setImmediate(() => {
         setImmediate(() => {
+          for (const record of records) record.inspectFence();
           Atomics.store(state, 4, requested);
           barrierPending = false;
           Atomics.notify(state, 4);
