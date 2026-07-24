@@ -52989,7 +52989,7 @@ var init_action_state_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
-import { spawn as spawn5 } from "node:child_process";
+import { execFileSync as execFileSync11, spawn as spawn5 } from "node:child_process";
 import { randomUUID as randomUUID5 } from "node:crypto";
 import { closeSync as closeSync3, constants, existsSync as existsSync21, fstatSync, lstatSync as lstatSync8, mkdtempSync, openSync as openSync3, readFileSync as readFileSync21, realpathSync as realpathSync4, renameSync as renameSync6, rmSync as rmSync8, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir10 } from "node:os";
@@ -53006,22 +53006,68 @@ function waitForFile(path, timeoutMs) {
   }
   return existsSync21(path);
 }
+function workerProcessStopped(worker) {
+  const probe = probeProcessBirth(worker.pid);
+  if (probe.status === "absent" || probe.status === "present" && probe.birth.token !== worker.birth.token) {
+    return true;
+  }
+  if (probe.status !== "present")
+    return false;
+  try {
+    if (process.platform === "linux") {
+      const stat2 = readFileSync21(`/proc/${worker.pid}/stat`, "utf8");
+      const commandEnd = stat2.lastIndexOf(")");
+      const state = commandEnd >= 0 ? stat2.slice(commandEnd + 1).trim().split(/\s+/, 1)[0] : "";
+      return state === "Z" || state === "X";
+    }
+    if (process.platform === "darwin") {
+      const state = execFileSync11("/bin/ps", ["-o", "stat=", "-p", String(worker.pid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      }).trim();
+      return state.startsWith("Z");
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+function waitForWorkerExit(worker, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (workerProcessStopped(worker))
+      return true;
+    Atomics.wait(WAIT_BUFFER, 0, 0, 10);
+  }
+  return workerProcessStopped(worker);
+}
+function signalWorker(worker, signal) {
+  if (workerProcessStopped(worker))
+    return false;
+  const probe = probeProcessBirth(worker.pid);
+  if (probe.status === "absent")
+    return false;
+  if (probe.status === "present" && probe.birth.token !== worker.birth.token)
+    return false;
+  if (probe.status !== "present") {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker identity is inconclusive");
+  }
+  process.kill(worker.pid, signal);
+  return true;
+}
 function stopWorker(worker, signal = "SIGTERM") {
   try {
     writeFileSync13(join30(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
   } catch {
   }
-  if (worker.child) {
-    worker.child.kill(signal);
-  } else if (worker.owner && worker.childId) {
-    try {
-      sendOperation(worker.owner, {
-        operation: "child-stop",
-        childId: worker.childId,
-        controlPath: worker.controlPath,
-        signal
-      }, 5e3);
-    } catch {
+  const signaled = signalWorker(worker, signal);
+  if (signaled && !waitForWorkerExit(worker, 5e3)) {
+    if (signal !== "SIGKILL") {
+      signalWorker(worker, "SIGKILL");
+    }
+    if (!waitForWorkerExit(worker, 5e3)) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
     }
   }
   rmSync8(worker.controlPath, { force: true, recursive: true });
@@ -53046,7 +53092,20 @@ function bindWorker(controlPath, child, owner, childId) {
     rmSync8(controlPath, { force: true, recursive: true });
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker rejected path");
   }
-  return { child, childId, controlPath, owner, pid: ready.pid, sequence: 0 };
+  const birthProbe = probeProcessBirth(ready.pid);
+  if (birthProbe.status !== "present") {
+    child?.kill("SIGKILL");
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker identity is unavailable");
+  }
+  return {
+    birth: birthProbe.birth,
+    child,
+    childId,
+    controlPath,
+    owner,
+    pid: ready.pid,
+    sequence: 0
+  };
 }
 function startWorker(path, identity2, realPath) {
   const controlPath = mkdtempSync(join30(tmpdir10(), "rn-bound-directory-"));
@@ -53113,6 +53172,7 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
 }
 function restartWorker(directory) {
   const descendants = [...directory.children];
+  stopDescendantWorkers(directory);
   stopWorker(directory.worker, "SIGKILL");
   if (directory.parent && directory.name) {
     directory.worker = startSubdirectoryWorker(directory.parent, directory.name, directory.identity, directory.realPath);
@@ -53123,6 +53183,12 @@ function restartWorker(directory) {
     rmSync8(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
     rebindDescendants(descendant);
+  }
+}
+function stopDescendantWorkers(directory) {
+  for (const descendant of directory.children) {
+    stopDescendantWorkers(descendant);
+    stopWorker(descendant.worker, "SIGKILL");
   }
 }
 function rebindDescendants(directory) {
@@ -53187,6 +53253,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
         const cleanup = sendOperation(directory, {
           operation: "recover",
           failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
+          cleanupRecoveryDelayMs: dependencies.cleanupRecoveryDelayMs ?? 0,
           journal: request2.journal,
           writes: request2.writes
         }, dependencies.recoveryTimeoutMs ?? 5e3);
@@ -53197,6 +53264,21 @@ function runBoundOperation(directory, request2, dependencies = {}) {
         }
         return { ...result, cleanupPending: false };
       } catch (cleanupError) {
+        if (cleanupError instanceof Error && cleanupError.message === "SESSION_INTEGRATION_WORKER_TIMEOUT") {
+          restartWorker(directory);
+          const cleanup = sendOperation(directory, {
+            operation: "recover",
+            failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
+            journal: request2.journal,
+            writes: request2.writes
+          }, dependencies.recoveryTimeoutMs ?? 5e3);
+          if (!cleanup.ok)
+            throwOperationFailure(cleanup);
+          if (!cleanup.committed) {
+            throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+          }
+          return { ...result, cleanupPending: false };
+        }
         return {
           ...result,
           cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
@@ -53258,6 +53340,7 @@ function openValidatedDirectory(path, expected) {
       descriptor,
       identity: identity2,
       path,
+      pendingCleanups: /* @__PURE__ */ new Map(),
       realPath,
       worker,
       closed: false
@@ -53279,11 +53362,26 @@ function openBoundDirectory(path) {
 function closeBoundDirectory(directory) {
   if (directory.closed)
     return;
+  const cleanupErrors = [];
+  for (const transactionId of directory.pendingCleanups.keys()) {
+    try {
+      retryBoundDirectoryCleanup(directory, { transactionId });
+    } catch (error2) {
+      cleanupErrors.push(new Error(`bound-directory cleanup ${transactionId} failed: ${error2 instanceof Error ? error2.message : String(error2)}`));
+    }
+  }
   directory.closed = true;
-  stopWorker(directory.worker);
+  try {
+    stopWorker(directory.worker);
+  } catch (error2) {
+    cleanupErrors.push(error2 instanceof Error ? error2 : new Error(`bound-directory close failed: ${String(error2)}`));
+  }
   directory.parent?.children.delete(directory);
   if (directory.descriptor !== void 0)
     closeSync3(directory.descriptor);
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, "bound-directory cleanup failed");
+  }
 }
 function assertBoundDirectoryCurrent(directory) {
   runBoundOperation(directory, { operation: "identity" });
@@ -53321,6 +53419,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       name,
       parent,
       path: join30(parent.path, name),
+      pendingCleanups: /* @__PURE__ */ new Map(),
       realPath: result.directoryIdentity.realPath,
       worker,
       closed: false
@@ -53365,35 +53464,75 @@ function readBoundDirectoryFiles(directory, names) {
 }
 function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
   const transactionId = randomUUID5();
+  const journal = `.rn-bound-${transactionId}.journal`;
+  const serializedWrites = writes.map((write, index) => ({
+    expected: write.expected?.toString("base64") ?? null,
+    expectedMode: write.expectedMode,
+    mode: write.mode,
+    name: write.name,
+    replacement: write.replacement?.toString("base64") ?? null,
+    temporary: `.rn-bound-${transactionId}-${index}.tmp`,
+    captured: `.rn-bound-${transactionId}-${index}.captured`,
+    afterCaptureDelayMs: dependencies.afterCaptureDelayMs ?? 0,
+    afterReplacementDelayMs: dependencies.afterReplacementDelayMs ?? 0
+  }));
   const result = runBoundOperation(directory, {
     operation: "cas",
-    journal: `.rn-bound-${transactionId}.journal`,
-    writes: writes.map((write, index) => ({
-      expected: write.expected?.toString("base64") ?? null,
-      expectedMode: write.expectedMode,
-      mode: write.mode,
-      name: write.name,
-      replacement: write.replacement?.toString("base64") ?? null,
-      temporary: `.rn-bound-${transactionId}-${index}.tmp`,
-      captured: `.rn-bound-${transactionId}-${index}.captured`,
-      afterCaptureDelayMs: dependencies.afterCaptureDelayMs ?? 0,
-      afterReplacementDelayMs: dependencies.afterReplacementDelayMs ?? 0
-    })),
+    journal,
+    writes: serializedWrites,
     failCleanupAfterCommit: dependencies.failCleanupAfterCommit ?? false
   }, dependencies);
   if (!result.committed) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory commit was not confirmed");
   }
+  if (result.cleanupPending) {
+    directory.pendingCleanups.set(transactionId, {
+      journal,
+      writes: serializedWrites
+    });
+  } else {
+    directory.pendingCleanups.delete(transactionId);
+  }
   return {
     committed: true,
     cleanupPending: result.cleanupPending ?? false,
+    ...result.cleanupPending ? { cleanupObligation: { transactionId } } : {},
     ...result.cleanupError ? { cleanupError: result.cleanupError } : {}
   };
+}
+function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
+  const transaction = directory.pendingCleanups.get(obligation.transactionId);
+  if (!transaction) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory cleanup obligation is unavailable");
+  }
+  const request2 = {
+    operation: "recover",
+    journal: transaction.journal,
+    writes: transaction.writes
+  };
+  let result;
+  try {
+    result = runBoundOperation(directory, request2, dependencies);
+  } catch (error2) {
+    if (!(error2 instanceof Error) || error2.message !== "SESSION_INTEGRATION_WORKER_TIMEOUT") {
+      throw error2;
+    }
+    restartWorker(directory);
+    result = runBoundOperation(directory, request2, {
+      ...dependencies,
+      cleanupRecoveryDelayMs: 0
+    });
+  }
+  if (!result.committed) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: committed bound-directory cleanup was not preserved");
+  }
+  directory.pendingCleanups.delete(obligation.transactionId);
 }
 var WAIT_BUFFER, BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
   "packages/rn-dev-agent-core/dist/session/bound-directory.js"() {
     "use strict";
+    init_process_birth();
     WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
     BOUND_DIRECTORY_WORKER = String.raw`
 const childProcess = require('node:child_process');
@@ -53783,6 +53922,9 @@ function execute(request) {
       throw new Error('bound-directory child is not a directory');
     }
     const realPath = fs.realpathSync(request.name);
+    if (realPath !== path.join(binding.realPath, request.name)) {
+      throw new Error('bound-directory child escaped retained parent');
+    }
     const after = fs.lstatSync(request.name, { bigint: true });
     if (
       !after.isDirectory() ||
@@ -53821,6 +53963,7 @@ function execute(request) {
     return applyBatch(request);
   }
   if (request.operation === 'recover') {
+    if (request.cleanupRecoveryDelayMs) wait(request.cleanupRecoveryDelayMs);
     if (request.failCleanupRecovery) {
       throw new Error('bound-directory cleanup recovery unavailable');
     }
@@ -62335,7 +62478,7 @@ var init_proof_receipt = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash11, randomUUID as randomUUID6 } from "node:crypto";
-import { execFileSync as execFileSync11 } from "node:child_process";
+import { execFileSync as execFileSync12 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync5, existsSync as existsSync27, fsyncSync, lstatSync as lstatSync9, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync24, realpathSync as realpathSync5, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename5, dirname as dirname14, extname, isAbsolute as isAbsolute4, join as join36, relative as relative2, resolve as resolve7, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -62459,7 +62602,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync11("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync12("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
@@ -62468,8 +62611,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync11("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync11("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync12("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync12("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
       const artifactBytes = readFileSync24(resolvedArtifactPath);
@@ -62477,17 +62620,17 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync11("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync12("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot) {
   const root = realpathSync5(resolve7(candidateRoot));
-  const sha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
+  const sha = execFileSync12("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync11("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync12("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
@@ -62504,7 +62647,7 @@ function readProofCandidateRuntime(candidateRoot) {
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
   }
-  const confirmedSha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync12("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -62600,7 +62743,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync11("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync12("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
@@ -62632,8 +62775,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync11("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync11("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync12("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync12("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -62644,7 +62787,7 @@ function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
   const path = relative2(root, proofRoot).replaceAll(sep5, "/");
-  return execFileSync11("git", ["ls-files", "-z", "--", path], {
+  return execFileSync12("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -64323,10 +64466,10 @@ var init_query = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync12("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync13("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -66265,12 +66408,12 @@ var init_metro_events = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync13 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
 import { readFileSync as readFileSync28, statSync as statSync12 } from "node:fs";
 import { join as join42 } from "node:path";
 function runText(command, args) {
-  return execFileSync13(command, [...args], {
+  return execFileSync14(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
@@ -68032,7 +68175,7 @@ var init_e2e_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -68046,7 +68189,7 @@ var defaultExec3;
 var init_git_info = __esm({
   "packages/rn-dev-agent-core/dist/e2e/git-info.js"() {
     "use strict";
-    defaultExec3 = (cmd, args) => execFileSync14(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    defaultExec3 = (cmd, args) => execFileSync15(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   }
 });
 
@@ -69152,8 +69295,9 @@ function casReplaceBoundBatch(directory, writes, dependencies = {}) {
   })), dependencies);
 }
 function assertBoundCleanup(result) {
-  if (result.cleanupError) {
-    throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${result.cleanupError}`);
+  if (result.cleanupPending) {
+    const transaction = result.cleanupObligation?.transactionId ?? "unknown transaction";
+    throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${transaction}: ${result.cleanupError ?? "cleanup unavailable"}`);
   }
 }
 function assertNoSymlinkPath(root, candidate) {
@@ -70797,7 +70941,7 @@ var init_metro_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
-import { execFileSync as execFileSync15 } from "node:child_process";
+import { execFileSync as execFileSync16 } from "node:child_process";
 import { createHash as createHash15 } from "node:crypto";
 function identity(value) {
   return createHash15("sha256").update(JSON.stringify(value)).digest("hex");
@@ -70833,7 +70977,7 @@ async function defaultFetchJson(url, init) {
 }
 function defaultDeviceExists(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync16("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -70841,7 +70985,7 @@ function defaultDeviceExists(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync15("adb", ["devices"], {
+  const output = execFileSync16("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3

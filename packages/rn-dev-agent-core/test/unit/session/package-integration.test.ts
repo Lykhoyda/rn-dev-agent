@@ -642,7 +642,44 @@ test('bound CAS returns committed state when cleanup recovery remains unavailabl
     assert.equal(result.committed, true);
     assert.equal(result.cleanupPending, true);
     assert.match(result.cleanupError ?? '', /cleanup recovery unavailable/);
+    assert.match(result.cleanupObligation?.transactionId ?? '', /^[0-9a-f-]{36}$/);
     assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bound CAS replaces a blocked cleanup worker before returning', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-cleanup-timeout-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const directory = openBoundDirectory(root);
+  try {
+    const result = casBoundDirectoryFiles(
+      directory,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          expectedMode: 0o600,
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      {
+        cleanupRecoveryDelayMs: 5_000,
+        failCleanupAfterCommit: true,
+        recoveryTimeoutMs: 100,
+      },
+    );
+    assert.equal(result.cleanupPending, false);
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+    assert.deepEqual(readdirSync(root), ['authority-marker.js']);
+    assert.equal(
+      readBoundDirectoryFiles(directory, ['authority-marker.js'])[0]?.contents?.toString('utf8'),
+      'after\n',
+    );
   } finally {
     closeBoundDirectory(directory);
     rmSync(root, { force: true, recursive: true });

@@ -294,8 +294,9 @@ function casReplaceBoundBatch(directory, writes, dependencies = {}) {
     })), dependencies);
 }
 function assertBoundCleanup(result) {
-    if (result.cleanupError) {
-        throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${result.cleanupError}`);
+    if (result.cleanupPending) {
+        const transaction = result.cleanupObligation?.transactionId ?? 'unknown transaction';
+        throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${transaction}: ${result.cleanupError ?? 'cleanup unavailable'}`);
     }
 }
 export function assertNoSymlinkPath(root, candidate) {

@@ -373,9 +373,10 @@ function casReplaceBoundBatch(
 }
 
 function assertBoundCleanup(result: BoundCasResult): void {
-  if (result.cleanupError) {
+  if (result.cleanupPending) {
+    const transaction = result.cleanupObligation?.transactionId ?? 'unknown transaction';
     throw new Error(
-      `SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${result.cleanupError}`,
+      `SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${transaction}: ${result.cleanupError ?? 'cleanup unavailable'}`,
     );
   }
 }
