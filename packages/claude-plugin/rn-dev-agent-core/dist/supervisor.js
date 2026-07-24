@@ -53758,7 +53758,7 @@ try {
       left.ino === right.ino &&
       left.ctimeNs === right.ctimeNs &&
       left.mtimeNs === right.mtimeNs;
-    const inspectFence = () => {
+    const inspectFence = (captureBaseline) => {
       let current;
       try {
         current = fs.statSync(parentPath, { bigint: true });
@@ -53767,7 +53767,7 @@ try {
         return;
       }
       if (!sameParent(current, parent)) {
-        invalidate();
+        if (!captureBaseline) invalidate();
         parent = current;
       }
     };
@@ -53786,7 +53786,8 @@ try {
     setImmediate(() => {
       setImmediate(() => {
         setImmediate(() => {
-          for (const record of records) record.inspectFence();
+          const captureBaseline = Atomics.load(state, 5) === 1;
+          for (const record of records) record.inspectFence(captureBaseline);
           Atomics.store(state, 4, requested);
           barrierPending = false;
           Atomics.notify(state, 4);
@@ -53850,7 +53851,7 @@ const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
     : binding.ancestors.slice(agentAncestorIndex);
-const ancestryState = new Int32Array(new SharedArrayBuffer(5 * 4));
+const ancestryState = new Int32Array(new SharedArrayBuffer(6 * 4));
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
     eval: true,
@@ -53876,8 +53877,9 @@ function wait(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function synchronizeAncestryMonitor() {
+function synchronizeAncestryMonitor(captureBaseline = false) {
   if (monitoredAncestors.length === 0) return;
+  Atomics.store(ancestryState, 5, captureBaseline ? 1 : 0);
   const requested = Atomics.add(ancestryState, 3, 1) + 1;
   Atomics.notify(ancestryState, 3);
   const deadline = Date.now() + 5_000;
@@ -54565,7 +54567,8 @@ function spawnChildWorker(request, directory) {
 }
 
 function execute(request) {
-  const ancestryGuard = assertBoundDirectory(undefined, true);
+  synchronizeAncestryMonitor(true);
+  const ancestryGuard = assertBoundDirectory();
   if (request.operation === 'directory') {
     validateName(request.childId);
     validateName(request.name);
