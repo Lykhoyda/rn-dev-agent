@@ -174,7 +174,7 @@ function fail() {
 }
 
 try {
-  for (const ancestor of workerData.ancestors) {
+  for (const [index, ancestor] of workerData.ancestors.entries()) {
     const watchedName = path.basename(ancestor.publicPath);
     const batch = { contentEvents: 0, pendingEntries: 0, scheduled: false };
     const scheduleBatch = () => {
@@ -183,9 +183,8 @@ try {
       setImmediate(() => {
         setImmediate(() => {
           if (
-            Atomics.load(state, 5) === 0 &&
             batch.pendingEntries > 0 &&
-            batch.contentEvents === 0
+            (batch.pendingEntries > 1 || batch.contentEvents === 0)
           ) {
             Atomics.add(state, 1, 1);
             Atomics.notify(state, 1);
@@ -200,19 +199,24 @@ try {
       if (
         eventType === 'rename' &&
         filename !== null &&
-        String(filename) === watchedName &&
-        Atomics.load(state, 5) === 0
+        String(filename) === watchedName
       ) {
-        batch.pendingEntries += 1;
-        scheduleBatch();
+        const ticketIndex = 5 + index;
+        let tickets = Atomics.load(state, ticketIndex);
+        while (
+          tickets > 0 &&
+          Atomics.compareExchange(state, ticketIndex, tickets, tickets - 1) !== tickets
+        ) {
+          tickets = Atomics.load(state, ticketIndex);
+        }
+        if (tickets === 0) {
+          batch.pendingEntries += 1;
+          scheduleBatch();
+        }
       }
     });
     const contentWatcher = fs.watch(ancestor.publicPath, (_eventType, filename) => {
-      if (
-        filename !== null &&
-        String(filename) !== watchedName &&
-        Atomics.load(state, 5) === 0
-      ) {
+      if (filename !== null && String(filename) !== watchedName) {
         batch.contentEvents += 1;
         scheduleBatch();
       }
@@ -293,7 +297,9 @@ const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
     : binding.ancestors.slice(agentAncestorIndex);
-const ancestryState = new Int32Array(new SharedArrayBuffer(24));
+const ancestryState = new Int32Array(
+  new SharedArrayBuffer((5 + monitoredAncestors.length) * 4),
+);
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
     eval: true,
@@ -341,14 +347,18 @@ function synchronizeAncestryMonitor() {
 }
 
 function mutateBoundDirectory(mutation) {
-  Atomics.add(ancestryState, 5, 1);
+  for (let index = 0; index < monitoredAncestors.length; index += 1) {
+    Atomics.add(ancestryState, 5 + index, 1);
+  }
   try {
     return mutation();
   } finally {
     try {
       synchronizeAncestryMonitor();
     } finally {
-      Atomics.sub(ancestryState, 5, 1);
+      for (let index = 0; index < monitoredAncestors.length; index += 1) {
+        Atomics.store(ancestryState, 5 + index, 0);
+      }
     }
   }
 }

@@ -440,13 +440,76 @@ test('bound CAS rejects a restored integration-directory switch', () => {
           external,
         )},${JSON.stringify(
           integrationPath,
-        )},'dir');fs.unlinkSync(${JSON.stringify(
+        )},'dir');fs.writeFileSync(${JSON.stringify(
+          join(external, 'swap-noise'),
+        )},'noise');fs.unlinkSync(${JSON.stringify(
+          join(external, 'swap-noise'),
+        )});fs.unlinkSync(${JSON.stringify(
           integrationPath,
         )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(integrationPath)})},100)`,
       ],
       { stdio: 'ignore' },
     );
     switcher.unref();
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          integration,
+          [
+            {
+              expected: Buffer.from('before\n'),
+              mode: 0o600,
+              name: 'authority-marker.js',
+              replacement: Buffer.from('after\n'),
+            },
+          ],
+          { afterCaptureDelayMs: 1_000 },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
+  } finally {
+    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
+    rmSync(root, { force: true, recursive: true });
+    rmSync(externalRoot, { force: true, recursive: true });
+  }
+});
+
+test('bound CAS rejects an external switch during transaction mutation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-observed-switch-'));
+  const externalRoot = mkdtempSync(
+    join(tmpdir(), 'rn-session-bound-observed-switch-external-'),
+  );
+  const agentPath = join(root, '.rn-agent');
+  const integrationPath = join(agentPath, 'integration');
+  const external = join(externalRoot, 'integration');
+  const readyPath = join(externalRoot, 'ready');
+  const markerPath = join(integrationPath, 'authority-marker.js');
+  mkdirSync(integrationPath, { recursive: true });
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const agent = openBoundDirectory(agentPath);
+  const integration = openBoundSubdirectory(agent, 'integration');
+  try {
+    const switcher = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const fs=require('node:fs');const integration=${JSON.stringify(
+          integrationPath,
+        )};const external=${JSON.stringify(external)};let switched=false;const watcher=fs.watch(integration,(event,name)=>{if(switched||!name||!String(name).startsWith('.rn-bound-'))return;switched=true;fs.renameSync(integration,external);fs.symlinkSync(external,integration,'dir');fs.unlinkSync(integration);fs.renameSync(external,integration);watcher.close()});fs.writeFileSync(${JSON.stringify(
+          readyPath,
+        )},'ready');setTimeout(()=>process.exit(0),5000)`,
+      ],
+      { stdio: 'ignore' },
+    );
+    switcher.unref();
+    const waitState = new Int32Array(new SharedArrayBuffer(4));
+    const readyDeadline = Date.now() + 5_000;
+    while (!existsSync(readyPath) && Date.now() < readyDeadline) {
+      Atomics.wait(waitState, 0, 0, 10);
+    }
+    assert.equal(existsSync(readyPath), true);
     assert.throws(
       () =>
         casBoundDirectoryFiles(
