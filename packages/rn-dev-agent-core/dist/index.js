@@ -108,7 +108,7 @@ import { loadE2eConfig, resolveParams } from './domain/e2e-config.js';
 import { getWorkerAuthorityRuntime } from './session/runtime.js';
 import { createSessionHandler } from './tools/session.js';
 import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
-import { createAuthorityGate } from './session/authority-gate.js';
+import { claimOptionalBundleAuthority, createAuthorityGate, } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import { pinExactDevClient } from './session/dev-client-authority.js';
@@ -2359,6 +2359,7 @@ createRunActionHandler({
     replayDeps: makeReplayDeps,
     blindProbeContext,
     targetContext: getActiveSession,
+    claimBundleAuthority: claimOptionalBundleAuthority,
 }));
 trackedTool('cdp_lock_e2e_test', 'Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.', {
     actionId: z.string().describe('The action id under .rn-agent/actions to lock'),
@@ -2436,6 +2437,7 @@ const runActionHandler = createRunActionHandler({
     replayDeps: makeReplayDeps,
     blindProbeContext,
     targetContext: getActiveSession,
+    claimBundleAuthority: claimOptionalBundleAuthority,
 });
 const observeRunActionHandler = authorityGate.wrap('cdp_run_action', runActionHandler);
 const observeTriggerRun = authorityGate.wrap('cdp_run_e2e_suite', async (...raw) => {

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAuthorityGate } from '../../../dist/session/authority-gate.js';
+import {
+  claimOptionalBundleAuthority,
+  createAuthorityGate,
+} from '../../../dist/session/authority-gate.js';
 import { okResult } from '../../../dist/utils.js';
 
 function fixture() {
@@ -190,6 +193,83 @@ test('native profiles never request a live bundle probe', async () => {
     calls.some((call) => call.endsWith(':B')),
     false,
   );
+});
+
+test('run-action claims bundle authority only when its CDP path is used', async () => {
+  const native = fixture();
+  const nativeGate = createAuthorityGate(native.runtime, {
+    probe: async ({ axis, phase }) => {
+      native.calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  await nativeGate.wrap('cdp_run_action', async () => okResult({ transport: 'maestro' }))({});
+  assert.equal(
+    native.calls.some((call) => call.endsWith(':B')),
+    false,
+  );
+
+  const cdp = fixture();
+  cdp.status.bindings.bundle.targetId = 'target-a';
+  cdp.status.bindings.bundle.connectionGeneration = 1;
+  const cdpGate = createAuthorityGate(cdp.runtime, {
+    probe: async ({ axis, phase }) => {
+      cdp.calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+    refreshRuntimeBinding: async () => cdp.status.bindings.bundle,
+  });
+  const result = await cdpGate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), true);
+    return okResult({ transport: 'cdp-js' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.deepEqual(
+    cdp.calls.filter((call) => call.endsWith(':B')),
+    ['preflight:B', 'postflight:B'],
+  );
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
+    true,
+  );
+});
+
+test('nested suite reload refreshes bundle generation under the outer fence', async () => {
+  const { runtime, calls, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  status.bindings.bundle.connectionGeneration = 1;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => ({
+      axis,
+      identity:
+        axis === 'B'
+          ? `${status.bindings.bundle.targetId}:${status.bindings.bundle.connectionGeneration}`
+          : `${axis}-identity`,
+      detail: { phase },
+    }),
+    refreshRuntimeBinding: async () => {
+      calls.push('refresh-binding');
+      status.authorityVersion += 1;
+      status.bindings.bundle = {
+        ...status.bindings.bundle,
+        connectionGeneration: 2,
+      };
+      return status.bindings.bundle;
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_e2e_suite', async () =>
+    okResult({ verdict: 'passed', metroReloaded: true }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.deepEqual(
+    calls.filter((call) => call === 'refresh-binding' || call === 'replace-binding'),
+    ['refresh-binding', 'replace-binding'],
+  );
+  assert.equal(envelope.meta.authorityReceipt.authorityVersion, 10);
 });
 
 test('legacy omitted targets are filled from the session before dispatch', async () => {

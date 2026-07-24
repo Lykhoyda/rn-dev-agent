@@ -57943,6 +57943,7 @@ function createRunActionHandler(deps = {}) {
   };
   const blindProbeContext2 = deps.blindProbeContext ?? (async () => null);
   const targetContext = deps.targetContext ?? (() => null);
+  const claimBundleAuthority = deps.claimBundleAuthority ?? (async () => true);
   return async (args) => {
     if (!args.actionId || typeof args.actionId !== "string") {
       return failResult("cdp_run_action requires actionId", "BAD_FILENAME");
@@ -58001,7 +58002,8 @@ function createRunActionHandler(deps = {}) {
         }
       }
       if (atRisk) {
-        const replayDeps = getReplayDeps(args);
+        const candidate = getReplayDeps(args);
+        const replayDeps = candidate && await claimBundleAuthority(args) ? candidate : null;
         const probe = replayDeps ? firstReplayTestId(action.body, args.params ?? {}) : null;
         if (replayDeps && probe) {
           const tProbe = Date.now();
@@ -58131,7 +58133,7 @@ function createRunActionHandler(deps = {}) {
       const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
       const expectedSeq = action.metadata.expectedRouteSequence;
       if (failure.kind === "SELECTOR_NOT_FOUND" && expectedSeq && expectedSeq.length > 0) {
-        const liveRoute = await getLiveRoute().catch(() => null);
+        const liveRoute = await claimBundleAuthority(args) ? await getLiveRoute().catch(() => null) : null;
         const drift = classifyRouteDriftAfterFailure({ expectedSequence: expectedSeq, liveRoute });
         if (drift.isDrift) {
           const autoRepair2 = {
@@ -58160,7 +58162,8 @@ function createRunActionHandler(deps = {}) {
       }
       let cdpJsFallback;
       if (failure.kind === "SELECTOR_NOT_FOUND" || failure.kind === "UNKNOWN") {
-        const replayDeps = getReplayDeps(args);
+        const candidate = getReplayDeps(args);
+        const replayDeps = candidate && await claimBundleAuthority(args) ? candidate : null;
         const probe = !replayDeps ? null : failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : firstReplayTestId(action.body, args.params ?? {});
         if (!replayDeps) {
           cdpJsFallback = { attempted: false, reason: "no-replay-deps" };
@@ -66931,7 +66934,11 @@ async function lockE2eTestCore(args, deps = {}) {
   }
   const session = getSession();
   const platform = session?.platform ?? void 0;
-  const runArgs = { flowPath: action.filePath, platform };
+  const runArgs = {
+    flowPath: action.filePath,
+    platform,
+    ...session?.deviceId ? { deviceId: session.deviceId } : {}
+  };
   if (resolvedParams)
     runArgs["params"] = resolvedParams;
   const result = await maestroRun(runArgs);
@@ -68563,22 +68570,23 @@ function add(names, profile) {
     profiles.set(name, profile);
   }
 }
-function authorityProfileFor(tool) {
+function authorityProfileFor(tool, args = {}) {
+  if (tool === "cdp_nav_graph" && (args.action === "scan" || args.action === "go")) {
+    return profiles.get("cdp_interact");
+  }
   const profile = profiles.get(tool);
   if (!profile)
     throw new Error(`UNPROFILED_AUTHORITY_TOOL: ${tool}`);
   return profile;
 }
-var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, cdpRead, cdpMutation, observe, proof, profiles;
+var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, cdpRead, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
     diagnostic = ["cdp_status", "cdp_targets", "device_list"];
     transition = ["rn_session", "cdp_connect", "cdp_disconnect"];
     sourceState = [
-      "cdp_lock_e2e_test",
       "cdp_nav_graph",
-      "cdp_record_test_annotate",
       "cdp_record_test_generate",
       "cdp_record_test_list",
       "cdp_record_test_load",
@@ -68593,6 +68601,7 @@ var init_tool_profiles = __esm({
       "device_snapshot"
     ];
     nativeMutation = [
+      "cdp_lock_e2e_test",
       "cdp_repair_action",
       "device_accept_system_dialog",
       "device_back",
@@ -68615,7 +68624,8 @@ var init_tool_profiles = __esm({
       "maestro_run",
       "maestro_test_all"
     ];
-    hybridMutation = ["cdp_auto_login", "cdp_run_action", "cdp_run_e2e_suite"];
+    hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
+    optionalHybridMutation = ["cdp_run_action"];
     cdpRead = [
       "cdp_component_state",
       "cdp_component_tree",
@@ -68648,6 +68658,7 @@ var init_tool_profiles = __esm({
       "cdp_interact",
       "cdp_mmkv",
       "cdp_navigate",
+      "cdp_record_test_annotate",
       "cdp_record_test_start",
       "cdp_record_test_stop",
       "cdp_reload",
@@ -68693,6 +68704,13 @@ var init_tool_profiles = __esm({
       mutation: true,
       liveBundleProbe: true
     });
+    add(optionalHybridMutation, {
+      kind: "authoritative",
+      axes: ["C", "S", "I", "M", "D", "R"],
+      optionalAxes: ["B"],
+      mutation: true,
+      liveBundleProbe: true
+    });
     add(cdpRead, {
       kind: "authoritative",
       axes: ["C", "S", "I", "M", "B", "D"],
@@ -68722,6 +68740,9 @@ var init_tool_profiles = __esm({
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID6 } from "node:crypto";
+async function claimOptionalBundleAuthority(args) {
+  return await args[optionalBundleAdmission]?.() ?? false;
+}
 function requireCompleteAxes(status, profile) {
   for (const axis of profile.axes) {
     if (axis === "C") {
@@ -68856,7 +68877,7 @@ function createAuthorityGate(runtime, dependencies) {
   return {
     wrap: (tool, handler) => async (...handlerArgs) => {
       const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
-      const baseProfile = authorityProfileFor(tool);
+      const baseProfile = authorityProfileFor(tool, args);
       const profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "cancel_handoff" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
         kind: "diagnostic",
         axes: [],
@@ -69009,10 +69030,43 @@ function createAuthorityGate(runtime, dependencies) {
           profile: profile.axes.join("")
         });
         const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+        const optionalBefore = [];
+        let optionalBundleClaimed = false;
+        if (profile.optionalAxes?.includes("B")) {
+          Object.defineProperty(args, optionalBundleAdmission, {
+            configurable: true,
+            value: async () => {
+              if (optionalBundleClaimed)
+                return true;
+              try {
+                const currentStatus = runtime.status();
+                if (!currentStatus.available || !currentStatus.bindings.bundle)
+                  return false;
+                const observation = await dependencies.probe({
+                  axis: "B",
+                  phase: "preflight",
+                  tool,
+                  profile,
+                  status: currentStatus,
+                  args
+                });
+                registry2.verifyOperation(operation);
+                status = currentStatus;
+                optionalBefore.push(observation);
+                optionalBundleClaimed = true;
+                return true;
+              } catch {
+                return false;
+              }
+            }
+          });
+        }
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
-        const replacesRuntimeTarget = tool === "cdp_reload" || tool === "cdp_restart";
-        if (replacesRuntimeTarget && !resultSucceeded(result)) {
+        const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
+        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && optionalBundleClaimed;
+        const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
+        if (directRuntimeReset && !resultSucceeded(result)) {
           const priorBundle = status.bindings.bundle;
           const metro = status.bindings.metro;
           const oldTargetId = priorBundle?.targetId;
@@ -69027,37 +69081,68 @@ function createAuthorityGate(runtime, dependencies) {
             nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
           });
         }
-        if (replacesRuntimeTarget && resultSucceeded(result)) {
+        let runtimeTargetChanged = false;
+        if (reconcilesRuntimeTarget && (resultSucceeded(result) || nestedRuntimeReset)) {
           if (!dependencies.refreshRuntimeBinding) {
             throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime reset cannot commit without a binding refresh");
           }
           const priorBundle = status.bindings.bundle;
           const metro = status.bindings.metro;
-          const bundle = await dependencies.refreshRuntimeBinding(status);
+          let bundle;
+          try {
+            bundle = await dependencies.refreshRuntimeBinding(status);
+          } catch (error2) {
+            const oldTargetId2 = priorBundle?.targetId;
+            const metroPort2 = metro?.port;
+            operation = registry2.replaceBindingsDuringOperation(operation, {
+              state: "device_bound",
+              bindings: { bundle: null },
+              releaseResources: typeof oldTargetId2 === "string" && Number.isSafeInteger(metroPort2) ? [{ type: "target", key: `${String(metroPort2)}:${oldTargetId2}` }] : []
+            });
+            if (!resultSucceeded(result)) {
+              return addMeta2(result, {
+                authorityInvalidated: true,
+                nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+              });
+            }
+            throw error2;
+          }
           const oldTargetId = priorBundle?.targetId;
           const newTargetId = bundle.targetId;
           const metroPort = metro?.port;
           if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
             throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
           }
-          operation = registry2.replaceBindingsDuringOperation(operation, {
-            state: "ready",
-            bindings: { bundle },
-            releaseResources: [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }],
-            claimResources: [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }]
-          });
-          const refreshedStatus = runtime.status();
-          if (!refreshedStatus.available) {
-            throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+          runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
+          if (runtimeTargetChanged) {
+            operation = registry2.replaceBindingsDuringOperation(operation, {
+              state: "ready",
+              bindings: { bundle },
+              releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+              claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+            });
+            const refreshedStatus = runtime.status();
+            if (!refreshedStatus.available) {
+              throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+            }
+            status = refreshedStatus;
           }
-          status = refreshedStatus;
         }
-        const after = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "postflight", tool, profile, status, args })));
-        for (let index = 0; index < before.length; index += 1) {
-          if (replacesRuntimeTarget && before[index]?.axis === "B")
+        const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;
+        const allBefore = [...before, ...optionalBefore];
+        const after = await Promise.all(effectiveProfile.axes.map((axis) => dependencies.probe({
+          axis,
+          phase: "postflight",
+          tool,
+          profile: effectiveProfile,
+          status,
+          args
+        })));
+        for (let index = 0; index < allBefore.length; index += 1) {
+          if (runtimeTargetChanged && allBefore[index]?.axis === "B")
             continue;
-          if (before[index]?.identity !== after[index]?.identity) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", `${before[index]?.axis ?? "unknown"} authority changed during the operation`);
+          if (allBefore[index]?.identity !== after[index]?.identity) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", `${allBefore[index]?.axis ?? "unknown"} authority changed during the operation`);
           }
         }
         registry2.verifyOperation(operation);
@@ -69077,7 +69162,9 @@ function createAuthorityGate(runtime, dependencies) {
         }
         if (operation)
           registry2.commitPlatformAuthorityReceipts(operation);
-        return addMeta2(result, { authorityReceipt: receipt(status, profile, after) });
+        return addMeta2(result, {
+          authorityReceipt: receipt(status, effectiveProfile, after)
+        });
       } catch (error2) {
         return authorityFailure2(error2);
       } finally {
@@ -69092,13 +69179,14 @@ function createAuthorityGate(runtime, dependencies) {
     }
   };
 }
-var axisBinding, axisErrors;
+var optionalBundleAdmission, axisBinding, axisErrors;
 var init_authority_gate = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-gate.js"() {
     "use strict";
     init_utils();
     init_registry();
     init_tool_profiles();
+    optionalBundleAdmission = /* @__PURE__ */ Symbol("optionalBundleAdmission");
     axisBinding = {
       I: "install",
       M: "metro",
@@ -70946,7 +71034,8 @@ var init_index = __esm({
         getLiveRoute: () => readLiveRoute(getClient()),
         replayDeps: makeReplayDeps,
         blindProbeContext,
-        targetContext: getActiveSession
+        targetContext: getActiveSession,
+        claimBundleAuthority: claimOptionalBundleAuthority
       })
     );
     trackedTool("cdp_lock_e2e_test", "Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.", {
@@ -71018,7 +71107,8 @@ var init_index = __esm({
       getLiveRoute: () => readLiveRoute(getClient()),
       replayDeps: makeReplayDeps,
       blindProbeContext,
-      targetContext: getActiveSession
+      targetContext: getActiveSession,
+      claimBundleAuthority: claimOptionalBundleAuthority
     });
     observeRunActionHandler = authorityGate.wrap("cdp_run_action", runActionHandler);
     observeTriggerRun = authorityGate.wrap("cdp_run_e2e_suite", async (...raw) => {

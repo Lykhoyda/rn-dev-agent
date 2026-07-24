@@ -26,13 +26,37 @@ test('native runner operations do not require a live CDP bundle seat', () => {
   assert.ok(authorityProfileFor('cdp_interact').axes.includes('B'));
 });
 
-test('hybrid action execution requires both live bundle and runner authority', () => {
-  for (const tool of ['cdp_auto_login', 'cdp_run_action', 'cdp_run_e2e_suite']) {
+test('hybrid execution separates required and optional bundle authority', () => {
+  for (const tool of ['cdp_auto_login', 'cdp_run_e2e_suite']) {
     const profile = authorityProfileFor(tool);
     assert.equal(profile.liveBundleProbe, true);
     assert.equal(profile.axes.includes('B'), true);
     assert.equal(profile.axes.includes('R'), true);
   }
+  const action = authorityProfileFor('cdp_run_action');
+  assert.equal(action.axes.includes('B'), false);
+  assert.deepEqual(action.optionalAxes, ['B']);
+  assert.equal(action.axes.includes('R'), true);
+});
+
+test('lock and live navigation paths receive exact mutation authority', () => {
+  assert.deepEqual(authorityProfileFor('cdp_lock_e2e_test').axes, [
+    'C',
+    'S',
+    'I',
+    'M',
+    'D',
+    'R',
+  ]);
+  assert.deepEqual(authorityProfileFor('cdp_nav_graph', { action: 'read' }).axes, ['C', 'S']);
+  assert.deepEqual(authorityProfileFor('cdp_nav_graph', { action: 'navigate' }).axes, ['C', 'S']);
+  for (const action of ['scan', 'go']) {
+    const profile = authorityProfileFor('cdp_nav_graph', { action });
+    assert.equal(profile.axes.includes('B'), true);
+    assert.equal(profile.axes.includes('D'), true);
+    assert.equal(profile.liveBundleProbe, true);
+  }
+  assert.equal(authorityProfileFor('cdp_record_test_annotate').axes.includes('B'), true);
 });
 
 test('diagnostics are explicitly non-verdict and arbitrary evaluate is mutating', () => {

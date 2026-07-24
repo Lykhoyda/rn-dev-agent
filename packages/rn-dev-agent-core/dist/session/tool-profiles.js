@@ -1,9 +1,7 @@
 const diagnostic = ['cdp_status', 'cdp_targets', 'device_list'];
 const transition = ['rn_session', 'cdp_connect', 'cdp_disconnect'];
 const sourceState = [
-    'cdp_lock_e2e_test',
     'cdp_nav_graph',
-    'cdp_record_test_annotate',
     'cdp_record_test_generate',
     'cdp_record_test_list',
     'cdp_record_test_load',
@@ -18,6 +16,7 @@ const nativeRead = [
     'device_snapshot',
 ];
 const nativeMutation = [
+    'cdp_lock_e2e_test',
     'cdp_repair_action',
     'device_accept_system_dialog',
     'device_back',
@@ -40,7 +39,8 @@ const nativeMutation = [
     'maestro_run',
     'maestro_test_all',
 ];
-const hybridMutation = ['cdp_auto_login', 'cdp_run_action', 'cdp_run_e2e_suite'];
+const hybridMutation = ['cdp_auto_login', 'cdp_run_e2e_suite'];
+const optionalHybridMutation = ['cdp_run_action'];
 const cdpRead = [
     'cdp_component_state',
     'cdp_component_tree',
@@ -73,6 +73,7 @@ const cdpMutation = [
     'cdp_interact',
     'cdp_mmkv',
     'cdp_navigate',
+    'cdp_record_test_annotate',
     'cdp_record_test_start',
     'cdp_record_test_stop',
     'cdp_reload',
@@ -125,6 +126,13 @@ add(hybridMutation, {
     mutation: true,
     liveBundleProbe: true,
 });
+add(optionalHybridMutation, {
+    kind: 'authoritative',
+    axes: ['C', 'S', 'I', 'M', 'D', 'R'],
+    optionalAxes: ['B'],
+    mutation: true,
+    liveBundleProbe: true,
+});
 add(cdpRead, {
     kind: 'authoritative',
     axes: ['C', 'S', 'I', 'M', 'B', 'D'],
@@ -149,7 +157,10 @@ add(proof, {
     mutation: true,
     liveBundleProbe: true,
 });
-export function authorityProfileFor(tool) {
+export function authorityProfileFor(tool, args = {}) {
+    if (tool === 'cdp_nav_graph' && (args.action === 'scan' || args.action === 'go')) {
+        return profiles.get('cdp_interact');
+    }
     const profile = profiles.get(tool);
     if (!profile)
         throw new Error(`UNPROFILED_AUTHORITY_TOOL: ${tool}`);

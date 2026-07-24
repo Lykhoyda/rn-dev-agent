@@ -31,6 +31,16 @@ interface AuthorityGateDependencies {
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
 }
 
+const optionalBundleAdmission = Symbol('optionalBundleAdmission');
+
+type AuthorityAwareArgs = Record<string, unknown> & {
+  [optionalBundleAdmission]?: () => Promise<boolean>;
+};
+
+export async function claimOptionalBundleAuthority(args: object): Promise<boolean> {
+  return (await (args as AuthorityAwareArgs)[optionalBundleAdmission]?.()) ?? false;
+}
+
 const axisBinding: Partial<Record<AuthorityAxis, string>> = {
   I: 'install',
   M: 'metro',
@@ -249,7 +259,7 @@ export function createAuthorityGate(
           handlerArgs[0] && typeof handlerArgs[0] === 'object'
             ? (handlerArgs[0] as Record<string, unknown>)
             : {};
-        const baseProfile = authorityProfileFor(tool);
+        const baseProfile = authorityProfileFor(tool, args);
         const profile =
           tool === 'rn_session' &&
           (args.action === 'status' ||
@@ -465,10 +475,45 @@ export function createAuthorityGate(
               dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
             ),
           );
+          const optionalBefore: AuthorityObservation[] = [];
+          let optionalBundleClaimed = false;
+          if (profile.optionalAxes?.includes('B')) {
+            Object.defineProperty(args, optionalBundleAdmission, {
+              configurable: true,
+              value: async () => {
+                if (optionalBundleClaimed) return true;
+                try {
+                  const currentStatus = runtime.status();
+                  if (!currentStatus.available || !currentStatus.bindings.bundle) return false;
+                  const observation = await dependencies.probe({
+                    axis: 'B',
+                    phase: 'preflight',
+                    tool,
+                    profile,
+                    status: currentStatus,
+                    args,
+                  });
+                  registry!.verifyOperation(operation!);
+                  status = currentStatus;
+                  optionalBefore.push(observation);
+                  optionalBundleClaimed = true;
+                  return true;
+                } catch {
+                  return false;
+                }
+              },
+            });
+          }
           registry.verifyOperation(operation);
           const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
-          const replacesRuntimeTarget = tool === 'cdp_reload' || tool === 'cdp_restart';
-          if (replacesRuntimeTarget && !resultSucceeded(result)) {
+          const directRuntimeReset = tool === 'cdp_reload' || tool === 'cdp_restart';
+          const nestedRuntimeReset =
+            tool === 'cdp_run_e2e_suite' ||
+            tool === 'cdp_auto_login' ||
+            (tool === 'cdp_nav_graph' && args.action === 'go') ||
+            (tool === 'cdp_run_action' && optionalBundleClaimed);
+          const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
+          if (directRuntimeReset && !resultSucceeded(result)) {
             const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
             const metro = status.bindings.metro as Record<string, unknown> | undefined;
             const oldTargetId = priorBundle?.targetId;
@@ -486,7 +531,8 @@ export function createAuthorityGate(
               nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
             });
           }
-          if (replacesRuntimeTarget && resultSucceeded(result)) {
+          let runtimeTargetChanged = false;
+          if (reconcilesRuntimeTarget && (resultSucceeded(result) || nestedRuntimeReset)) {
             if (!dependencies.refreshRuntimeBinding) {
               throw new SessionAuthorityError(
                 'BUNDLE_HANDSHAKE_UNAVAILABLE',
@@ -495,7 +541,28 @@ export function createAuthorityGate(
             }
             const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
             const metro = status.bindings.metro as Record<string, unknown> | undefined;
-            const bundle = await dependencies.refreshRuntimeBinding(status);
+            let bundle: Record<string, unknown>;
+            try {
+              bundle = await dependencies.refreshRuntimeBinding(status);
+            } catch (error) {
+              const oldTargetId = priorBundle?.targetId;
+              const metroPort = metro?.port;
+              operation = registry.replaceBindingsDuringOperation(operation, {
+                state: 'device_bound',
+                bindings: { bundle: null },
+                releaseResources:
+                  typeof oldTargetId === 'string' && Number.isSafeInteger(metroPort)
+                    ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
+                    : [],
+              });
+              if (!resultSucceeded(result)) {
+                return addMeta(result, {
+                  authorityInvalidated: true,
+                  nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
+                });
+              }
+              throw error;
+            }
             const oldTargetId = priorBundle?.targetId;
             const newTargetId = bundle.targetId;
             const metroPort = metro?.port;
@@ -509,29 +576,52 @@ export function createAuthorityGate(
                 'runtime reset did not produce an exact target replacement',
               );
             }
-            operation = registry.replaceBindingsDuringOperation(operation, {
-              state: 'ready',
-              bindings: { bundle },
-              releaseResources: [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }],
-              claimResources: [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }],
-            });
-            const refreshedStatus = runtime.status();
-            if (!refreshedStatus.available) {
-              throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+            runtimeTargetChanged =
+              oldTargetId !== newTargetId ||
+              priorBundle?.connectionGeneration !== bundle.connectionGeneration;
+            if (runtimeTargetChanged) {
+              operation = registry.replaceBindingsDuringOperation(operation, {
+                state: 'ready',
+                bindings: { bundle },
+                releaseResources:
+                  oldTargetId !== newTargetId
+                    ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
+                    : [],
+                claimResources:
+                  oldTargetId !== newTargetId
+                    ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
+                    : [],
+              });
+              const refreshedStatus = runtime.status();
+              if (!refreshedStatus.available) {
+                throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+              }
+              status = refreshedStatus;
             }
-            status = refreshedStatus;
           }
+          const effectiveProfile =
+            optionalBefore.length > 0
+              ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] }
+              : profile;
+          const allBefore = [...before, ...optionalBefore];
           const after = await Promise.all(
-            profile.axes.map((axis) =>
-              dependencies.probe({ axis, phase: 'postflight', tool, profile, status, args }),
+            effectiveProfile.axes.map((axis) =>
+              dependencies.probe({
+                axis,
+                phase: 'postflight',
+                tool,
+                profile: effectiveProfile,
+                status,
+                args,
+              }),
             ),
           );
-          for (let index = 0; index < before.length; index += 1) {
-            if (replacesRuntimeTarget && before[index]?.axis === 'B') continue;
-            if (before[index]?.identity !== after[index]?.identity) {
+          for (let index = 0; index < allBefore.length; index += 1) {
+            if (runtimeTargetChanged && allBefore[index]?.axis === 'B') continue;
+            if (allBefore[index]?.identity !== after[index]?.identity) {
               throw new SessionAuthorityError(
                 'AUTHORITY_LOST_DURING_OPERATION',
-                `${before[index]?.axis ?? 'unknown'} authority changed during the operation`,
+                `${allBefore[index]?.axis ?? 'unknown'} authority changed during the operation`,
               );
             }
           }
@@ -556,7 +646,9 @@ export function createAuthorityGate(
             return addMeta(result, { authoritative: false });
           }
           if (operation) registry.commitPlatformAuthorityReceipts(operation);
-          return addMeta(result, { authorityReceipt: receipt(status, profile, after) });
+          return addMeta(result, {
+            authorityReceipt: receipt(status, effectiveProfile, after),
+          });
         } catch (error) {
           return authorityFailure(error);
         } finally {
