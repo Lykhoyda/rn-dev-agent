@@ -93,6 +93,7 @@ interface BoundCleanupTransaction {
 
 export interface BoundOperationDependencies {
   afterCaptureDelayMs?: number;
+  afterLockReleaseDelayMs?: number;
   afterReplacementDelayMs?: number;
   beforeCleanupRecovery?: () => void;
   failCleanupAfterCommit?: boolean;
@@ -175,15 +176,67 @@ function fail() {
 try {
   for (const ancestor of workerData.ancestors) {
     const watchedName = path.basename(ancestor.publicPath);
-    const watcher = fs.watch(path.dirname(ancestor.publicPath), (eventType, filename) => {
-      if (eventType === 'rename' && (filename === null || String(filename) === watchedName)) {
-        Atomics.add(state, 1, 1);
-        Atomics.notify(state, 1);
+    const batch = { contentEvents: 0, pendingEntries: 0, scheduled: false };
+    const scheduleBatch = () => {
+      if (batch.scheduled) return;
+      batch.scheduled = true;
+      setImmediate(() => {
+        setImmediate(() => {
+          if (
+            Atomics.load(state, 5) === 0 &&
+            batch.pendingEntries > 0 &&
+            batch.contentEvents === 0
+          ) {
+            Atomics.add(state, 1, 1);
+            Atomics.notify(state, 1);
+          }
+          batch.contentEvents = 0;
+          batch.pendingEntries = 0;
+          batch.scheduled = false;
+        });
+      });
+    };
+    const parentWatcher = fs.watch(path.dirname(ancestor.publicPath), (eventType, filename) => {
+      if (
+        eventType === 'rename' &&
+        filename !== null &&
+        String(filename) === watchedName &&
+        Atomics.load(state, 5) === 0
+      ) {
+        batch.pendingEntries += 1;
+        scheduleBatch();
       }
     });
-    watcher.on('error', fail);
-    watchers.push(watcher);
+    const contentWatcher = fs.watch(ancestor.publicPath, (_eventType, filename) => {
+      if (
+        filename !== null &&
+        String(filename) !== watchedName &&
+        Atomics.load(state, 5) === 0
+      ) {
+        batch.contentEvents += 1;
+        scheduleBatch();
+      }
+    });
+    parentWatcher.on('error', fail);
+    contentWatcher.on('error', fail);
+    watchers.push(parentWatcher, contentWatcher);
   }
+  let barrierPending = false;
+  const barrier = setInterval(() => {
+    const requested = Atomics.load(state, 3);
+    if (barrierPending || requested === Atomics.load(state, 4)) return;
+    barrierPending = true;
+    setImmediate(() => {
+      setImmediate(() => {
+        setImmediate(() => {
+          Atomics.store(state, 4, requested);
+          barrierPending = false;
+          Atomics.notify(state, 4);
+        });
+      });
+    });
+  }, 1);
+  barrier.unref();
   Atomics.store(state, 0, 1);
   Atomics.notify(state, 0);
 } catch {
@@ -239,8 +292,8 @@ const agentAncestorIndex = binding.ancestors.findIndex(
 const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
-    : [binding.ancestors[agentAncestorIndex]];
-const ancestryState = new Int32Array(new SharedArrayBuffer(12));
+    : binding.ancestors.slice(agentAncestorIndex);
+const ancestryState = new Int32Array(new SharedArrayBuffer(24));
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
     eval: true,
@@ -266,6 +319,40 @@ function wait(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+function synchronizeAncestryMonitor() {
+  if (monitoredAncestors.length === 0) return;
+  const requested = Atomics.add(ancestryState, 3, 1) + 1;
+  Atomics.notify(ancestryState, 3);
+  const deadline = Date.now() + 5_000;
+  while (Atomics.load(ancestryState, 4) !== requested) {
+    const remaining = deadline - Date.now();
+    if (
+      remaining <= 0 ||
+      Atomics.wait(
+        ancestryState,
+        4,
+        Atomics.load(ancestryState, 4),
+        remaining,
+      ) === 'timed-out'
+    ) {
+      throw new AncestryError('bound-directory ancestry monitor synchronization failed');
+    }
+  }
+}
+
+function mutateBoundDirectory(mutation) {
+  Atomics.add(ancestryState, 5, 1);
+  try {
+    return mutation();
+  } finally {
+    try {
+      synchronizeAncestryMonitor();
+    } finally {
+      Atomics.sub(ancestryState, 5, 1);
+    }
+  }
+}
+
 function validateName(name) {
   if (
     typeof name !== 'string' ||
@@ -279,7 +366,7 @@ function validateName(name) {
 }
 
 function assertBoundDirectory(expectedGuard, settle = false) {
-  if (settle && monitoredAncestors.length > 0) wait(5);
+  if (settle) synchronizeAncestryMonitor();
   if (Atomics.load(ancestryState, 2) !== 0) {
     throw new AncestryError('bound-directory ancestry monitor failed');
   }
@@ -377,7 +464,7 @@ function sameIdentity(left, right) {
 
 function removeOptional(name) {
   try {
-    fs.unlinkSync(name);
+    mutateBoundDirectory(() => fs.unlinkSync(name));
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
@@ -424,13 +511,15 @@ function validateTransactionLock(lock) {
 function publishTransactionLock(lock) {
   const temporary = transactionLock + '.' + binding.lifecycleCapability + '.initial';
   removeOptional(temporary);
-  fs.writeFileSync(temporary, JSON.stringify(lock), {
-    flag: 'wx',
-    mode: 0o600,
-    flush: true,
-  });
+  mutateBoundDirectory(() =>
+    fs.writeFileSync(temporary, JSON.stringify(lock), {
+      flag: 'wx',
+      mode: 0o600,
+      flush: true,
+    }),
+  );
   try {
-    fs.linkSync(temporary, transactionLock);
+    mutateBoundDirectory(() => fs.linkSync(temporary, transactionLock));
   } finally {
     removeOptional(temporary);
   }
@@ -461,7 +550,7 @@ function acquireTransactionLock() {
       if (!fs.existsSync(path.join(existing.controlPath, 'stopped'))) {
         throw new Error('bound-directory transaction is active');
       }
-      fs.unlinkSync(transactionLock);
+      mutateBoundDirectory(() => fs.unlinkSync(transactionLock));
       fs.rmSync(existing.controlPath, { force: true, recursive: true });
     }
   }
@@ -489,7 +578,7 @@ function releaseTransactionLock() {
   ) {
     throw new Error('bound-directory transaction lock is invalid');
   }
-  fs.unlinkSync(transactionLock);
+  mutateBoundDirectory(() => fs.unlinkSync(transactionLock));
 }
 
 function writeJournal(name, value, exclusive) {
@@ -499,9 +588,11 @@ function writeJournal(name, value, exclusive) {
   if (exclusive) {
     const temporary = name + '.initial';
     removeOptional(temporary);
-    fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true });
+    mutateBoundDirectory(() =>
+      fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true }),
+    );
     try {
-      fs.linkSync(temporary, name);
+      mutateBoundDirectory(() => fs.linkSync(temporary, name));
     } finally {
       removeOptional(temporary);
     }
@@ -509,8 +600,10 @@ function writeJournal(name, value, exclusive) {
   }
   const temporary = name + '.next';
   removeOptional(temporary);
-  fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true });
-  fs.renameSync(temporary, name);
+  mutateBoundDirectory(() =>
+    fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true }),
+  );
+  mutateBoundDirectory(() => fs.renameSync(temporary, name));
 }
 
 function readJournal(name) {
@@ -534,11 +627,13 @@ function validateWrite(write) {
 
 function prepareReplacement(write) {
   if (write.replacement === null) return;
-  fs.writeFileSync(write.temporary, Buffer.from(write.replacement, 'base64'), {
-    flag: 'wx',
-    mode: write.mode,
-  });
-  fs.chmodSync(write.temporary, write.mode);
+  mutateBoundDirectory(() =>
+    fs.writeFileSync(write.temporary, Buffer.from(write.replacement, 'base64'), {
+      flag: 'wx',
+      mode: write.mode,
+    }),
+  );
+  mutateBoundDirectory(() => fs.chmodSync(write.temporary, write.mode));
 }
 
 function applyWrite(write) {
@@ -550,7 +645,7 @@ function applyWrite(write) {
     }
   } else {
     try {
-      fs.renameSync(write.name, write.captured);
+      mutateBoundDirectory(() => fs.renameSync(write.name, write.captured));
     } catch (error) {
       if (error.code === 'ENOENT') {
         throw new ConflictError('bound-directory input changed before commit');
@@ -565,7 +660,7 @@ function applyWrite(write) {
   }
   if (write.replacement !== null) {
     try {
-      fs.linkSync(write.temporary, write.name);
+      mutateBoundDirectory(() => fs.linkSync(write.temporary, write.name));
     } catch (error) {
       if (error.code === 'EEXIST') {
         throw new ConflictError('bound-directory input changed before commit');
@@ -596,21 +691,21 @@ function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
     const target = readRegularFile(write.name);
     if (captured !== null) {
       if (target === null) {
-        fs.linkSync(write.captured, write.name);
+        mutateBoundDirectory(() => fs.linkSync(write.captured, write.name));
       } else if (!sameIdentity(target, captured)) {
         if (!sameIdentity(target, temporary)) {
           throw new ConflictError('bound-directory input changed during recovery');
         }
-        fs.unlinkSync(write.name);
+        mutateBoundDirectory(() => fs.unlinkSync(write.name));
         if (recoveryDelayAfterUnlinkMs > 0) wait(recoveryDelayAfterUnlinkMs);
-        fs.linkSync(write.captured, write.name);
+        mutateBoundDirectory(() => fs.linkSync(write.captured, write.name));
       }
       removeOptional(write.captured);
       removeOptional(write.temporary);
       continue;
     }
     if (write.expected === null && sameIdentity(target, temporary)) {
-      fs.unlinkSync(write.name);
+      mutateBoundDirectory(() => fs.unlinkSync(write.name));
     }
     removeOptional(write.temporary);
   }
@@ -636,7 +731,10 @@ function recoverTransaction(
   if (journal === null) {
     const committed = allReplacementsPresent(requestedWrites);
     assertBoundDirectory(ancestryGuard, true);
-    if (releaseLock) releaseTransactionLock();
+    if (releaseLock) {
+      releaseTransactionLock();
+      assertBoundDirectory(ancestryGuard, true);
+    }
     return { committed };
   }
   if (
@@ -651,7 +749,11 @@ function recoverTransaction(
     cleanupArtifacts(journal.writes);
     assertBoundDirectory(ancestryGuard, true);
     cleanupJournal(journalName);
-    if (releaseLock) releaseTransactionLock();
+    assertBoundDirectory(ancestryGuard, true);
+    if (releaseLock) {
+      releaseTransactionLock();
+      assertBoundDirectory(ancestryGuard, true);
+    }
     return { committed: true };
   }
   if (journal.state !== 'applying') {
@@ -660,7 +762,11 @@ function recoverTransaction(
   rollbackOwnedWrites(journal.writes, recoveryDelayAfterUnlinkMs);
   assertBoundDirectory(ancestryGuard, true);
   cleanupJournal(journalName);
-  if (releaseLock) releaseTransactionLock();
+  assertBoundDirectory(ancestryGuard, true);
+  if (releaseLock) {
+    releaseTransactionLock();
+    assertBoundDirectory(ancestryGuard, true);
+  }
   return { committed: false };
 }
 
@@ -729,14 +835,14 @@ function inspectTransactions() {
 function quarantineInvalidTransactions(journalNames) {
   return journalNames.map((journal) => {
     const quarantine = journal + '.invalid-' + crypto.randomUUID();
-    fs.renameSync(journal, quarantine);
+    mutateBoundDirectory(() => fs.renameSync(journal, quarantine));
     return { journal, quarantine };
   });
 }
 
 function restoreQuarantinedTransactions(quarantined) {
   for (const entry of [...quarantined].reverse()) {
-    fs.renameSync(entry.quarantine, entry.journal);
+    mutateBoundDirectory(() => fs.renameSync(entry.quarantine, entry.journal));
   }
 }
 
@@ -752,6 +858,7 @@ function discoverTransactions(ancestryGuard) {
     }
     assertBoundDirectory(ancestryGuard, true);
     releaseTransactionLock();
+    assertBoundDirectory(ancestryGuard, true);
     return [];
   }
   ensureTransactionLock();
@@ -761,7 +868,10 @@ function discoverTransactions(ancestryGuard) {
     assertBoundDirectory(ancestryGuard, true);
     quarantined = quarantineInvalidTransactions(inspection.invalidJournals);
     assertBoundDirectory(ancestryGuard, true);
-    if (inspection.transactions.length === 0) releaseTransactionLock();
+    if (inspection.transactions.length === 0) {
+      releaseTransactionLock();
+      assertBoundDirectory(ancestryGuard, true);
+    }
     return inspection.transactions;
   } catch (error) {
     if (error instanceof AncestryError) {
@@ -770,6 +880,7 @@ function discoverTransactions(ancestryGuard) {
         restoreQuarantinedTransactions(quarantined);
         assertBoundDirectory(rollbackGuard, true);
         releaseTransactionLock();
+        assertBoundDirectory(rollbackGuard, true);
       } catch {}
     } else {
       try {
@@ -800,24 +911,34 @@ function applyBatch(request, ancestryGuard) {
     state: 'applying',
     writes: request.writes,
   };
+  let committed = false;
   try {
     writeJournal(request.journal, journal, true);
     for (const write of request.writes) applyWrite(write);
     assertBoundDirectory(ancestryGuard, true);
     journal.state = 'committed';
     writeJournal(request.journal, journal, false);
-    try {
-      if (request.failCleanupAfterCommit) {
-        throw new Error('bound-directory cleanup unavailable');
-      }
-      cleanupArtifacts(request.writes);
-      cleanupJournal(request.journal);
-      releaseTransactionLock();
-      return { committed: true };
-    } catch {
-      return { cleanupPending: true, committed: true };
+    committed = true;
+    assertBoundDirectory(ancestryGuard, true);
+    if (request.failCleanupAfterCommit) {
+      throw new Error('bound-directory cleanup unavailable');
     }
+    cleanupArtifacts(request.writes);
+    assertBoundDirectory(ancestryGuard, true);
+    cleanupJournal(request.journal);
+    assertBoundDirectory(ancestryGuard, true);
+    releaseTransactionLock();
+    if (request.afterLockReleaseDelayMs) wait(request.afterLockReleaseDelayMs);
+    assertBoundDirectory(ancestryGuard, true);
+    return { committed: true };
   } catch (error) {
+    if (committed) {
+      return {
+        cleanupPending: true,
+        committed: true,
+        ...(error instanceof AncestryError ? { cleanupError: error.message } : {}),
+      };
+    }
     try {
       recoverTransaction(
         request.journal,
@@ -885,7 +1006,7 @@ function execute(request) {
     let created = false;
     if (request.create) {
       try {
-        fs.mkdirSync(request.name, { mode: request.mode });
+        mutateBoundDirectory(() => fs.mkdirSync(request.name, { mode: request.mode }));
         created = true;
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
@@ -920,7 +1041,7 @@ function execute(request) {
     try {
       assertBoundDirectory(ancestryGuard, true);
     } catch (error) {
-      if (created) fs.rmdirSync(request.name);
+      if (created) mutateBoundDirectory(() => fs.rmdirSync(request.name));
       throw error;
     }
     spawnChildWorker(request, directory);
@@ -986,7 +1107,14 @@ function respond(requestPath, responsePath) {
     response = {
       ok: false,
       code: conflict ? 'CONFLICT' : 'UNSAFE',
-      message: error instanceof Error ? error.message : String(error),
+      message:
+        error instanceof AggregateError
+          ? error.errors
+              .map((entry) => (entry instanceof Error ? entry.message : String(entry)))
+              .join('; ')
+          : error instanceof Error
+            ? error.message
+            : String(error),
     };
   }
   const temporary = responsePath + '.tmp';
@@ -1374,6 +1502,7 @@ function runBoundOperation(
     const result = sendOperation(directory, request, dependencies.timeoutMs ?? 5_000);
     if (!result.ok) throwOperationFailure(result);
     if (request.operation === 'cas' && result.cleanupPending) {
+      if (result.cleanupError) return result;
       try {
         dependencies.beforeCleanupRecovery?.();
         const cleanup = sendOperation(
@@ -1818,6 +1947,7 @@ export function casBoundDirectoryFiles(
       operation: 'cas',
       journal,
       writes: serializedWrites,
+      afterLockReleaseDelayMs: dependencies.afterLockReleaseDelayMs ?? 0,
       failCleanupAfterCommit: dependencies.failCleanupAfterCommit ?? false,
     },
     dependencies,
