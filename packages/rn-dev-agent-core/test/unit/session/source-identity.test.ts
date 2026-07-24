@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -102,6 +102,37 @@ test('strict proof uses one current repository HEAD and content-root-relative un
   assert.equal(receipt.head, 'current-head');
   assert.ok(calls.every((call) => call.startsWith(`${root}:`)));
   assert.ok(calls.some((call) => call.includes('diff --binary --no-ext-diff current-head --')));
+});
+
+test('strict proof hashes untracked symlink text without following its target', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-symlink-'));
+  roots.push(root);
+  const external = mkdtempSync(join(tmpdir(), 'rn-source-proof-external-'));
+  roots.push(external);
+  const externalFile = join(external, 'secret.txt');
+  writeFileSync(externalFile, 'first');
+  symlinkSync(externalFile, join(root, 'untracked-link'));
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args[0] === 'diff') return '';
+    if (args[0] === 'ls-files') return 'untracked-link\0';
+    throw new Error('unexpected git command');
+  };
+
+  const first = strictProofSourceIdentity(identity, { git });
+  writeFileSync(externalFile, 'second');
+  const second = strictProofSourceIdentity(identity, { git });
+
+  assert.equal(first.dirtyDigest, second.dirtyDigest);
 });
 
 test('non-Git authority requires declared manifests and remains ineligible for strict proof', () => {

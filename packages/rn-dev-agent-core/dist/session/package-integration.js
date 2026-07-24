@@ -300,7 +300,7 @@ function restoreSnapshots(snapshots) {
         }
     }
 }
-function assertNoSymlinkPath(root, candidate) {
+export function assertNoSymlinkPath(root, candidate) {
     const child = relative(root, candidate);
     if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
         throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root');
@@ -391,14 +391,23 @@ export function restorePackageIntegrationFiles(input) {
     const appRoot = resolve(input.appRoot);
     const packagePath = join(appRoot, 'package.json');
     const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
+    assertNoSymlinkPath(appRoot, packagePath);
+    assertNoSymlinkPath(appRoot, manifestPath);
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    const metroConfigPath = join(appRoot, manifest.metroConfig ?? 'metro.config.js');
+    const metroConfig = manifest.metroConfig === undefined ? 'metro.config.js' : manifest.metroConfig;
+    if (metroConfig !== 'metro.config.js' && metroConfig !== 'metro.config.cjs') {
+        throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config');
+    }
+    const metroConfigPath = join(appRoot, metroConfig);
     const generated = [
         manifestPath,
         join(appRoot, ADAPTER),
         join(appRoot, METRO_ADAPTER),
         join(appRoot, AUTHORITY_MODULE),
     ];
+    for (const path of [metroConfigPath, ...generated]) {
+        assertNoSymlinkPath(appRoot, path);
+    }
     const snapshots = snapshotFiles([packagePath, metroConfigPath, ...generated]);
     try {
         const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));

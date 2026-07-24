@@ -162,6 +162,17 @@ else {
         }
         child.on('exit', (code, signal) => onDeath(code, signal, ''));
     }
+    function closeAuthorityAndExit() {
+        void authority
+            ?.close()
+            .then(() => process.exit(0))
+            .catch((error) => {
+            process.stderr.write(`rn-bridge-supervisor: authority cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+            process.exit(2);
+        });
+        if (!authority)
+            process.exit(0);
+    }
     function beginShutdown(why) {
         if (shutdownRequested)
             return;
@@ -169,8 +180,8 @@ else {
         process.stderr.write(`rn-bridge-supervisor: shutdown (${why})\n`);
         const child = worker;
         if (!child || child.exitCode !== null) {
-            authority?.close();
-            process.exit(0);
+            closeAuthorityAndExit();
+            return;
         }
         child.kill('SIGTERM');
         const force = setTimeout(() => {
@@ -183,8 +194,7 @@ else {
         }, 3000);
         force.unref();
         child.on('exit', () => {
-            authority?.close();
-            process.exit(0);
+            closeAuthorityAndExit();
         });
     }
     process.stdin.setEncoding('utf8');

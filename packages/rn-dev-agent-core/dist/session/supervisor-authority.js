@@ -159,7 +159,7 @@ export function createSupervisorAuthority(input) {
             RN_DEV_AGENT_METRO_PORT: String(metroPort),
             RN_DEV_AGENT_OBSERVE_PORT: String(observePort),
         }),
-        close: () => {
+        close: async () => {
             if (heartbeat)
                 clearInterval(heartbeat);
             try {
@@ -168,10 +168,14 @@ export function createSupervisorAuthority(input) {
                     if (RELEASABLE_SESSION_STATES.has(status.state)) {
                         registry.cancelActiveOperationForSession(session);
                     }
-                    stopManagedMetro(status.bindings.metro, {
-                        sessionId,
-                        signerCapability,
-                    });
+                    const metro = status.bindings.metro;
+                    if (metro?.mode === 'managed' &&
+                        !(await stopManagedMetro(metro, {
+                            sessionId,
+                            signerCapability,
+                        }))) {
+                        throw new Error('METRO_AUTHORITY_MISMATCH: managed Metro could not be stopped with exact process authority');
+                    }
                 }
                 if (status?.state === 'blocked') {
                     registry.discardBlockedSession(session);

@@ -240,7 +240,19 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', `${requiredBinding} must be bound before pinning`);
                     }
                 }
-                const bundle = await dependencies.pinDevClient(status);
+                const priorTargetId = status.bindings.bundle?.targetId;
+                if (input.force === true && typeof priorTargetId === 'string') {
+                    registry.releaseResources(session, [
+                        { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
+                    ]);
+                    registry.updateBindings(session, {
+                        state: 'device_bound',
+                        bindings: { bundle: null },
+                    });
+                }
+                const bundle = await dependencies.pinDevClient(status, {
+                    force: input.force === true,
+                });
                 registry.claimResources(session, [
                     { type: 'target', key: `${bundle.metroPort}:${bundle.targetId}` },
                 ]);
@@ -426,7 +438,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!signerCapability) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'managed Metro release requires the session signer capability');
                 }
-                const stopped = (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+                const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
                     sessionId: session.sessionId,
                     signerCapability,
                 });

@@ -400,6 +400,71 @@ test('an exactly idempotent Metro rebind preserves bundle authority and ready st
   assert.deepEqual(update.releaseResources, []);
 });
 
+test('forced dev-client pin invalidates the prior target before recreating the client', async () => {
+  const calls: string[] = [];
+  const status = {
+    sessionId: 'session-a',
+    state: 'ready',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-a' },
+      device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+      bundle: { targetId: 'target-a' },
+    },
+  };
+  const bundle = {
+    sessionId: 'session-a',
+    metroInstanceId: 'metro-a',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'ios',
+    buildGeneration: 1,
+    deviceId: 'SIM-1',
+    metroPort: 8193,
+    launchMethod: 'app',
+    targetId: 'target-b',
+    connectionGeneration: 2,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  } as const;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseResources: (_session, resources) =>
+            calls.push(`release:${resources[0].key}`),
+          updateBindings: (_session, update) =>
+            calls.push(update.bindings.bundle === null ? 'clear-bundle' : 'bind-bundle'),
+          claimResources: (_session, resources) => calls.push(`claim:${resources[0].key}`),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      pinDevClient: async (_status, options) => {
+        assert.equal(options.force, true);
+        calls.push('recreate-client');
+        return bundle;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client', force: true });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls, [
+    'release:8193:target-a',
+    'clear-bundle',
+    'recreate-client',
+    'claim:8193:target-b',
+    'bind-bundle',
+  ]);
+});
+
 test('session release stops its managed Metro before releasing claims', async () => {
   const calls: string[] = [];
   const status = {
@@ -427,7 +492,7 @@ test('session release stops its managed Metro before releasing claims', async ()
     },
     {
       getSignerCapability: () => 'signer',
-      stopManagedMetro: (_binding, authority) => {
+      stopManagedMetro: async (_binding, authority) => {
         assert.deepEqual(authority, {
           sessionId: 'session-a',
           signerCapability: 'signer',
@@ -465,7 +530,7 @@ test('session release retains claims when managed Metro shutdown is not proven',
     },
     {
       getSignerCapability: () => 'signer',
-      stopManagedMetro: () => false,
+      stopManagedMetro: async () => false,
     },
   );
 

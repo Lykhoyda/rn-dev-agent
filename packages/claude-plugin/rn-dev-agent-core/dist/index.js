@@ -66401,14 +66401,23 @@ function restorePackageIntegrationFiles(input) {
   const appRoot = resolve6(input.appRoot);
   const packagePath = join48(appRoot, "package.json");
   const manifestPath = join48(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+  assertNoSymlinkPath(appRoot, packagePath);
+  assertNoSymlinkPath(appRoot, manifestPath);
   const manifest = JSON.parse(readFileSync33(manifestPath, "utf8"));
-  const metroConfigPath = join48(appRoot, manifest.metroConfig ?? "metro.config.js");
+  const metroConfig = manifest.metroConfig === void 0 ? "metro.config.js" : manifest.metroConfig;
+  if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
+  }
+  const metroConfigPath = join48(appRoot, metroConfig);
   const generated = [
     manifestPath,
     join48(appRoot, ADAPTER),
     join48(appRoot, METRO_ADAPTER),
     join48(appRoot, AUTHORITY_MODULE)
   ];
+  for (const path of [metroConfigPath, ...generated]) {
+    assertNoSymlinkPath(appRoot, path);
+  }
   const snapshots = snapshotFiles([packagePath, metroConfigPath, ...generated]);
   try {
     const packageJson = JSON.parse(readFileSync33(packagePath, "utf8"));
@@ -66439,8 +66448,18 @@ function probeManagedMetroListener(port, platform = process.platform, execute = 
 function managementProof(sessionId, launcherPid, launcherBirth, instanceId, signerCapability) {
   return createHmac2("sha256", signerCapability).update(`${sessionId}\0${launcherPid}\0${launcherBirth}\0${instanceId}`).digest("hex");
 }
-function stopManagedMetro(binding, input) {
-  if (binding?.mode !== "managed" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
+function signalProcessTree(pid, signal) {
+  if (process.platform === "win32") {
+    execFileSync13("taskkill.exe", ["/PID", String(pid), "/T"], {
+      stdio: "ignore",
+      timeout: 2e3
+    });
+    return;
+  }
+  process.kill(-pid, signal);
+}
+async function stopManagedMetro(binding, input, dependencies = {}) {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, binding.launcherPid, binding.launcherBirth, binding.instanceId, input.signerCapability);
@@ -66449,14 +66468,31 @@ function stopManagedMetro(binding, input) {
   if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual5(expectedBuffer, observedBuffer)) {
     return false;
   }
-  const birth = readProcessBirth(binding.launcherPid);
-  if (!birth || birth.token !== binding.launcherBirth)
+  const readBirth = dependencies.readBirth ?? readProcessBirth;
+  const launcherBirth = readBirth(binding.launcherPid);
+  const listenerBirth = readBirth(binding.pid);
+  const listener = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+  if (!launcherBirth || launcherBirth.token !== binding.launcherBirth || !listenerBirth || listenerBirth.token !== binding.birth || listener.status !== "listening" || listener.pid !== binding.pid) {
     return false;
+  }
   try {
-    process.kill(binding.launcherPid, "SIGTERM");
-    return true;
+    (dependencies.signalTree ?? signalProcessTree)(binding.launcherPid, "SIGTERM");
   } catch {
     return false;
+  }
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve8) => setTimeout(resolve8, ms)));
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    const currentLauncher = readBirth(binding.launcherPid);
+    const currentListener = readBirth(binding.pid);
+    const currentPort = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+    const launcherStopped = !currentLauncher || currentLauncher.token !== binding.launcherBirth;
+    const listenerStopped = !currentListener || currentListener.token !== binding.birth;
+    if (launcherStopped && listenerStopped && currentPort.status === "absent")
+      return true;
+    if (currentPort.status === "unknown" || Date.now() >= deadline)
+      return false;
+    await wait(25);
   }
 }
 
@@ -66664,7 +66700,19 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", `${requiredBinding} must be bound before pinning`);
           }
         }
-        const bundle = await dependencies.pinDevClient(status2);
+        const priorTargetId = status2.bindings.bundle?.targetId;
+        if (input.force === true && typeof priorTargetId === "string") {
+          registry2.releaseResources(session, [
+            { type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }
+          ]);
+          registry2.updateBindings(session, {
+            state: "device_bound",
+            bindings: { bundle: null }
+          });
+        }
+        const bundle = await dependencies.pinDevClient(status2, {
+          force: input.force === true
+        });
         registry2.claimResources(session, [
           { type: "target", key: `${bundle.metroPort}:${bundle.targetId}` }
         ]);
@@ -66837,7 +66885,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!signerCapability) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro release requires the session signer capability");
         }
-        const stopped = (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
           sessionId: session.sessionId,
           signerCapability
         });
@@ -67692,7 +67740,7 @@ init_process_birth();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash13 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { readFileSync as readFileSync35, realpathSync as realpathSync4 } from "node:fs";
+import { lstatSync as lstatSync8, readFileSync as readFileSync35, readlinkSync, realpathSync as realpathSync4 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join50, relative as relative3, resolve as resolve7 } from "node:path";
 function digest(parts) {
   const hash = createHash13("sha256");
@@ -67779,7 +67827,16 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   for (const entry of untracked) {
     const file = resolve7(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
-    dirtyParts.push(entry, readFileSync35(file));
+    const stat2 = lstatSync8(file);
+    if (stat2.isFile()) {
+      dirtyParts.push(entry, "file", readFileSync35(file));
+      continue;
+    }
+    if (stat2.isSymbolicLink()) {
+      dirtyParts.push(entry, "symlink", readlinkSync(file));
+      continue;
+    }
+    throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
   }
   return {
     kind: "git-strict-proof",
@@ -68451,7 +68508,7 @@ function trackedTool(name, desc, schema, handler) {
     server2.tool(name, desc, schema, wrapped);
   }
 }
-async function pinSessionDevClient(status) {
+async function pinSessionDevClient(status, options) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const install = status.bindings.install;
@@ -68460,6 +68517,11 @@ async function pinSessionDevClient(status) {
   const devClientUrl = install.devClientUrl ?? declaredDevice.devClientUrl;
   if (!secret?.signerCapability) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable");
+  }
+  if (options.force) {
+    const current = getClient();
+    await current.disconnect();
+    setClient(createClient(metro.port));
   }
   return pinExactDevClient({
     sessionId: status.sessionId,
@@ -68585,7 +68647,7 @@ async function connectBoundSession(args) {
   const conflict2 = boundConnectConflict(status, args);
   if (conflict2)
     return failResult(conflict2.message, conflict2.code);
-  return sessionHandler({ action: "pin_dev_client" });
+  return sessionHandler({ action: "pin_dev_client", force: args.force === true });
 }
 async function disconnectBoundSession() {
   const disconnected = await disconnectClientHandler({});

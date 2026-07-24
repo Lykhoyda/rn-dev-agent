@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
 import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
+import { writeSessionSecret } from '../../../dist/session/state-root.js';
 
 const cliPath = new URL('../../../dist/rn-session.js', import.meta.url).pathname;
 
@@ -105,4 +113,123 @@ test('package-local CLI rejects an explicit session from another worktree', () =
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /explicit session belongs to a different canonical worktree/);
+});
+
+test('package-local CLI refuses marker writes through a replaced .rn-agent symlink', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-marker-'));
+  const appRoot = join(root, 'app');
+  const external = join(root, 'external');
+  const stateHome = join(root, 'state');
+  execFileSync('git', ['init', '-q', appRoot]);
+  execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+  execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+  writeFileSync(join(appRoot, 'package.json'), '{}\n');
+  execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+  execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+  mkdirSync(external);
+  symlinkSync(external, join(appRoot, '.rn-agent'));
+
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = stateHome;
+  const source = resolveSourceIdentity(appRoot);
+  const layout = createAuthorityStateLayout();
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+  const session = registry.createSession({
+    sessionId: 'session-marker',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    supervisor: { pid: process.pid, token: 'fixture' },
+    source: { ...source },
+    bindings: {
+      metroPort: 8193,
+      device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+      metro: { instanceId: 'metro-a', buildGeneration: 1 },
+    },
+  });
+  registry.updateBindings(session, { state: 'device_claimed', bindings: {} });
+  registry.close();
+  writeSessionSecret(layout, session.sessionId, {
+    signerCapability: 'signer',
+    observeCapability: 'observe',
+    recoveryCapability: 'recovery',
+  });
+
+  const result = spawnSync(process.execPath, [cliPath, 'prepare-build', 'ios'], {
+    cwd: appRoot,
+    env: {
+      ...process.env,
+      XDG_STATE_HOME: stateHome,
+      RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    },
+    encoding: 'utf8',
+  });
+
+  if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = previousStateHome;
+  const wroteExternalMarker = existsSync(join(external, 'integration', 'authority-marker.js'));
+  rmSync(root, { force: true, recursive: true });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SESSION_INTEGRATION_PATH_UNSAFE/);
+  assert.equal(wroteExternalMarker, false);
+});
+
+test('package-local CLI retains claims when managed Metro cleanup is unproven', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-release-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'state');
+  execFileSync('git', ['init', '-q', appRoot]);
+  execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+  execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+  writeFileSync(join(appRoot, 'package.json'), '{}\n');
+  execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+  execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = stateHome;
+  const source = resolveSourceIdentity(appRoot);
+  const layout = createAuthorityStateLayout();
+  let registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+  const session = registry.createSession({
+    sessionId: 'session-release',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    supervisor: { pid: process.pid, token: 'fixture' },
+    source: { ...source },
+    bindings: {
+      metroPort: 8193,
+      metro: { mode: 'managed' },
+    },
+  });
+  registry.updateBindings(session, { state: 'source_bound', bindings: {} });
+  registry.close();
+  writeSessionSecret(layout, session.sessionId, {
+    signerCapability: 'signer',
+    observeCapability: 'observe',
+    recoveryCapability: 'recovery',
+  });
+
+  const result = spawnSync(process.execPath, [cliPath, 'release'], {
+    cwd: appRoot,
+    env: {
+      ...process.env,
+      XDG_STATE_HOME: stateHome,
+      RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      RN_DEV_AGENT_CLAIM_EPOCH: String(session.claimEpoch),
+    },
+    encoding: 'utf8',
+  });
+  registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+  const status = registry.getSessionStatus(session.sessionId);
+  registry.close();
+
+  if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = previousStateHome;
+  rmSync(root, { force: true, recursive: true });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /METRO_AUTHORITY_MISMATCH/);
+  assert.equal(status?.state, 'source_bound');
 });

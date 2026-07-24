@@ -5,6 +5,7 @@ import {
   probeManagedMetroListener,
   resolveManagedMetroCommand,
   startManagedMetro,
+  stopManagedMetro,
 } from '../../../dist/session/managed-metro.js';
 
 test('managed Metro discovers listener PIDs with platform-native commands', () => {
@@ -170,4 +171,57 @@ test('managed Metro proves a cross-platform listener belongs to the spawned laun
 
   assert.equal(ownershipChecked, true);
   assert.equal(binding.servingRoot, '/app');
+});
+
+test('managed Metro stops its owned process tree and proves the listener is gone', async () => {
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => ({
+        pid: 101,
+        exitCode: null,
+        kill: () => true,
+        unref: () => {},
+      }),
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'birth-202',
+        servingRoot: '/app',
+      }),
+    },
+  );
+  let stopped = false;
+  const signals: Array<[number, NodeJS.Signals]> = [];
+
+  const result = await stopManagedMetro(
+    binding,
+    { sessionId: 'session-a', signerCapability: 'signer' },
+    {
+      readBirth: (pid) =>
+        stopped ? null : { pid, source: 'linux-proc', token: `birth-${pid}` },
+      probeListener: () =>
+        stopped ? { status: 'absent' } : { status: 'listening', pid: 202 },
+      signalTree: (pid, signal) => signals.push([pid, signal]),
+      wait: async () => {
+        stopped = true;
+      },
+    },
+  );
+
+  assert.equal(result, true);
+  assert.deepEqual(signals, [[101, 'SIGTERM']]);
 });

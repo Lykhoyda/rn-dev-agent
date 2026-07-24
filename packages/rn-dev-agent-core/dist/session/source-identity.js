@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 function digest(parts) {
     const hash = createHash('sha256');
@@ -95,7 +95,16 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
     for (const entry of untracked) {
         const file = resolve(identity.contentRoot, entry);
         assertContained(identity.contentRoot, file, 'STRICT_PROOF_PATH_ESCAPE');
-        dirtyParts.push(entry, readFileSync(file));
+        const stat = lstatSync(file);
+        if (stat.isFile()) {
+            dirtyParts.push(entry, 'file', readFileSync(file));
+            continue;
+        }
+        if (stat.isSymbolicLink()) {
+            dirtyParts.push(entry, 'symlink', readlinkSync(file));
+            continue;
+        }
+        throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink');
     }
     return {
         kind: 'git-strict-proof',

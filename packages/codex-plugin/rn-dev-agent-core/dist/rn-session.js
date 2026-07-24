@@ -3997,10 +3997,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep2, value } = collItem;
+        const { start, key, sep: sep3, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep2?.[0],
+          next: key ?? sep3?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4014,7 +4014,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep2) {
+          if (!keyProps.anchor && !keyProps.tag && !sep3) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -4038,7 +4038,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep2 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep3 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4054,7 +4054,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep2, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep3, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4145,7 +4145,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep2 = "";
+        let sep3 = "";
         for (const token2 of end) {
           const { source, type } = token2;
           switch (type) {
@@ -4159,13 +4159,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep2 + cb;
-              sep2 = "";
+                comment += sep3 + cb;
+              sep3 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep2 += source;
+                sep3 += source;
               hasSpace = true;
               break;
             default:
@@ -4208,18 +4208,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep2, value } = collItem;
+        const { start, key, sep: sep3, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep2?.[0],
+          next: key ?? sep3?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep2 && !value) {
+          if (!props.anchor && !props.tag && !sep3 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -4273,8 +4273,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep2 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep2, null, props, onError);
+        if (!isMap && !sep3 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep3, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4286,7 +4286,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep2 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep3 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4297,8 +4297,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep2)
-                for (const st of sep2) {
+              if (sep3)
+                for (const st of sep3) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4315,7 +4315,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep2, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep3, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4495,7 +4495,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep2 = "";
+      let sep3 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -4512,24 +4512,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep2 + indent.slice(trimIndent) + content;
-          sep2 = "\n";
+          value += sep3 + indent.slice(trimIndent) + content;
+          sep3 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep2 === " ")
-            sep2 = "\n";
-          else if (!prevMoreIndented && sep2 === "\n")
-            sep2 = "\n\n";
-          value += sep2 + indent.slice(trimIndent) + content;
-          sep2 = "\n";
+          if (sep3 === " ")
+            sep3 = "\n";
+          else if (!prevMoreIndented && sep3 === "\n")
+            sep3 = "\n\n";
+          value += sep3 + indent.slice(trimIndent) + content;
+          sep3 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep2 === "\n")
+          if (sep3 === "\n")
             value += "\n";
           else
-            sep2 = "\n";
+            sep3 = "\n";
         } else {
-          value += sep2 + content;
-          sep2 = " ";
+          value += sep3 + content;
+          sep3 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4711,25 +4711,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep2 = " ";
+      let sep3 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep2 === "\n")
-            res += sep2;
+          if (sep3 === "\n")
+            res += sep3;
           else
-            sep2 = "\n";
+            sep3 = "\n";
         } else {
-          res += sep2 + match[1];
-          sep2 = " ";
+          res += sep3 + match[1];
+          sep3 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep2 + (match?.[1] ?? "");
+      return res + sep3 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5539,14 +5539,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep2, value }) {
+    function stringifyItem({ start, key, sep: sep3, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep2)
-        for (const st of sep2)
+      if (sep3)
+        for (const st of sep3)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6713,18 +6713,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep2;
+          let sep3;
           if (scalar.end) {
-            sep2 = scalar.end;
-            sep2.push(this.sourceToken);
+            sep3 = scalar.end;
+            sep3.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep2 = [this.sourceToken];
+            sep3 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep2 }]
+            items: [{ start, key: scalar, sep: sep3 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -6877,15 +6877,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep2 = it.sep;
-                  sep2.push(this.sourceToken);
+                  const sep3 = it.sep;
+                  sep3.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep2 }]
+                    items: [{ start: start2, key, sep: sep3 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7079,13 +7079,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep2 = fc.end.splice(1, fc.end.length);
-            sep2.push(this.sourceToken);
+            const sep3 = fc.end.splice(1, fc.end.length);
+            sep3.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep2 }]
+              items: [{ start, key: fc, sep: sep3 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -7365,8 +7365,8 @@ var require_dist = __commonJS({
 
 // packages/rn-dev-agent-core/dist/rn-session.js
 import { randomUUID } from "node:crypto";
-import { chmodSync as chmodSync3, readFileSync as readFileSync6, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join7 } from "node:path";
+import { chmodSync as chmodSync4, readFileSync as readFileSync7, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -7899,6 +7899,9 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
 function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync5) {
   return metroListenerPid(port, platform, execute);
 }
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync5) {
+  return probeMetroListener(port, platform, execute);
+}
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync;
   const readText = dependencies.readText ?? ((path) => readFileSync3(path, "utf8"));
@@ -7952,7 +7955,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
   const deadline = Date.now() + 2e4;
   let lastError = null;
   while (Date.now() < deadline) {
@@ -7986,8 +7989,18 @@ async function startManagedMetro(input, dependencies = {}) {
   }
   throw new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${lastError instanceof Error ? ` (${lastError.message})` : ""}`);
 }
-function stopManagedMetro(binding, input) {
-  if (binding?.mode !== "managed" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
+function signalProcessTree(pid, signal) {
+  if (process.platform === "win32") {
+    execFileSync5("taskkill.exe", ["/PID", String(pid), "/T"], {
+      stdio: "ignore",
+      timeout: 2e3
+    });
+    return;
+  }
+  process.kill(-pid, signal);
+}
+async function stopManagedMetro(binding, input, dependencies = {}) {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, binding.launcherPid, binding.launcherBirth, binding.instanceId, input.signerCapability);
@@ -7996,14 +8009,31 @@ function stopManagedMetro(binding, input) {
   if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual3(expectedBuffer, observedBuffer)) {
     return false;
   }
-  const birth = readProcessBirth(binding.launcherPid);
-  if (!birth || birth.token !== binding.launcherBirth)
+  const readBirth = dependencies.readBirth ?? readProcessBirth;
+  const launcherBirth = readBirth(binding.launcherPid);
+  const listenerBirth = readBirth(binding.pid);
+  const listener = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+  if (!launcherBirth || launcherBirth.token !== binding.launcherBirth || !listenerBirth || listenerBirth.token !== binding.birth || listener.status !== "listening" || listener.pid !== binding.pid) {
     return false;
+  }
   try {
-    process.kill(binding.launcherPid, "SIGTERM");
-    return true;
+    (dependencies.signalTree ?? signalProcessTree)(binding.launcherPid, "SIGTERM");
   } catch {
     return false;
+  }
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    const currentLauncher = readBirth(binding.launcherPid);
+    const currentListener = readBirth(binding.pid);
+    const currentPort = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+    const launcherStopped = !currentLauncher || currentLauncher.token !== binding.launcherBirth;
+    const listenerStopped = !currentListener || currentListener.token !== binding.birth;
+    if (launcherStopped && listenerStopped && currentPort.status === "absent")
+      return true;
+    if (currentPort.status === "unknown" || Date.now() >= deadline)
+      return false;
+    await wait(25);
   }
 }
 
@@ -9466,7 +9496,7 @@ var SessionRegistry = class {
         if (Date.now() >= deadline) {
           throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
         }
-        await new Promise((resolve3) => setTimeout(resolve3, retryDelayMs));
+        await new Promise((resolve4) => setTimeout(resolve4, retryDelayMs));
       }
     }
   }
@@ -9484,7 +9514,7 @@ function openSessionRegistry(path, dependencies) {
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { readFileSync as readFileSync4, realpathSync as realpathSync2 } from "node:fs";
+import { lstatSync as lstatSync2, readFileSync as readFileSync4, readlinkSync, realpathSync as realpathSync2 } from "node:fs";
 import { isAbsolute, join as join3, relative, resolve as resolve2 } from "node:path";
 function digest2(parts) {
   const hash = createHash4("sha256");
@@ -9561,7 +9591,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
-import { chmodSync as chmodSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync2, renameSync, statSync as statSync3, writeFileSync } from "node:fs";
+import { chmodSync as chmodSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync2, renameSync, statSync as statSync3, writeFileSync } from "node:fs";
 import { join as join5 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
@@ -9584,7 +9614,7 @@ function fail(code, detail) {
 function ensurePrivateDirectory(path) {
   try {
     mkdirSync2(path, { recursive: true, mode: 448 });
-    const link = lstatSync2(path);
+    const link = lstatSync3(path);
     const stat = statSync3(path);
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
@@ -9702,6 +9732,34 @@ function projectPublicAuthorityStatus(status) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/session/package-integration.js
+import { chmodSync as chmodSync3, existsSync as existsSync3, lstatSync as lstatSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync6, renameSync as renameSync2, rmSync, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve3, sep as sep2 } from "node:path";
+var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
+var SENTINELS = {
+  ios: `node ${ADAPTER} ios`,
+  android: `node ${ADAPTER} android`
+};
+function assertNoSymlinkPath(root, candidate) {
+  const child = relative2(root, candidate);
+  if (child === ".." || child.startsWith(`..${sep2}`) || isAbsolute2(child)) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
+  }
+  let current = root;
+  for (const component of [root, ...child.split(sep2).filter(Boolean)]) {
+    current = component === root ? root : join7(current, component);
+    try {
+      if (lstatSync4(current).isSymbolicLink()) {
+        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
+      }
+    } catch (error) {
+      if (error.code === "ENOENT")
+        break;
+      throw error;
+    }
+  }
+}
+
 // packages/rn-dev-agent-core/dist/rn-session.js
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -9728,13 +9786,14 @@ function resolveStatus() {
   });
 }
 function readSigner(status) {
-  const secret = JSON.parse(readFileSync6(join7(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
+  const secret = JSON.parse(readFileSync7(join8(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
   if (typeof secret.signerCapability !== "string") {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session build signer is unavailable");
   }
   return secret.signerCapability;
 }
 function writeMarker(status, input) {
+  const appRoot = String(status.source.appRoot);
   const marker = buildSignedMetroMarker({
     sessionId: status.sessionId,
     metroInstanceId: input.metroInstanceId,
@@ -9743,14 +9802,17 @@ function writeMarker(status, input) {
     platform: input.platform,
     buildGeneration: input.buildGeneration
   }, input.signerCapability);
-  const markerPath = join7(String(status.source.appRoot), ".rn-agent", "integration", "authority-marker.js");
+  const markerPath = join8(appRoot, ".rn-agent", "integration", "authority-marker.js");
+  assertNoSymlinkPath(appRoot, markerPath);
   const temporary = `${markerPath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync2(temporary, createMetroAuthorityModule(marker), {
+  writeFileSync3(temporary, createMetroAuthorityModule(marker), {
     encoding: "utf8",
     mode: 384
   });
-  chmodSync3(temporary, 384);
-  renameSync2(temporary, markerPath);
+  chmodSync4(temporary, 384);
+  assertNoSymlinkPath(appRoot, markerPath);
+  assertNoSymlinkPath(appRoot, temporary);
+  renameSync3(temporary, markerPath);
 }
 async function ensureManagedMetro(status) {
   const device = status.bindings.device;
@@ -9773,7 +9835,10 @@ async function ensureManagedMetro(status) {
       return;
     } catch {
       const signer = readSigner(status);
-      if (!stopManagedMetro(existing, { sessionId: status.sessionId, signerCapability: signer })) {
+      if (!await stopManagedMetro(existing, {
+        sessionId: status.sessionId,
+        signerCapability: signer
+      })) {
         throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "existing external Metro binding is stale and cannot be replaced automatically");
       }
       status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { bindings: { metro: null, bundle: null } });
@@ -9932,10 +9997,13 @@ async function main() {
         throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "release requires the exact session ID and claim epoch in the environment");
       }
       const signerCapability = readSigner(status);
-      stopManagedMetro(status.bindings.metro, {
+      const metro = status.bindings.metro;
+      if (metro?.mode === "managed" && !await stopManagedMetro(metro, {
         sessionId: status.sessionId,
         signerCapability
-      });
+      })) {
+        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+      }
       status.registry.releaseSession({ sessionId: status.sessionId, claimEpoch: epoch });
       process.stdout.write(`${JSON.stringify({ released: true })}
 `);

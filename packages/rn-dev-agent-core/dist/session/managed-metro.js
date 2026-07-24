@@ -132,8 +132,21 @@ export async function startManagedMetro(input, dependencies = {}) {
     }
     throw new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${lastError instanceof Error ? ` (${lastError.message})` : ''}`);
 }
-export function stopManagedMetro(binding, input) {
+function signalProcessTree(pid, signal) {
+    if (process.platform === 'win32') {
+        execFileSync('taskkill.exe', ['/PID', String(pid), '/T'], {
+            stdio: 'ignore',
+            timeout: 2_000,
+        });
+        return;
+    }
+    process.kill(-pid, signal);
+}
+export async function stopManagedMetro(binding, input, dependencies = {}) {
     if (binding?.mode !== 'managed' ||
+        typeof binding.port !== 'number' ||
+        typeof binding.pid !== 'number' ||
+        typeof binding.birth !== 'string' ||
         typeof binding.launcherPid !== 'number' ||
         typeof binding.launcherBirth !== 'string' ||
         typeof binding.instanceId !== 'string' ||
@@ -147,14 +160,36 @@ export function stopManagedMetro(binding, input) {
         !timingSafeEqual(expectedBuffer, observedBuffer)) {
         return false;
     }
-    const birth = readProcessBirth(binding.launcherPid);
-    if (!birth || birth.token !== binding.launcherBirth)
+    const readBirth = dependencies.readBirth ?? readProcessBirth;
+    const launcherBirth = readBirth(binding.launcherPid);
+    const listenerBirth = readBirth(binding.pid);
+    const listener = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+    if (!launcherBirth ||
+        launcherBirth.token !== binding.launcherBirth ||
+        !listenerBirth ||
+        listenerBirth.token !== binding.birth ||
+        listener.status !== 'listening' ||
+        listener.pid !== binding.pid) {
         return false;
+    }
     try {
-        process.kill(binding.launcherPid, 'SIGTERM');
-        return true;
+        (dependencies.signalTree ?? signalProcessTree)(binding.launcherPid, 'SIGTERM');
     }
     catch {
         return false;
+    }
+    const wait = dependencies.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const deadline = Date.now() + 2_000;
+    while (true) {
+        const currentLauncher = readBirth(binding.launcherPid);
+        const currentListener = readBirth(binding.pid);
+        const currentPort = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+        const launcherStopped = !currentLauncher || currentLauncher.token !== binding.launcherBirth;
+        const listenerStopped = !currentListener || currentListener.token !== binding.birth;
+        if (launcherStopped && listenerStopped && currentPort.status === 'absent')
+            return true;
+        if (currentPort.status === 'unknown' || Date.now() >= deadline)
+            return false;
+        await wait(25);
     }
 }

@@ -512,7 +512,7 @@ function trackedTool(name, desc, schema, handler) {
         server.tool(name, desc, schema, wrapped);
     }
 }
-async function pinSessionDevClient(status) {
+async function pinSessionDevClient(status, options) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -523,6 +523,11 @@ async function pinSessionDevClient(status) {
     const devClientUrl = install.devClientUrl ?? declaredDevice.devClientUrl;
     if (!secret?.signerCapability) {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
+    }
+    if (options.force) {
+        const current = getClient();
+        await current.disconnect();
+        setClient(createClient(metro.port));
     }
     return pinExactDevClient({
         sessionId: status.sessionId,
@@ -663,7 +668,7 @@ async function connectBoundSession(args) {
     const conflict = boundConnectConflict(status, args);
     if (conflict)
         return failResult(conflict.message, conflict.code);
-    return sessionHandler({ action: 'pin_dev_client' });
+    return sessionHandler({ action: 'pin_dev_client', force: args.force === true });
 }
 async function disconnectBoundSession() {
     const disconnected = await disconnectClientHandler({});

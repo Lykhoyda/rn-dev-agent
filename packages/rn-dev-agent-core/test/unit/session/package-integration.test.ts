@@ -274,6 +274,31 @@ test('confirmed integration can be transactionally restored through its public f
   }
 });
 
+test('confirmed restoration rejects a manifest Metro path outside the app root', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-path-'));
+  const external = mkdtempSync(join(tmpdir(), 'rn-session-restore-external-'));
+  try {
+    writeFileSync(join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+    writeFileSync(join(root, 'metro.config.js'), 'module.exports = {};\n');
+    const externalConfig = join(external, 'metro.config.js');
+    writeFileSync(externalConfig, 'external\n');
+    applyPackageIntegration({ appRoot: root, sessionCli: join(root, 'rn-session.js') });
+    const manifestPath = join(root, '.rn-agent/integration/rn-session-integration.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.metroConfig = `../${join(external, 'metro.config.js')}`;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    assert.throws(
+      () => restorePackageIntegrationFiles({ appRoot: root }),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(readFileSync(externalConfig, 'utf8'), 'external\n');
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+    rmSync(external, { force: true, recursive: true });
+  }
+});
+
 test('copied adapter injects the active session into literal package scripts', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-adapter-'));
   try {

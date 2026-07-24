@@ -59,6 +59,7 @@ export interface SessionToolInput {
   token?: string;
   adoptionHandle?: string;
   confirmed?: boolean;
+  force?: boolean;
 }
 
 interface SessionHandlerDependencies {
@@ -73,7 +74,10 @@ interface SessionHandlerDependencies {
     sourceRoot: string;
     buildGeneration: number;
   }) => Promise<MetroBinding>;
-  pinDevClient?: (status: SessionStatus) => Promise<BundleAuthorityBinding>;
+  pinDevClient?: (
+    status: SessionStatus,
+    options: { force: boolean },
+  ) => Promise<BundleAuthorityBinding>;
   stopHandoffObserve?: (binding: Record<string, unknown>) => Promise<void>;
   stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
   probeProcessBirth?: (pid: number) => ProcessBirthProbe;
@@ -401,7 +405,21 @@ export function createSessionHandler(
             );
           }
         }
-        const bundle = await dependencies.pinDevClient(status);
+        const priorTargetId = (
+          status.bindings.bundle as { targetId?: unknown } | null | undefined
+        )?.targetId;
+        if (input.force === true && typeof priorTargetId === 'string') {
+          registry.releaseResources(session, [
+            { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
+          ]);
+          registry.updateBindings(session, {
+            state: 'device_bound',
+            bindings: { bundle: null },
+          });
+        }
+        const bundle = await dependencies.pinDevClient(status, {
+          force: input.force === true,
+        });
         registry.claimResources(session, [
           { type: 'target', key: `${bundle.metroPort}:${bundle.targetId}` },
         ]);
@@ -664,7 +682,7 @@ export function createSessionHandler(
             'managed Metro release requires the session signer capability',
           );
         }
-        const stopped = (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
           sessionId: session.sessionId,
           signerCapability,
         });

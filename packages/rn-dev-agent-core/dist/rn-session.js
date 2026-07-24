@@ -13,6 +13,7 @@ import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
+import { assertNoSymlinkPath } from './session/package-integration.js';
 function resolveStatus() {
     const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
     const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
@@ -50,6 +51,7 @@ function readSigner(status) {
     return secret.signerCapability;
 }
 function writeMarker(status, input) {
+    const appRoot = String(status.source.appRoot);
     const marker = buildSignedMetroMarker({
         sessionId: status.sessionId,
         metroInstanceId: input.metroInstanceId,
@@ -58,13 +60,16 @@ function writeMarker(status, input) {
         platform: input.platform,
         buildGeneration: input.buildGeneration,
     }, input.signerCapability);
-    const markerPath = join(String(status.source.appRoot), '.rn-agent', 'integration', 'authority-marker.js');
+    const markerPath = join(appRoot, '.rn-agent', 'integration', 'authority-marker.js');
+    assertNoSymlinkPath(appRoot, markerPath);
     const temporary = `${markerPath}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(temporary, createMetroAuthorityModule(marker), {
         encoding: 'utf8',
         mode: 0o600,
     });
     chmodSync(temporary, 0o600);
+    assertNoSymlinkPath(appRoot, markerPath);
+    assertNoSymlinkPath(appRoot, temporary);
     renameSync(temporary, markerPath);
 }
 async function ensureManagedMetro(status) {
@@ -93,7 +98,10 @@ async function ensureManagedMetro(status) {
         }
         catch {
             const signer = readSigner(status);
-            if (!stopManagedMetro(existing, { sessionId: status.sessionId, signerCapability: signer })) {
+            if (!(await stopManagedMetro(existing, {
+                sessionId: status.sessionId,
+                signerCapability: signer,
+            }))) {
                 throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'existing external Metro binding is stale and cannot be replaced automatically');
             }
             status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { bindings: { metro: null, bundle: null } });
@@ -259,10 +267,14 @@ async function main() {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'release requires the exact session ID and claim epoch in the environment');
             }
             const signerCapability = readSigner(status);
-            stopManagedMetro(status.bindings.metro, {
-                sessionId: status.sessionId,
-                signerCapability,
-            });
+            const metro = status.bindings.metro;
+            if (metro?.mode === 'managed' &&
+                !(await stopManagedMetro(metro, {
+                    sessionId: status.sessionId,
+                    signerCapability,
+                }))) {
+                throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'managed Metro could not be stopped with exact process authority');
+            }
             status.registry.releaseSession({ sessionId: status.sessionId, claimEpoch: epoch });
             process.stdout.write(`${JSON.stringify({ released: true })}\n`);
             return;

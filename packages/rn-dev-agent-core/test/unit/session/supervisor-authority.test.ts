@@ -13,7 +13,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
 
-test('supervisor creates one source-and-port session inherited by worker respawns', () => {
+test('supervisor creates one source-and-port session inherited by worker respawns', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
   const source = {
@@ -50,7 +50,7 @@ test('supervisor creates one source-and-port session inherited by worker respawn
       ['metro-port', 'observe-port', 'source'],
     );
   } finally {
-    authority.close();
+    await authority.close();
   }
 });
 
@@ -126,7 +126,7 @@ test('supervisor initialization releases claims when shared knowledge setup fail
   }
 });
 
-test('supervisor close is idempotent after the session was already released', () => {
+test('supervisor close is idempotent after the session was already released', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
   const authority = createSupervisorAuthority({
@@ -147,10 +147,10 @@ test('supervisor close is idempotent after the session was already released', ()
   });
 
   authority.registry.releaseSession(authority.session);
-  assert.doesNotThrow(() => authority.close());
+  await assert.doesNotReject(authority.close());
 });
 
-test('supervisor close cancels an interrupted operation before releasing claims', () => {
+test('supervisor close cancels an interrupted operation before releasing claims', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
   const authority = createSupervisorAuthority({
@@ -175,7 +175,7 @@ test('supervisor close cancels an interrupted operation before releasing claims'
     profile: 'CSIMDR',
   });
 
-  assert.doesNotThrow(() => authority.close());
+  await assert.doesNotReject(authority.close());
 
   const registry = openSessionRegistry(authority.layout.registry, {
     ownerStatus: () => 'match',
@@ -189,7 +189,7 @@ test('supervisor close cancels an interrupted operation before releasing claims'
   }
 });
 
-test('a supervisor without the source claim stays blocked and exposes the full adoption ID', () => {
+test('a supervisor without the source claim stays blocked and exposes the full adoption ID', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
   const source = {
@@ -254,7 +254,7 @@ test('a supervisor without the source claim stays blocked and exposes the full a
       /SESSION_OWNER_LOST/,
     );
   } finally {
-    blocked.close();
-    prior.close();
+    await blocked.close();
+    await prior.close();
   }
 });
