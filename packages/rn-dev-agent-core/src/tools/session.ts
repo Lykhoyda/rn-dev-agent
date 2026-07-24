@@ -12,6 +12,7 @@ import type { BundleAuthorityBinding } from '../session/dev-client-authority.js'
 import type { SessionStatus } from '../session/registry.js';
 import {
   applyPackageIntegration,
+  assertNoSymlinkPath,
   previewMetroIntegration,
   previewPackageIntegration,
   restorePackageIntegrationFiles,
@@ -458,9 +459,14 @@ export function createSessionHandler(
           );
         }
         const packagePath = join(appRoot, 'package.json');
-        const metroConfigPath = ['metro.config.js', 'metro.config.cjs']
-          .map((name) => join(appRoot, name))
-          .find((path) => {
+        assertNoSymlinkPath(appRoot, packagePath);
+        const metroConfigCandidates = ['metro.config.js', 'metro.config.cjs'].map((name) =>
+          join(appRoot, name),
+        );
+        for (const path of metroConfigCandidates) {
+          assertNoSymlinkPath(appRoot, path);
+        }
+        const metroConfigPath = metroConfigCandidates.find((path) => {
             try {
               readFileSync(path, 'utf8');
               return true;
@@ -480,6 +486,7 @@ export function createSessionHandler(
           'integration',
           'rn-session-integration.json',
         );
+        assertNoSymlinkPath(appRoot, manifestPath);
         const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as Record<
           string,
           unknown

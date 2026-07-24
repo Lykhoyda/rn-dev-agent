@@ -122,7 +122,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       else if (action.kind === 'spawn') {
         spawnWorker();
         apply(core.onSpawned());
-      } else process.exit(action.code);
+      } else closeAuthorityAndExit(action.kind === 'shutdown' ? 0 : action.code);
     }
   }
 
@@ -183,10 +183,10 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     child.on('exit', (code, signal) => onDeath(code, signal, ''));
   }
 
-  function closeAuthorityAndExit(): void {
+  function closeAuthorityAndExit(exitCode = 0): void {
     void authority
       ?.close()
-      .then(() => process.exit(0))
+      .then(() => process.exit(exitCode))
       .catch((error) => {
         process.stderr.write(
           `rn-bridge-supervisor: authority cleanup failed: ${
@@ -195,7 +195,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
         );
         process.exit(2);
       });
-    if (!authority) process.exit(0);
+    if (!authority) process.exit(exitCode);
   }
 
   function beginShutdown(why: string): void {
@@ -216,9 +216,6 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       }
     }, 3000);
     force.unref();
-    child.on('exit', () => {
-      closeAuthorityAndExit();
-    });
   }
 
   process.stdin.setEncoding('utf8');

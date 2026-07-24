@@ -9,7 +9,12 @@ import {
   type MetroBinding,
   type MetroListenerProbe,
 } from './metro-binding.js';
-import { readProcessBirth, type ProcessBirth } from './process-birth.js';
+import {
+  probeProcessBirth,
+  readProcessBirth,
+  type ProcessBirth,
+  type ProcessBirthProbe,
+} from './process-birth.js';
 
 export interface ManagedMetroBinding extends MetroBinding {
   mode: 'managed';
@@ -30,9 +35,22 @@ interface ManagedMetroDependencies {
   listenerOwnedByLauncher?: (listenerPid: number, launcherPid: number) => boolean;
   capture?: typeof captureMetroBinding;
   readBirth?: (pid: number) => ProcessBirth | null;
+  probeBirth?: (pid: number) => ProcessBirthProbe;
   probeListener?: (port: number) => ManagedMetroListenerProbe;
-  signalTree?: (pid: number, signal: NodeJS.Signals) => void;
+  signalTree?: (input: ManagedMetroSignal) => void;
   wait?: (ms: number) => Promise<void>;
+}
+
+interface ManagedMetroSignal {
+  launcherPid: number;
+  listenerPid: number;
+  launcherPresent: boolean;
+  signal: NodeJS.Signals;
+}
+
+interface ManagedMetroProcessIdentity {
+  pid: number;
+  birth: string;
 }
 
 function parentPid(pid: number): number | null {
@@ -176,14 +194,20 @@ export async function startManagedMetro(
   const listenerPid = dependencies.listenerPid ?? managedMetroListenerPid;
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const wait =
     dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const deadline = Date.now() + 20_000;
   let lastError: unknown = null;
+  let listenerIdentity: ManagedMetroProcessIdentity | null = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) break;
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {
+      const listenerBirth = probeBirth(pid);
+      if (listenerBirth.status === 'present') {
+        listenerIdentity = { pid, birth: listenerBirth.birth.token };
+      }
       try {
         const binding = await capture(
           {
@@ -214,8 +238,18 @@ export async function startManagedMetro(
     }
     await wait(100);
   }
-  if (readBirth(child.pid)?.token === launcherBirth.token) {
-    child.kill('SIGTERM');
+  const cleanupProven = await stopManagedMetroProcesses(
+    {
+      port: input.port,
+      launcher: { pid: child.pid, birth: launcherBirth.token },
+      listener: listenerIdentity,
+    },
+    dependencies,
+  );
+  if (!cleanupProven) {
+    throw new Error(
+      'METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous',
+    );
   }
   throw new Error(
     `METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${
@@ -224,15 +258,114 @@ export async function startManagedMetro(
   );
 }
 
-function signalProcessTree(pid: number, signal: NodeJS.Signals): void {
+function signalProcessTree(input: ManagedMetroSignal): void {
   if (process.platform === 'win32') {
+    const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
     execFileSync('taskkill.exe', ['/PID', String(pid), '/T'], {
       stdio: 'ignore',
       timeout: 2_000,
     });
     return;
   }
-  process.kill(-pid, signal);
+  process.kill(input.launcherPresent ? -input.launcherPid : input.listenerPid, input.signal);
+}
+
+type ExactProcessState = 'present' | 'stopped' | 'unknown';
+
+function exactProcessState(
+  expected: ManagedMetroProcessIdentity,
+  probe: ProcessBirthProbe,
+): ExactProcessState {
+  if (probe.status === 'unknown') return 'unknown';
+  if (probe.status === 'absent') return 'stopped';
+  return probe.birth.token === expected.birth ? 'present' : 'stopped';
+}
+
+async function stopManagedMetroProcesses(
+  input: {
+    port: number;
+    launcher: ManagedMetroProcessIdentity;
+    listener: ManagedMetroProcessIdentity | null;
+  },
+  dependencies: Pick<
+    ManagedMetroDependencies,
+    'probeBirth' | 'probeListener' | 'signalTree' | 'wait'
+  >,
+): Promise<boolean> {
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
+  const signalTree = dependencies.signalTree ?? signalProcessTree;
+  const wait =
+    dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const inspect = () => {
+    const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
+    const listener = input.listener
+      ? exactProcessState(input.listener, probeBirth(input.listener.pid))
+      : 'stopped';
+    const port = probeListener(input.port);
+    return { launcher, listener, port };
+  };
+  const initial = inspect();
+  if (
+    initial.launcher === 'unknown' ||
+    initial.listener === 'unknown' ||
+    initial.port.status === 'unknown'
+  ) {
+    return false;
+  }
+  if (
+    initial.port.status === 'listening' &&
+    (!input.listener ||
+      initial.port.pid !== input.listener.pid ||
+      initial.listener !== 'present')
+  ) {
+    return false;
+  }
+  if (
+    initial.launcher === 'stopped' &&
+    initial.listener === 'stopped' &&
+    initial.port.status === 'absent'
+  ) {
+    return true;
+  }
+  try {
+    signalTree({
+      launcherPid: input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.launcher.pid,
+      launcherPresent: initial.launcher === 'present',
+      signal: 'SIGTERM',
+    });
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    const current = inspect();
+    if (
+      current.launcher === 'unknown' ||
+      current.listener === 'unknown' ||
+      current.port.status === 'unknown'
+    ) {
+      return false;
+    }
+    if (
+      current.launcher === 'stopped' &&
+      current.listener === 'stopped' &&
+      current.port.status === 'absent'
+    ) {
+      return true;
+    }
+    if (
+      current.port.status === 'listening' &&
+      (!input.listener ||
+        current.port.pid !== input.listener.pid ||
+        current.listener !== 'present')
+    ) {
+      return false;
+    }
+    if (Date.now() >= deadline) return false;
+    await wait(25);
+  }
 }
 
 export async function stopManagedMetro(
@@ -240,7 +373,7 @@ export async function stopManagedMetro(
   input: { sessionId: string; signerCapability: string },
   dependencies: Pick<
     ManagedMetroDependencies,
-    'probeListener' | 'readBirth' | 'signalTree' | 'wait'
+    'probeBirth' | 'probeListener' | 'signalTree' | 'wait'
   > = {},
 ): Promise<boolean> {
   if (
@@ -270,37 +403,12 @@ export async function stopManagedMetro(
   ) {
     return false;
   }
-  const readBirth = dependencies.readBirth ?? readProcessBirth;
-  const launcherBirth = readBirth(binding.launcherPid);
-  const listenerBirth = readBirth(binding.pid);
-  const listener = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
-  if (
-    !launcherBirth ||
-    launcherBirth.token !== binding.launcherBirth ||
-    !listenerBirth ||
-    listenerBirth.token !== binding.birth ||
-    listener.status !== 'listening' ||
-    listener.pid !== binding.pid
-  ) {
-    return false;
-  }
-  try {
-    (dependencies.signalTree ?? signalProcessTree)(binding.launcherPid, 'SIGTERM');
-  } catch {
-    return false;
-  }
-  const wait =
-    dependencies.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const deadline = Date.now() + 2_000;
-  while (true) {
-    const currentLauncher = readBirth(binding.launcherPid);
-    const currentListener = readBirth(binding.pid);
-    const currentPort = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
-    const launcherStopped =
-      !currentLauncher || currentLauncher.token !== binding.launcherBirth;
-    const listenerStopped = !currentListener || currentListener.token !== binding.birth;
-    if (launcherStopped && listenerStopped && currentPort.status === 'absent') return true;
-    if (currentPort.status === 'unknown' || Date.now() >= deadline) return false;
-    await wait(25);
-  }
+  return stopManagedMetroProcesses(
+    {
+      port: binding.port,
+      launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
+      listener: { pid: binding.pid, birth: binding.birth },
+    },
+    dependencies,
+  );
 }

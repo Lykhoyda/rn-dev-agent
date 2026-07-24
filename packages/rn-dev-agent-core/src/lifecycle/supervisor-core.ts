@@ -4,6 +4,7 @@ export type SupervisorAction =
   | { kind: 'toWorker'; line: string }
   | { kind: 'toClient'; line: string }
   | { kind: 'spawn' }
+  | { kind: 'shutdown' }
   | { kind: 'exit'; code: number };
 
 export interface SupervisorCoreOpts {
@@ -214,7 +215,7 @@ export class SupervisorCore {
     signal: string | null,
     shutdownRequested: boolean,
   ): SupervisorAction[] {
-    if (shutdownRequested) return [{ kind: 'exit', code: 0 }];
+    if (shutdownRequested) return [{ kind: 'shutdown' }];
     this.lastExit = workerExitDetail(code, signal);
     const errors: SupervisorAction[] = [...this.pending].map((id) => ({
       kind: 'toClient',

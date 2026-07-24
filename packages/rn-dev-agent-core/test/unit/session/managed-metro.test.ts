@@ -211,11 +211,16 @@ test('managed Metro stops its owned process tree and proves the listener is gone
     binding,
     { sessionId: 'session-a', signerCapability: 'signer' },
     {
-      readBirth: (pid) =>
-        stopped ? null : { pid, source: 'linux-proc', token: `birth-${pid}` },
+      probeBirth: (pid) =>
+        stopped
+          ? { status: 'absent' }
+          : {
+              status: 'present',
+              birth: { pid, source: 'linux-proc', token: `birth-${pid}` },
+            },
       probeListener: () =>
         stopped ? { status: 'absent' } : { status: 'listening', pid: 202 },
-      signalTree: (pid, signal) => signals.push([pid, signal]),
+      signalTree: ({ launcherPid, signal }) => signals.push([launcherPid, signal]),
       wait: async () => {
         stopped = true;
       },
@@ -224,4 +229,213 @@ test('managed Metro stops its owned process tree and proves the listener is gone
 
   assert.equal(result, true);
   assert.deepEqual(signals, [[101, 'SIGTERM']]);
+});
+
+test('managed Metro accepts authenticated cleanup when processes and port are already absent', async () => {
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => ({
+        pid: 101,
+        exitCode: null,
+        kill: () => true,
+        unref: () => {},
+      }),
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'birth-202',
+        servingRoot: '/app',
+      }),
+    },
+  );
+  let signalled = false;
+
+  const result = await stopManagedMetro(
+    binding,
+    { sessionId: 'session-a', signerCapability: 'signer' },
+    {
+      probeBirth: () => ({ status: 'absent' }),
+      probeListener: () => ({ status: 'absent' }),
+      signalTree: () => {
+        signalled = true;
+      },
+    },
+  );
+
+  assert.equal(result, true);
+  assert.equal(signalled, false);
+});
+
+test('managed Metro refuses cleanup when process absence is unknown', async () => {
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => ({
+        pid: 101,
+        exitCode: null,
+        kill: () => true,
+        unref: () => {},
+      }),
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'birth-202',
+        servingRoot: '/app',
+      }),
+    },
+  );
+
+  const result = await stopManagedMetro(
+    binding,
+    { sessionId: 'session-a', signerCapability: 'signer' },
+    {
+      probeBirth: () => ({ status: 'unknown' }),
+      probeListener: () => ({ status: 'absent' }),
+    },
+  );
+
+  assert.equal(result, false);
+});
+
+test('managed Metro stops an exact listener after its launcher already exited', async () => {
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => ({
+        pid: 101,
+        exitCode: null,
+        kill: () => true,
+        unref: () => {},
+      }),
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'birth-202',
+        servingRoot: '/app',
+      }),
+    },
+  );
+  let listenerPresent = true;
+  const signals: Array<{ launcherPresent: boolean; listenerPid: number }> = [];
+
+  const result = await stopManagedMetro(
+    binding,
+    { sessionId: 'session-a', signerCapability: 'signer' },
+    {
+      probeBirth: (pid) => {
+        if (pid === 101 || !listenerPresent) return { status: 'absent' };
+        return {
+          status: 'present',
+          birth: { pid, source: 'linux-proc', token: 'birth-202' },
+        };
+      },
+      probeListener: () =>
+        listenerPresent ? { status: 'listening', pid: 202 } : { status: 'absent' },
+      signalTree: ({ launcherPresent, listenerPid }) => {
+        signals.push({ launcherPresent, listenerPid });
+        listenerPresent = false;
+      },
+    },
+  );
+
+  assert.equal(result, true);
+  assert.deepEqual(signals, [{ launcherPresent: false, listenerPid: 202 }]);
+});
+
+test('managed Metro startup failure stops the owned tree before returning', async () => {
+  const child = {
+    pid: 101,
+    exitCode: null,
+    kill: () => true,
+    unref: () => {},
+  };
+  let stopped = false;
+  let captureAttempted = false;
+  const signals: number[] = [];
+
+  await assert.rejects(
+    startManagedMetro(
+      {
+        appRoot: '/app',
+        runtimeRoot: '/tmp',
+        sourceRoot: '/app',
+        sessionId: 'session-a',
+        port: 8341,
+        instanceId: 'metro-a',
+        buildGeneration: 1,
+        signerCapability: 'signer',
+      },
+      {
+        readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+        exists: () => true,
+        spawnProcess: () => child,
+        listenerPid: () => 202,
+        listenerOwnedByLauncher: () => true,
+        readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+        probeBirth: (pid) =>
+          stopped
+            ? { status: 'absent' }
+            : {
+                status: 'present',
+                birth: { pid, source: 'linux-proc', token: `birth-${pid}` },
+              },
+        probeListener: () =>
+          stopped ? { status: 'absent' } : { status: 'listening', pid: 202 },
+        capture: async () => {
+          captureAttempted = true;
+          throw new Error('capture failed');
+        },
+        signalTree: ({ launcherPid }) => {
+          signals.push(launcherPid);
+          stopped = true;
+        },
+        wait: async () => {
+          if (captureAttempted) child.exitCode = 1;
+        },
+      },
+    ),
+    /METRO_START_UNAVAILABLE/,
+  );
+
+  assert.deepEqual(signals, [101]);
 });

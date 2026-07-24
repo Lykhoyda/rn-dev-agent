@@ -66448,15 +66448,71 @@ function probeManagedMetroListener(port, platform = process.platform, execute = 
 function managementProof(sessionId, launcherPid, launcherBirth, instanceId, signerCapability) {
   return createHmac2("sha256", signerCapability).update(`${sessionId}\0${launcherPid}\0${launcherBirth}\0${instanceId}`).digest("hex");
 }
-function signalProcessTree(pid, signal) {
+function signalProcessTree(input) {
   if (process.platform === "win32") {
+    const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
     execFileSync13("taskkill.exe", ["/PID", String(pid), "/T"], {
       stdio: "ignore",
       timeout: 2e3
     });
     return;
   }
-  process.kill(-pid, signal);
+  process.kill(input.launcherPresent ? -input.launcherPid : input.listenerPid, input.signal);
+}
+function exactProcessState(expected, probe) {
+  if (probe.status === "unknown")
+    return "unknown";
+  if (probe.status === "absent")
+    return "stopped";
+  return probe.birth.token === expected.birth ? "present" : "stopped";
+}
+async function stopManagedMetroProcesses(input, dependencies) {
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
+  const signalTree = dependencies.signalTree ?? signalProcessTree;
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve8) => setTimeout(resolve8, ms)));
+  const inspect = () => {
+    const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
+    const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
+    const port = probeListener(input.port);
+    return { launcher, listener, port };
+  };
+  const initial = inspect();
+  if (initial.launcher === "unknown" || initial.listener === "unknown" || initial.port.status === "unknown") {
+    return false;
+  }
+  if (initial.port.status === "listening" && (!input.listener || initial.port.pid !== input.listener.pid || initial.listener !== "present")) {
+    return false;
+  }
+  if (initial.launcher === "stopped" && initial.listener === "stopped" && initial.port.status === "absent") {
+    return true;
+  }
+  try {
+    signalTree({
+      launcherPid: input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.launcher.pid,
+      launcherPresent: initial.launcher === "present",
+      signal: "SIGTERM"
+    });
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    const current = inspect();
+    if (current.launcher === "unknown" || current.listener === "unknown" || current.port.status === "unknown") {
+      return false;
+    }
+    if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
+      return true;
+    }
+    if (current.port.status === "listening" && (!input.listener || current.port.pid !== input.listener.pid || current.listener !== "present")) {
+      return false;
+    }
+    if (Date.now() >= deadline)
+      return false;
+    await wait(25);
+  }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
   if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
@@ -66468,32 +66524,11 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual5(expectedBuffer, observedBuffer)) {
     return false;
   }
-  const readBirth = dependencies.readBirth ?? readProcessBirth;
-  const launcherBirth = readBirth(binding.launcherPid);
-  const listenerBirth = readBirth(binding.pid);
-  const listener = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
-  if (!launcherBirth || launcherBirth.token !== binding.launcherBirth || !listenerBirth || listenerBirth.token !== binding.birth || listener.status !== "listening" || listener.pid !== binding.pid) {
-    return false;
-  }
-  try {
-    (dependencies.signalTree ?? signalProcessTree)(binding.launcherPid, "SIGTERM");
-  } catch {
-    return false;
-  }
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve8) => setTimeout(resolve8, ms)));
-  const deadline = Date.now() + 2e3;
-  while (true) {
-    const currentLauncher = readBirth(binding.launcherPid);
-    const currentListener = readBirth(binding.pid);
-    const currentPort = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
-    const launcherStopped = !currentLauncher || currentLauncher.token !== binding.launcherBirth;
-    const listenerStopped = !currentListener || currentListener.token !== binding.birth;
-    if (launcherStopped && listenerStopped && currentPort.status === "absent")
-      return true;
-    if (currentPort.status === "unknown" || Date.now() >= deadline)
-      return false;
-    await wait(25);
-  }
+  return stopManagedMetroProcesses({
+    port: binding.port,
+    launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
+    listener: { pid: binding.pid, birth: binding.birth }
+  }, dependencies);
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
@@ -66741,7 +66776,12 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
         const packagePath = join49(appRoot, "package.json");
-        const metroConfigPath = ["metro.config.js", "metro.config.cjs"].map((name) => join49(appRoot, name)).find((path) => {
+        assertNoSymlinkPath(appRoot, packagePath);
+        const metroConfigCandidates = ["metro.config.js", "metro.config.cjs"].map((name) => join49(appRoot, name));
+        for (const path of metroConfigCandidates) {
+          assertNoSymlinkPath(appRoot, path);
+        }
+        const metroConfigPath = metroConfigCandidates.find((path) => {
           try {
             readFileSync34(path, "utf8");
             return true;
@@ -66753,6 +66793,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "metro.config.js or metro.config.cjs is required for integration");
         }
         const manifestPath = join49(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+        assertNoSymlinkPath(appRoot, manifestPath);
         const packageJson = JSON.parse(readFileSync34(packagePath, "utf8"));
         let existing;
         try {

@@ -146,7 +146,7 @@ test('GH#264 core: clean exit 0 (no signal, not shutdown) exits the supervisor i
 test('GH#264 core: supervisor-initiated shutdown exits 0 with no death errors', () => {
   const core = new SupervisorCore();
   core.onClientLine(req(5, 'tools/call'));
-  assert.deepEqual(core.onWorkerExit(null, 'SIGTERM', true), [{ kind: 'exit', code: 0 }]);
+  assert.deepEqual(core.onWorkerExit(null, 'SIGTERM', true), [{ kind: 'shutdown' }]);
 });
 
 test('GH#264 workerExitDetail: signal wins over code', () => {

@@ -3,7 +3,7 @@ import { failResult, okResult } from '../utils.js';
 import { verifyBuildReceipt } from '../session/build-receipt.js';
 import { captureInstallGeneration, } from '../session/install-authority.js';
 import { captureMetroBinding } from '../session/metro-binding.js';
-import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, restorePackageIntegrationFiles, } from '../session/package-integration.js';
+import { applyPackageIntegration, assertNoSymlinkPath, previewMetroIntegration, previewPackageIntegration, restorePackageIntegrationFiles, } from '../session/package-integration.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -283,9 +283,12 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'session app root is unavailable for integration');
                 }
                 const packagePath = join(appRoot, 'package.json');
-                const metroConfigPath = ['metro.config.js', 'metro.config.cjs']
-                    .map((name) => join(appRoot, name))
-                    .find((path) => {
+                assertNoSymlinkPath(appRoot, packagePath);
+                const metroConfigCandidates = ['metro.config.js', 'metro.config.cjs'].map((name) => join(appRoot, name));
+                for (const path of metroConfigCandidates) {
+                    assertNoSymlinkPath(appRoot, path);
+                }
+                const metroConfigPath = metroConfigCandidates.find((path) => {
                     try {
                         readFileSync(path, 'utf8');
                         return true;
@@ -298,6 +301,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'metro.config.js or metro.config.cjs is required for integration');
                 }
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
+                assertNoSymlinkPath(appRoot, manifestPath);
                 const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
                 let existing;
                 try {

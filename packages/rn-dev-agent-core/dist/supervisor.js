@@ -102,7 +102,7 @@ else {
                 apply(core.onSpawned());
             }
             else
-                process.exit(action.code);
+                closeAuthorityAndExit(action.kind === 'shutdown' ? 0 : action.code);
         }
     }
     function spawnWorker() {
@@ -162,16 +162,16 @@ else {
         }
         child.on('exit', (code, signal) => onDeath(code, signal, ''));
     }
-    function closeAuthorityAndExit() {
+    function closeAuthorityAndExit(exitCode = 0) {
         void authority
             ?.close()
-            .then(() => process.exit(0))
+            .then(() => process.exit(exitCode))
             .catch((error) => {
             process.stderr.write(`rn-bridge-supervisor: authority cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
             process.exit(2);
         });
         if (!authority)
-            process.exit(0);
+            process.exit(exitCode);
     }
     function beginShutdown(why) {
         if (shutdownRequested)
@@ -193,9 +193,6 @@ else {
             }
         }, 3000);
         force.unref();
-        child.on('exit', () => {
-            closeAuthorityAndExit();
-        });
     }
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => {

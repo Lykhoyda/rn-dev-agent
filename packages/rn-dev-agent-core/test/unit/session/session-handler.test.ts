@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 
@@ -539,4 +542,49 @@ test('session release retains claims when managed Metro shutdown is not proven',
   assert.equal(result.isError, true);
   assert.equal(released, false);
   assert.match(result.content[0].text, /METRO_AUTHORITY_MISMATCH/);
+});
+
+test('integration preview rejects a symlinked .rn-agent before reading its manifest', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-preview-symlink-'));
+  const external = mkdtempSync(join(tmpdir(), 'rn-session-preview-external-'));
+  try {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        scripts: { ios: 'expo run:ios', android: 'expo run:android' },
+      }),
+    );
+    writeFileSync(join(root, 'metro.config.js'), 'module.exports = {};\n');
+    mkdirSync(join(external, 'integration'));
+    writeFileSync(
+      join(external, 'integration', 'rn-session-integration.json'),
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        originalScripts: { ios: ['external'], android: ['external'] },
+      }),
+    );
+    symlinkSync(external, join(root, '.rn-agent'));
+    const status = {
+      sessionId: 'session-a',
+      source: { appRoot: root },
+      bindings: {},
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    });
+
+    const result = await handler({ action: 'preview_integration' });
+
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /SESSION_INTEGRATION_PATH_UNSAFE/);
+    assert.doesNotMatch(result.content[0].text, /external/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
 });
