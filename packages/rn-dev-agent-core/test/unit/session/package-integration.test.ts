@@ -12,12 +12,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   applyPackageIntegration,
   previewMetroIntegration,
   previewPackageIntegration,
+  readRegularFileNoFollow,
   renderMetroIntegrationAdapter,
   renderProjectAdapter,
   restoreMetroIntegration,
@@ -250,6 +251,24 @@ test('confirmed integration rejects a symlinked .rn-agent ancestor before writin
     rmSync(external, { force: true, recursive: true });
   }
 });
+
+test(
+  'integration reads reject non-regular inputs without blocking',
+  { skip: process.platform === 'win32' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-session-input-fifo-'));
+    try {
+      const fifo = join(root, 'package.json');
+      execFileSync('mkfifo', [fifo]);
+      assert.throws(
+        () => readRegularFileNoFollow(root, fifo),
+        /integration input is not a regular file/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test('confirmed integration can be transactionally restored through its public file surface', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-'));

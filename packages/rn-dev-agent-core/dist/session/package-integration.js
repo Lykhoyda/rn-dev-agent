@@ -1,5 +1,5 @@
 import { createBuildLaunchPlan } from './build-adapter.js';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
@@ -283,12 +283,15 @@ function atomicWrite(path, contents, mode) {
     chmodSync(temporary, mode);
     renameSync(temporary, path);
 }
-function snapshotFiles(paths) {
-    return paths.map((path) => ({
-        path,
-        contents: existsSync(path) ? readFileSync(path) : null,
-        mode: existsSync(path) ? statSync(path).mode & 0o777 : 0o600,
-    }));
+function snapshotFiles(root, paths) {
+    return paths.map((path) => {
+        const contents = readOptionalRegularFileNoFollow(root, path);
+        return {
+            path,
+            contents: contents === undefined ? null : Buffer.from(contents),
+            mode: contents === undefined ? 0o600 : statSync(path).mode & 0o777,
+        };
+    });
 }
 function restoreSnapshots(snapshots) {
     for (const snapshot of [...snapshots].reverse()) {
@@ -320,25 +323,61 @@ export function assertNoSymlinkPath(root, candidate) {
         }
     }
 }
+function regularFileIdentity(root, candidate) {
+    assertNoSymlinkPath(root, candidate);
+    const identity = lstatSync(candidate, { bigint: true });
+    if (!identity.isFile()) {
+        throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file');
+    }
+    return { dev: identity.dev, ino: identity.ino };
+}
+export function readRegularFileNoFollow(root, candidate) {
+    const before = regularFileIdentity(root, candidate);
+    const descriptor = openSync(candidate, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+        const opened = fstatSync(descriptor, { bigint: true });
+        const after = regularFileIdentity(root, candidate);
+        if (!opened.isFile() ||
+            before.dev !== opened.dev ||
+            before.ino !== opened.ino ||
+            after.dev !== opened.dev ||
+            after.ino !== opened.ino) {
+            throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening');
+        }
+        return readFileSync(descriptor, 'utf8');
+    }
+    finally {
+        closeSync(descriptor);
+    }
+}
+export function readOptionalRegularFileNoFollow(root, candidate) {
+    try {
+        return readRegularFileNoFollow(root, candidate);
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return undefined;
+        throw error;
+    }
+}
 export function applyPackageIntegration(input) {
     const appRoot = resolve(input.appRoot);
     const packagePath = join(appRoot, 'package.json');
     const integrationRoot = join(appRoot, '.rn-agent', 'integration');
     const manifestPath = join(integrationRoot, 'rn-session-integration.json');
     const adapterPath = join(appRoot, ADAPTER);
-    const metroConfigPath = ['metro.config.js', 'metro.config.cjs']
-        .map((name) => join(appRoot, name))
-        .find((path) => {
-        try {
-            return lstatSync(path).isFile();
+    let metroConfig;
+    for (const path of ['metro.config.js', 'metro.config.cjs'].map((name) => join(appRoot, name))) {
+        const contents = readOptionalRegularFileNoFollow(appRoot, path);
+        if (contents !== undefined) {
+            metroConfig = { path, contents };
+            break;
         }
-        catch {
-            return false;
-        }
-    });
-    if (!metroConfigPath) {
+    }
+    if (!metroConfig) {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required');
     }
+    const metroConfigPath = metroConfig.path;
     const metroAdapterPath = join(appRoot, METRO_ADAPTER);
     const authorityModulePath = join(appRoot, AUTHORITY_MODULE);
     for (const path of [
@@ -351,20 +390,25 @@ export function applyPackageIntegration(input) {
     ]) {
         assertNoSymlinkPath(appRoot, path);
     }
-    const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+    const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
     const existing = (() => {
         try {
-            return JSON.parse(readFileSync(manifestPath, 'utf8'));
+            const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+            return manifest === undefined
+                ? undefined
+                : JSON.parse(manifest);
         }
-        catch {
-            return undefined;
+        catch (error) {
+            if (error instanceof SyntaxError)
+                return undefined;
+            throw error;
         }
     })();
     const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
-    const metroSource = readFileSync(metroConfigPath, 'utf8');
+    const metroSource = metroConfig.contents;
     const nextMetroSource = previewMetroIntegration(metroSource);
     preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
-    const snapshots = snapshotFiles([
+    const snapshots = snapshotFiles(appRoot, [
         packagePath,
         manifestPath,
         adapterPath,
@@ -393,7 +437,7 @@ export function restorePackageIntegrationFiles(input) {
     const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
     assertNoSymlinkPath(appRoot, packagePath);
     assertNoSymlinkPath(appRoot, manifestPath);
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const manifest = JSON.parse(readRegularFileNoFollow(appRoot, manifestPath));
     const metroConfig = manifest.metroConfig === undefined ? 'metro.config.js' : manifest.metroConfig;
     if (metroConfig !== 'metro.config.js' && metroConfig !== 'metro.config.cjs') {
         throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config');
@@ -408,11 +452,11 @@ export function restorePackageIntegrationFiles(input) {
     for (const path of [metroConfigPath, ...generated]) {
         assertNoSymlinkPath(appRoot, path);
     }
-    const snapshots = snapshotFiles([packagePath, metroConfigPath, ...generated]);
+    const snapshots = snapshotFiles(appRoot, [packagePath, metroConfigPath, ...generated]);
     try {
-        const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+        const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
         atomicWrite(packagePath, `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}\n`, 0o644);
-        atomicWrite(metroConfigPath, restoreMetroIntegration(readFileSync(metroConfigPath, 'utf8')), 0o644);
+        atomicWrite(metroConfigPath, restoreMetroIntegration(readRegularFileNoFollow(appRoot, metroConfigPath)), 0o644);
         for (const path of generated)
             rmSync(path, { force: true });
     }

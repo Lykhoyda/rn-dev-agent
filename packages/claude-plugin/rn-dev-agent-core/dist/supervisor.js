@@ -10406,8 +10406,16 @@ import { createHmac, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync6) {
   return probeMetroListener(port, platform, execute);
 }
-function managementProof(sessionId, launcherPid, launcherBirth, instanceId, signerCapability) {
-  return createHmac("sha256", signerCapability).update(`${sessionId}\0${launcherPid}\0${launcherBirth}\0${instanceId}`).digest("hex");
+function managementProof(sessionId, authority, signerCapability) {
+  return createHmac("sha256", signerCapability).update([
+    sessionId,
+    authority.port,
+    authority.pid,
+    authority.birth,
+    authority.launcherPid,
+    authority.launcherBirth,
+    authority.instanceId
+  ].join("\0")).digest("hex");
 }
 function signalProcessTree(input) {
   if (process.platform === "win32") {
@@ -10418,7 +10426,7 @@ function signalProcessTree(input) {
     });
     return;
   }
-  process.kill(input.launcherPresent ? -input.launcherPid : input.listenerPid, input.signal);
+  process.kill(-input.launcherPid, input.signal);
 }
 function exactProcessState(expected, probe) {
   if (probe.status === "unknown")
@@ -10442,7 +10450,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   if (initial.launcher === "unknown" || initial.listener === "unknown" || initial.port.status === "unknown") {
     return false;
   }
-  if (initial.port.status === "listening" && (!input.listener || initial.port.pid !== input.listener.pid || initial.listener !== "present")) {
+  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.launcher !== "present")) {
     return false;
   }
   if (initial.launcher === "stopped" && initial.listener === "stopped" && initial.port.status === "absent") {
@@ -10467,7 +10475,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
     if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
       return true;
     }
-    if (current.port.status === "listening" && (!input.listener || current.port.pid !== input.listener.pid || current.listener !== "present")) {
+    if (current.port.status === "listening" && input.listener && (current.port.pid !== input.listener.pid || current.listener !== "present")) {
       return false;
     }
     if (Date.now() >= deadline)
@@ -10479,7 +10487,14 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
     return false;
   }
-  const expected = managementProof(input.sessionId, binding.launcherPid, binding.launcherBirth, binding.instanceId, input.signerCapability);
+  const expected = managementProof(input.sessionId, {
+    port: binding.port,
+    pid: binding.pid,
+    birth: binding.birth,
+    launcherPid: binding.launcherPid,
+    launcherBirth: binding.launcherBirth,
+    instanceId: binding.instanceId
+  }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
   if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual2(expectedBuffer, observedBuffer)) {
@@ -24191,11 +24206,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -24212,10 +24227,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants2);
+        this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -24276,8 +24291,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants2) {
-        this.code = optimizeExpr(this.code, names, constants2);
+      optimizeNames(names, constants3) {
+        this.code = optimizeExpr(this.code, names, constants3);
         return this;
       }
       get names() {
@@ -24306,12 +24321,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants2))
+          if (n.optimizeNames(names, constants3))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -24364,12 +24379,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
-        if (!(super.optimizeNames(names, constants2) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants3);
+        if (!(super.optimizeNames(names, constants3) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants2);
+        this.condition = optimizeExpr(this.condition, names, constants3);
         return this;
       }
       get names() {
@@ -24392,10 +24407,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants2);
+        this.iteration = optimizeExpr(this.iteration, names, constants3);
         return this;
       }
       get names() {
@@ -24431,10 +24446,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants2);
+        this.iterable = optimizeExpr(this.iterable, names, constants3);
         return this;
       }
       get names() {
@@ -24476,11 +24491,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a, _b;
-        super.optimizeNames(names, constants2);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
+        super.optimizeNames(names, constants3);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants3);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
         return this;
       }
       get names() {
@@ -24781,7 +24796,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants2) {
+    function optimizeExpr(expr, names, constants3) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -24796,14 +24811,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants2[n.str];
+        const c = constants3[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -67906,7 +67921,7 @@ var init_build_adapter = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { chmodSync as chmodSync5, existsSync as existsSync33, lstatSync as lstatSync10, mkdirSync as mkdirSync21, readFileSync as readFileSync34, renameSync as renameSync11, rmSync as rmSync8, statSync as statSync13, writeFileSync as writeFileSync21 } from "node:fs";
+import { chmodSync as chmodSync5, closeSync as closeSync5, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync10, mkdirSync as mkdirSync21, openSync as openSync5, readFileSync as readFileSync34, renameSync as renameSync11, rmSync as rmSync8, statSync as statSync13, writeFileSync as writeFileSync21 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute5, join as join51, relative as relative3, resolve as resolve8, sep as sep6 } from "node:path";
 function renderMetroIntegrationAdapter() {
   return `'use strict';
@@ -68178,12 +68193,15 @@ function atomicWrite(path, contents, mode) {
   chmodSync5(temporary, mode);
   renameSync11(temporary, path);
 }
-function snapshotFiles(paths) {
-  return paths.map((path) => ({
-    path,
-    contents: existsSync33(path) ? readFileSync34(path) : null,
-    mode: existsSync33(path) ? statSync13(path).mode & 511 : 384
-  }));
+function snapshotFiles(root, paths) {
+  return paths.map((path) => {
+    const contents = readOptionalRegularFileNoFollow(root, path);
+    return {
+      path,
+      contents: contents === void 0 ? null : Buffer.from(contents),
+      mode: contents === void 0 ? 384 : statSync13(path).mode & 511
+    };
+  });
 }
 function restoreSnapshots(snapshots) {
   for (const snapshot of [...snapshots].reverse()) {
@@ -68213,22 +68231,55 @@ function assertNoSymlinkPath(root, candidate) {
     }
   }
 }
+function regularFileIdentity(root, candidate) {
+  assertNoSymlinkPath(root, candidate);
+  const identity2 = lstatSync10(candidate, { bigint: true });
+  if (!identity2.isFile()) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file");
+  }
+  return { dev: identity2.dev, ino: identity2.ino };
+}
+function readRegularFileNoFollow(root, candidate) {
+  const before = regularFileIdentity(root, candidate);
+  const descriptor = openSync5(candidate, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+  try {
+    const opened = fstatSync2(descriptor, { bigint: true });
+    const after = regularFileIdentity(root, candidate);
+    if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
+    }
+    return readFileSync34(descriptor, "utf8");
+  } finally {
+    closeSync5(descriptor);
+  }
+}
+function readOptionalRegularFileNoFollow(root, candidate) {
+  try {
+    return readRegularFileNoFollow(root, candidate);
+  } catch (error2) {
+    if (error2.code === "ENOENT")
+      return void 0;
+    throw error2;
+  }
+}
 function applyPackageIntegration(input) {
   const appRoot = resolve8(input.appRoot);
   const packagePath = join51(appRoot, "package.json");
   const integrationRoot = join51(appRoot, ".rn-agent", "integration");
   const manifestPath = join51(integrationRoot, "rn-session-integration.json");
   const adapterPath = join51(appRoot, ADAPTER);
-  const metroConfigPath = ["metro.config.js", "metro.config.cjs"].map((name) => join51(appRoot, name)).find((path) => {
-    try {
-      return lstatSync10(path).isFile();
-    } catch {
-      return false;
+  let metroConfig;
+  for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join51(appRoot, name))) {
+    const contents = readOptionalRegularFileNoFollow(appRoot, path);
+    if (contents !== void 0) {
+      metroConfig = { path, contents };
+      break;
     }
-  });
-  if (!metroConfigPath) {
+  }
+  if (!metroConfig) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
   }
+  const metroConfigPath = metroConfig.path;
   const metroAdapterPath = join51(appRoot, METRO_ADAPTER);
   const authorityModulePath = join51(appRoot, AUTHORITY_MODULE);
   for (const path of [
@@ -68241,19 +68292,22 @@ function applyPackageIntegration(input) {
   ]) {
     assertNoSymlinkPath(appRoot, path);
   }
-  const packageJson = JSON.parse(readFileSync34(packagePath, "utf8"));
+  const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
   const existing = (() => {
     try {
-      return JSON.parse(readFileSync34(manifestPath, "utf8"));
-    } catch {
-      return void 0;
+      const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+      return manifest === void 0 ? void 0 : JSON.parse(manifest);
+    } catch (error2) {
+      if (error2 instanceof SyntaxError)
+        return void 0;
+      throw error2;
     }
   })();
   const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
-  const metroSource = readFileSync34(metroConfigPath, "utf8");
+  const metroSource = metroConfig.contents;
   const nextMetroSource = previewMetroIntegration(metroSource);
   preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
-  const snapshots = snapshotFiles([
+  const snapshots = snapshotFiles(appRoot, [
     packagePath,
     manifestPath,
     adapterPath,
@@ -68283,7 +68337,7 @@ function restorePackageIntegrationFiles(input) {
   const manifestPath = join51(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
   assertNoSymlinkPath(appRoot, packagePath);
   assertNoSymlinkPath(appRoot, manifestPath);
-  const manifest = JSON.parse(readFileSync34(manifestPath, "utf8"));
+  const manifest = JSON.parse(readRegularFileNoFollow(appRoot, manifestPath));
   const metroConfig = manifest.metroConfig === void 0 ? "metro.config.js" : manifest.metroConfig;
   if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
@@ -68298,12 +68352,12 @@ function restorePackageIntegrationFiles(input) {
   for (const path of [metroConfigPath, ...generated]) {
     assertNoSymlinkPath(appRoot, path);
   }
-  const snapshots = snapshotFiles([packagePath, metroConfigPath, ...generated]);
+  const snapshots = snapshotFiles(appRoot, [packagePath, metroConfigPath, ...generated]);
   try {
-    const packageJson = JSON.parse(readFileSync34(packagePath, "utf8"));
+    const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
     atomicWrite(packagePath, `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
 `, 420);
-    atomicWrite(metroConfigPath, restoreMetroIntegration(readFileSync34(metroConfigPath, "utf8")), 420);
+    atomicWrite(metroConfigPath, restoreMetroIntegration(readRegularFileNoFollow(appRoot, metroConfigPath)), 420);
     for (const path of generated)
       rmSync8(path, { force: true });
   } catch (error2) {
@@ -68329,7 +68383,6 @@ var init_package_integration = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { readFileSync as readFileSync35 } from "node:fs";
 import { dirname as dirname19, join as join52 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function sameMetroAuthority(current, next) {
@@ -68576,30 +68629,27 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
         const packagePath = join52(appRoot, "package.json");
-        assertNoSymlinkPath(appRoot, packagePath);
         const metroConfigCandidates = ["metro.config.js", "metro.config.cjs"].map((name) => join52(appRoot, name));
+        let metroConfig;
         for (const path of metroConfigCandidates) {
-          assertNoSymlinkPath(appRoot, path);
-        }
-        const metroConfigPath = metroConfigCandidates.find((path) => {
-          try {
-            readFileSync35(path, "utf8");
-            return true;
-          } catch {
-            return false;
+          const contents = readOptionalRegularFileNoFollow(appRoot, path);
+          if (contents !== void 0) {
+            metroConfig = { path, contents };
+            break;
           }
-        });
-        if (!metroConfigPath) {
+        }
+        if (!metroConfig) {
           throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "metro.config.js or metro.config.cjs is required for integration");
         }
         const manifestPath = join52(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
-        assertNoSymlinkPath(appRoot, manifestPath);
-        const packageJson = JSON.parse(readFileSync35(packagePath, "utf8"));
+        const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
         let existing;
         try {
-          existing = JSON.parse(readFileSync35(manifestPath, "utf8"));
-        } catch {
-          existing = void 0;
+          const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+          existing = manifest === void 0 ? void 0 : JSON.parse(manifest);
+        } catch (error2) {
+          if (!(error2 instanceof SyntaxError))
+            throw error2;
         }
         const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join52(dirname19(fileURLToPath4(import.meta.url)), "..", "rn-session.js");
         if (input.action === "restore_integration") {
@@ -68616,7 +68666,8 @@ function createSessionHandler(runtime, dependencies = {}) {
           return okResult({ restored: true, packagePath, manifestPath });
         }
         const preview = previewPackageIntegration(packageJson, existing, sessionCli);
-        const metroBefore = readFileSync35(metroConfigPath, "utf8");
+        const metroConfigPath = metroConfig.path;
+        const metroBefore = metroConfig.contents;
         const metroAfter = previewMetroIntegration(metroBefore);
         if (input.action === "preview_integration") {
           return okResult({
@@ -69983,7 +70034,7 @@ __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
 import { createHash as createHash16, randomUUID as randomUUID7 } from "node:crypto";
-import { readFileSync as readFileSync36, rmSync as rmSync9 } from "node:fs";
+import { readFileSync as readFileSync35, rmSync as rmSync9 } from "node:fs";
 import { execFile as execFile26 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -70387,7 +70438,7 @@ var init_index = __esm({
     init_target_device_authority();
     init_source_identity();
     pkgPath = join53(dirname20(fileURLToPath5(import.meta.url)), "..", "package.json");
-    pkgVersion = JSON.parse(readFileSync36(pkgPath, "utf8")).version;
+    pkgVersion = JSON.parse(readFileSync35(pkgPath, "utf8")).version;
     lockfile = null;
     diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
     noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
@@ -70663,7 +70714,7 @@ var init_index = __esm({
       readRoute: (c) => readLiveRoute(c),
       readShotFile: (path) => {
         try {
-          const buf = readFileSync36(path);
+          const buf = readFileSync35(path);
           const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
           return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
         } catch {
@@ -71660,7 +71711,7 @@ init_lockfile();
 init_parent_watch();
 import { randomUUID as randomUUID8 } from "node:crypto";
 import { spawn as spawn7 } from "node:child_process";
-import { readFileSync as readFileSync37 } from "node:fs";
+import { readFileSync as readFileSync36 } from "node:fs";
 import { dirname as dirname21, join as join54 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
@@ -72142,7 +72193,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   const noLock2 = process.argv.includes("--no-lock");
   let lockfile2 = null;
   if (!noLock2) {
-    const pkg = JSON.parse(readFileSync37(join54(here, "..", "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync36(join54(here, "..", "package.json"), "utf8"));
     lockfile2 = new Lockfile({ version: pkg.version });
     const lockResult = lockfile2.acquire();
     if (lockResult.status === "conflict") {

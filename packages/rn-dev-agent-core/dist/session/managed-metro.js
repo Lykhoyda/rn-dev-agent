@@ -63,10 +63,50 @@ export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
     }
     throw new Error('METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native');
 }
-function managementProof(sessionId, launcherPid, launcherBirth, instanceId, signerCapability) {
+function managementProof(sessionId, authority, signerCapability) {
     return createHmac('sha256', signerCapability)
-        .update(`${sessionId}\0${launcherPid}\0${launcherBirth}\0${instanceId}`)
+        .update([
+        sessionId,
+        authority.port,
+        authority.pid,
+        authority.birth,
+        authority.launcherPid,
+        authority.launcherBirth,
+        authority.instanceId,
+    ].join('\0'))
         .digest('hex');
+}
+async function stopSpawnedProcessGroup(input, dependencies) {
+    const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+    const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
+    const signalTree = dependencies.signalTree ?? signalProcessTree;
+    const wait = dependencies.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    let signalFailed = false;
+    try {
+        signalTree({
+            launcherPid: input.launcherPid,
+            listenerPid: input.launcherPid,
+            launcherPresent: true,
+            signal: 'SIGTERM',
+        });
+    }
+    catch {
+        signalFailed = true;
+    }
+    const deadline = Date.now() + 2_000;
+    while (true) {
+        const launcher = probeBirth(input.launcherPid);
+        const port = probeListener(input.port);
+        if (launcher.status === 'unknown' || port.status === 'unknown')
+            return false;
+        if (launcher.status === 'absent' && port.status === 'absent')
+            return true;
+        if (signalFailed)
+            return false;
+        if (Date.now() >= deadline)
+            return false;
+        await wait(25);
+    }
 }
 export async function startManagedMetro(input, dependencies = {}) {
     const command = resolveManagedMetroCommand(input.appRoot, dependencies);
@@ -90,7 +130,10 @@ export async function startManagedMetro(input, dependencies = {}) {
     const readBirth = dependencies.readBirth ?? readProcessBirth;
     const launcherBirth = readBirth(child.pid);
     if (!launcherBirth) {
-        child.kill('SIGTERM');
+        const cleanupProven = await stopSpawnedProcessGroup({ launcherPid: child.pid, port: input.port }, dependencies);
+        if (!cleanupProven) {
+            throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro launcher birth and cleanup could not be proven');
+        }
         throw new Error('PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven');
     }
     child.unref();
@@ -119,12 +162,15 @@ export async function startManagedMetro(input, dependencies = {}) {
                     sourceRoot: input.sourceRoot,
                     buildGeneration: input.buildGeneration,
                 }, { servingRoot: () => input.sourceRoot });
-                return {
+                const authority = {
                     ...binding,
                     mode: 'managed',
                     launcherPid: child.pid,
                     launcherBirth: launcherBirth.token,
-                    managementProof: managementProof(input.sessionId, child.pid, launcherBirth.token, instanceId, input.signerCapability),
+                };
+                return {
+                    ...authority,
+                    managementProof: managementProof(input.sessionId, authority, input.signerCapability),
                 };
             }
             catch (error) {
@@ -152,7 +198,7 @@ function signalProcessTree(input) {
         });
         return;
     }
-    process.kill(input.launcherPresent ? -input.launcherPid : input.listenerPid, input.signal);
+    process.kill(-input.launcherPid, input.signal);
 }
 function exactProcessState(expected, probe) {
     if (probe.status === 'unknown')
@@ -181,9 +227,9 @@ async function stopManagedMetroProcesses(input, dependencies) {
         return false;
     }
     if (initial.port.status === 'listening' &&
-        (!input.listener ||
-            initial.port.pid !== input.listener.pid ||
-            initial.listener !== 'present')) {
+        (input.listener
+            ? initial.port.pid !== input.listener.pid || initial.listener !== 'present'
+            : initial.launcher !== 'present')) {
         return false;
     }
     if (initial.launcher === 'stopped' &&
@@ -216,9 +262,8 @@ async function stopManagedMetroProcesses(input, dependencies) {
             return true;
         }
         if (current.port.status === 'listening' &&
-            (!input.listener ||
-                current.port.pid !== input.listener.pid ||
-                current.listener !== 'present')) {
+            input.listener &&
+            (current.port.pid !== input.listener.pid || current.listener !== 'present')) {
             return false;
         }
         if (Date.now() >= deadline)
@@ -237,7 +282,14 @@ export async function stopManagedMetro(binding, input, dependencies = {}) {
         typeof binding.managementProof !== 'string') {
         return false;
     }
-    const expected = managementProof(input.sessionId, binding.launcherPid, binding.launcherBirth, binding.instanceId, input.signerCapability);
+    const expected = managementProof(input.sessionId, {
+        port: binding.port,
+        pid: binding.pid,
+        birth: binding.birth,
+        launcherPid: binding.launcherPid,
+        launcherBirth: binding.launcherBirth,
+        instanceId: binding.instanceId,
+    }, input.signerCapability);
     const expectedBuffer = Buffer.from(expected, 'hex');
     const observedBuffer = Buffer.from(binding.managementProof, 'hex');
     if (expectedBuffer.length !== observedBuffer.length ||

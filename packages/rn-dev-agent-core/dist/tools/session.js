@@ -3,8 +3,7 @@ import { failResult, okResult } from '../utils.js';
 import { verifyBuildReceipt } from '../session/build-receipt.js';
 import { captureInstallGeneration, } from '../session/install-authority.js';
 import { captureMetroBinding } from '../session/metro-binding.js';
-import { applyPackageIntegration, assertNoSymlinkPath, previewMetroIntegration, previewPackageIntegration, restorePackageIntegrationFiles, } from '../session/package-integration.js';
-import { readFileSync } from 'node:fs';
+import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, readOptionalRegularFileNoFollow, readRegularFileNoFollow, restorePackageIntegrationFiles, } from '../session/package-integration.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
@@ -283,32 +282,31 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'session app root is unavailable for integration');
                 }
                 const packagePath = join(appRoot, 'package.json');
-                assertNoSymlinkPath(appRoot, packagePath);
                 const metroConfigCandidates = ['metro.config.js', 'metro.config.cjs'].map((name) => join(appRoot, name));
+                let metroConfig;
                 for (const path of metroConfigCandidates) {
-                    assertNoSymlinkPath(appRoot, path);
+                    const contents = readOptionalRegularFileNoFollow(appRoot, path);
+                    if (contents !== undefined) {
+                        metroConfig = { path, contents };
+                        break;
+                    }
                 }
-                const metroConfigPath = metroConfigCandidates.find((path) => {
-                    try {
-                        readFileSync(path, 'utf8');
-                        return true;
-                    }
-                    catch {
-                        return false;
-                    }
-                });
-                if (!metroConfigPath) {
+                if (!metroConfig) {
                     throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'metro.config.js or metro.config.cjs is required for integration');
                 }
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
-                assertNoSymlinkPath(appRoot, manifestPath);
-                const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+                const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
                 let existing;
                 try {
-                    existing = JSON.parse(readFileSync(manifestPath, 'utf8'));
+                    const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+                    existing =
+                        manifest === undefined
+                            ? undefined
+                            : JSON.parse(manifest);
                 }
-                catch {
-                    existing = undefined;
+                catch (error) {
+                    if (!(error instanceof SyntaxError))
+                        throw error;
                 }
                 const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ??
                     join(dirname(fileURLToPath(import.meta.url)), '..', 'rn-session.js');
@@ -326,7 +324,8 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     return okResult({ restored: true, packagePath, manifestPath });
                 }
                 const preview = previewPackageIntegration(packageJson, existing, sessionCli);
-                const metroBefore = readFileSync(metroConfigPath, 'utf8');
+                const metroConfigPath = metroConfig.path;
+                const metroBefore = metroConfig.contents;
                 const metroAfter = previewMetroIntegration(metroBefore);
                 if (input.action === 'preview_integration') {
                     return okResult({

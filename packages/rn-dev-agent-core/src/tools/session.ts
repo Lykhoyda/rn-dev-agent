@@ -12,13 +12,13 @@ import type { BundleAuthorityBinding } from '../session/dev-client-authority.js'
 import type { SessionStatus } from '../session/registry.js';
 import {
   applyPackageIntegration,
-  assertNoSymlinkPath,
   previewMetroIntegration,
   previewPackageIntegration,
+  readOptionalRegularFileNoFollow,
+  readRegularFileNoFollow,
   restorePackageIntegrationFiles,
   type PackageIntegrationManifest,
 } from '../session/package-integration.js';
-import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectSessionOwner } from '../session/process-owner.js';
@@ -459,22 +459,18 @@ export function createSessionHandler(
           );
         }
         const packagePath = join(appRoot, 'package.json');
-        assertNoSymlinkPath(appRoot, packagePath);
         const metroConfigCandidates = ['metro.config.js', 'metro.config.cjs'].map((name) =>
           join(appRoot, name),
         );
+        let metroConfig: { path: string; contents: string } | undefined;
         for (const path of metroConfigCandidates) {
-          assertNoSymlinkPath(appRoot, path);
+          const contents = readOptionalRegularFileNoFollow(appRoot, path);
+          if (contents !== undefined) {
+            metroConfig = { path, contents };
+            break;
+          }
         }
-        const metroConfigPath = metroConfigCandidates.find((path) => {
-            try {
-              readFileSync(path, 'utf8');
-              return true;
-            } catch {
-              return false;
-            }
-          });
-        if (!metroConfigPath) {
+        if (!metroConfig) {
           throw new SessionAuthorityError(
             'BUNDLE_HANDSHAKE_UNAVAILABLE',
             'metro.config.js or metro.config.cjs is required for integration',
@@ -486,16 +482,19 @@ export function createSessionHandler(
           'integration',
           'rn-session-integration.json',
         );
-        assertNoSymlinkPath(appRoot, manifestPath);
-        const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as Record<
+        const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath)) as Record<
           string,
           unknown
         >;
         let existing: PackageIntegrationManifest | undefined;
         try {
-          existing = JSON.parse(readFileSync(manifestPath, 'utf8')) as PackageIntegrationManifest;
-        } catch {
-          existing = undefined;
+          const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+          existing =
+            manifest === undefined
+              ? undefined
+              : (JSON.parse(manifest) as PackageIntegrationManifest);
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error;
         }
         const sessionCli =
           process.env.RN_DEV_AGENT_SESSION_CLI ??
@@ -520,7 +519,8 @@ export function createSessionHandler(
           return okResult({ restored: true, packagePath, manifestPath });
         }
         const preview = previewPackageIntegration(packageJson, existing, sessionCli);
-        const metroBefore = readFileSync(metroConfigPath, 'utf8');
+        const metroConfigPath = metroConfig.path;
+        const metroBefore = metroConfig.contents;
         const metroAfter = previewMetroIntegration(metroBefore);
         if (input.action === 'preview_integration') {
           return okResult({
