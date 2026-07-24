@@ -8642,7 +8642,7 @@ var SessionRegistry = class {
       if (handoff.consumed_ms !== null) {
         throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
       }
-      const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+      const row = asSession(this.#database.prepare("SELECT state, claim_epoch, authority_version FROM sessions WHERE session_id = ?").get(session.sessionId));
       if (!row || row.state !== "handoff" || row.claim_epoch !== session.claimEpoch) {
         throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff source owner changed");
       }
@@ -8650,6 +8650,7 @@ var SessionRegistry = class {
            SET state = ?, authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session.sessionId, session.claimEpoch);
       this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoffId);
+      this.#advanceActiveOperationFence(session, row.authority_version, row.authority_version + 1);
     });
   }
   getHandoffOwner(handoffId) {
@@ -9028,6 +9029,9 @@ var SessionRegistry = class {
       if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
         throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
       }
+      if (prior.state === "handoff_cleanup") {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption cannot discard an incomplete handoff cleanup plan");
+      }
       this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
              AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
@@ -9070,7 +9074,7 @@ var SessionRegistry = class {
   beginOperation(session, operation) {
     const now = this.#now();
     return this.#transaction(() => {
-      const owner = this.#requireSession(session);
+      const owner = this.#requireFenceableSession(session);
       const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
       if (active) {
@@ -9287,6 +9291,17 @@ var SessionRegistry = class {
            FROM sessions WHERE session_id = ?`).get(session.sessionId));
     if (!row || !isOperationalState(row.state) || row.claim_epoch !== session.claimEpoch) {
       throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
+    }
+    return row;
+  }
+  #requireFenceableSession(session) {
+    const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session.sessionId));
+    if (!row || !isFenceableState(row.state) || row.claim_epoch !== session.claimEpoch) {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
     }
     return row;
   }

@@ -268,33 +268,41 @@ export function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     return true;
 }
 export function proofCandidateCheckoutMatchesHead(candidateRoot, artifactPaths) {
+    return readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) !== null;
+}
+export function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
     try {
+        const root = realpathSync(candidateRoot);
         const statusArgs = [
             '-C',
-            candidateRoot,
+            root,
             'status',
             '--porcelain=v1',
             '--untracked-files=all',
             '--ignore-submodules=none',
         ];
         if (execFileSync('git', statusArgs, { encoding: 'utf8' }).trim())
-            return false;
+            return null;
+        const verifiedBytes = [];
         for (const artifactPath of artifactPaths) {
-            const artifactRelativePath = relative(candidateRoot, artifactPath).split(sep).join('/');
+            const resolvedArtifactPath = realpathSync(artifactPath);
+            const artifactRelativePath = relative(root, resolvedArtifactPath).split(sep).join('/');
             if (!artifactRelativePath ||
                 artifactRelativePath === '..' ||
                 artifactRelativePath.startsWith('../')) {
-                return false;
+                return null;
             }
-            execFileSync('git', ['-C', candidateRoot, 'ls-files', '--error-unmatch', artifactRelativePath]);
-            const headBytes = execFileSync('git', ['-C', candidateRoot, 'show', `HEAD:${artifactRelativePath}`], { maxBuffer: 128 * 1024 * 1024 });
-            if (hashBytes(readFileSync(artifactPath)) !== hashBytes(headBytes))
-                return false;
+            execFileSync('git', ['-C', root, 'ls-files', '--error-unmatch', artifactRelativePath]);
+            const headBytes = execFileSync('git', ['-C', root, 'show', `HEAD:${artifactRelativePath}`], { maxBuffer: 128 * 1024 * 1024 });
+            const artifactBytes = readFileSync(resolvedArtifactPath);
+            if (hashBytes(artifactBytes) !== hashBytes(headBytes))
+                return null;
+            verifiedBytes.push(artifactBytes);
         }
-        return !execFileSync('git', statusArgs, { encoding: 'utf8' }).trim();
+        return execFileSync('git', statusArgs, { encoding: 'utf8' }).trim() ? null : verifiedBytes;
     }
     catch {
-        return false;
+        return null;
     }
 }
 /**
@@ -303,9 +311,7 @@ export function proofCandidateCheckoutMatchesHead(candidateRoot, artifactPaths) 
  * process identity are captured at the strict-proof boundary.
  */
 export function readProofCandidateRuntime(candidateRoot) {
-    const root = resolve(candidateRoot);
-    if (root !== candidateRoot)
-        throw new Error('CANDIDATE_ROOT_NOT_NORMALIZED');
+    const root = realpathSync(resolve(candidateRoot));
     const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
         encoding: 'utf8',
     }).trim();
@@ -322,7 +328,8 @@ export function readProofCandidateRuntime(candidateRoot) {
     }
     const { host, coreBundle } = entrypoint;
     const runnerManifest = join(root, 'packages', host, 'runner-manifest.json');
-    if (!proofCandidateCheckoutMatchesHead(root, [coreBundle, runnerManifest])) {
+    const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
+    if (!artifacts) {
         throw new Error('CANDIDATE_CHECKOUT_NOT_CLEAN');
     }
     const confirmedSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
@@ -333,8 +340,8 @@ export function readProofCandidateRuntime(candidateRoot) {
     return proofCandidateRuntimeSchema.parse({
         repo: 'Lykhoyda/rn-dev-agent',
         sha,
-        coreBundleSha256: hashBytes(readFileSync(coreBundle)),
-        runnerManifestSha256: hashBytes(readFileSync(runnerManifest)),
+        coreBundleSha256: hashBytes(artifacts[0]),
+        runnerManifestSha256: hashBytes(artifacts[1]),
         mcp: { pid: process.pid, argv, cwd: process.cwd() },
     });
 }

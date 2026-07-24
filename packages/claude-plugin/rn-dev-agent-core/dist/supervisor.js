@@ -1588,7 +1588,7 @@ var init_registry = __esm({
           if (handoff.consumed_ms !== null) {
             throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
           }
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, authority_version FROM sessions WHERE session_id = ?").get(session.sessionId));
           if (!row || row.state !== "handoff" || row.claim_epoch !== session.claimEpoch) {
             throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff source owner changed");
           }
@@ -1596,6 +1596,7 @@ var init_registry = __esm({
            SET state = ?, authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session.sessionId, session.claimEpoch);
           this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoffId);
+          this.#advanceActiveOperationFence(session, row.authority_version, row.authority_version + 1);
         });
       }
       getHandoffOwner(handoffId) {
@@ -1974,6 +1975,9 @@ var init_registry = __esm({
           if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
             throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
           }
+          if (prior.state === "handoff_cleanup") {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption cannot discard an incomplete handoff cleanup plan");
+          }
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
              AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
@@ -2016,7 +2020,7 @@ var init_registry = __esm({
       beginOperation(session, operation) {
         const now = this.#now();
         return this.#transaction(() => {
-          const owner = this.#requireSession(session);
+          const owner = this.#requireFenceableSession(session);
           const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
           if (active) {
@@ -2233,6 +2237,17 @@ var init_registry = __esm({
            FROM sessions WHERE session_id = ?`).get(session.sessionId));
         if (!row || !isOperationalState(row.state) || row.claim_epoch !== session.claimEpoch) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
+        }
+        return row;
+      }
+      #requireFenceableSession(session) {
+        const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`).get(session.sessionId));
+        if (!row || !isFenceableState(row.state) || row.claim_epoch !== session.claimEpoch) {
+          throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
         }
         return row;
       }
@@ -58414,6 +58429,8 @@ function createRunActionHandler(deps = {}) {
         underlyingFailure: retryFailureDetail
       });
     } catch (err) {
+      if (err instanceof SessionAuthorityError)
+        throw err;
       const msg3 = err instanceof Error ? err.message : String(err);
       const autoRepair = {
         attempted: false,
@@ -58488,6 +58505,7 @@ var init_run_action = __esm({
     init_repair_action();
     init_path_safety();
     init_route_sequence();
+    init_registry();
     init_cdp_replay_dispatch();
     init_cdp_flow_replay();
     init_blind_probe_gate();
@@ -61342,37 +61360,40 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     return false;
   return true;
 }
-function proofCandidateCheckoutMatchesHead(candidateRoot, artifactPaths) {
+function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
+    const root = realpathSync4(candidateRoot);
     const statusArgs = [
       "-C",
-      candidateRoot,
+      root,
       "status",
       "--porcelain=v1",
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
     if (execFileSync11("git", statusArgs, { encoding: "utf8" }).trim())
-      return false;
+      return null;
+    const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const artifactRelativePath = relative2(candidateRoot, artifactPath).split(sep5).join("/");
+      const resolvedArtifactPath = realpathSync4(artifactPath);
+      const artifactRelativePath = relative2(root, resolvedArtifactPath).split(sep5).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
-        return false;
+        return null;
       }
-      execFileSync11("git", ["-C", candidateRoot, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync11("git", ["-C", candidateRoot, "show", `HEAD:${artifactRelativePath}`], { maxBuffer: 128 * 1024 * 1024 });
-      if (hashBytes(readFileSync23(artifactPath)) !== hashBytes(headBytes))
-        return false;
+      execFileSync11("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync11("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], { maxBuffer: 128 * 1024 * 1024 });
+      const artifactBytes = readFileSync23(resolvedArtifactPath);
+      if (hashBytes(artifactBytes) !== hashBytes(headBytes))
+        return null;
+      verifiedBytes.push(artifactBytes);
     }
-    return !execFileSync11("git", statusArgs, { encoding: "utf8" }).trim();
+    return execFileSync11("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
-    return false;
+    return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot) {
-  const root = resolve7(candidateRoot);
-  if (root !== candidateRoot)
-    throw new Error("CANDIDATE_ROOT_NOT_NORMALIZED");
+  const root = realpathSync4(resolve7(candidateRoot));
   const sha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -61389,7 +61410,8 @@ function readProofCandidateRuntime(candidateRoot) {
   }
   const { host, coreBundle } = entrypoint;
   const runnerManifest = join35(root, "packages", host, "runner-manifest.json");
-  if (!proofCandidateCheckoutMatchesHead(root, [coreBundle, runnerManifest])) {
+  const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
+  if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
   }
   const confirmedSha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
@@ -61400,8 +61422,8 @@ function readProofCandidateRuntime(candidateRoot) {
   return proofCandidateRuntimeSchema.parse({
     repo: "Lykhoyda/rn-dev-agent",
     sha,
-    coreBundleSha256: hashBytes(readFileSync23(coreBundle)),
-    runnerManifestSha256: hashBytes(readFileSync23(runnerManifest)),
+    coreBundleSha256: hashBytes(artifacts[0]),
+    runnerManifestSha256: hashBytes(artifacts[1]),
     mcp: { pid: process.pid, argv, cwd: process.cwd() }
   });
 }
@@ -68153,6 +68175,9 @@ var init_package_integration = __esm({
 import { readFileSync as readFileSync35 } from "node:fs";
 import { dirname as dirname19, join as join52 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
+function sameMetroAuthority(current, next) {
+  return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
+}
 async function waitForExactStopped(probe, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs;
   while (true) {
@@ -68330,13 +68355,16 @@ function createSessionHandler(runtime, dependencies = {}) {
           sourceRoot,
           buildGeneration
         });
+        const nextMetro = { ...metro, mode: input.mode ?? "external" };
+        const priorMetro = status.bindings.metro;
         const priorBundle = status.bindings.bundle;
         const priorTargetId = priorBundle?.targetId;
+        const metroUnchanged = sameMetroAuthority(priorMetro, nextMetro);
         registry2.claimResources(session, [{ type: "metro-port", key: String(port) }]);
         registry2.updateBindings(session, {
-          state: status.bindings.install ? "device_bound" : "metro_bound",
-          bindings: { metro: { ...metro, mode: input.mode ?? "external" }, bundle: null },
-          releaseResources: typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status.bindings.metroPort)}:${priorTargetId}` }] : []
+          state: metroUnchanged ? status.state : status.bindings.install ? "device_bound" : "metro_bound",
+          bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
+          releaseResources: !metroUnchanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status.bindings.metroPort)}:${priorTargetId}` }] : []
         });
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
@@ -68860,8 +68888,11 @@ function authorityFailure2(error2) {
   const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1];
   return failResult(message, code ?? "AUTHORITY_LOST_DURING_OPERATION");
 }
+function authorityErrorCode(error2) {
+  return error2 instanceof SessionAuthorityError ? error2.code : /^([A-Z][A-Z0-9_]+):/.exec(error2 instanceof Error ? error2.message : String(error2))?.[1];
+}
 function isOptionalBundleFailure(error2) {
-  const code = error2 instanceof SessionAuthorityError ? error2.code : /^([A-Z][A-Z0-9_]+):/.exec(error2 instanceof Error ? error2.message : String(error2))?.[1];
+  const code = authorityErrorCode(error2);
   return code === "BUNDLE_HANDSHAKE_UNAVAILABLE" || code === "BUNDLE_IDENTITY_MISMATCH" || code === "CDP_TARGET_AUTHORITY_MISMATCH" || code === "TARGET_CLAIM_CONFLICT";
 }
 function addMeta2(result, meta) {
@@ -68925,7 +68956,7 @@ function createAuthorityGate(runtime, dependencies) {
     wrap: (tool, handler) => async (...handlerArgs) => {
       const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
       const baseProfile = authorityProfileFor(tool, args);
-      const profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "cancel_handoff" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
+      const profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
         kind: "diagnostic",
         axes: [],
         mutation: false,
@@ -69085,7 +69116,7 @@ function createAuthorityGate(runtime, dependencies) {
             value: async () => {
               if (optionalBundleClaimed)
                 return true;
-              const currentStatus = runtime.status();
+              let currentStatus = runtime.status();
               if (!currentStatus.available) {
                 throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
               }
@@ -69102,9 +69133,62 @@ function createAuthorityGate(runtime, dependencies) {
                   args
                 });
               } catch (error2) {
-                if (!isOptionalBundleFailure(error2))
-                  throw error2;
-                return false;
+                if (authorityErrorCode(error2) !== "CDP_TARGET_AUTHORITY_MISMATCH" || !dependencies.refreshRuntimeBinding) {
+                  if (!isOptionalBundleFailure(error2))
+                    throw error2;
+                  return false;
+                }
+                registry2.verifyOperation(operation);
+                let bundle;
+                try {
+                  bundle = await dependencies.refreshRuntimeBinding(currentStatus);
+                } catch (refreshError) {
+                  if (refreshError instanceof SessionAuthorityError) {
+                    if (!isOptionalBundleFailure(refreshError))
+                      throw refreshError;
+                  }
+                  return false;
+                }
+                const priorBundle = currentStatus.bindings.bundle;
+                const metro = currentStatus.bindings.metro;
+                const oldTargetId = priorBundle?.targetId;
+                const newTargetId = bundle.targetId;
+                const metroPort = metro?.port;
+                if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+                  return false;
+                }
+                try {
+                  operation = registry2.replaceBindingsDuringOperation(operation, {
+                    state: "ready",
+                    bindings: { bundle },
+                    releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+                    claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+                  });
+                } catch (replacementError) {
+                  if (!isOptionalBundleFailure(replacementError))
+                    throw replacementError;
+                  return false;
+                }
+                const refreshedStatus = runtime.status();
+                if (!refreshedStatus.available) {
+                  throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+                }
+                currentStatus = refreshedStatus;
+                try {
+                  observation = await dependencies.probe({
+                    axis: "B",
+                    phase: "preflight",
+                    tool,
+                    profile,
+                    status: currentStatus,
+                    args
+                  });
+                } catch (refreshedProbeError) {
+                  if (!isOptionalBundleFailure(refreshedProbeError)) {
+                    throw refreshedProbeError;
+                  }
+                  return false;
+                }
               }
               registry2.verifyOperation(operation);
               status = currentStatus;
@@ -69377,6 +69461,7 @@ function createLocalAuthorityProbe(dependencies) {
   const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
+  const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
   return async ({ axis, status }) => {
     if (axis === "C") {
       const { registry: registry2, session } = dependencies.runtime.requireAvailable();
@@ -69460,11 +69545,21 @@ function createLocalAuthorityProbe(dependencies) {
       if (!client2.isConnected || !client2.connectedTarget) {
         throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "live CDP runtime is unavailable for bundle verification");
       }
-      const evaluated = await client2.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+      let evaluated;
+      try {
+        evaluated = await client2.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+      } catch {
+        throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "live CDP runtime could not be evaluated for bundle verification");
+      }
       if (typeof evaluated.value !== "string") {
         throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime did not expose a signed authority marker");
       }
-      const outer = JSON.parse(evaluated.value);
+      let outer;
+      try {
+        outer = JSON.parse(evaluated.value);
+      } catch {
+        throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "live CDP runtime returned an invalid bundle authority marker");
+      }
       const secret = dependencies.getSecret()?.signerCapability;
       if (!outer?.marker || outer.status !== "signed" || !secret) {
         throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "signed authority marker or signer capability is unavailable");
@@ -69502,9 +69597,11 @@ function createLocalAuthorityProbe(dependencies) {
     if (axis === "R") {
       const runner = objectBinding(status, "runner");
       const port = Number(runner.port);
+      const pid = Number(runner.pid);
+      const processBirth = String(runner.processBirth ?? "");
       const capability = String(runner.capability ?? "");
-      if (!Number.isSafeInteger(port) || !capability) {
-        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner endpoint capability is incomplete");
+      if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !processBirth || !capability || inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }) !== "match") {
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner process identity and endpoint capability no longer match the binding");
       }
       const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
         headers: { authorization: `Bearer ${capability}` }
@@ -69514,7 +69611,7 @@ function createLocalAuthorityProbe(dependencies) {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", `runner ${key} no longer matches the session binding`);
         }
       }
-      return { axis, identity: identity(health) };
+      return { axis, identity: identity({ health, pid, processBirth }) };
     }
     if (axis === "O") {
       const observe2 = objectBinding(status, "observe");

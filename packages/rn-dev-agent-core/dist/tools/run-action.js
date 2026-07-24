@@ -36,6 +36,7 @@ import { createMaestroRunHandler } from './maestro-run.js';
 import { createRepairActionHandler } from './repair-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 import { classifyRouteDriftAfterFailure } from '../nav-graph/route-sequence.js';
+import { SessionAuthorityError } from '../session/registry.js';
 import { isExactPresent, runCdpReplay, firstReplayTestId, } from './cdp-replay-dispatch.js';
 import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
 import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
@@ -795,6 +796,8 @@ export function createRunActionHandler(deps = {}) {
             });
         }
         catch (err) {
+            if (err instanceof SessionAuthorityError)
+                throw err;
             // Multi-LLM review of PR #115 (Gemini conf 95): top-level catch
             // ensures any thrown exception during orchestration (maestroRun
             // timeout, repairAction throw through withSession, etc.) lands

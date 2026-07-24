@@ -77,6 +77,7 @@ export function createLocalAuthorityProbe(dependencies) {
     const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
     const sourceResolver = dependencies.resolveSource ?? defaultSource;
     const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
+    const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
     return async ({ axis, status }) => {
         if (axis === 'C') {
             const { registry, session } = dependencies.runtime.requireAvailable();
@@ -172,11 +173,23 @@ export function createLocalAuthorityProbe(dependencies) {
             if (!client.isConnected || !client.connectedTarget) {
                 throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'live CDP runtime is unavailable for bundle verification');
             }
-            const evaluated = await client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+            let evaluated;
+            try {
+                evaluated = await client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+            }
+            catch {
+                throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'live CDP runtime could not be evaluated for bundle verification');
+            }
             if (typeof evaluated.value !== 'string') {
                 throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'runtime did not expose a signed authority marker');
             }
-            const outer = JSON.parse(evaluated.value);
+            let outer;
+            try {
+                outer = JSON.parse(evaluated.value);
+            }
+            catch {
+                throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'live CDP runtime returned an invalid bundle authority marker');
+            }
             const secret = dependencies.getSecret()?.signerCapability;
             if (!outer?.marker || outer.status !== 'signed' || !secret) {
                 throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'signed authority marker or signer capability is unavailable');
@@ -217,9 +230,15 @@ export function createLocalAuthorityProbe(dependencies) {
         if (axis === 'R') {
             const runner = objectBinding(status, 'runner');
             const port = Number(runner.port);
+            const pid = Number(runner.pid);
+            const processBirth = String(runner.processBirth ?? '');
             const capability = String(runner.capability ?? '');
-            if (!Number.isSafeInteger(port) || !capability) {
-                throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'runner endpoint capability is incomplete');
+            if (!Number.isSafeInteger(port) ||
+                !Number.isSafeInteger(pid) ||
+                !processBirth ||
+                !capability ||
+                inspectOwner({ sessionId: status.sessionId, pid, token: processBirth }) !== 'match') {
+                throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'runner process identity and endpoint capability no longer match the binding');
             }
             const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
                 headers: { authorization: `Bearer ${capability}` },
@@ -229,7 +248,7 @@ export function createLocalAuthorityProbe(dependencies) {
                     throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', `runner ${key} no longer matches the session binding`);
                 }
             }
-            return { axis, identity: identity(health) };
+            return { axis, identity: identity({ health, pid, processBirth }) };
         }
         if (axis === 'O') {
             const observe = objectBinding(status, 'observe');

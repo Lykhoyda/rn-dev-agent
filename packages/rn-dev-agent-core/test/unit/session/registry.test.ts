@@ -645,6 +645,25 @@ test('handoff cancellation and explicit expiry recovery restore the unchanged ow
   assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
 });
 
+test('handoff cancellation advances its active controller operation fence', async () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+  const operation = registry.beginOperation(owner, {
+    operationId: 'cancel-handoff',
+    tool: 'rn_session',
+    profile: 'transition:CS>CS',
+  });
+
+  await registry.runWithOperation(operation, async () => {
+    registry.cancelHandoff(owner, handoff.handoffId);
+  });
+
+  assert.doesNotThrow(() => registry.verifyOperation(operation));
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
+  registry.endOperation(operation);
+});
+
 test('opaque recovery handles authorize only their bounded transition', () => {
   const { registry, create } = fixture();
   const owner = create('a', 'shared-worktree');
@@ -850,4 +869,59 @@ test('handoff cleanup retains runner claim until its durable checkpoint', () => 
   registry.completeHandoffCleanupResource(target, 'worker-next', 'runner');
   assert.equal(registry.getClaim('runner', 'ios:device-a:9100'), null);
   assert.doesNotThrow(() => registry.finishHandoffCleanup(target, 'worker-next'));
+});
+
+test('stale adoption cannot discard another contender handoff cleanup plan', () => {
+  const { registry, create, ownerStates } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const cleanupOwner = create('b', 'shared-worktree');
+  const contender = create('c', 'shared-worktree');
+  registry.bindWorker(cleanupOwner, {
+    instanceId: 'worker-cleanup',
+    pid: 202,
+    token: 'birth-worker-cleanup',
+  });
+  registry.updateBindings(cleanupOwner, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-cleanup' },
+  });
+  registry.bindWorker(contender, {
+    instanceId: 'worker-contender',
+    pid: 303,
+    token: 'birth-worker-contender',
+  });
+  registry.updateBindings(contender, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-contender' },
+  });
+  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:9100' }]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      runner: {
+        platform: 'ios',
+        deviceId: 'device-a',
+        port: 9100,
+        instanceId: 'runner-a',
+        capability: 'runner-capability-a',
+      },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-cleanup' });
+  registry.acceptHandoffInto(cleanupOwner, {
+    ...handoff,
+    targetInstance: 'worker-cleanup',
+  });
+  ownerStates.set(cleanupOwner.sessionId, 'mismatch');
+
+  assert.throws(
+    () =>
+      registry.adoptStaleIntoBlocked(contender, cleanupOwner.sessionId, 'worker-contender'),
+    /incomplete handoff cleanup plan/,
+  );
+  assert.equal(registry.getSessionStatus(cleanupOwner.sessionId)?.state, 'handoff_cleanup');
+  assert.equal(
+    registry.getClaim('runner', 'ios:device-a:9100')?.sessionId,
+    cleanupOwner.sessionId,
+  );
 });

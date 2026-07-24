@@ -11,6 +11,15 @@ import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
 import { probeManagedMetroListener, } from '../session/managed-metro.js';
+function sameMetroAuthority(current, next) {
+    return (current?.port === next.port &&
+        current.pid === next.pid &&
+        current.birth === next.birth &&
+        current.instanceId === next.instanceId &&
+        current.servingRoot === next.servingRoot &&
+        current.buildGeneration === next.buildGeneration &&
+        current.mode === next.mode);
+}
 async function waitForExactStopped(probe, timeoutMs, message) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
@@ -202,13 +211,20 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     sourceRoot,
                     buildGeneration,
                 });
+                const nextMetro = { ...metro, mode: input.mode ?? 'external' };
+                const priorMetro = status.bindings.metro;
                 const priorBundle = status.bindings.bundle;
                 const priorTargetId = priorBundle?.targetId;
+                const metroUnchanged = sameMetroAuthority(priorMetro, nextMetro);
                 registry.claimResources(session, [{ type: 'metro-port', key: String(port) }]);
                 registry.updateBindings(session, {
-                    state: status.bindings.install ? 'device_bound' : 'metro_bound',
-                    bindings: { metro: { ...metro, mode: input.mode ?? 'external' }, bundle: null },
-                    releaseResources: typeof priorTargetId === 'string'
+                    state: metroUnchanged
+                        ? status.state
+                        : status.bindings.install
+                            ? 'device_bound'
+                            : 'metro_bound',
+                    bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
+                    releaseResources: !metroUnchanged && typeof priorTargetId === 'string'
                         ? [{ type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` }]
                         : [],
                 });

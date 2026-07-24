@@ -8,6 +8,7 @@ import {
   candidateAuthorityReasons,
   proofCandidateCheckoutMatchesHead,
   proofCandidateEntrypointEnvironmentMatches,
+  readProofCandidateHeadArtifacts,
   resolveProofCandidateEntrypoint,
 } from '../../dist/tools/proof-capture.js';
 import { proofCandidateRuntimeSchema } from '../../dist/domain/proof-receipt.js';
@@ -61,8 +62,16 @@ test('GH-588 V8: candidate artifacts must be tracked clean HEAD bytes', async (t
   ]);
 
   assert.equal(proofCandidateCheckoutMatchesHead(candidateRoot, [artifact]), true);
+  const aliasParent = await mkdtemp(join(tmpdir(), 'proof-candidate-clean-alias-'));
+  t.after(() => rm(aliasParent, { recursive: true, force: true }));
+  const candidateAlias = join(aliasParent, 'candidate');
+  await symlink(candidateRoot, candidateAlias);
+  assert.equal(proofCandidateCheckoutMatchesHead(candidateAlias, [artifact]), true);
+  const verifiedBytes = readProofCandidateHeadArtifacts(candidateAlias, [artifact]);
+  assert.equal(verifiedBytes?.[0]?.toString('utf8'), 'candidate bytes\n');
   await writeFile(artifact, 'dirty candidate bytes\n');
   assert.equal(proofCandidateCheckoutMatchesHead(candidateRoot, [artifact]), false);
+  assert.equal(verifiedBytes?.[0]?.toString('utf8'), 'candidate bytes\n');
 });
 
 test('GH-588 V8: absolute Codex supervisor argv binds the candidate packaged core', async (t) => {

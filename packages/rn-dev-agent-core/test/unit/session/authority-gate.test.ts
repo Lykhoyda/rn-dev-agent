@@ -4,6 +4,7 @@ import {
   claimOptionalBundleAuthority,
   createAuthorityGate,
 } from '../../../dist/session/authority-gate.js';
+import { SessionAuthorityError } from '../../../dist/session/registry.js';
 import { okResult } from '../../../dist/utils.js';
 
 function fixture() {
@@ -291,6 +292,54 @@ test('optional bundle admission downgrades only a genuine bundle mismatch', asyn
   assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), false);
 });
 
+test('reactive bundle admission reconciles the target replaced by the native attempt', async () => {
+  const { calls, registry, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  status.bindings.bundle.connectionGeneration = 1;
+  let bundleProbes = 0;
+  let refreshes = 0;
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push('replace-binding');
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: operation.authorityVersion + 1 };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        bundleProbes += 1;
+        if (bundleProbes === 1) {
+          throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: native attempt not started');
+        }
+        if (bundleProbes === 2) {
+          throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: native attempt replaced the target');
+        }
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+    refreshRuntimeBinding: async () => {
+      refreshes += 1;
+      return {
+        ...status.bindings.bundle,
+        targetId: 'target-b',
+        connectionGeneration: 2,
+      };
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    assert.equal(await claimOptionalBundleAuthority(args), true);
+    return okResult({ transport: 'cdp-js' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(refreshes, 2);
+  assert.equal(calls.filter((call) => call === 'replace-binding').length, 1);
+  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), true);
+});
+
 test('native run-action invalidates an unrecoverable prior bundle without losing native proof', async () => {
   const { calls, registry, runtime, status } = fixture();
   status.bindings.bundle.targetId = 'target-a';
@@ -466,6 +515,54 @@ test('transition handlers remain fenced across their expected authority version 
   assert.equal(envelope.meta.authorityReceipt.authorityVersion, 10);
   assert.equal(calls[0], 'begin:rn_session');
   assert.equal(calls.at(-1), 'end');
+});
+
+test('handoff cancellation requires controller authority and runs as a fenced transition', async () => {
+  const { runtime, status, calls } = fixture();
+  status.state = 'handoff';
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('rn_session', async () => {
+    status.state = 'ready';
+    status.authorityVersion += 1;
+    return okResult({ cancelled: true });
+  })({ action: 'cancel_handoff', handoffId: 'handoff-a' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityTransition, true);
+  assert.deepEqual(
+    calls.filter((call) => call.endsWith(':C')),
+    ['preflight:C', 'postflight:C'],
+  );
+});
+
+test('handoff cancellation rejects a superseded controller before mutation', async () => {
+  const { runtime, status } = fixture();
+  status.state = 'handoff';
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'C') {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'controller was superseded');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('rn_session', async () => {
+    dispatched = true;
+    return okResult({ cancelled: true });
+  })({ action: 'cancel_handoff', handoffId: 'handoff-a' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'SESSION_OWNER_LOST');
+  assert.equal(dispatched, false);
 });
 
 test('warning results never receive an authoritative receipt', async () => {

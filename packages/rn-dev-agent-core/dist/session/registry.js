@@ -663,7 +663,7 @@ export class SessionRegistry {
                 throw new SessionAuthorityError('HANDOFF_ALREADY_CONSUMED', 'handoff is already terminal');
             }
             const row = asSession(this.#database
-                .prepare('SELECT state, claim_epoch FROM sessions WHERE session_id = ?')
+                .prepare('SELECT state, claim_epoch, authority_version FROM sessions WHERE session_id = ?')
                 .get(session.sessionId));
             if (!row || row.state !== 'handoff' || row.claim_epoch !== session.claimEpoch) {
                 throw new SessionAuthorityError('SESSION_OWNER_LOST', 'handoff source owner changed');
@@ -676,6 +676,7 @@ export class SessionRegistry {
             this.#database
                 .prepare('UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?')
                 .run(now, handoffId);
+            this.#advanceActiveOperationFence(session, row.authority_version, row.authority_version + 1);
         });
     }
     getHandoffOwner(handoffId) {
@@ -1152,6 +1153,9 @@ export class SessionRegistry {
                 prior.app_root_key !== targetRow.app_root_key) {
                 throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'stale session does not belong to this exact source worktree');
             }
+            if (prior.state === 'handoff_cleanup') {
+                throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'stale adoption cannot discard an incomplete handoff cleanup plan');
+            }
             this.#database
                 .prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
@@ -1206,7 +1210,7 @@ export class SessionRegistry {
     beginOperation(session, operation) {
         const now = this.#now();
         return this.#transaction(() => {
-            const owner = this.#requireSession(session);
+            const owner = this.#requireFenceableSession(session);
             const active = this.#database
                 .prepare(`SELECT operation_id FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`)
@@ -1473,6 +1477,19 @@ export class SessionRegistry {
             .get(session.sessionId));
         if (!row || !isOperationalState(row.state) || row.claim_epoch !== session.claimEpoch) {
             throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session owner no longer matches the active claim epoch');
+        }
+        return row;
+    }
+    #requireFenceableSession(session) {
+        const row = asSession(this.#database
+            .prepare(`SELECT session_id, state, claim_epoch, authority_version,
+                  source_key, worktree_key, app_root_key,
+                  supervisor_pid, supervisor_birth, worker_instance, worker_pid,
+                  worker_birth, lease_until_ms, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`)
+            .get(session.sessionId));
+        if (!row || !isFenceableState(row.state) || row.claim_epoch !== session.claimEpoch) {
+            throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session owner no longer matches the fenceable claim epoch');
         }
         return row;
     }

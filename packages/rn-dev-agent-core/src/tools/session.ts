@@ -80,6 +80,21 @@ interface SessionHandlerDependencies {
   cleanupTimeoutMs?: number;
 }
 
+function sameMetroAuthority(
+  current: Record<string, unknown> | undefined,
+  next: MetroBinding & { mode: 'managed' | 'external' },
+): boolean {
+  return (
+    current?.port === next.port &&
+    current.pid === next.pid &&
+    current.birth === next.birth &&
+    current.instanceId === next.instanceId &&
+    current.servingRoot === next.servingRoot &&
+    current.buildGeneration === next.buildGeneration &&
+    current.mode === next.mode
+  );
+}
+
 async function waitForExactStopped(
   probe: () => 'running' | 'stopped' | 'unknown',
   timeoutMs: number,
@@ -346,14 +361,21 @@ export function createSessionHandler(
           sourceRoot,
           buildGeneration,
         });
+        const nextMetro = { ...metro, mode: input.mode ?? ('external' as const) };
+        const priorMetro = status.bindings.metro as Record<string, unknown> | undefined;
         const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
         const priorTargetId = priorBundle?.targetId;
+        const metroUnchanged = sameMetroAuthority(priorMetro, nextMetro);
         registry.claimResources(session, [{ type: 'metro-port', key: String(port) }]);
         registry.updateBindings(session, {
-          state: status.bindings.install ? 'device_bound' : 'metro_bound',
-          bindings: { metro: { ...metro, mode: input.mode ?? 'external' }, bundle: null },
+          state: metroUnchanged
+            ? status.state
+            : status.bindings.install
+              ? 'device_bound'
+              : 'metro_bound',
+          bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
           releaseResources:
-            typeof priorTargetId === 'string'
+            !metroUnchanged && typeof priorTargetId === 'string'
               ? [{ type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` }]
               : [],
         });

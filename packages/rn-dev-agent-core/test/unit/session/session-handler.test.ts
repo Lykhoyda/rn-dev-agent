@@ -346,3 +346,56 @@ test('Metro rebinding clears the prior bundle and releases its target claim', as
   assert.equal(update.bindings.bundle, null);
   assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-a' }]);
 });
+
+test('an exactly idempotent Metro rebind preserves bundle authority and ready state', async () => {
+  let update;
+  const metro = {
+    port: 8193,
+    pid: 123,
+    birth: 'birth',
+    instanceId: 'metro-a',
+    servingRoot: '/project',
+    buildGeneration: 2,
+    mode: 'external',
+  };
+  const status = {
+    sessionId: 'session-a',
+    state: 'ready',
+    source: { contentRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      metro,
+      install: { artifactDigest: 'install' },
+      bundle: { targetId: 'target-a' },
+    },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          claimResources: () => {},
+          updateBindings: (_session, input) => {
+            update = input;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    { captureMetro: async () => metro },
+  );
+
+  const result = await handler({
+    action: 'bind_metro',
+    metroPort: 8193,
+    metroPid: 123,
+    metroInstanceId: 'metro-a',
+    buildGeneration: 2,
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(update.state, 'ready');
+  assert.equal(Object.hasOwn(update.bindings, 'bundle'), false);
+  assert.deepEqual(update.releaseResources, []);
+});
