@@ -426,6 +426,25 @@ test('runtime target replacement advances the binding and operation fence atomic
   );
 });
 
+test('binding replacement clears a stale target claim in the same transaction', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.claimResources(owner, [{ type: 'target', key: '8193:old-target' }]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: { bundle: { targetId: 'old-target' } },
+  });
+
+  registry.updateBindings(owner, {
+    state: 'device_bound',
+    bindings: { metro: { port: 8193, instanceId: 'new-metro' }, bundle: null },
+    releaseResources: [{ type: 'target', key: '8193:old-target' }],
+  });
+
+  assert.equal(registry.getClaim('target', '8193:old-target'), null);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.bindings.bundle, null);
+});
+
 test('runtime target replacement refuses a target claimed by another live session', () => {
   const { registry, create } = fixture();
   const owner = create('a');

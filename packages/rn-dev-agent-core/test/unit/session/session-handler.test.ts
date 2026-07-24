@@ -295,3 +295,54 @@ test('handoff cleanup resumes after a later resource fails', async () => {
   assert.equal(observeStops, 2);
   assert.equal(finished, 1);
 });
+
+test('Metro rebinding clears the prior bundle and releases its target claim', async () => {
+  let update;
+  const status = {
+    sessionId: 'session-a',
+    source: { contentRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      install: { artifactDigest: 'install' },
+      bundle: { targetId: 'target-a' },
+    },
+  };
+  const registry = {
+    getSessionStatus: () => status,
+    claimResources: () => {},
+    updateBindings: (_session, input) => {
+      update = input;
+    },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry,
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      captureMetro: async () => ({
+        port: 8193,
+        pid: 123,
+        processBirth: 'birth',
+        instanceId: 'metro-b',
+        servingRoot: '/project',
+        buildGeneration: 2,
+      }),
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_metro',
+    metroPort: 8193,
+    metroPid: 123,
+    metroInstanceId: 'metro-b',
+    buildGeneration: 2,
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(update.bindings.bundle, null);
+  assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-a' }]);
+});

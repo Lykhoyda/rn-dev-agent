@@ -346,10 +346,16 @@ export function createSessionHandler(
           sourceRoot,
           buildGeneration,
         });
+        const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
+        const priorTargetId = priorBundle?.targetId;
         registry.claimResources(session, [{ type: 'metro-port', key: String(port) }]);
         registry.updateBindings(session, {
           state: status.bindings.install ? 'device_bound' : 'metro_bound',
-          bindings: { metro: { ...metro, mode: input.mode ?? 'external' } },
+          bindings: { metro: { ...metro, mode: input.mode ?? 'external' }, bundle: null },
+          releaseResources:
+            typeof priorTargetId === 'string'
+              ? [{ type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` }]
+              : [],
         });
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }

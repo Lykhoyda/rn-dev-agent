@@ -689,6 +689,7 @@ export class SessionRegistry {
       state?: string;
       bindings: Record<string, unknown>;
       expectedAuthorityVersion?: number;
+      releaseResources?: readonly ResourceClaim[];
     },
   ): void {
     const now = this.#now();
@@ -720,6 +721,15 @@ export class SessionRegistry {
         if (platform) {
           this.#invalidatePlatformReceipt(session, platform);
         }
+      }
+      for (const resource of input.releaseResources ?? []) {
+        this.#database
+          .prepare(
+            `DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`,
+          )
+          .run(resource.type, resource.key, session.sessionId, session.claimEpoch);
       }
       this.#database
         .prepare(

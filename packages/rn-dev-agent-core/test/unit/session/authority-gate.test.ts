@@ -67,7 +67,7 @@ function fixture() {
     }),
     status: () => status,
   };
-  return { calls, runtime, status };
+  return { calls, registry, runtime, status };
 }
 
 test('authoritative tools receive preflight/postflight receipts and an immediate CAS', async () => {
@@ -197,10 +197,16 @@ test('native profiles never request a live bundle probe', async () => {
 
 test('run-action claims bundle authority only when its CDP path is used', async () => {
   const native = fixture();
+  native.status.bindings.bundle.targetId = 'target-a';
+  native.status.bindings.bundle.connectionGeneration = 1;
   const nativeGate = createAuthorityGate(native.runtime, {
     probe: async ({ axis, phase }) => {
       native.calls.push(`${phase}:${axis}`);
       return { axis, identity: `${axis}-identity` };
+    },
+    refreshRuntimeBinding: async () => {
+      native.calls.push('refresh-binding');
+      return native.status.bindings.bundle;
     },
   });
 
@@ -209,6 +215,7 @@ test('run-action claims bundle authority only when its CDP path is used', async 
     native.calls.some((call) => call.endsWith(':B')),
     false,
   );
+  assert.equal(native.calls.includes('refresh-binding'), true);
 
   const cdp = fixture();
   cdp.status.bindings.bundle.targetId = 'target-a';
@@ -234,6 +241,112 @@ test('run-action claims bundle authority only when its CDP path is used', async 
     envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
     true,
   );
+});
+
+test('optional bundle admission propagates operation fence loss', async () => {
+  const { registry, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  let verifications = 0;
+  registry.verifyOperation = () => {
+    verifications += 1;
+    if (verifications === 2) {
+      throw new Error('AUTHORITY_LOST_DURING_OPERATION: operation fence was replaced');
+    }
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    refreshRuntimeBinding: async () => status.bindings.bundle,
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    await claimOptionalBundleAuthority(args);
+    return okResult({ transport: 'cdp-js' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+});
+
+test('optional bundle admission downgrades only a genuine bundle mismatch', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: target generation changed');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+    refreshRuntimeBinding: async () => status.bindings.bundle,
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    return okResult({ transport: 'maestro' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), false);
+});
+
+test('native run-action invalidates an unrecoverable prior bundle without losing native proof', async () => {
+  const { calls, registry, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  status.bindings.bundle.connectionGeneration = 1;
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push('replace-binding');
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: operation.authorityVersion + 1 };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    refreshRuntimeBinding: async () => {
+      throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: target did not return');
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_action', async () =>
+    okResult({ transport: 'maestro' }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityInvalidated, true);
+  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), false);
+  assert.equal(status.bindings.bundle, null);
+});
+
+test('native run-action reconciles a replaced runtime target without claiming bundle proof', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  status.bindings.bundle.connectionGeneration = 1;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    refreshRuntimeBinding: async () => {
+      calls.push('refresh-binding');
+      status.bindings.bundle = {
+        ...status.bindings.bundle,
+        targetId: 'target-b',
+        connectionGeneration: 2,
+      };
+      return status.bindings.bundle;
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_action', async () =>
+    okResult({ transport: 'maestro' }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.deepEqual(
+    calls.filter((call) => call === 'refresh-binding' || call === 'replace-binding'),
+    ['refresh-binding', 'replace-binding'],
+  );
+  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), false);
 });
 
 test('nested suite reload refreshes bundle generation under the outer fence', async () => {

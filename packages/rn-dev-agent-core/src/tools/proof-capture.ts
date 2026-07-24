@@ -433,6 +433,43 @@ export function proofCandidateEntrypointEnvironmentMatches(
   return true;
 }
 
+export function proofCandidateCheckoutMatchesHead(
+  candidateRoot: string,
+  artifactPaths: readonly string[],
+): boolean {
+  try {
+    const statusArgs = [
+      '-C',
+      candidateRoot,
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ];
+    if (execFileSync('git', statusArgs, { encoding: 'utf8' }).trim()) return false;
+    for (const artifactPath of artifactPaths) {
+      const artifactRelativePath = relative(candidateRoot, artifactPath).split(sep).join('/');
+      if (
+        !artifactRelativePath ||
+        artifactRelativePath === '..' ||
+        artifactRelativePath.startsWith('../')
+      ) {
+        return false;
+      }
+      execFileSync('git', ['-C', candidateRoot, 'ls-files', '--error-unmatch', artifactRelativePath]);
+      const headBytes = execFileSync(
+        'git',
+        ['-C', candidateRoot, 'show', `HEAD:${artifactRelativePath}`],
+        { maxBuffer: 128 * 1024 * 1024 },
+      );
+      if (hashBytes(readFileSync(artifactPath)) !== hashBytes(headBytes)) return false;
+    }
+    return !execFileSync('git', statusArgs, { encoding: 'utf8' }).trim();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Read dual proof authority from immutable candidate bytes. Nothing in this
  * block is caller-authored prose: Git, package digests, and the live MCP
@@ -458,6 +495,13 @@ export function readProofCandidateRuntime(candidateRoot: string): ProofCandidate
   }
   const { host, coreBundle } = entrypoint;
   const runnerManifest = join(root, 'packages', host, 'runner-manifest.json');
+  if (!proofCandidateCheckoutMatchesHead(root, [coreBundle, runnerManifest])) {
+    throw new Error('CANDIDATE_CHECKOUT_NOT_CLEAN');
+  }
+  const confirmedSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  }).trim();
+  if (confirmedSha !== sha) throw new Error('CANDIDATE_SHA_CHANGED');
 
   return proofCandidateRuntimeSchema.parse({
     repo: 'Lykhoyda/rn-dev-agent',

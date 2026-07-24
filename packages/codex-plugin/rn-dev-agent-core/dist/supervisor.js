@@ -1364,6 +1364,11 @@ var init_registry = __esm({
               this.#invalidatePlatformReceipt(session, platform);
             }
           }
+          for (const resource of input.releaseResources ?? []) {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+          }
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
@@ -61337,6 +61342,33 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     return false;
   return true;
 }
+function proofCandidateCheckoutMatchesHead(candidateRoot, artifactPaths) {
+  try {
+    const statusArgs = [
+      "-C",
+      candidateRoot,
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignore-submodules=none"
+    ];
+    if (execFileSync11("git", statusArgs, { encoding: "utf8" }).trim())
+      return false;
+    for (const artifactPath of artifactPaths) {
+      const artifactRelativePath = relative2(candidateRoot, artifactPath).split(sep5).join("/");
+      if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
+        return false;
+      }
+      execFileSync11("git", ["-C", candidateRoot, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync11("git", ["-C", candidateRoot, "show", `HEAD:${artifactRelativePath}`], { maxBuffer: 128 * 1024 * 1024 });
+      if (hashBytes(readFileSync23(artifactPath)) !== hashBytes(headBytes))
+        return false;
+    }
+    return !execFileSync11("git", statusArgs, { encoding: "utf8" }).trim();
+  } catch {
+    return false;
+  }
+}
 function readProofCandidateRuntime(candidateRoot) {
   const root = resolve7(candidateRoot);
   if (root !== candidateRoot)
@@ -61357,6 +61389,14 @@ function readProofCandidateRuntime(candidateRoot) {
   }
   const { host, coreBundle } = entrypoint;
   const runnerManifest = join35(root, "packages", host, "runner-manifest.json");
+  if (!proofCandidateCheckoutMatchesHead(root, [coreBundle, runnerManifest])) {
+    throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
+  }
+  const confirmedSha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
+    encoding: "utf8"
+  }).trim();
+  if (confirmedSha !== sha)
+    throw new Error("CANDIDATE_SHA_CHANGED");
   return proofCandidateRuntimeSchema.parse({
     repo: "Lykhoyda/rn-dev-agent",
     sha,
@@ -68290,10 +68330,13 @@ function createSessionHandler(runtime, dependencies = {}) {
           sourceRoot,
           buildGeneration
         });
+        const priorBundle = status.bindings.bundle;
+        const priorTargetId = priorBundle?.targetId;
         registry2.claimResources(session, [{ type: "metro-port", key: String(port) }]);
         registry2.updateBindings(session, {
           state: status.bindings.install ? "device_bound" : "metro_bound",
-          bindings: { metro: { ...metro, mode: input.mode ?? "external" } }
+          bindings: { metro: { ...metro, mode: input.mode ?? "external" }, bundle: null },
+          releaseResources: typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status.bindings.metroPort)}:${priorTargetId}` }] : []
         });
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
@@ -68817,6 +68860,10 @@ function authorityFailure2(error2) {
   const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1];
   return failResult(message, code ?? "AUTHORITY_LOST_DURING_OPERATION");
 }
+function isOptionalBundleFailure(error2) {
+  const code = error2 instanceof SessionAuthorityError ? error2.code : /^([A-Z][A-Z0-9_]+):/.exec(error2 instanceof Error ? error2.message : String(error2))?.[1];
+  return code === "BUNDLE_HANDSHAKE_UNAVAILABLE" || code === "BUNDLE_IDENTITY_MISMATCH" || code === "CDP_TARGET_AUTHORITY_MISMATCH" || code === "TARGET_CLAIM_CONFLICT";
+}
 function addMeta2(result, meta) {
   if (!result || typeof result !== "object")
     return result;
@@ -69038,11 +69085,15 @@ function createAuthorityGate(runtime, dependencies) {
             value: async () => {
               if (optionalBundleClaimed)
                 return true;
+              const currentStatus = runtime.status();
+              if (!currentStatus.available) {
+                throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+              }
+              if (!currentStatus.bindings.bundle)
+                return false;
+              let observation;
               try {
-                const currentStatus = runtime.status();
-                if (!currentStatus.available || !currentStatus.bindings.bundle)
-                  return false;
-                const observation = await dependencies.probe({
+                observation = await dependencies.probe({
                   axis: "B",
                   phase: "preflight",
                   tool,
@@ -69050,22 +69101,25 @@ function createAuthorityGate(runtime, dependencies) {
                   status: currentStatus,
                   args
                 });
-                registry2.verifyOperation(operation);
-                status = currentStatus;
-                optionalBefore.push(observation);
-                optionalBundleClaimed = true;
-                return true;
-              } catch {
+              } catch (error2) {
+                if (!isOptionalBundleFailure(error2))
+                  throw error2;
                 return false;
               }
+              registry2.verifyOperation(operation);
+              status = currentStatus;
+              optionalBefore.push(observation);
+              optionalBundleClaimed = true;
+              return true;
             }
           });
         }
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
         const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
-        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && optionalBundleClaimed;
+        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && Boolean(status.bindings.bundle);
         const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
+        let authorityInvalidated = false;
         if (directRuntimeReset && !resultSucceeded(result)) {
           const priorBundle = status.bindings.bundle;
           const metro = status.bindings.metro;
@@ -69083,49 +69137,60 @@ function createAuthorityGate(runtime, dependencies) {
         }
         let runtimeTargetChanged = false;
         if (reconcilesRuntimeTarget && (resultSucceeded(result) || nestedRuntimeReset)) {
-          if (!dependencies.refreshRuntimeBinding) {
-            throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime reset cannot commit without a binding refresh");
-          }
           const priorBundle = status.bindings.bundle;
           const metro = status.bindings.metro;
-          let bundle;
+          let bundle = null;
           try {
+            if (!dependencies.refreshRuntimeBinding) {
+              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime reset cannot commit without a binding refresh");
+            }
             bundle = await dependencies.refreshRuntimeBinding(status);
           } catch (error2) {
-            const oldTargetId2 = priorBundle?.targetId;
-            const metroPort2 = metro?.port;
+            const oldTargetId = priorBundle?.targetId;
+            const metroPort = metro?.port;
             operation = registry2.replaceBindingsDuringOperation(operation, {
               state: "device_bound",
               bindings: { bundle: null },
-              releaseResources: typeof oldTargetId2 === "string" && Number.isSafeInteger(metroPort2) ? [{ type: "target", key: `${String(metroPort2)}:${oldTargetId2}` }] : []
-            });
-            if (!resultSucceeded(result)) {
-              return addMeta2(result, {
-                authorityInvalidated: true,
-                nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
-              });
-            }
-            throw error2;
-          }
-          const oldTargetId = priorBundle?.targetId;
-          const newTargetId = bundle.targetId;
-          const metroPort = metro?.port;
-          if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
-            throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
-          }
-          runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
-          if (runtimeTargetChanged) {
-            operation = registry2.replaceBindingsDuringOperation(operation, {
-              state: "ready",
-              bindings: { bundle },
-              releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
-              claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+              releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
             });
             const refreshedStatus = runtime.status();
             if (!refreshedStatus.available) {
               throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
             }
             status = refreshedStatus;
+            if (!resultSucceeded(result)) {
+              return addMeta2(result, {
+                authorityInvalidated: true,
+                nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+              });
+            }
+            if (tool === "cdp_run_action" && !optionalBundleClaimed) {
+              authorityInvalidated = true;
+            } else {
+              throw error2;
+            }
+          }
+          if (!authorityInvalidated && bundle) {
+            const oldTargetId = priorBundle?.targetId;
+            const newTargetId = bundle.targetId;
+            const metroPort = metro?.port;
+            if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+              throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
+            }
+            runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
+            if (runtimeTargetChanged) {
+              operation = registry2.replaceBindingsDuringOperation(operation, {
+                state: "ready",
+                bindings: { bundle },
+                releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+                claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+              });
+              const refreshedStatus = runtime.status();
+              if (!refreshedStatus.available) {
+                throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+              }
+              status = refreshedStatus;
+            }
           }
         }
         const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;
@@ -69158,12 +69223,22 @@ function createAuthorityGate(runtime, dependencies) {
           }
         }
         if (!resultIsCanonicalSuccess(result)) {
-          return addMeta2(result, { authoritative: false });
+          return addMeta2(result, {
+            authoritative: false,
+            ...authorityInvalidated ? {
+              authorityInvalidated: true,
+              nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+            } : {}
+          });
         }
         if (operation)
           registry2.commitPlatformAuthorityReceipts(operation);
         return addMeta2(result, {
-          authorityReceipt: receipt(status, effectiveProfile, after)
+          authorityReceipt: receipt(status, effectiveProfile, after),
+          ...authorityInvalidated ? {
+            authorityInvalidated: true,
+            nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+          } : {}
         });
       } catch (error2) {
         return authorityFailure2(error2);

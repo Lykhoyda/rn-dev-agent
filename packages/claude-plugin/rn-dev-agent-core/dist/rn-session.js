@@ -8418,6 +8418,11 @@ var SessionRegistry = class {
           this.#invalidatePlatformReceipt(session, platform);
         }
       }
+      for (const resource of input.releaseResources ?? []) {
+        this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+      }
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
