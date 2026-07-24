@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -126,7 +119,7 @@ test('package-local CLI refuses marker writes through a replaced .rn-agent symli
   writeFileSync(join(appRoot, 'package.json'), '{}\n');
   execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
   execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
-  mkdirSync(external);
+  mkdirSync(join(external, 'integration'), { recursive: true });
   symlinkSync(external, join(appRoot, '.rn-agent'));
 
   const previousStateHome = process.env.XDG_STATE_HOME;

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { inspectAuthorityMigration } from '../../../dist/session/migration-diagnostic.js';
 
@@ -39,4 +42,37 @@ test('legacy files are diagnostic only and never disable strict enforcement', ()
   assert.equal(diagnostic.legacyStateDetected, true);
   assert.equal(diagnostic.packageIntegration.installed, false);
   assert.equal(diagnostic.strictEnforcement, true);
+});
+
+test('migration diagnostic reads integration state only through validated ancestors', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-migration-diagnostic-'));
+  const appRoot = join(root, 'app');
+  const external = join(root, 'external');
+  mkdirSync(join(appRoot, '.rn-agent', 'integration'), { recursive: true });
+  writeFileSync(
+    join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json'),
+    JSON.stringify({ version: 1 }),
+  );
+
+  const installed = inspectAuthorityMigration({
+    ...status,
+    source: { appRoot },
+  });
+  assert.equal(installed.packageIntegration.installed, true);
+
+  rmSync(join(appRoot, '.rn-agent'), { recursive: true });
+  mkdirSync(join(external, 'integration'), { recursive: true });
+  writeFileSync(
+    join(external, 'integration', 'rn-session-integration.json'),
+    JSON.stringify({ version: 1 }),
+  );
+  symlinkSync(external, join(appRoot, '.rn-agent'));
+
+  const redirected = inspectAuthorityMigration({
+    ...status,
+    source: { appRoot },
+  });
+  assert.equal(redirected.packageIntegration.installed, false);
+
+  rmSync(root, { force: true, recursive: true });
 });

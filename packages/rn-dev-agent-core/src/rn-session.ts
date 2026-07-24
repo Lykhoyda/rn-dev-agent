@@ -20,6 +20,7 @@ import { projectPublicAuthorityStatus } from './session/public-status.js';
 import {
   closeBoundDirectory,
   openBoundDirectory,
+  openBoundSubdirectory,
   writeBoundDirectoryFile,
 } from './session/bound-directory.js';
 
@@ -98,16 +99,21 @@ function writeMarker(
     },
     input.signerCapability,
   );
-  const integration = openBoundDirectory(join(appRoot, '.rn-agent', 'integration'));
+  const agent = openBoundDirectory(join(appRoot, '.rn-agent'));
   try {
-    writeBoundDirectoryFile(
-      integration,
-      'authority-marker.js',
-      Buffer.from(createMetroAuthorityModule(marker)),
-      0o600,
-    );
+    const integration = openBoundSubdirectory(agent, 'integration');
+    try {
+      writeBoundDirectoryFile(
+        integration,
+        'authority-marker.js',
+        Buffer.from(createMetroAuthorityModule(marker)),
+        0o600,
+      );
+    } finally {
+      closeBoundDirectory(integration);
+    }
   } finally {
-    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
   }
 }
 

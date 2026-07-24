@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync } from 'node:fs';
+import { join } from 'node:path';
 
 export interface BoundDirectory {
   descriptor: number;
@@ -25,6 +26,7 @@ interface BoundOperationResult {
   code?: 'CONFLICT' | 'UNSAFE';
   message?: string;
   ok: boolean;
+  directoryIdentity?: { dev: string; ino: string };
   snapshots?: Array<{ contents: string | null; mode: number; name: string }>;
 }
 
@@ -202,18 +204,25 @@ function assertIdentity(expected) {
 try {
   const request = JSON.parse(fs.readFileSync(0, 'utf8'));
   assertIdentity(request.identity);
+  let directoryIdentity;
   let snapshots;
-  if (request.operation === 'mkdir') {
+  if (request.operation === 'directory') {
     validateName(request.name);
-    try {
-      fs.mkdirSync(request.name, { mode: request.mode });
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+    if (request.create) {
+      try {
+        fs.mkdirSync(request.name, { mode: request.mode });
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
     }
-    const directory = fs.lstatSync(request.name);
+    const directory = fs.lstatSync(request.name, { bigint: true });
     if (!directory.isDirectory() || directory.isSymbolicLink()) {
       throw new Error('bound-directory child is not a directory');
     }
+    directoryIdentity = {
+      dev: directory.dev.toString(),
+      ino: directory.ino.toString(),
+    };
   } else if (request.operation === 'read') {
     snapshots = request.names.map((name) => {
       const snapshot = readRegularFile(name);
@@ -224,7 +233,7 @@ try {
   } else {
     throw new Error('invalid bound-directory operation');
   }
-  process.stdout.write(JSON.stringify({ ok: true, snapshots }));
+  process.stdout.write(JSON.stringify({ ok: true, directoryIdentity, snapshots }));
 } catch (error) {
   const conflict =
     error instanceof ConflictError ||
@@ -272,7 +281,7 @@ function runBoundOperation(
         },
       }),
       maxBuffer: 16 * 1024 * 1024,
-      timeout: 5_000,
+      ...(request.operation === 'cas' ? {} : { timeout: 5_000 }),
     });
   } catch {
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable');
@@ -295,7 +304,10 @@ function runBoundOperation(
   return result;
 }
 
-export function openBoundDirectory(path: string): BoundDirectory {
+export function openBoundDirectory(
+  path: string,
+  expectedIdentity?: { dev: bigint; ino: bigint },
+): BoundDirectory {
   let descriptor: number | undefined;
   try {
     const before = lstatSync(path, { bigint: true });
@@ -308,7 +320,12 @@ export function openBoundDirectory(path: string): BoundDirectory {
     );
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync(path, { bigint: true });
-    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened)) {
+    if (
+      !opened.isDirectory() ||
+      !sameIdentity(before, opened) ||
+      !sameIdentity(after, opened) ||
+      (expectedIdentity !== undefined && !sameIdentity(expectedIdentity, opened))
+    ) {
       throw new Error(
         'SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening',
       );
@@ -343,12 +360,26 @@ export function assertBoundDirectoryCurrent(directory: BoundDirectory): void {
   }
 }
 
-export function ensureBoundSubdirectory(
-  directory: BoundDirectory,
+export function openBoundSubdirectory(
+  parent: BoundDirectory,
   name: string,
-  mode = 0o700,
-): void {
-  runBoundOperation(directory, { operation: 'mkdir', name, mode });
+  options: { create?: boolean; mode?: number } = {},
+): BoundDirectory {
+  const result = runBoundOperation(parent, {
+    operation: 'directory',
+    name,
+    create: options.create ?? false,
+    mode: options.mode ?? 0o700,
+  });
+  if (!result.directoryIdentity) {
+    throw new Error(
+      'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output',
+    );
+  }
+  return openBoundDirectory(join(parent.path, name), {
+    dev: BigInt(result.directoryIdentity.dev),
+    ino: BigInt(result.directoryIdentity.ino),
+  });
 }
 
 export function readBoundDirectoryFiles(

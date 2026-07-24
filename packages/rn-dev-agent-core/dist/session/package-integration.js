@@ -2,7 +2,7 @@ import { createBuildLaunchPlan } from './build-adapter.js';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { assertBoundDirectoryCurrent, casBoundDirectoryFiles, closeBoundDirectory, ensureBoundSubdirectory, openBoundDirectory, readBoundDirectoryFiles, } from './bound-directory.js';
+import { assertBoundDirectoryCurrent, casBoundDirectoryFiles, closeBoundDirectory, openBoundDirectory, openBoundSubdirectory, readBoundDirectoryFiles, } from './bound-directory.js';
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
 const AUTHORITY_MODULE = '.rn-agent/integration/authority-marker.js';
@@ -413,10 +413,8 @@ function openIntegrationDirectories(appRoot) {
             throw error;
     }
     const agent = openBoundDirectory(agentRoot);
-    const integrationPath = join(agentRoot, 'integration');
     try {
-        ensureBoundSubdirectory(agent, 'integration');
-        const integration = openBoundDirectory(integrationPath);
+        const integration = openBoundSubdirectory(agent, 'integration', { create: true });
         return { agent, integration };
     }
     catch (error) {

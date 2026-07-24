@@ -7366,7 +7366,7 @@ var require_dist = __commonJS({
 // packages/rn-dev-agent-core/dist/rn-session.js
 import { randomUUID } from "node:crypto";
 import { readFileSync as readFileSync6 } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -9776,81 +9776,12 @@ function sessionRuntimeDirectory(layout, sessionId) {
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
 import { existsSync as existsSync2, readFileSync as readFileSync5 } from "node:fs";
-import { join as join6 } from "node:path";
-function inspectAuthorityMigration(status, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync2;
-  const readText = dependencies.readText ?? ((path) => readFileSync5(path, "utf8"));
-  const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
-  const manifestPath = appRoot ? join6(appRoot, ".rn-agent", "integration", "rn-session-integration.json") : "";
-  let packageIntegrationInstalled = false;
-  if (manifestPath && exists(manifestPath)) {
-    try {
-      const manifest = JSON.parse(readText(manifestPath));
-      packageIntegrationInstalled = manifest.version === 1;
-    } catch {
-      packageIntegrationInstalled = false;
-    }
-  }
-  const legacyStateDetected = [
-    "/tmp/rn-dev-agent-session.json",
-    "/tmp/rn-fast-runner-state.json",
-    "/tmp/rn-android-runner-state.json"
-  ].some(exists);
-  return {
-    rollout: "strict-default",
-    storeAvailable: true,
-    registrySchema: 3,
-    legacyStateDetected,
-    bundleHandshake: {
-      supported: true,
-      scope: "coarse-initial-bundle",
-      bound: Boolean(status.bindings.bundle),
-      sourceFidelity: "not-proven"
-    },
-    packageIntegration: {
-      supported: true,
-      installed: packageIntegrationInstalled
-    },
-    strictEnforcement: true
-  };
-}
-
-// packages/rn-dev-agent-core/dist/session/public-status.js
-function projectPublicAuthorityStatus(status) {
-  if (!status.available) {
-    return {
-      available: false,
-      code: status.code
-    };
-  }
-  const recovery = status.bindings.recoveryHandles;
-  const recoveryStatus = status.state === "blocked" && recovery ? {
-    handoffRecipientHandle: typeof recovery.handoffRecipient?.token === "string" ? recovery.handoffRecipient.token : void 0,
-    handoffRecipientExpiresMs: typeof recovery.handoffRecipient?.expiresMs === "number" ? recovery.handoffRecipient.expiresMs : void 0,
-    adoptionRequired: Boolean(recovery.adoptStale),
-    adoptionHandle: typeof recovery.adoptStale?.token === "string" ? recovery.adoptStale.token : void 0,
-    adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
-  } : void 0;
-  return {
-    available: true,
-    state: status.state,
-    sourceKind: status.source.kind,
-    metroPort: status.bindings.metroPort,
-    observePort: status.bindings.observePort,
-    platform: status.bindings.device?.platform,
-    deviceBound: Boolean(status.bindings.device),
-    installBound: Boolean(status.bindings.install),
-    metroBound: Boolean(status.bindings.metro),
-    bundleBound: Boolean(status.bindings.bundle),
-    runnerBound: Boolean(status.bindings.runner),
-    ...recoveryStatus ? { recovery: recoveryStatus } : {},
-    migration: inspectAuthorityMigration(status)
-  };
-}
+import { join as join7 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { execFileSync as execFileSync7 } from "node:child_process";
 import { closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync4, openSync as openSync2 } from "node:fs";
+import { join as join6 } from "node:path";
 var BOUND_DIRECTORY_WORKER = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -10025,18 +9956,25 @@ function assertIdentity(expected) {
 try {
   const request = JSON.parse(fs.readFileSync(0, 'utf8'));
   assertIdentity(request.identity);
+  let directoryIdentity;
   let snapshots;
-  if (request.operation === 'mkdir') {
+  if (request.operation === 'directory') {
     validateName(request.name);
-    try {
-      fs.mkdirSync(request.name, { mode: request.mode });
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+    if (request.create) {
+      try {
+        fs.mkdirSync(request.name, { mode: request.mode });
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
     }
-    const directory = fs.lstatSync(request.name);
+    const directory = fs.lstatSync(request.name, { bigint: true });
     if (!directory.isDirectory() || directory.isSymbolicLink()) {
       throw new Error('bound-directory child is not a directory');
     }
+    directoryIdentity = {
+      dev: directory.dev.toString(),
+      ino: directory.ino.toString(),
+    };
   } else if (request.operation === 'read') {
     snapshots = request.names.map((name) => {
       const snapshot = readRegularFile(name);
@@ -10047,7 +9985,7 @@ try {
   } else {
     throw new Error('invalid bound-directory operation');
   }
-  process.stdout.write(JSON.stringify({ ok: true, snapshots }));
+  process.stdout.write(JSON.stringify({ ok: true, directoryIdentity, snapshots }));
 } catch (error) {
   const conflict =
     error instanceof ConflictError ||
@@ -10083,7 +10021,7 @@ function runBoundOperation(directory, request) {
         }
       }),
       maxBuffer: 16 * 1024 * 1024,
-      timeout: 5e3
+      ...request.operation === "cas" ? {} : { timeout: 5e3 }
     });
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable");
@@ -10100,7 +10038,7 @@ function runBoundOperation(directory, request) {
   }
   return result;
 }
-function openBoundDirectory(path) {
+function openBoundDirectory(path, expectedIdentity) {
   let descriptor;
   try {
     const before = lstatSync4(path, { bigint: true });
@@ -10110,7 +10048,7 @@ function openBoundDirectory(path) {
     descriptor = openSync2(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync4(path, { bigint: true });
-    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened)) {
+    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expectedIdentity !== void 0 && !sameIdentity(expectedIdentity, opened)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
     return {
@@ -10129,6 +10067,21 @@ function openBoundDirectory(path) {
 }
 function closeBoundDirectory(directory) {
   closeSync2(directory.descriptor);
+}
+function openBoundSubdirectory(parent, name, options = {}) {
+  const result = runBoundOperation(parent, {
+    operation: "directory",
+    name,
+    create: options.create ?? false,
+    mode: options.mode ?? 448
+  });
+  if (!result.directoryIdentity) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output");
+  }
+  return openBoundDirectory(join6(parent.path, name), {
+    dev: BigInt(result.directoryIdentity.dev),
+    ino: BigInt(result.directoryIdentity.ino)
+  });
 }
 function readBoundDirectoryFiles(directory, names) {
   const result = runBoundOperation(directory, { operation: "read", names });
@@ -10167,6 +10120,99 @@ function writeBoundDirectoryFile(directory, name, contents, mode, dependencies =
   ]);
 }
 
+// packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
+function readPackageIntegrationManifest(appRoot, dependencies) {
+  const manifestPath = join7(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+  if (dependencies.exists || dependencies.readText) {
+    const exists = dependencies.exists ?? existsSync2;
+    if (!exists(manifestPath))
+      return void 0;
+    const readText = dependencies.readText ?? ((path) => readFileSync5(path, "utf8"));
+    return readText(manifestPath);
+  }
+  const agent = openBoundDirectory(join7(appRoot, ".rn-agent"));
+  try {
+    const integration = openBoundSubdirectory(agent, "integration");
+    try {
+      const [manifest] = readBoundDirectoryFiles(integration, ["rn-session-integration.json"]);
+      return manifest?.contents?.toString("utf8");
+    } finally {
+      closeBoundDirectory(integration);
+    }
+  } finally {
+    closeBoundDirectory(agent);
+  }
+}
+function inspectAuthorityMigration(status, dependencies = {}) {
+  const exists = dependencies.exists ?? existsSync2;
+  const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
+  let packageIntegrationInstalled = false;
+  if (appRoot) {
+    try {
+      const manifestText = readPackageIntegrationManifest(appRoot, dependencies);
+      const manifest = manifestText ? JSON.parse(manifestText) : void 0;
+      packageIntegrationInstalled = manifest?.version === 1;
+    } catch {
+      packageIntegrationInstalled = false;
+    }
+  }
+  const legacyStateDetected = [
+    "/tmp/rn-dev-agent-session.json",
+    "/tmp/rn-fast-runner-state.json",
+    "/tmp/rn-android-runner-state.json"
+  ].some(exists);
+  return {
+    rollout: "strict-default",
+    storeAvailable: true,
+    registrySchema: 3,
+    legacyStateDetected,
+    bundleHandshake: {
+      supported: true,
+      scope: "coarse-initial-bundle",
+      bound: Boolean(status.bindings.bundle),
+      sourceFidelity: "not-proven"
+    },
+    packageIntegration: {
+      supported: true,
+      installed: packageIntegrationInstalled
+    },
+    strictEnforcement: true
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/public-status.js
+function projectPublicAuthorityStatus(status) {
+  if (!status.available) {
+    return {
+      available: false,
+      code: status.code
+    };
+  }
+  const recovery = status.bindings.recoveryHandles;
+  const recoveryStatus = status.state === "blocked" && recovery ? {
+    handoffRecipientHandle: typeof recovery.handoffRecipient?.token === "string" ? recovery.handoffRecipient.token : void 0,
+    handoffRecipientExpiresMs: typeof recovery.handoffRecipient?.expiresMs === "number" ? recovery.handoffRecipient.expiresMs : void 0,
+    adoptionRequired: Boolean(recovery.adoptStale),
+    adoptionHandle: typeof recovery.adoptStale?.token === "string" ? recovery.adoptStale.token : void 0,
+    adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
+  } : void 0;
+  return {
+    available: true,
+    state: status.state,
+    sourceKind: status.source.kind,
+    metroPort: status.bindings.metroPort,
+    observePort: status.bindings.observePort,
+    platform: status.bindings.device?.platform,
+    deviceBound: Boolean(status.bindings.device),
+    installBound: Boolean(status.bindings.install),
+    metroBound: Boolean(status.bindings.metro),
+    bundleBound: Boolean(status.bindings.bundle),
+    runnerBound: Boolean(status.bindings.runner),
+    ...recoveryStatus ? { recovery: recoveryStatus } : {},
+    migration: inspectAuthorityMigration(status)
+  };
+}
+
 // packages/rn-dev-agent-core/dist/rn-session.js
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -10193,7 +10239,7 @@ function resolveStatus() {
   });
 }
 function readSigner(status) {
-  const secret = JSON.parse(readFileSync6(join7(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
+  const secret = JSON.parse(readFileSync6(join8(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
   if (typeof secret.signerCapability !== "string") {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session build signer is unavailable");
   }
@@ -10209,11 +10255,16 @@ function writeMarker(status, input) {
     platform: input.platform,
     buildGeneration: input.buildGeneration
   }, input.signerCapability);
-  const integration = openBoundDirectory(join7(appRoot, ".rn-agent", "integration"));
+  const agent = openBoundDirectory(join8(appRoot, ".rn-agent"));
   try {
-    writeBoundDirectoryFile(integration, "authority-marker.js", Buffer.from(createMetroAuthorityModule(marker)), 384);
+    const integration = openBoundSubdirectory(agent, "integration");
+    try {
+      writeBoundDirectoryFile(integration, "authority-marker.js", Buffer.from(createMetroAuthorityModule(marker)), 384);
+    } finally {
+      closeBoundDirectory(integration);
+    }
   } finally {
-    closeBoundDirectory(integration);
+    closeBoundDirectory(agent);
   }
 }
 async function ensureManagedMetro(status) {

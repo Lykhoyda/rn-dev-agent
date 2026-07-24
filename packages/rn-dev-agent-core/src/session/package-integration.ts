@@ -21,8 +21,8 @@ import {
   assertBoundDirectoryCurrent,
   casBoundDirectoryFiles,
   closeBoundDirectory,
-  ensureBoundSubdirectory,
   openBoundDirectory,
+  openBoundSubdirectory,
   readBoundDirectoryFiles,
   type BoundDirectory,
 } from './bound-directory.js';
@@ -524,10 +524,8 @@ function openIntegrationDirectories(appRoot: string): {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
   const agent = openBoundDirectory(agentRoot);
-  const integrationPath = join(agentRoot, 'integration');
   try {
-    ensureBoundSubdirectory(agent, 'integration');
-    const integration = openBoundDirectory(integrationPath);
+    const integration = openBoundSubdirectory(agent, 'integration', { create: true });
     return { agent, integration };
   } catch (error) {
     closeBoundDirectory(agent);
