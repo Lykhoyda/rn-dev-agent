@@ -64,10 +64,14 @@ const { workerData } = require('node:worker_threads');
 const state = new Int32Array(workerData.stateBuffer);
 const watchers = [];
 
-function fail() {
-  Atomics.store(state, 2, 1);
+function invalidate() {
   Atomics.add(state, 1, 1);
   Atomics.notify(state, 1);
+}
+
+function fail() {
+  Atomics.store(state, 2, 1);
+  invalidate();
 }
 
 try {
@@ -83,8 +87,7 @@ try {
             batch.pendingEntries > 0 &&
             (batch.pendingEntries > 1 || batch.contentEvents === 0)
           ) {
-            Atomics.add(state, 1, 1);
-            Atomics.notify(state, 1);
+            invalidate();
           }
           batch.contentEvents = 0;
           batch.pendingEntries = 0;
@@ -93,11 +96,12 @@ try {
       });
     };
     const parentWatcher = fs.watch(path.dirname(ancestor.publicPath), (eventType, filename) => {
-      if (
-        eventType === 'rename' &&
-        filename !== null &&
-        String(filename) === watchedName
-      ) {
+      if (eventType !== 'rename') return;
+      if (filename === null) {
+        invalidate();
+        return;
+      }
+      if (String(filename) === watchedName) {
         const ticketIndex = 5 + index;
         let tickets = Atomics.load(state, ticketIndex);
         while (
@@ -242,7 +246,7 @@ function synchronizeAncestryMonitor() {
   }
 }
 
-function mutateBoundDirectory(mutation) {
+function mutateBoundDirectory(_names, mutation) {
   for (let index = 0; index < monitoredAncestors.length; index += 1) {
     Atomics.add(ancestryState, 5 + index, 1);
   }
@@ -370,7 +374,7 @@ function sameIdentity(left, right) {
 
 function removeOptional(name) {
   try {
-    mutateBoundDirectory(() => fs.unlinkSync(name));
+    mutateBoundDirectory(name, () => fs.unlinkSync(name));
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
@@ -417,7 +421,7 @@ function validateTransactionLock(lock) {
 function publishTransactionLock(lock) {
   const temporary = transactionLock + '.' + binding.lifecycleCapability + '.initial';
   removeOptional(temporary);
-  mutateBoundDirectory(() =>
+  mutateBoundDirectory(temporary, () =>
     fs.writeFileSync(temporary, JSON.stringify(lock), {
       flag: 'wx',
       mode: 0o600,
@@ -425,7 +429,9 @@ function publishTransactionLock(lock) {
     }),
   );
   try {
-    mutateBoundDirectory(() => fs.linkSync(temporary, transactionLock));
+    mutateBoundDirectory([temporary, transactionLock], () =>
+      fs.linkSync(temporary, transactionLock),
+    );
   } finally {
     removeOptional(temporary);
   }
@@ -456,7 +462,7 @@ function acquireTransactionLock() {
       if (!fs.existsSync(path.join(existing.controlPath, 'stopped'))) {
         throw new Error('bound-directory transaction is active');
       }
-      mutateBoundDirectory(() => fs.unlinkSync(transactionLock));
+      mutateBoundDirectory(transactionLock, () => fs.unlinkSync(transactionLock));
       fs.rmSync(existing.controlPath, { force: true, recursive: true });
     }
   }
@@ -484,7 +490,7 @@ function releaseTransactionLock() {
   ) {
     throw new Error('bound-directory transaction lock is invalid');
   }
-  mutateBoundDirectory(() => fs.unlinkSync(transactionLock));
+  mutateBoundDirectory(transactionLock, () => fs.unlinkSync(transactionLock));
 }
 
 function writeJournal(name, value, exclusive) {
@@ -494,11 +500,11 @@ function writeJournal(name, value, exclusive) {
   if (exclusive) {
     const temporary = name + '.initial';
     removeOptional(temporary);
-    mutateBoundDirectory(() =>
+    mutateBoundDirectory(temporary, () =>
       fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true }),
     );
     try {
-      mutateBoundDirectory(() => fs.linkSync(temporary, name));
+      mutateBoundDirectory([temporary, name], () => fs.linkSync(temporary, name));
     } finally {
       removeOptional(temporary);
     }
@@ -506,10 +512,10 @@ function writeJournal(name, value, exclusive) {
   }
   const temporary = name + '.next';
   removeOptional(temporary);
-  mutateBoundDirectory(() =>
+  mutateBoundDirectory(temporary, () =>
     fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true }),
   );
-  mutateBoundDirectory(() => fs.renameSync(temporary, name));
+  mutateBoundDirectory([temporary, name], () => fs.renameSync(temporary, name));
 }
 
 function readJournal(name) {
@@ -533,13 +539,13 @@ function validateWrite(write) {
 
 function prepareReplacement(write) {
   if (write.replacement === null) return;
-  mutateBoundDirectory(() =>
+  mutateBoundDirectory(write.temporary, () =>
     fs.writeFileSync(write.temporary, Buffer.from(write.replacement, 'base64'), {
       flag: 'wx',
       mode: write.mode,
     }),
   );
-  mutateBoundDirectory(() => fs.chmodSync(write.temporary, write.mode));
+  mutateBoundDirectory(write.temporary, () => fs.chmodSync(write.temporary, write.mode));
 }
 
 function applyWrite(write) {
@@ -551,7 +557,9 @@ function applyWrite(write) {
     }
   } else {
     try {
-      mutateBoundDirectory(() => fs.renameSync(write.name, write.captured));
+      mutateBoundDirectory([write.name, write.captured], () =>
+        fs.renameSync(write.name, write.captured),
+      );
     } catch (error) {
       if (error.code === 'ENOENT') {
         throw new ConflictError('bound-directory input changed before commit');
@@ -566,7 +574,9 @@ function applyWrite(write) {
   }
   if (write.replacement !== null) {
     try {
-      mutateBoundDirectory(() => fs.linkSync(write.temporary, write.name));
+      mutateBoundDirectory([write.temporary, write.name], () =>
+        fs.linkSync(write.temporary, write.name),
+      );
     } catch (error) {
       if (error.code === 'EEXIST') {
         throw new ConflictError('bound-directory input changed before commit');
@@ -597,21 +607,25 @@ function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
     const target = readRegularFile(write.name);
     if (captured !== null) {
       if (target === null) {
-        mutateBoundDirectory(() => fs.linkSync(write.captured, write.name));
+        mutateBoundDirectory([write.captured, write.name], () =>
+          fs.linkSync(write.captured, write.name),
+        );
       } else if (!sameIdentity(target, captured)) {
         if (!sameIdentity(target, temporary)) {
           throw new ConflictError('bound-directory input changed during recovery');
         }
-        mutateBoundDirectory(() => fs.unlinkSync(write.name));
+        mutateBoundDirectory(write.name, () => fs.unlinkSync(write.name));
         if (recoveryDelayAfterUnlinkMs > 0) wait(recoveryDelayAfterUnlinkMs);
-        mutateBoundDirectory(() => fs.linkSync(write.captured, write.name));
+        mutateBoundDirectory([write.captured, write.name], () =>
+          fs.linkSync(write.captured, write.name),
+        );
       }
       removeOptional(write.captured);
       removeOptional(write.temporary);
       continue;
     }
     if (write.expected === null && sameIdentity(target, temporary)) {
-      mutateBoundDirectory(() => fs.unlinkSync(write.name));
+      mutateBoundDirectory(write.name, () => fs.unlinkSync(write.name));
     }
     removeOptional(write.temporary);
   }
@@ -741,14 +755,18 @@ function inspectTransactions() {
 function quarantineInvalidTransactions(journalNames) {
   return journalNames.map((journal) => {
     const quarantine = journal + '.invalid-' + crypto.randomUUID();
-    mutateBoundDirectory(() => fs.renameSync(journal, quarantine));
+    mutateBoundDirectory([journal, quarantine], () =>
+      fs.renameSync(journal, quarantine),
+    );
     return { journal, quarantine };
   });
 }
 
 function restoreQuarantinedTransactions(quarantined) {
   for (const entry of [...quarantined].reverse()) {
-    mutateBoundDirectory(() => fs.renameSync(entry.quarantine, entry.journal));
+    mutateBoundDirectory([entry.quarantine, entry.journal], () =>
+      fs.renameSync(entry.quarantine, entry.journal),
+    );
   }
 }
 
@@ -912,7 +930,9 @@ function execute(request) {
     let created = false;
     if (request.create) {
       try {
-        mutateBoundDirectory(() => fs.mkdirSync(request.name, { mode: request.mode }));
+        mutateBoundDirectory(request.name, () =>
+          fs.mkdirSync(request.name, { mode: request.mode }),
+        );
         created = true;
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
@@ -947,7 +967,9 @@ function execute(request) {
     try {
       assertBoundDirectory(ancestryGuard, true);
     } catch (error) {
-      if (created) mutateBoundDirectory(() => fs.rmdirSync(request.name));
+      if (created) {
+        mutateBoundDirectory(request.name, () => fs.rmdirSync(request.name));
+      }
       throw error;
     }
     spawnChildWorker(request, directory);
