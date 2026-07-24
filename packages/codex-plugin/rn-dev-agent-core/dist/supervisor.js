@@ -53747,53 +53747,53 @@ function fail() {
 }
 
 try {
-  for (const [index, ancestor] of workerData.ancestors.entries()) {
+  for (const ancestor of workerData.ancestors) {
     const watchedName = path.basename(ancestor.publicPath);
-    const batch = { contentEvents: 0, pendingEntries: 0, scheduled: false };
+    const parentPath = path.dirname(ancestor.publicPath);
+    let parent = fs.statSync(parentPath, { bigint: true });
+    const sameParent = (current) =>
+      current.isDirectory() &&
+      current.dev === parent.dev &&
+      current.ino === parent.ino &&
+      current.ctimeNs === parent.ctimeNs &&
+      current.mtimeNs === parent.mtimeNs;
+    const batch = { entryEvents: 0, scheduled: false };
+    const inspectEntry = () => {
+      let current;
+      try {
+        current = fs.statSync(parentPath, { bigint: true });
+      } catch {
+        invalidate();
+        return;
+      }
+      if (!sameParent(current)) {
+        invalidate();
+        parent = current;
+      }
+    };
     const scheduleBatch = () => {
       if (batch.scheduled) return;
       batch.scheduled = true;
       setImmediate(() => {
         setImmediate(() => {
-          if (
-            batch.pendingEntries > 0 &&
-            (batch.pendingEntries > 1 || batch.contentEvents === 0)
-          ) {
-            invalidate();
-          }
-          batch.contentEvents = 0;
-          batch.pendingEntries = 0;
+          if (batch.entryEvents > 0) inspectEntry();
+          batch.entryEvents = 0;
           batch.scheduled = false;
         });
       });
     };
-    const parentWatcher = fs.watch(path.dirname(ancestor.publicPath), (eventType, filename) => {
+    const parentWatcher = fs.watch(parentPath, (eventType, filename) => {
       if (eventType !== 'rename') return;
       if (filename === null) {
         invalidate();
         return;
       }
       if (String(filename) === watchedName) {
-        const ticketIndex = 5 + index;
-        let tickets = Atomics.load(state, ticketIndex);
-        while (
-          tickets > 0 &&
-          Atomics.compareExchange(state, ticketIndex, tickets, tickets - 1) !== tickets
-        ) {
-          tickets = Atomics.load(state, ticketIndex);
-        }
-        if (tickets === 0) {
-          batch.pendingEntries += 1;
-          scheduleBatch();
-        }
-      }
-    });
-    const contentWatcher = fs.watch(ancestor.publicPath, (_eventType, filename) => {
-      if (filename !== null && String(filename) !== watchedName) {
-        batch.contentEvents += 1;
+        batch.entryEvents += 1;
         scheduleBatch();
       }
     });
+    const contentWatcher = fs.watch(ancestor.publicPath, () => {});
     parentWatcher.on('error', fail);
     contentWatcher.on('error', fail);
     watchers.push(parentWatcher, contentWatcher);
@@ -53869,9 +53869,7 @@ const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
     : binding.ancestors.slice(agentAncestorIndex);
-const ancestryState = new Int32Array(
-  new SharedArrayBuffer((5 + monitoredAncestors.length) * 4),
-);
+const ancestryState = new Int32Array(new SharedArrayBuffer(5 * 4));
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
     eval: true,
@@ -53918,20 +53916,11 @@ function synchronizeAncestryMonitor() {
   }
 }
 
-function mutateBoundDirectory(_names, mutation) {
-  for (let index = 0; index < monitoredAncestors.length; index += 1) {
-    Atomics.add(ancestryState, 5 + index, 1);
-  }
+function mutateBoundDirectory(mutation) {
   try {
     return mutation();
   } finally {
-    try {
-      synchronizeAncestryMonitor();
-    } finally {
-      for (let index = 0; index < monitoredAncestors.length; index += 1) {
-        Atomics.store(ancestryState, 5 + index, 0);
-      }
-    }
+    synchronizeAncestryMonitor();
   }
 }
 
@@ -54046,7 +54035,7 @@ function sameIdentity(left, right) {
 
 function removeOptional(name) {
   try {
-    mutateBoundDirectory(name, () => fs.unlinkSync(name));
+    mutateBoundDirectory(() => fs.unlinkSync(name));
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
@@ -54093,7 +54082,7 @@ function validateTransactionLock(lock) {
 function publishTransactionLock(lock) {
   const temporary = transactionLock + '.' + binding.lifecycleCapability + '.initial';
   removeOptional(temporary);
-  mutateBoundDirectory(temporary, () =>
+  mutateBoundDirectory(() =>
     fs.writeFileSync(temporary, JSON.stringify(lock), {
       flag: 'wx',
       mode: 0o600,
@@ -54101,7 +54090,7 @@ function publishTransactionLock(lock) {
     }),
   );
   try {
-    mutateBoundDirectory([temporary, transactionLock], () =>
+    mutateBoundDirectory(() =>
       fs.linkSync(temporary, transactionLock),
     );
   } finally {
@@ -54134,7 +54123,7 @@ function acquireTransactionLock() {
       if (!fs.existsSync(path.join(existing.controlPath, 'stopped'))) {
         throw new Error('bound-directory transaction is active');
       }
-      mutateBoundDirectory(transactionLock, () => fs.unlinkSync(transactionLock));
+      mutateBoundDirectory(() => fs.unlinkSync(transactionLock));
       fs.rmSync(existing.controlPath, { force: true, recursive: true });
     }
   }
@@ -54162,7 +54151,7 @@ function releaseTransactionLock() {
   ) {
     throw new Error('bound-directory transaction lock is invalid');
   }
-  mutateBoundDirectory(transactionLock, () => fs.unlinkSync(transactionLock));
+  mutateBoundDirectory(() => fs.unlinkSync(transactionLock));
 }
 
 function writeJournal(name, value, exclusive) {
@@ -54172,11 +54161,11 @@ function writeJournal(name, value, exclusive) {
   if (exclusive) {
     const temporary = name + '.initial';
     removeOptional(temporary);
-    mutateBoundDirectory(temporary, () =>
+    mutateBoundDirectory(() =>
       fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true }),
     );
     try {
-      mutateBoundDirectory([temporary, name], () => fs.linkSync(temporary, name));
+      mutateBoundDirectory(() => fs.linkSync(temporary, name));
     } finally {
       removeOptional(temporary);
     }
@@ -54184,10 +54173,10 @@ function writeJournal(name, value, exclusive) {
   }
   const temporary = name + '.next';
   removeOptional(temporary);
-  mutateBoundDirectory(temporary, () =>
+  mutateBoundDirectory(() =>
     fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true }),
   );
-  mutateBoundDirectory([temporary, name], () => fs.renameSync(temporary, name));
+  mutateBoundDirectory(() => fs.renameSync(temporary, name));
 }
 
 function readJournal(name) {
@@ -54211,13 +54200,13 @@ function validateWrite(write) {
 
 function prepareReplacement(write) {
   if (write.replacement === null) return;
-  mutateBoundDirectory(write.temporary, () =>
+  mutateBoundDirectory(() =>
     fs.writeFileSync(write.temporary, Buffer.from(write.replacement, 'base64'), {
       flag: 'wx',
       mode: write.mode,
     }),
   );
-  mutateBoundDirectory(write.temporary, () => fs.chmodSync(write.temporary, write.mode));
+  mutateBoundDirectory(() => fs.chmodSync(write.temporary, write.mode));
 }
 
 function applyWrite(write) {
@@ -54229,7 +54218,7 @@ function applyWrite(write) {
     }
   } else {
     try {
-      mutateBoundDirectory([write.name, write.captured], () =>
+      mutateBoundDirectory(() =>
         fs.renameSync(write.name, write.captured),
       );
     } catch (error) {
@@ -54246,7 +54235,7 @@ function applyWrite(write) {
   }
   if (write.replacement !== null) {
     try {
-      mutateBoundDirectory([write.temporary, write.name], () =>
+      mutateBoundDirectory(() =>
         fs.linkSync(write.temporary, write.name),
       );
     } catch (error) {
@@ -54279,16 +54268,16 @@ function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
     const target = readRegularFile(write.name);
     if (captured !== null) {
       if (target === null) {
-        mutateBoundDirectory([write.captured, write.name], () =>
+        mutateBoundDirectory(() =>
           fs.linkSync(write.captured, write.name),
         );
       } else if (!sameIdentity(target, captured)) {
         if (!sameIdentity(target, temporary)) {
           throw new ConflictError('bound-directory input changed during recovery');
         }
-        mutateBoundDirectory(write.name, () => fs.unlinkSync(write.name));
+        mutateBoundDirectory(() => fs.unlinkSync(write.name));
         if (recoveryDelayAfterUnlinkMs > 0) wait(recoveryDelayAfterUnlinkMs);
-        mutateBoundDirectory([write.captured, write.name], () =>
+        mutateBoundDirectory(() =>
           fs.linkSync(write.captured, write.name),
         );
       }
@@ -54297,7 +54286,7 @@ function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
       continue;
     }
     if (write.expected === null && sameIdentity(target, temporary)) {
-      mutateBoundDirectory(write.name, () => fs.unlinkSync(write.name));
+      mutateBoundDirectory(() => fs.unlinkSync(write.name));
     }
     removeOptional(write.temporary);
   }
@@ -54427,7 +54416,7 @@ function inspectTransactions() {
 function quarantineInvalidTransactions(journalNames) {
   return journalNames.map((journal) => {
     const quarantine = journal + '.invalid-' + crypto.randomUUID();
-    mutateBoundDirectory([journal, quarantine], () =>
+    mutateBoundDirectory(() =>
       fs.renameSync(journal, quarantine),
     );
     return { journal, quarantine };
@@ -54436,7 +54425,7 @@ function quarantineInvalidTransactions(journalNames) {
 
 function restoreQuarantinedTransactions(quarantined) {
   for (const entry of [...quarantined].reverse()) {
-    mutateBoundDirectory([entry.quarantine, entry.journal], () =>
+    mutateBoundDirectory(() =>
       fs.renameSync(entry.quarantine, entry.journal),
     );
   }
@@ -54602,7 +54591,7 @@ function execute(request) {
     let created = false;
     if (request.create) {
       try {
-        mutateBoundDirectory(request.name, () =>
+        mutateBoundDirectory(() =>
           fs.mkdirSync(request.name, { mode: request.mode }),
         );
         created = true;
@@ -54640,7 +54629,7 @@ function execute(request) {
       assertBoundDirectory(ancestryGuard, true);
     } catch (error) {
       if (created) {
-        mutateBoundDirectory(request.name, () => fs.rmdirSync(request.name));
+        mutateBoundDirectory(() => fs.rmdirSync(request.name));
       }
       throw error;
     }
@@ -54699,6 +54688,7 @@ function respond(requestPath, responsePath) {
   try {
     request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
     response = { ok: true, ...execute(request) };
+    synchronizeAncestryMonitor();
   } catch (error) {
     const conflict =
       error instanceof ConflictError ||
