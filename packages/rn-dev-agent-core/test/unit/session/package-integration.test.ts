@@ -8,13 +8,14 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   applyPackageIntegration,
@@ -382,6 +383,114 @@ test('bounded CAS recovery restores a file captured during worker timeout', () =
     );
     assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
     assert.deepEqual(readdirSync(root), ['authority-marker.js']);
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bounded CAS recovery leaves untouched later writes absent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-untouched-'));
+  const firstPath = join(root, 'first.js');
+  const secondPath = join(root, 'second.js');
+  writeFileSync(firstPath, 'first-before\n');
+  writeFileSync(secondPath, 'second-before\n');
+  const directory = openBoundDirectory(root);
+  try {
+    const remover = spawn(
+      process.execPath,
+      ['-e', `setTimeout(() => require('node:fs').unlinkSync(${JSON.stringify(secondPath)}), 300)`],
+      { stdio: 'ignore' },
+    );
+    remover.unref();
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          directory,
+          [
+            {
+              expected: Buffer.from('first-before\n'),
+              mode: 0o600,
+              name: 'first.js',
+              replacement: Buffer.from('first-after\n'),
+            },
+            {
+              expected: Buffer.from('second-before\n'),
+              mode: 0o600,
+              name: 'second.js',
+              replacement: Buffer.from('second-after\n'),
+            },
+          ],
+          { afterCaptureDelayMs: 5_000, timeoutMs: 1_000 },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(readFileSync(firstPath, 'utf8'), 'first-before\n');
+    assert.equal(existsSync(secondPath), false);
+    assert.deepEqual(readdirSync(root), ['first.js']);
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bounded CAS recovery resumes after its first timeout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-recovery-timeout-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const directory = openBoundDirectory(root);
+  try {
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          directory,
+          [
+            {
+              expected: Buffer.from('before\n'),
+              mode: 0o600,
+              name: 'authority-marker.js',
+              replacement: Buffer.from('after\n'),
+            },
+          ],
+          {
+            afterReplacementDelayMs: 5_000,
+            recoveryDelayAfterUnlinkMs: 5_000,
+            recoveryTimeoutMs: 1_000,
+            timeoutMs: 1_000,
+          },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
+    assert.deepEqual(readdirSync(root), ['authority-marker.js']);
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('bound CAS rejects concurrent mode changes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-mode-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const directory = openBoundDirectory(root);
+  try {
+    chmodSync(markerPath, 0o644);
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(directory, [
+          {
+            expected: Buffer.from('before\n'),
+            expectedMode: 0o600,
+            mode: 0o600,
+            name: 'authority-marker.js',
+            replacement: Buffer.from('after\n'),
+          },
+        ]),
+      /SESSION_INTEGRATION_CONFLICT/,
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
+    assert.equal(statSync(markerPath).mode & 0o777, 0o644);
   } finally {
     closeBoundDirectory(directory);
     rmSync(root, { force: true, recursive: true });

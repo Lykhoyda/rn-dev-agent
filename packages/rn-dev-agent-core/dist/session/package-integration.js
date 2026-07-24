@@ -334,7 +334,7 @@ function snapshotIntegrationFiles(directory, integrationPath, names) {
 function casReplaceIntegrationBatch(directory, writes) {
     casBoundDirectoryFiles(directory, writes.map((write) => ({
         expected: write.expected,
-        expectedMode: write.snapshot.mode,
+        expectedMode: write.expectedMode ?? write.snapshot.mode,
         mode: write.mode,
         name: write.snapshot.name,
         replacement: write.replacement,
@@ -431,6 +431,7 @@ function rollbackWrites(writes) {
                     {
                         snapshot: write.snapshot,
                         expected: write.written,
+                        expectedMode: write.writtenMode,
                         replacement: write.snapshot.contents,
                         mode: write.snapshot.mode,
                     },
@@ -519,6 +520,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
                 root: directories.integration.path,
                 snapshot: output.snapshot,
                 written: output.contents,
+                writtenMode: output.mode,
                 directory: directories.integration,
             });
             dependencies.afterWrite?.(output.snapshot.path);

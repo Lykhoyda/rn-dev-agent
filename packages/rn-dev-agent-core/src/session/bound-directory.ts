@@ -1,22 +1,35 @@
-import { execFileSync } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-interface BoundDirectoryRoot {
-  descriptor: number;
-  identity: { dev: bigint; ino: bigint };
-  path: string;
-  realPath: string;
-  references: number;
+interface BoundDirectoryWorker {
+  child: ChildProcess;
+  controlPath: string;
+  sequence: number;
 }
 
 export interface BoundDirectory {
   descriptor: number;
   identity: { dev: bigint; ino: bigint };
   path: string;
-  root: BoundDirectoryRoot;
-  segments: string[];
+  realPath: string;
+  worker: BoundDirectoryWorker;
   closed: boolean;
 }
 
@@ -36,22 +49,36 @@ export interface BoundFileWrite {
 
 interface BoundOperationResult {
   code?: 'CONFLICT' | 'UNSAFE';
+  committed?: boolean;
   message?: string;
   ok: boolean;
-  directoryIdentity?: { dev: string; ino: string };
+  directoryIdentity?: { dev: string; ino: string; realPath: string };
   snapshots?: Array<{ contents: string | null; mode: number; name: string }>;
 }
 
 export interface BoundOperationDependencies {
   afterCaptureDelayMs?: number;
+  afterReplacementDelayMs?: number;
+  recoveryDelayAfterUnlinkMs?: number;
+  recoveryTimeoutMs?: number;
   timeoutMs?: number;
 }
+
+const WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
 const BOUND_DIRECTORY_WORKER = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
 
 class ConflictError extends Error {}
+
+const controlPath = process.argv[1];
+const binding = JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8'));
+process.on('disconnect', () => process.exit(0));
+
+function wait(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
 
 function validateName(name) {
   if (
@@ -62,6 +89,18 @@ function validateName(name) {
     path.basename(name) !== name
   ) {
     throw new Error('invalid bound-directory filename');
+  }
+}
+
+function assertBoundDirectory() {
+  const current = fs.statSync('.', { bigint: true });
+  if (
+    !current.isDirectory() ||
+    current.dev.toString() !== binding.dev ||
+    current.ino.toString() !== binding.ino ||
+    fs.realpathSync('.') !== binding.realPath
+  ) {
+    throw new Error('bound-directory identity changed');
   }
 }
 
@@ -97,6 +136,8 @@ function readRegularFile(name) {
     }
     return {
       contents: fs.readFileSync(descriptor).toString('base64'),
+      dev: opened.dev.toString(),
+      ino: opened.ino.toString(),
       mode: Number(opened.mode & 0o777n),
       name,
     };
@@ -105,14 +146,22 @@ function readRegularFile(name) {
   }
 }
 
-function exists(name) {
-  try {
-    fs.lstatSync(name);
-    return true;
-  } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }
+function sameContentsAndMode(snapshot, encoded, mode) {
+  return (
+    snapshot !== null &&
+    encoded !== null &&
+    snapshot.mode === mode &&
+    Buffer.from(encoded, 'base64').equals(Buffer.from(snapshot.contents, 'base64'))
+  );
+}
+
+function sameIdentity(left, right) {
+  return (
+    left !== null &&
+    right !== null &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
 }
 
 function removeOptional(name) {
@@ -123,189 +172,181 @@ function removeOptional(name) {
   }
 }
 
-function sameContents(snapshot, expected) {
-  return (
-    snapshot !== null &&
-    expected !== null &&
-    expected.equals(Buffer.from(snapshot.contents, 'base64'))
-  );
-}
-
-function casReplace(write) {
-  validateName(write.name);
-  validateName(write.temporary);
-  validateName(write.captured);
-  const temporary = write.temporary;
-  const captured = write.captured;
-  const expected =
-    write.expected === null ? null : Buffer.from(write.expected, 'base64');
-  const replacement =
-    write.replacement === null ? null : Buffer.from(write.replacement, 'base64');
-  if (replacement !== null) {
-    fs.writeFileSync(temporary, replacement, { flag: 'wx', mode: write.mode });
-    fs.chmodSync(temporary, write.mode);
-  }
-  try {
-    if (expected === null) {
-      if (readRegularFile(write.name) !== null) {
-        throw new ConflictError('bound-directory input changed before commit');
-      }
-    } else {
-      try {
-        fs.renameSync(write.name, captured);
-      } catch (error) {
-        if (error.code === 'ENOENT') {
-          throw new ConflictError('bound-directory input changed before commit');
-        }
-        throw error;
-      }
-      if (write.afterCaptureDelayMs > 0) {
-        Atomics.wait(
-          new Int32Array(new SharedArrayBuffer(4)),
-          0,
-          0,
-          write.afterCaptureDelayMs,
-        );
-      }
-      const observed = readRegularFile(captured);
-      if (
-        observed === null ||
-        !expected.equals(Buffer.from(observed.contents, 'base64'))
-      ) {
-        fs.linkSync(captured, write.name);
-        throw new ConflictError('bound-directory input changed before commit');
-      }
-    }
-    if (replacement !== null) {
-      try {
-        fs.linkSync(temporary, write.name);
-      } catch (error) {
-        if (error.code === 'EEXIST') {
-          throw new ConflictError('bound-directory input changed before commit');
-        }
-        throw error;
-      }
-    }
-    if (expected !== null) removeOptional(captured);
-  } finally {
-    removeOptional(temporary);
-    if (exists(captured)) {
-      if (!exists(write.name)) fs.linkSync(captured, write.name);
-      removeOptional(captured);
-    }
-  }
-}
-
-function restoreExpected(write) {
-  validateName(write.name);
-  validateName(write.temporary);
-  validateName(write.captured);
-  validateName(write.rollbackTemporary);
-  validateName(write.rollbackCaptured);
-  const expected =
-    write.expected === null ? null : Buffer.from(write.expected, 'base64');
-  const replacement =
-    write.replacement === null ? null : Buffer.from(write.replacement, 'base64');
-  const target = readRegularFile(write.name);
-  const captured = readRegularFile(write.captured);
-  if (
-    (expected === null && target === null) ||
-    sameContents(target, expected)
-  ) {
-    removeOptional(write.temporary);
-    removeOptional(write.captured);
-    removeOptional(write.rollbackTemporary);
-    removeOptional(write.rollbackCaptured);
+function writeJournal(name, value, exclusive) {
+  validateName(name);
+  const contents = JSON.stringify(value);
+  if (exclusive) {
+    fs.writeFileSync(name, contents, { flag: 'wx', mode: 0o600, flush: true });
     return;
   }
-  if (target === null && sameContents(captured, expected)) {
-    fs.linkSync(write.captured, write.name);
-    removeOptional(write.temporary);
-    removeOptional(write.captured);
-    removeOptional(write.rollbackTemporary);
-    removeOptional(write.rollbackCaptured);
-    return;
-  }
-  if (target !== null && !sameContents(target, replacement)) {
-    throw new ConflictError('bound-directory input changed during recovery');
-  }
-  casReplace({
-    expected: target === null ? null : write.replacement,
-    mode: write.originalMode,
-    name: write.name,
-    replacement: write.expected,
-    temporary: write.rollbackTemporary,
-    captured: write.rollbackCaptured,
-    afterCaptureDelayMs: 0,
-  });
-  removeOptional(write.temporary);
-  removeOptional(write.captured);
+  const temporary = name + '.next';
+  removeOptional(temporary);
+  fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600, flush: true });
+  fs.renameSync(temporary, name);
 }
 
-function applyBatch(writes) {
-  const applied = [];
+function readJournal(name) {
+  validateName(name);
   try {
-    for (const write of writes) {
-      casReplace(write);
-      applied.push(write);
-    }
+    const snapshot = readRegularFile(name);
+    return snapshot === null
+      ? null
+      : JSON.parse(Buffer.from(snapshot.contents, 'base64').toString('utf8'));
   } catch (error) {
-    const rollbackErrors = [];
-    for (const write of applied.reverse()) {
-      try {
-        casReplace({
-          expected: write.replacement,
-          mode: write.originalMode,
-          name: write.name,
-          replacement: write.expected,
-          temporary: write.rollbackTemporary,
-          captured: write.rollbackCaptured,
-          afterCaptureDelayMs: 0,
-        });
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError);
-      }
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function validateWrite(write) {
+  validateName(write.name);
+  validateName(write.temporary);
+  validateName(write.captured);
+}
+
+function prepareReplacement(write) {
+  if (write.replacement === null) return;
+  fs.writeFileSync(write.temporary, Buffer.from(write.replacement, 'base64'), {
+    flag: 'wx',
+    mode: write.mode,
+  });
+  fs.chmodSync(write.temporary, write.mode);
+}
+
+function applyWrite(write) {
+  validateWrite(write);
+  prepareReplacement(write);
+  if (write.expected === null) {
+    if (readRegularFile(write.name) !== null) {
+      throw new ConflictError('bound-directory input changed before commit');
     }
-    if (rollbackErrors.length > 0) {
-      throw new AggregateError([error, ...rollbackErrors]);
+  } else {
+    try {
+      fs.renameSync(write.name, write.captured);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        throw new ConflictError('bound-directory input changed before commit');
+      }
+      throw error;
+    }
+    if (write.afterCaptureDelayMs > 0) wait(write.afterCaptureDelayMs);
+    const observed = readRegularFile(write.captured);
+    if (!sameContentsAndMode(observed, write.expected, write.expectedMode)) {
+      throw new ConflictError('bound-directory input changed before commit');
+    }
+  }
+  if (write.replacement !== null) {
+    try {
+      fs.linkSync(write.temporary, write.name);
+    } catch (error) {
+      if (error.code === 'EEXIST') {
+        throw new ConflictError('bound-directory input changed before commit');
+      }
+      throw error;
+    }
+  }
+  if (write.afterReplacementDelayMs > 0) wait(write.afterReplacementDelayMs);
+}
+
+function cleanupArtifacts(writes) {
+  for (const write of writes) {
+    removeOptional(write.temporary);
+    removeOptional(write.captured);
+  }
+}
+
+function cleanupJournal(name) {
+  removeOptional(name + '.next');
+  removeOptional(name);
+}
+
+function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
+  for (const write of [...writes].reverse()) {
+    validateWrite(write);
+    const captured = readRegularFile(write.captured);
+    const temporary = readRegularFile(write.temporary);
+    const target = readRegularFile(write.name);
+    if (captured !== null) {
+      if (target === null) {
+        fs.linkSync(write.captured, write.name);
+      } else if (!sameIdentity(target, captured)) {
+        if (!sameIdentity(target, temporary)) {
+          throw new ConflictError('bound-directory input changed during recovery');
+        }
+        fs.unlinkSync(write.name);
+        if (recoveryDelayAfterUnlinkMs > 0) wait(recoveryDelayAfterUnlinkMs);
+        fs.linkSync(write.captured, write.name);
+      }
+      removeOptional(write.captured);
+      removeOptional(write.temporary);
+      continue;
+    }
+    if (write.expected === null && sameIdentity(target, temporary)) {
+      fs.unlinkSync(write.name);
+    }
+    removeOptional(write.temporary);
+  }
+}
+
+function allReplacementsPresent(writes) {
+  return writes.every((write) => {
+    const target = readRegularFile(write.name);
+    return write.replacement === null
+      ? target === null
+      : sameContentsAndMode(target, write.replacement, write.mode);
+  });
+}
+
+function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnlinkMs = 0) {
+  const journal = readJournal(journalName);
+  if (journal === null) {
+    return { committed: allReplacementsPresent(requestedWrites) };
+  }
+  if (
+    journal.version !== 1 ||
+    journal.name !== journalName ||
+    JSON.stringify(journal.writes) !== JSON.stringify(requestedWrites)
+  ) {
+    throw new Error('bound-directory transaction journal is invalid');
+  }
+  if (journal.state === 'committed') {
+    cleanupArtifacts(journal.writes);
+    cleanupJournal(journalName);
+    return { committed: true };
+  }
+  if (journal.state !== 'applying') {
+    throw new Error('bound-directory transaction state is invalid');
+  }
+  rollbackOwnedWrites(journal.writes, recoveryDelayAfterUnlinkMs);
+  cleanupJournal(journalName);
+  return { committed: false };
+}
+
+function applyBatch(request) {
+  const journal = {
+    version: 1,
+    name: request.journal,
+    state: 'applying',
+    writes: request.writes,
+  };
+  writeJournal(request.journal, journal, true);
+  try {
+    for (const write of request.writes) applyWrite(write);
+    journal.state = 'committed';
+    writeJournal(request.journal, journal, false);
+    cleanupArtifacts(request.writes);
+  } catch (error) {
+    try {
+      recoverTransaction(request.journal, request.writes);
+    } catch (recoveryError) {
+      throw new AggregateError([error, recoveryError]);
     }
     throw error;
   }
 }
 
-function enterBoundDirectory(binding) {
-  const current = fs.statSync('.', { bigint: true });
-  if (
-    !current.isDirectory() ||
-    current.dev.toString() !== binding.rootIdentity.dev ||
-    current.ino.toString() !== binding.rootIdentity.ino ||
-    fs.realpathSync('.') !== binding.rootRealPath
-  ) {
-    throw new Error('bound-directory identity changed');
-  }
-  for (const segment of binding.segments) {
-    validateName(segment);
-    const child = fs.lstatSync(segment, { bigint: true });
-    if (!child.isDirectory() || child.isSymbolicLink()) {
-      throw new Error('bound-directory child is not a directory');
-    }
-    process.chdir(segment);
-  }
-  const bound = fs.statSync('.', { bigint: true });
-  if (
-    !bound.isDirectory() ||
-    bound.dev.toString() !== binding.identity.dev ||
-    bound.ino.toString() !== binding.identity.ino
-  ) {
-    throw new Error('bound-directory child identity changed');
-  }
-}
-
-try {
-  const request = JSON.parse(fs.readFileSync(0, 'utf8'));
-  enterBoundDirectory(request.binding);
-  let directoryIdentity;
-  let snapshots;
+function execute(request) {
+  assertBoundDirectory();
   if (request.operation === 'directory') {
     validateName(request.name);
     if (request.create) {
@@ -319,36 +360,90 @@ try {
     if (!directory.isDirectory() || directory.isSymbolicLink()) {
       throw new Error('bound-directory child is not a directory');
     }
-    directoryIdentity = {
-      dev: directory.dev.toString(),
-      ino: directory.ino.toString(),
+    return {
+      directoryIdentity: {
+        dev: directory.dev.toString(),
+        ino: directory.ino.toString(),
+        realPath: fs.realpathSync(request.name),
+      },
     };
-  } else if (request.operation === 'read') {
-    snapshots = request.names.map((name) => {
-      const snapshot = readRegularFile(name);
-      return snapshot ?? { contents: null, mode: 0o600, name };
-    });
-  } else if (request.operation === 'cas') {
-    applyBatch(request.writes);
-  } else if (request.operation === 'recover') {
-    for (const write of [...request.writes].reverse()) restoreExpected(write);
-  } else if (request.operation === 'identity') {
-  } else {
-    throw new Error('invalid bound-directory operation');
   }
-  process.stdout.write(JSON.stringify({ ok: true, directoryIdentity, snapshots }));
-} catch (error) {
-  const conflict =
-    error instanceof ConflictError ||
-    (error instanceof AggregateError &&
-      error.errors.some((entry) => entry instanceof ConflictError));
-  process.stdout.write(
-    JSON.stringify({
+  if (request.operation === 'read') {
+    return {
+      snapshots: request.names.map((name) => {
+        const snapshot = readRegularFile(name);
+        return snapshot ?? { contents: null, mode: 0o600, name };
+      }),
+    };
+  }
+  if (request.operation === 'cas') {
+    applyBatch(request);
+    return {};
+  }
+  if (request.operation === 'recover') {
+    return recoverTransaction(
+      request.journal,
+      request.writes,
+      request.recoveryDelayAfterUnlinkMs,
+    );
+  }
+  if (request.operation === 'identity') return {};
+  throw new Error('invalid bound-directory operation');
+}
+
+function respond(requestPath, responsePath) {
+  let response;
+  let request;
+  try {
+    request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+    response = { ok: true, ...execute(request) };
+  } catch (error) {
+    const conflict =
+      error instanceof ConflictError ||
+      (error instanceof AggregateError &&
+        error.errors.some((entry) => entry instanceof ConflictError));
+    response = {
       ok: false,
       code: conflict ? 'CONFLICT' : 'UNSAFE',
       message: error instanceof Error ? error.message : String(error),
-    }),
-  );
+    };
+  }
+  const temporary = responsePath + '.tmp';
+  fs.writeFileSync(temporary, JSON.stringify(response), { flag: 'wx', mode: 0o600 });
+  fs.renameSync(temporary, responsePath);
+  if (request?.operation === 'cas' && response.ok) {
+    cleanupJournal(request.journal);
+  }
+  removeOptional(requestPath);
+}
+
+try {
+  assertBoundDirectory();
+  fs.writeFileSync(path.join(controlPath, 'ready'), JSON.stringify({ ok: true }), {
+    flag: 'wx',
+    mode: 0o600,
+  });
+  while (!fs.existsSync(path.join(controlPath, 'stop'))) {
+    for (const entry of fs.readdirSync(controlPath)) {
+      if (!entry.endsWith('.request')) continue;
+      const requestPath = path.join(controlPath, entry);
+      const responsePath = path.join(controlPath, entry.replace(/\.request$/, '.response'));
+      respond(requestPath, responsePath);
+    }
+    wait(5);
+  }
+} catch (error) {
+  try {
+    fs.writeFileSync(
+      path.join(controlPath, 'ready'),
+      JSON.stringify({
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+      { flag: 'wx', mode: 0o600 },
+    );
+  } catch {}
+  process.exitCode = 1;
 }
 `;
 
@@ -359,6 +454,102 @@ function sameIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+function waitForFile(path: string, timeoutMs: number): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return true;
+    Atomics.wait(WAIT_BUFFER, 0, 0, 5);
+  }
+  return existsSync(path);
+}
+
+function stopWorker(worker: BoundDirectoryWorker, signal: NodeJS.Signals = 'SIGTERM'): void {
+  try {
+    writeFileSync(join(worker.controlPath, 'stop'), '', { flag: 'wx', mode: 0o600 });
+  } catch {}
+  worker.child.kill(signal);
+  rmSync(worker.controlPath, { force: true, recursive: true });
+}
+
+function startWorker(
+  path: string,
+  identity: { dev: bigint; ino: bigint },
+  realPath: string,
+): BoundDirectoryWorker {
+  const controlPath = mkdtempSync(join(tmpdir(), 'rn-bound-directory-'));
+  const binding = Buffer.from(
+    JSON.stringify({
+      dev: identity.dev.toString(),
+      ino: identity.ino.toString(),
+      realPath,
+    }),
+  ).toString('base64url');
+  const child = spawn(process.execPath, ['-e', BOUND_DIRECTORY_WORKER, controlPath, binding], {
+    cwd: path,
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  child.on('error', () => {});
+  child.channel?.unref();
+  child.unref();
+  const worker = { child, controlPath, sequence: 0 };
+  const readyPath = join(controlPath, 'ready');
+  if (!waitForFile(readyPath, 5_000)) {
+    stopWorker(worker, 'SIGKILL');
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable');
+  }
+  let ready: { ok?: unknown };
+  try {
+    ready = JSON.parse(readFileSync(readyPath, 'utf8')) as { ok?: unknown };
+  } catch {
+    stopWorker(worker, 'SIGKILL');
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable');
+  }
+  if (ready.ok !== true) {
+    stopWorker(worker, 'SIGKILL');
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker rejected path');
+  }
+  return worker;
+}
+
+function restartWorker(directory: BoundDirectory): void {
+  stopWorker(directory.worker, 'SIGKILL');
+  directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
+}
+
+function sendOperation(
+  directory: BoundDirectory,
+  request: Record<string, unknown>,
+  timeoutMs: number,
+): BoundOperationResult {
+  const sequence = ++directory.worker.sequence;
+  const prefix = String(sequence).padStart(8, '0');
+  const pendingPath = join(directory.worker.controlPath, `${prefix}.pending`);
+  const requestPath = join(directory.worker.controlPath, `${prefix}.request`);
+  const responsePath = join(directory.worker.controlPath, `${prefix}.response`);
+  writeFileSync(pendingPath, JSON.stringify(request), { flag: 'wx', mode: 0o600 });
+  renameSync(pendingPath, requestPath);
+  if (!waitForFile(responsePath, timeoutMs)) {
+    throw new Error('SESSION_INTEGRATION_WORKER_TIMEOUT');
+  }
+  let result: BoundOperationResult;
+  try {
+    result = JSON.parse(readFileSync(responsePath, 'utf8')) as BoundOperationResult;
+  } catch {
+    throw new Error(
+      'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output',
+    );
+  } finally {
+    rmSync(responsePath, { force: true });
+  }
+  return result;
+}
+
+function throwOperationFailure(result: BoundOperationResult): never {
+  const prefix =
+    result.code === 'CONFLICT' ? 'SESSION_INTEGRATION_CONFLICT' : 'SESSION_INTEGRATION_PATH_UNSAFE';
+  throw new Error(`${prefix}: ${result.message ?? 'bound-directory operation failed'}`);
+}
+
 function runBoundOperation(
   directory: BoundDirectory,
   request: Record<string, unknown>,
@@ -367,83 +558,82 @@ function runBoundOperation(
   if (directory.closed) {
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound directory is closed');
   }
-  const retained = fstatSync(directory.root.descriptor, { bigint: true });
+  const retained = fstatSync(directory.descriptor, { bigint: true });
   if (
     !retained.isDirectory() ||
-    retained.dev !== directory.root.identity.dev ||
-    retained.ino !== directory.root.identity.ino
+    retained.dev !== directory.identity.dev ||
+    retained.ino !== directory.identity.ino
   ) {
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed');
   }
-  const binding = {
-    rootIdentity: {
-      dev: retained.dev.toString(),
-      ino: retained.ino.toString(),
-    },
-    rootRealPath: directory.root.realPath,
-    segments: directory.segments,
-    identity: {
-      dev: directory.identity.dev.toString(),
-      ino: directory.identity.ino.toString(),
-    },
-  };
-  const input = JSON.stringify({ ...request, binding });
-  let output: string;
+  let current;
+  let currentRealPath;
   try {
-    output = execFileSync(process.execPath, ['-e', BOUND_DIRECTORY_WORKER], {
-      cwd: directory.root.path,
-      encoding: 'utf8',
-      input,
-      maxBuffer: 16 * 1024 * 1024,
-      timeout: dependencies.timeoutMs ?? 5_000,
-    });
+    current = lstatSync(directory.path, { bigint: true });
+    currentRealPath = realpathSync(directory.path);
   } catch {
-    let recoveryFailed = false;
-    if (request.operation === 'cas') {
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable');
+  }
+  if (
+    !current.isDirectory() ||
+    current.isSymbolicLink() ||
+    !sameIdentity(current, directory.identity) ||
+    currentRealPath !== directory.realPath
+  ) {
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound directory path changed');
+  }
+  try {
+    const result = sendOperation(directory, request, dependencies.timeoutMs ?? 5_000);
+    if (!result.ok) throwOperationFailure(result);
+    return result;
+  } catch (error) {
+    if (
+      request.operation !== 'cas' ||
+      !(error instanceof Error) ||
+      error.message !== 'SESSION_INTEGRATION_WORKER_TIMEOUT'
+    ) {
+      throw error;
+    }
+    restartWorker(directory);
+    let recovery: BoundOperationResult | undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const recoveryOutput = execFileSync(process.execPath, ['-e', BOUND_DIRECTORY_WORKER], {
-          cwd: directory.root.path,
-          encoding: 'utf8',
-          input: JSON.stringify({
+        recovery = sendOperation(
+          directory,
+          {
             operation: 'recover',
+            journal: request.journal,
             writes: request.writes,
-            binding,
-          }),
-          maxBuffer: 16 * 1024 * 1024,
-          timeout: 5_000,
-        });
-        const recovery = JSON.parse(recoveryOutput) as BoundOperationResult;
-        recoveryFailed = !recovery.ok;
-      } catch {
-        recoveryFailed = true;
+            recoveryDelayAfterUnlinkMs: dependencies.recoveryDelayAfterUnlinkMs ?? 0,
+          },
+          dependencies.recoveryTimeoutMs ?? 5_000,
+        );
+        if (!recovery.ok) throwOperationFailure(recovery);
+        break;
+      } catch (recoveryError) {
+        if (
+          !(recoveryError instanceof Error) ||
+          recoveryError.message !== 'SESSION_INTEGRATION_WORKER_TIMEOUT'
+        ) {
+          throw recoveryError;
+        }
+        restartWorker(directory);
       }
     }
-    throw new Error(
-      recoveryFailed
-        ? 'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory recovery failed'
-        : 'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable',
-    );
+    if (!recovery) {
+      throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory recovery failed');
+    }
+    if (recovery.committed) return recovery;
+    throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation unavailable');
   }
-  let result: BoundOperationResult;
-  try {
-    result = JSON.parse(output) as BoundOperationResult;
-  } catch {
-    throw new Error(
-      'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output',
-    );
-  }
-  if (!result.ok) {
-    const prefix =
-      result.code === 'CONFLICT'
-        ? 'SESSION_INTEGRATION_CONFLICT'
-        : 'SESSION_INTEGRATION_PATH_UNSAFE';
-    throw new Error(`${prefix}: ${result.message ?? 'bound-directory operation failed'}`);
-  }
-  return result;
 }
 
-export function openBoundDirectory(path: string): BoundDirectory {
+function openValidatedDirectory(
+  path: string,
+  expected?: { identity: { dev: bigint; ino: bigint }; realPath: string },
+): BoundDirectory {
   let descriptor: number | undefined;
+  let worker: BoundDirectoryWorker | undefined;
   try {
     const before = lstatSync(path, { bigint: true });
     if (!before.isDirectory() || before.isSymbolicLink()) {
@@ -456,27 +646,29 @@ export function openBoundDirectory(path: string): BoundDirectory {
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync(path, { bigint: true });
     const realPath = realpathSync(path);
-    if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened)) {
+    if (
+      !opened.isDirectory() ||
+      !sameIdentity(before, opened) ||
+      !sameIdentity(after, opened) ||
+      (expected !== undefined &&
+        (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath))
+    ) {
       throw new Error(
         'SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening',
       );
     }
-    const root: BoundDirectoryRoot = {
-      descriptor,
-      identity: { dev: opened.dev, ino: opened.ino },
-      path,
-      realPath,
-      references: 1,
-    };
+    const identity = { dev: opened.dev, ino: opened.ino };
+    worker = startWorker(path, identity, realPath);
     return {
       descriptor,
-      identity: root.identity,
+      identity,
       path,
-      root,
-      segments: [],
+      realPath,
+      worker,
       closed: false,
     };
   } catch (error) {
+    if (worker !== undefined) stopWorker(worker, 'SIGKILL');
     if (descriptor !== undefined) closeSync(descriptor);
     if (error instanceof Error && error.message.includes('SESSION_INTEGRATION_PATH_UNSAFE')) {
       throw error;
@@ -485,11 +677,15 @@ export function openBoundDirectory(path: string): BoundDirectory {
   }
 }
 
+export function openBoundDirectory(path: string): BoundDirectory {
+  return openValidatedDirectory(path);
+}
+
 export function closeBoundDirectory(directory: BoundDirectory): void {
   if (directory.closed) return;
   directory.closed = true;
-  directory.root.references -= 1;
-  if (directory.root.references === 0) closeSync(directory.root.descriptor);
+  stopWorker(directory.worker);
+  closeSync(directory.descriptor);
 }
 
 export function assertBoundDirectoryCurrent(directory: BoundDirectory): void {
@@ -512,18 +708,13 @@ export function openBoundSubdirectory(
       'SESSION_INTEGRATION_PATH_UNSAFE: bound-directory traversal returned invalid output',
     );
   }
-  parent.root.references += 1;
-  return {
-    descriptor: parent.root.descriptor,
+  return openValidatedDirectory(join(parent.path, name), {
     identity: {
       dev: BigInt(result.directoryIdentity.dev),
       ino: BigInt(result.directoryIdentity.ino),
     },
-    path: join(parent.path, name),
-    root: parent.root,
-    segments: [...parent.segments, name],
-    closed: false,
-  };
+    realPath: result.directoryIdentity.realPath,
+  });
 }
 
 export function readBoundDirectoryFiles(
@@ -553,17 +744,17 @@ export function casBoundDirectoryFiles(
     directory,
     {
       operation: 'cas',
+      journal: `.rn-bound-${transactionId}.journal`,
       writes: writes.map((write, index) => ({
         expected: write.expected?.toString('base64') ?? null,
+        expectedMode: write.expectedMode ?? write.mode,
         mode: write.mode,
         name: write.name,
-        originalMode: write.expectedMode ?? write.mode,
         replacement: write.replacement?.toString('base64') ?? null,
-        temporary: `.${transactionId}-${index}.tmp`,
-        captured: `.${transactionId}-${index}.captured`,
-        rollbackTemporary: `.${transactionId}-${index}.rollback.tmp`,
-        rollbackCaptured: `.${transactionId}-${index}.rollback.captured`,
+        temporary: `.rn-bound-${transactionId}-${index}.tmp`,
+        captured: `.rn-bound-${transactionId}-${index}.captured`,
         afterCaptureDelayMs: dependencies.afterCaptureDelayMs ?? 0,
+        afterReplacementDelayMs: dependencies.afterReplacementDelayMs ?? 0,
       })),
     },
     dependencies,

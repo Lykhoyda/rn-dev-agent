@@ -419,6 +419,7 @@ function casReplaceIntegrationBatch(
   writes: ReadonlyArray<{
     snapshot: DescriptorFileSnapshot;
     expected: Buffer | null;
+    expectedMode?: number;
     replacement: Buffer | null;
     mode: number;
   }>,
@@ -427,7 +428,7 @@ function casReplaceIntegrationBatch(
     directory,
     writes.map((write) => ({
       expected: write.expected,
-      expectedMode: write.snapshot.mode,
+      expectedMode: write.expectedMode ?? write.snapshot.mode,
       mode: write.mode,
       name: write.snapshot.name,
       replacement: write.replacement,
@@ -542,6 +543,7 @@ interface AppliedWrite {
   root: string;
   snapshot: FileSnapshot;
   written: Buffer | null;
+  writtenMode?: number;
   directory?: BoundDirectory;
 }
 
@@ -554,6 +556,7 @@ function rollbackWrites(writes: readonly AppliedWrite[]): Error[] {
           {
             snapshot: write.snapshot as DescriptorFileSnapshot,
             expected: write.written,
+            expectedMode: write.writtenMode,
             replacement: write.snapshot.contents,
             mode: write.snapshot.mode,
           },
@@ -666,6 +669,7 @@ export function applyPackageIntegration(
         root: directories.integration.path,
         snapshot: output.snapshot,
         written: output.contents,
+        writtenMode: output.mode,
         directory: directories.integration,
       });
       dependencies.afterWrite?.(output.snapshot.path);
