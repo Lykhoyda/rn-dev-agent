@@ -7867,6 +7867,22 @@ import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync as readFileSync3 } from "node:fs";
 import { join as join2 } from "node:path";
+var METRO_LAUNCHER_SOURCE = String.raw`
+const { spawn } = require('node:child_process');
+const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
+const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
+if (!executable) process.exit(1);
+const child = spawn(executable, args, {
+  cwd: process.cwd(),
+  env: process.env,
+  stdio: 'inherit',
+});
+child.once('error', () => process.exit(1));
+child.once('exit', (code, signal) => {
+  if (signal || (typeof code === 'number' && code !== 0)) process.exit(code || 1);
+});
+setInterval(() => {}, 1 << 30);
+`;
 function parentPid(pid) {
   try {
     const output = process.platform === "win32" ? execFileSync5("powershell.exe", [
@@ -7969,10 +7985,12 @@ async function startManagedMetro(input, dependencies = {}) {
   const command = resolveManagedMetroCommand(input.appRoot, dependencies);
   const log = openSync(join2(input.runtimeRoot, "metro.log"), "a", 384);
   const instanceId = input.instanceId;
-  const child = (dependencies.spawnProcess ?? spawn)(command.executable, [...command.args, "--port", String(input.port)], {
+  const child = (dependencies.spawnProcess ?? spawn)(process.execPath, ["-e", METRO_LAUNCHER_SOURCE], {
     cwd: input.appRoot,
     env: {
       ...process.env,
+      RN_DEV_AGENT_METRO_EXECUTABLE: command.executable,
+      RN_DEV_AGENT_METRO_ARGS: JSON.stringify([...command.args, "--port", String(input.port)]),
       RCT_METRO_PORT: String(input.port),
       RN_DEV_AGENT_SESSION_ID: input.sessionId,
       RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId
@@ -8002,11 +8020,13 @@ async function startManagedMetro(input, dependencies = {}) {
   const deadline = Date.now() + 2e4;
   let lastError = null;
   let listenerIdentity = null;
+  let ownedListenerPid = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null)
       break;
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {
+      ownedListenerPid = pid;
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === "present") {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
@@ -8038,7 +8058,8 @@ async function startManagedMetro(input, dependencies = {}) {
   const cleanupProven = await stopManagedMetroProcesses({
     port: input.port,
     launcher: { pid: child.pid, birth: launcherBirth.token },
-    listener: listenerIdentity
+    listener: listenerIdentity,
+    fallbackListenerPid: ownedListenerPid
   }, dependencies);
   if (!cleanupProven) {
     throw new Error("METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous");
@@ -8078,7 +8099,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   if (initial.launcher === "unknown" || initial.listener === "unknown" || initial.port.status === "unknown") {
     return false;
   }
-  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.launcher !== "present")) {
+  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.port.pid !== input.fallbackListenerPid && initial.launcher !== "present")) {
     return false;
   }
   if (initial.launcher === "stopped" && initial.listener === "stopped" && initial.port.status === "absent") {
@@ -8087,7 +8108,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   try {
     signalTree({
       launcherPid: input.launcher.pid,
-      listenerPid: input.listener?.pid ?? input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.fallbackListenerPid ?? input.launcher.pid,
       launcherPresent: initial.launcher === "present",
       signal: "SIGTERM"
     });
@@ -9831,7 +9852,7 @@ function projectPublicAuthorityStatus(status) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { chmodSync as chmodSync3, closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync4, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync6, renameSync as renameSync2, rmSync, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, closeSync as closeSync2, constants, fstatSync, lstatSync as lstatSync4, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync6, readdirSync, renameSync as renameSync2, rmdirSync, rmSync, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve3, sep as sep2 } from "node:path";
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var SENTINELS = {

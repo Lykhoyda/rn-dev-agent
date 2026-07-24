@@ -10450,7 +10450,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   if (initial.launcher === "unknown" || initial.listener === "unknown" || initial.port.status === "unknown") {
     return false;
   }
-  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.launcher !== "present")) {
+  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.port.pid !== input.fallbackListenerPid && initial.launcher !== "present")) {
     return false;
   }
   if (initial.launcher === "stopped" && initial.listener === "stopped" && initial.port.status === "absent") {
@@ -10459,7 +10459,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   try {
     signalTree({
       launcherPid: input.launcher.pid,
-      listenerPid: input.listener?.pid ?? input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.fallbackListenerPid ?? input.launcher.pid,
       launcherPresent: initial.launcher === "present",
       signal: "SIGTERM"
     });
@@ -10506,11 +10506,28 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
     listener: { pid: binding.pid, birth: binding.birth }
   }, dependencies);
 }
+var METRO_LAUNCHER_SOURCE;
 var init_managed_metro = __esm({
   "packages/rn-dev-agent-core/dist/session/managed-metro.js"() {
     "use strict";
     init_metro_binding();
     init_process_birth();
+    METRO_LAUNCHER_SOURCE = String.raw`
+const { spawn } = require('node:child_process');
+const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
+const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
+if (!executable) process.exit(1);
+const child = spawn(executable, args, {
+  cwd: process.cwd(),
+  env: process.env,
+  stdio: 'inherit',
+});
+child.once('error', () => process.exit(1));
+child.once('exit', (code, signal) => {
+  if (signal || (typeof code === 'number' && code !== 0)) process.exit(code || 1);
+});
+setInterval(() => {}, 1 << 30);
+`;
   }
 });
 
@@ -67921,7 +67938,8 @@ var init_build_adapter = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { chmodSync as chmodSync5, closeSync as closeSync5, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync10, mkdirSync as mkdirSync21, openSync as openSync5, readFileSync as readFileSync34, renameSync as renameSync11, rmSync as rmSync8, statSync as statSync13, writeFileSync as writeFileSync21 } from "node:fs";
+import { randomUUID as randomUUID6 } from "node:crypto";
+import { chmodSync as chmodSync5, closeSync as closeSync5, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync10, mkdirSync as mkdirSync21, openSync as openSync5, readFileSync as readFileSync34, readdirSync as readdirSync14, renameSync as renameSync11, rmdirSync, rmSync as rmSync8, statSync as statSync13, writeFileSync as writeFileSync21 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute5, join as join51, relative as relative3, resolve as resolve8, sep as sep6 } from "node:path";
 function renderMetroIntegrationAdapter() {
   return `'use strict';
@@ -68188,7 +68206,7 @@ process.exit(0);
 `;
 }
 function atomicWrite(path, contents, mode) {
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  const temporary = `${path}.${randomUUID6()}.tmp`;
   writeFileSync21(temporary, contents, { encoding: "utf8", mode });
   chmodSync5(temporary, mode);
   renameSync11(temporary, path);
@@ -68203,8 +68221,10 @@ function snapshotFiles(root, paths) {
     };
   });
 }
-function restoreSnapshots(snapshots) {
+function restoreSnapshots(snapshots, writtenPaths = new Set(snapshots.map((snapshot) => snapshot.path))) {
   for (const snapshot of [...snapshots].reverse()) {
+    if (!writtenPaths.has(snapshot.path))
+      continue;
     if (snapshot.contents === null) {
       rmSync8(snapshot.path, { force: true });
     } else {
@@ -68262,12 +68282,108 @@ function readOptionalRegularFileNoFollow(root, candidate) {
     throw error2;
   }
 }
-function applyPackageIntegration(input) {
+function beginAgentRootTransaction(appRoot) {
+  const agentRoot = join51(appRoot, ".rn-agent");
+  const boundRoot = join51(appRoot, `.rn-agent-transaction-${randomUUID6()}`);
+  let existed = false;
+  let identity2;
+  try {
+    identity2 = lstatSync10(agentRoot, { bigint: true });
+  } catch (error2) {
+    if (error2.code !== "ENOENT")
+      throw error2;
+  }
+  if (identity2) {
+    if (!identity2.isDirectory() || identity2.isSymbolicLink()) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: .rn-agent is not a regular directory");
+    }
+    renameSync11(agentRoot, boundRoot);
+    const bound = lstatSync10(boundRoot, { bigint: true });
+    if (bound.dev !== identity2.dev || bound.ino !== identity2.ino || !bound.isDirectory()) {
+      let agentRootAbsent = false;
+      try {
+        lstatSync10(agentRoot);
+      } catch (error2) {
+        agentRootAbsent = error2.code === "ENOENT";
+      }
+      if (agentRootAbsent) {
+        renameSync11(boundRoot, agentRoot);
+      }
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: .rn-agent changed during transaction");
+    }
+    existed = true;
+  } else {
+    mkdirSync21(boundRoot, { mode: 448 });
+  }
+  try {
+    mkdirSync21(agentRoot, { mode: 448 });
+  } catch (error2) {
+    const conflictPath = `${agentRoot}-conflict-${randomUUID6()}`;
+    try {
+      renameSync11(agentRoot, conflictPath);
+      if (existed)
+        renameSync11(boundRoot, agentRoot);
+      else
+        rmSync8(boundRoot, { recursive: true, force: true });
+      const conflict2 = lstatSync10(conflictPath);
+      if (conflict2.isSymbolicLink() || conflict2.isDirectory() && readdirSync14(conflictPath).length === 0) {
+        rmSync8(conflictPath, { recursive: conflict2.isDirectory(), force: true });
+      }
+    } catch (recoveryError) {
+      void recoveryError;
+    }
+    throw error2;
+  }
+  const placeholder = lstatSync10(agentRoot, { bigint: true });
+  return {
+    agentRoot,
+    boundRoot,
+    existed,
+    placeholder: { dev: placeholder.dev, ino: placeholder.ino }
+  };
+}
+function clearAgentRootPlaceholder(transaction) {
+  const current = lstatSync10(transaction.agentRoot, { bigint: true });
+  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== transaction.placeholder.dev || current.ino !== transaction.placeholder.ino || readdirSync14(transaction.agentRoot).length !== 0) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: .rn-agent changed during transaction");
+  }
+  rmdirSync(transaction.agentRoot);
+}
+function commitAgentRootTransaction(transaction) {
+  clearAgentRootPlaceholder(transaction);
+  renameSync11(transaction.boundRoot, transaction.agentRoot);
+}
+function recoverAgentRootTransaction(transaction) {
+  let conflictPath = null;
+  try {
+    clearAgentRootPlaceholder(transaction);
+  } catch (error2) {
+    if (error2.code !== "ENOENT") {
+      conflictPath = `${transaction.agentRoot}-conflict-${randomUUID6()}`;
+      renameSync11(transaction.agentRoot, conflictPath);
+    }
+  }
+  if (transaction.existed) {
+    renameSync11(transaction.boundRoot, transaction.agentRoot);
+  } else {
+    rmSync8(transaction.boundRoot, { recursive: true, force: true });
+  }
+  if (conflictPath) {
+    const conflict2 = lstatSync10(conflictPath);
+    if (conflict2.isSymbolicLink() || conflict2.isDirectory() && readdirSync14(conflictPath).length === 0) {
+      rmSync8(conflictPath, { recursive: conflict2.isDirectory(), force: true });
+    }
+  }
+}
+function assertSnapshotUnchanged(root, snapshot) {
+  const current = readOptionalRegularFileNoFollow(root, snapshot.path);
+  if (snapshot.contents === null && current !== void 0 || snapshot.contents !== null && (current === void 0 || !snapshot.contents.equals(Buffer.from(current)))) {
+    throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
+  }
+}
+function applyPackageIntegration(input, dependencies = {}) {
   const appRoot = resolve8(input.appRoot);
   const packagePath = join51(appRoot, "package.json");
-  const integrationRoot = join51(appRoot, ".rn-agent", "integration");
-  const manifestPath = join51(integrationRoot, "rn-session-integration.json");
-  const adapterPath = join51(appRoot, ADAPTER);
   let metroConfig;
   for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join51(appRoot, name))) {
     const contents = readOptionalRegularFileNoFollow(appRoot, path);
@@ -68280,88 +68396,113 @@ function applyPackageIntegration(input) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
   }
   const metroConfigPath = metroConfig.path;
-  const metroAdapterPath = join51(appRoot, METRO_ADAPTER);
-  const authorityModulePath = join51(appRoot, AUTHORITY_MODULE);
-  for (const path of [
-    packagePath,
-    manifestPath,
-    adapterPath,
-    metroAdapterPath,
-    authorityModulePath,
-    metroConfigPath
-  ]) {
-    assertNoSymlinkPath(appRoot, path);
-  }
-  const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
-  const existing = (() => {
-    try {
-      const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
-      return manifest === void 0 ? void 0 : JSON.parse(manifest);
-    } catch (error2) {
-      if (error2 instanceof SyntaxError)
-        return void 0;
-      throw error2;
-    }
-  })();
-  const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
-  const metroSource = metroConfig.contents;
-  const nextMetroSource = previewMetroIntegration(metroSource);
-  preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
-  const snapshots = snapshotFiles(appRoot, [
-    packagePath,
-    manifestPath,
-    adapterPath,
-    metroAdapterPath,
-    authorityModulePath,
-    metroConfigPath
-  ]);
-  mkdirSync21(dirname18(adapterPath), { recursive: true, mode: 448 });
+  const transaction = beginAgentRootTransaction(appRoot);
+  const integrationRoot = join51(transaction.boundRoot, "integration");
+  const manifestPath = join51(integrationRoot, "rn-session-integration.json");
+  const adapterPath = join51(transaction.boundRoot, "integration", "rn-session-adapter.cjs");
+  const metroAdapterPath = join51(transaction.boundRoot, "integration", "rn-session-metro.cjs");
+  const authorityModulePath = join51(transaction.boundRoot, "integration", "authority-marker.js");
+  let snapshots = [];
+  const writtenPaths = /* @__PURE__ */ new Set();
   try {
+    const packageSource = readRegularFileNoFollow(appRoot, packagePath);
+    const packageJson = JSON.parse(packageSource);
+    const existing = (() => {
+      try {
+        const manifest = readOptionalRegularFileNoFollow(appRoot, manifestPath);
+        return manifest === void 0 ? void 0 : JSON.parse(manifest);
+      } catch (error2) {
+        if (error2 instanceof SyntaxError)
+          return void 0;
+        throw error2;
+      }
+    })();
+    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
+    const nextMetroSource = previewMetroIntegration(metroConfig.contents);
+    preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
+    snapshots = snapshotFiles(appRoot, [
+      packagePath,
+      manifestPath,
+      adapterPath,
+      metroAdapterPath,
+      authorityModulePath,
+      metroConfigPath
+    ]);
+    const packageSnapshot = snapshots.find((snapshot) => snapshot.path === packagePath);
+    const metroSnapshot = snapshots.find((snapshot) => snapshot.path === metroConfigPath);
+    if (!packageSnapshot || !packageSnapshot.contents?.equals(Buffer.from(packageSource)) || !metroSnapshot || !metroSnapshot.contents?.equals(Buffer.from(metroConfig.contents))) {
+      throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
+    }
+    dependencies.beforeCommit?.();
+    mkdirSync21(dirname18(adapterPath), { recursive: true, mode: 448 });
     atomicWrite(manifestPath, `${JSON.stringify(preview.manifest, null, 2)}
 `, 384);
+    writtenPaths.add(manifestPath);
     atomicWrite(adapterPath, renderProjectAdapter(), 493);
+    writtenPaths.add(adapterPath);
     atomicWrite(metroAdapterPath, renderMetroIntegrationAdapter(), 420);
+    writtenPaths.add(metroAdapterPath);
     atomicWrite(authorityModulePath, "globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n", 384);
+    writtenPaths.add(authorityModulePath);
+    assertSnapshotUnchanged(appRoot, metroSnapshot);
     atomicWrite(metroConfigPath, nextMetroSource, 420);
+    writtenPaths.add(metroConfigPath);
+    assertSnapshotUnchanged(appRoot, packageSnapshot);
     atomicWrite(packagePath, `${JSON.stringify(preview.packageJson, null, 2)}
 `, 420);
+    writtenPaths.add(packagePath);
+    commitAgentRootTransaction(transaction);
+    return preview;
   } catch (error2) {
-    restoreSnapshots(snapshots);
+    restoreSnapshots(snapshots, writtenPaths);
+    recoverAgentRootTransaction(transaction);
     throw error2;
   }
-  return preview;
 }
-function restorePackageIntegrationFiles(input) {
+function restorePackageIntegrationFiles(input, dependencies = {}) {
   const appRoot = resolve8(input.appRoot);
   const packagePath = join51(appRoot, "package.json");
-  const manifestPath = join51(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
-  assertNoSymlinkPath(appRoot, packagePath);
-  assertNoSymlinkPath(appRoot, manifestPath);
-  const manifest = JSON.parse(readRegularFileNoFollow(appRoot, manifestPath));
-  const metroConfig = manifest.metroConfig === void 0 ? "metro.config.js" : manifest.metroConfig;
-  if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
-  }
-  const metroConfigPath = join51(appRoot, metroConfig);
-  const generated = [
-    manifestPath,
-    join51(appRoot, ADAPTER),
-    join51(appRoot, METRO_ADAPTER),
-    join51(appRoot, AUTHORITY_MODULE)
-  ];
-  for (const path of [metroConfigPath, ...generated]) {
-    assertNoSymlinkPath(appRoot, path);
-  }
-  const snapshots = snapshotFiles(appRoot, [packagePath, metroConfigPath, ...generated]);
+  const transaction = beginAgentRootTransaction(appRoot);
+  const manifestPath = join51(transaction.boundRoot, "integration", "rn-session-integration.json");
+  let snapshots = [];
+  const writtenPaths = /* @__PURE__ */ new Set();
   try {
-    const packageJson = JSON.parse(readRegularFileNoFollow(appRoot, packagePath));
+    const manifest = JSON.parse(readRegularFileNoFollow(appRoot, manifestPath));
+    const metroConfig = manifest.metroConfig === void 0 ? "metro.config.js" : manifest.metroConfig;
+    if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
+    }
+    const metroConfigPath = join51(appRoot, metroConfig);
+    const generated = [
+      manifestPath,
+      join51(transaction.boundRoot, "integration", "rn-session-adapter.cjs"),
+      join51(transaction.boundRoot, "integration", "rn-session-metro.cjs"),
+      join51(transaction.boundRoot, "integration", "authority-marker.js")
+    ];
+    snapshots = snapshotFiles(appRoot, [packagePath, metroConfigPath, ...generated]);
+    const packageSnapshot = snapshots.find((snapshot) => snapshot.path === packagePath);
+    const metroSnapshot = snapshots.find((snapshot) => snapshot.path === metroConfigPath);
+    if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
+      throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
+    }
+    const packageJson = JSON.parse(packageSnapshot.contents.toString("utf8"));
+    const metroSource = metroSnapshot.contents.toString("utf8");
+    dependencies.beforeCommit?.();
+    assertSnapshotUnchanged(appRoot, packageSnapshot);
     atomicWrite(packagePath, `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
 `, 420);
-    atomicWrite(metroConfigPath, restoreMetroIntegration(readRegularFileNoFollow(appRoot, metroConfigPath)), 420);
-    for (const path of generated)
+    writtenPaths.add(packagePath);
+    assertSnapshotUnchanged(appRoot, metroSnapshot);
+    atomicWrite(metroConfigPath, restoreMetroIntegration(metroSource), 420);
+    writtenPaths.add(metroConfigPath);
+    for (const path of generated) {
       rmSync8(path, { force: true });
+      writtenPaths.add(path);
+    }
+    commitAgentRootTransaction(transaction);
   } catch (error2) {
-    restoreSnapshots(snapshots);
+    restoreSnapshots(snapshots, writtenPaths);
+    recoverAgentRootTransaction(transaction);
     throw error2;
   }
 }
@@ -69051,7 +69192,7 @@ var init_tool_profiles = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID7 } from "node:crypto";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -69255,7 +69396,7 @@ function createAuthorityGate(runtime, dependencies) {
           } : tool === "rn_session" && args.action === "prepare_handoff" ? { before: [...profile.axes], after: [] } : { before: [...profile.axes], after: [...profile.axes] };
           requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
           operation2 = registry3.beginOperation(available.session, {
-            operationId: randomUUID6(),
+            operationId: randomUUID7(),
             tool,
             profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
           });
@@ -69344,7 +69485,7 @@ function createAuthorityGate(runtime, dependencies) {
         requireCompleteAxes(status, profile);
         bindSessionArguments(status, profile, args);
         operation = registry2.beginOperation(available.session, {
-          operationId: randomUUID6(),
+          operationId: randomUUID7(),
           tool,
           profile: profile.axes.join("")
         });
@@ -70033,7 +70174,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash16, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { readFileSync as readFileSync35, rmSync as rmSync9 } from "node:fs";
 import { execFile as execFile26 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
@@ -70635,7 +70776,7 @@ var init_index = __esm({
           authority: {
             sessionId: status.sessionId,
             claimEpoch: status.claimEpoch,
-            instanceId: randomUUID7(),
+            instanceId: randomUUID8(),
             capability: secret.observeCapability
           }
         };
@@ -71709,7 +71850,7 @@ var init_index = __esm({
 // packages/rn-dev-agent-core/dist/supervisor.js
 init_lockfile();
 init_parent_watch();
-import { randomUUID as randomUUID8 } from "node:crypto";
+import { randomUUID as randomUUID9 } from "node:crypto";
 import { spawn as spawn7 } from "node:child_process";
 import { readFileSync as readFileSync36 } from "node:fs";
 import { dirname as dirname21, join as join54 } from "node:path";
@@ -72119,7 +72260,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
         closeAuthorityAndExit2(action.kind === "shutdown" ? 0 : action.code);
     }
   }, spawnWorker2 = function() {
-    const workerInstance = randomUUID8();
+    const workerInstance = randomUUID9();
     const child = spawn7(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, void 0, process.argv.slice(2)), {
       stdio: ["pipe", "pipe", "inherit"],
       env: {

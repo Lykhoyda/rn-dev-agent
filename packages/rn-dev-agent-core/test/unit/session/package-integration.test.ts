@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -249,6 +250,65 @@ test('confirmed integration rejects a symlinked .rn-agent ancestor before writin
   } finally {
     rmSync(root, { force: true, recursive: true });
     rmSync(external, { force: true, recursive: true });
+  }
+});
+
+test('confirmed integration never mutates through a replaced .rn-agent ancestor', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-swap-'));
+  const external = mkdtempSync(join(tmpdir(), 'rn-session-apply-swap-external-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const metroPath = join(root, 'metro.config.js');
+    const packageBefore = `${JSON.stringify(packageJson)}\n`;
+    const metroBefore = 'module.exports = { serializer: {} };\n';
+    writeFileSync(packagePath, packageBefore);
+    writeFileSync(metroPath, metroBefore);
+
+    assert.throws(
+      () =>
+        applyPackageIntegration(
+          { appRoot: root, sessionCli: join(root, 'rn-session.js') },
+          {
+            beforeCommit: () => {
+              rmSync(join(root, '.rn-agent'), { recursive: true });
+              symlinkSync(external, join(root, '.rn-agent'));
+            },
+          },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
+    );
+    assert.deepEqual(readdirSync(external), []);
+    assert.equal(readFileSync(packagePath, 'utf8'), packageBefore);
+    assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+    rmSync(external, { force: true, recursive: true });
+  }
+});
+
+test('confirmed integration preserves concurrent package inputs', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-conflict-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const metroPath = join(root, 'metro.config.js');
+    const packageBefore = `${JSON.stringify(packageJson)}\n`;
+    const concurrentMetro = 'module.exports = { concurrent: true };\n';
+    writeFileSync(packagePath, packageBefore);
+    writeFileSync(metroPath, 'module.exports = { serializer: {} };\n');
+
+    assert.throws(
+      () =>
+        applyPackageIntegration(
+          { appRoot: root, sessionCli: join(root, 'rn-session.js') },
+          { beforeCommit: () => writeFileSync(metroPath, concurrentMetro) },
+        ),
+      /SESSION_INTEGRATION_CONFLICT/,
+    );
+    assert.equal(readFileSync(packagePath, 'utf8'), packageBefore);
+    assert.equal(readFileSync(metroPath, 'utf8'), concurrentMetro);
+    assert.equal(existsSync(join(root, '.rn-agent')), false);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 });
 

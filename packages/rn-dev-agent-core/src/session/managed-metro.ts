@@ -53,6 +53,23 @@ interface ManagedMetroProcessIdentity {
   birth: string;
 }
 
+const METRO_LAUNCHER_SOURCE = String.raw`
+const { spawn } = require('node:child_process');
+const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
+const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
+if (!executable) process.exit(1);
+const child = spawn(executable, args, {
+  cwd: process.cwd(),
+  env: process.env,
+  stdio: 'inherit',
+});
+child.once('error', () => process.exit(1));
+child.once('exit', (code, signal) => {
+  if (signal || (typeof code === 'number' && code !== 0)) process.exit(code || 1);
+});
+setInterval(() => {}, 1 << 30);
+`;
+
 function parentPid(pid: number): number | null {
   try {
     const output =
@@ -215,12 +232,14 @@ export async function startManagedMetro(
   const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
   const instanceId = input.instanceId;
   const child = (dependencies.spawnProcess ?? spawn)(
-    command.executable,
-    [...command.args, '--port', String(input.port)],
+    process.execPath,
+    ['-e', METRO_LAUNCHER_SOURCE],
     {
       cwd: input.appRoot,
       env: {
         ...process.env,
+        RN_DEV_AGENT_METRO_EXECUTABLE: command.executable,
+        RN_DEV_AGENT_METRO_ARGS: JSON.stringify([...command.args, '--port', String(input.port)]),
         RCT_METRO_PORT: String(input.port),
         RN_DEV_AGENT_SESSION_ID: input.sessionId,
         RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
@@ -258,10 +277,12 @@ export async function startManagedMetro(
   const deadline = Date.now() + 20_000;
   let lastError: unknown = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
+  let ownedListenerPid: number | null = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) break;
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {
+      ownedListenerPid = pid;
       const listenerBirth = probeBirth(pid);
       if (listenerBirth.status === 'present') {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
@@ -298,6 +319,7 @@ export async function startManagedMetro(
       port: input.port,
       launcher: { pid: child.pid, birth: launcherBirth.token },
       listener: listenerIdentity,
+      fallbackListenerPid: ownedListenerPid,
     },
     dependencies,
   );
@@ -341,6 +363,7 @@ async function stopManagedMetroProcesses(
     port: number;
     launcher: ManagedMetroProcessIdentity;
     listener: ManagedMetroProcessIdentity | null;
+    fallbackListenerPid?: number | null;
   },
   dependencies: Pick<
     ManagedMetroDependencies,
@@ -372,7 +395,7 @@ async function stopManagedMetroProcesses(
     initial.port.status === 'listening' &&
     (input.listener
       ? initial.port.pid !== input.listener.pid || initial.listener !== 'present'
-      : initial.launcher !== 'present')
+      : initial.port.pid !== input.fallbackListenerPid && initial.launcher !== 'present')
   ) {
     return false;
   }
@@ -386,7 +409,7 @@ async function stopManagedMetroProcesses(
   try {
     signalTree({
       launcherPid: input.launcher.pid,
-      listenerPid: input.listener?.pid ?? input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.fallbackListenerPid ?? input.launcher.pid,
       launcherPresent: initial.launcher === 'present',
       signal: 'SIGTERM',
     });
