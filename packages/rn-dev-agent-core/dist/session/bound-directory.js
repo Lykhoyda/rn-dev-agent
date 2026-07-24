@@ -77,7 +77,6 @@ function fail() {
 
 try {
   for (const ancestor of workerData.ancestors) {
-    const watchedName = path.basename(ancestor.publicPath);
     const parentPath = path.dirname(ancestor.publicPath);
     let parent = fs.statSync(parentPath, { bigint: true });
     const sameParent = (left, right) =>
@@ -87,7 +86,6 @@ try {
       left.ino === right.ino &&
       left.ctimeNs === right.ctimeNs &&
       left.mtimeNs === right.mtimeNs;
-    const record = { unrelatedEvents: 0 };
     const inspectFence = () => {
       let current;
       try {
@@ -97,23 +95,11 @@ try {
         return;
       }
       if (!sameParent(current, parent)) {
-        if (record.unrelatedEvents === 0) {
-          invalidate();
-        }
+        invalidate();
         parent = current;
       }
-      record.unrelatedEvents = 0;
     };
-    const parentWatcher = fs.watch(parentPath, (eventType, filename) => {
-      if (eventType !== 'rename') return;
-      if (filename === null) {
-        invalidate();
-        return;
-      }
-      if (String(filename) !== watchedName) {
-        record.unrelatedEvents += 1;
-      }
-    });
+    const parentWatcher = fs.watch(parentPath, () => {});
     const contentWatcher = fs.watch(ancestor.publicPath, () => {});
     parentWatcher.on('error', fail);
     contentWatcher.on('error', fail);
@@ -907,7 +893,7 @@ function spawnChildWorker(request, directory) {
 }
 
 function execute(request) {
-  const ancestryGuard = assertBoundDirectory();
+  const ancestryGuard = assertBoundDirectory(undefined, true);
   if (request.operation === 'directory') {
     validateName(request.childId);
     validateName(request.name);

@@ -367,6 +367,7 @@ test('bound CAS rolls back an ancestor switched and restored during mutation', (
   const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-switch-external-'));
   const agentPath = join(root, '.rn-agent');
   const external = join(externalRoot, 'agent');
+  const unrelatedPath = join(root, 'unrelated-root');
   const integrationPath = join(agentPath, 'integration');
   const markerPath = join(integrationPath, 'authority-marker.js');
   mkdirSync(integrationPath, { recursive: true });
@@ -378,7 +379,9 @@ test('bound CAS rolls back an ancestor switched and restored during mutation', (
       process.execPath,
       [
         '-e',
-        `const fs=require('node:fs');setTimeout(()=>{fs.renameSync(${JSON.stringify(
+        `const fs=require('node:fs');setTimeout(()=>{fs.writeFileSync(${JSON.stringify(
+          unrelatedPath,
+        )},'noise');fs.renameSync(${JSON.stringify(
           agentPath,
         )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
           external,
@@ -593,7 +596,7 @@ test('bound CAS retains cleanup after a late integration-directory switch', () =
   }
 });
 
-test('bound CAS tolerates unrelated ancestor-directory churn', () => {
+test('bound CAS fails closed on unrelated ancestor-directory churn', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-unrelated-churn-'));
   const agentPath = join(root, '.rn-agent');
   const integrationPath = join(agentPath, 'integration');
@@ -620,20 +623,23 @@ test('bound CAS tolerates unrelated ancestor-directory churn', () => {
       { stdio: 'ignore' },
     );
     churn.unref();
-    const result = casBoundDirectoryFiles(
-      integration,
-      [
-        {
-          expected: Buffer.from('before\n'),
-          mode: 0o600,
-          name: 'authority-marker.js',
-          replacement: Buffer.from('after\n'),
-        },
-      ],
-      { afterCaptureDelayMs: 1_000 },
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          integration,
+          [
+            {
+              expected: Buffer.from('before\n'),
+              mode: 0o600,
+              name: 'authority-marker.js',
+              replacement: Buffer.from('after\n'),
+            },
+          ],
+          { afterCaptureDelayMs: 1_000 },
+        ),
+      /SESSION_INTEGRATION_PATH_UNSAFE/,
     );
-    assert.equal(result.committed, true);
-    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+    assert.equal(readFileSync(markerPath, 'utf8'), 'before\n');
   } finally {
     closeBoundDirectory(integration);
     closeBoundDirectory(agent);
