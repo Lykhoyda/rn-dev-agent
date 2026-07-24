@@ -25,4 +25,5 @@ test('SQLite warning filter suppresses only the known warning', () => {
   assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
   assert.match(result.stderr, /ExperimentalWarning: unrelated experimental/);
   assert.match(result.stderr, /Warning: ordinary warning/);
+  assert.doesNotMatch(result.stderr, /\n\s+at /);
 });

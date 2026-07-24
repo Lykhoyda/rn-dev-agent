@@ -1244,11 +1244,9 @@ trackedTool(
 
 trackedTool(
   'cdp_object_inspect',
-  'Inspect a JS object by expression without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.',
+  'Inspect a JS object by property path without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.',
   {
-    expression: z
-      .string()
-      .describe('JS expression to evaluate and inspect (e.g. "globalThis.__REDUX_STORE__")'),
+    expression: z.string().describe('JS property path or primitive literal to inspect'),
     depth: z
       .number()
       .int()

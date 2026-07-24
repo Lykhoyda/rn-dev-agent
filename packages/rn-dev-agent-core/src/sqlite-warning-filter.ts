@@ -6,5 +6,5 @@ process.on('warning', (warning) => {
   if (warning.name === 'ExperimentalWarning' && warning.message === SQLITE_EXPERIMENTAL_WARNING) {
     return;
   }
-  process.stderr.write(`${warning.stack ?? `${warning.name}: ${warning.message}`}\n`);
+  process.stderr.write(`${warning.name}: ${warning.message}\n`);
 });

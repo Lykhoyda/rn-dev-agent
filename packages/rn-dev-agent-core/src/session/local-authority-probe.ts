@@ -282,14 +282,14 @@ export function createLocalAuthorityProbe(
           'live CDP runtime returned an invalid bundle authority marker',
         );
       }
-      const secret = dependencies.getSecret()?.signerCapability;
-      if (!outer?.marker || outer.status !== 'signed' || !secret) {
+      const signerCapability = dependencies.getSecret()?.signerCapability;
+      if (!outer?.marker || outer.status !== 'signed' || !signerCapability) {
         throw new SessionAuthorityError(
           'BUNDLE_HANDSHAKE_UNAVAILABLE',
           'signed authority marker or signer capability is unavailable',
         );
       }
-      const payload = verifyMetroAuthorityMarker(outer.marker, secret, {
+      verifyMetroAuthorityMarker(outer.marker, signerCapability, {
         sessionId: status.sessionId,
         metroInstanceId: String(bundle.metroInstanceId),
         worktreeKey: status.worktreeKey,
@@ -309,7 +309,7 @@ export function createLocalAuthorityProbe(
       return {
         axis,
         identity: identity({
-          payload,
+          payload: outer.marker.payload,
           targetId: client.connectedTarget.id,
           connectionGeneration: client.connectionGeneration,
         }),

@@ -754,6 +754,22 @@ test('object_inspect: expression throws returns failResult', async () => {
   assert.match(error, /Expression threw/);
 });
 
+test('object_inspect: rejects executable expressions before evaluation', async () => {
+  let sendCalls = 0;
+  const client = createMockClient({
+    send: async () => {
+      sendCalls += 1;
+      return {};
+    },
+  });
+  const handler = createObjectInspectHandler(() => client);
+
+  const error = expectFail(await handler({ expression: 'globalThis.value = runTask()' }));
+
+  assert.match(error, /property path or literal/);
+  assert.equal(sendCalls, 0);
+});
+
 test('object_inspect: depth is clamped to [0, 3]', async () => {
   const sendCalls = [];
   const client = createMockClient({

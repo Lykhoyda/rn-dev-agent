@@ -83,7 +83,8 @@ test('bundle probe normalizes CDP transport failure to optional bundle unavailab
 
   await assert.rejects(
     () => probe({ axis: 'B', status }),
-    (error) => error instanceof SessionAuthorityError && error.code === 'BUNDLE_HANDSHAKE_UNAVAILABLE',
+    (error) =>
+      error instanceof SessionAuthorityError && error.code === 'BUNDLE_HANDSHAKE_UNAVAILABLE',
   );
 });
 

@@ -918,10 +918,8 @@ trackedTool('cdp_cpu_profile', 'Record a CPU profile for a specified duration. R
         .optional()
         .describe('Profile duration in ms (default 3000, max 30000)'),
 }, createCpuProfileHandler(getClient));
-trackedTool('cdp_object_inspect', 'Inspect a JS object by expression without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.', {
-    expression: z
-        .string()
-        .describe('JS expression to evaluate and inspect (e.g. "globalThis.__REDUX_STORE__")'),
+trackedTool('cdp_object_inspect', 'Inspect a JS object by property path without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.', {
+    expression: z.string().describe('JS property path or primitive literal to inspect'),
     depth: z
         .number()
         .int()

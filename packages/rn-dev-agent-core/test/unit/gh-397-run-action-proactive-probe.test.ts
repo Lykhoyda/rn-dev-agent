@@ -185,7 +185,8 @@ test('gh-588: authority loss escapes orchestration without persisting a RunRecor
 
   await assert.rejects(
     () => handler({ actionId: 'demo', projectRoot: project.root, platform: 'ios' }),
-    (error) => error instanceof SessionAuthorityError && error.code === 'AUTHORITY_LOST_DURING_OPERATION',
+    (error) =>
+      error instanceof SessionAuthorityError && error.code === 'AUTHORITY_LOST_DURING_OPERATION',
   );
   assert.equal(lastRun('demo'), undefined);
 });

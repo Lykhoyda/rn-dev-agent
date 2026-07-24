@@ -30,7 +30,7 @@ if (supervisorFlag.length > 0 &&
         stdio: 'inherit',
         env: { ...process.env, RN_DEV_AGENT_SQLITE_RELAUNCHED: '1' },
     });
-    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGUSR2']) {
         process.on(signal, () => child.kill(signal));
     }
     const outcome = await new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));

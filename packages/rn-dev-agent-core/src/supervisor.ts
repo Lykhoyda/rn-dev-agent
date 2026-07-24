@@ -46,7 +46,7 @@ if (
       env: { ...process.env, RN_DEV_AGENT_SQLITE_RELAUNCHED: '1' },
     },
   );
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGUSR2'] as const) {
     process.on(signal, () => child.kill(signal));
   }
   const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(

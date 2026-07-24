@@ -7510,20 +7510,21 @@ function captureInstalledArtifact(target, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
-import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { createHmac as createHmac2, createSecretKey, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 function serializePayload(payload) {
   return JSON.stringify(payload);
 }
-function signPayload(payload, secret) {
-  return createHmac2("sha256", secret).update(serializePayload(payload)).digest("hex");
+function signPayload(payload, signerCapability) {
+  const signingKey = createSecretKey(Buffer.from(signerCapability, "base64url"));
+  return createHmac2("sha256", signingKey).update(serializePayload(payload)).digest("hex");
 }
-function createMetroAuthorityMarker(binding, secret) {
+function createMetroAuthorityMarker(binding, signerCapability) {
   const payload = {
     ...binding,
     authorityScope: "initial-bundle",
     sourceFidelity: "not-proven"
   };
-  return { version: 1, payload, signature: signPayload(payload, secret) };
+  return { version: 1, payload, signature: signPayload(payload, signerCapability) };
 }
 function createMetroAuthorityModule(marker) {
   const value = marker ? { status: "signed", marker } : {

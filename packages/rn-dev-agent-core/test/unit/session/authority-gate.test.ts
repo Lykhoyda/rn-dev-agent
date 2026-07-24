@@ -289,7 +289,10 @@ test('optional bundle admission downgrades only a genuine bundle mismatch', asyn
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), false);
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
+    false,
+  );
 });
 
 test('reactive bundle admission reconciles the target replaced by the native attempt', async () => {
@@ -337,7 +340,10 @@ test('reactive bundle admission reconciles the target replaced by the native att
   assert.equal(envelope.ok, true);
   assert.equal(refreshes, 2);
   assert.equal(calls.filter((call) => call === 'replace-binding').length, 1);
-  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), true);
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
+    true,
+  );
 });
 
 test('reactive bundle admission verifies the refreshed target before replacing ownership', async () => {
@@ -429,7 +435,10 @@ test('later verified bundle admission clears an earlier recovery failure', async
   assert.equal(envelope.ok, true);
   assert.equal(envelope.meta.authorityInvalidated, undefined);
   assert.equal(status.bindings.bundle.targetId, 'target-b');
-  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), true);
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
+    true,
+  );
 });
 
 test('native run-action invalidates an unrecoverable prior bundle without losing native proof', async () => {
@@ -449,14 +458,17 @@ test('native run-action invalidates an unrecoverable prior bundle without losing
     },
   });
 
-  const result = await gate.wrap('cdp_run_action', async () =>
-    okResult({ transport: 'maestro' }),
-  )({});
+  const result = await gate.wrap('cdp_run_action', async () => okResult({ transport: 'maestro' }))(
+    {},
+  );
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
   assert.equal(envelope.meta.authorityInvalidated, true);
-  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), false);
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
+    false,
+  );
   assert.equal(status.bindings.bundle, null);
 });
 
@@ -477,9 +489,9 @@ test('native run-action reconciles a replaced runtime target without claiming bu
     },
   });
 
-  const result = await gate.wrap('cdp_run_action', async () =>
-    okResult({ transport: 'maestro' }),
-  )({});
+  const result = await gate.wrap('cdp_run_action', async () => okResult({ transport: 'maestro' }))(
+    {},
+  );
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
@@ -487,7 +499,10 @@ test('native run-action reconciles a replaced runtime target without claiming bu
     calls.filter((call) => call === 'refresh-binding' || call === 'replace-binding'),
     ['refresh-binding', 'replace-binding'],
   );
-  assert.equal(envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'), false);
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
+    false,
+  );
 });
 
 test('nested suite reload refreshes bundle generation under the outer fence', async () => {

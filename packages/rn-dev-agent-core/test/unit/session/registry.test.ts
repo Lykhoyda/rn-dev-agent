@@ -673,10 +673,7 @@ test('handoff cancellation controller lookup does not widen operational access',
     () => registry.getControllerBinding(owner),
     (error) => error.code === 'SESSION_OWNER_LOST',
   );
-  assert.equal(
-    registry.getHandoffCancellationControllerBinding(owner).sessionId,
-    owner.sessionId,
-  );
+  assert.equal(registry.getHandoffCancellationControllerBinding(owner).sessionId, owner.sessionId);
 });
 
 test('opaque recovery handles authorize only their bounded transition', () => {
@@ -930,13 +927,9 @@ test('stale adoption cannot discard another contender handoff cleanup plan', () 
   ownerStates.set(cleanupOwner.sessionId, 'mismatch');
 
   assert.throws(
-    () =>
-      registry.adoptStaleIntoBlocked(contender, cleanupOwner.sessionId, 'worker-contender'),
+    () => registry.adoptStaleIntoBlocked(contender, cleanupOwner.sessionId, 'worker-contender'),
     /incomplete handoff cleanup plan/,
   );
   assert.equal(registry.getSessionStatus(cleanupOwner.sessionId)?.state, 'handoff_cleanup');
-  assert.equal(
-    registry.getClaim('runner', 'ios:device-a:9100')?.sessionId,
-    cleanupOwner.sessionId,
-  );
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, cleanupOwner.sessionId);
 });

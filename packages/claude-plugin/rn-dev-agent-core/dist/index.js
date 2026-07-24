@@ -50541,10 +50541,14 @@ function createCpuProfileHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/tools/object-inspect.js
 init_utils();
+var SAFE_INSPECTION_EXPRESSION = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?|true|false|null|undefined|[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)$/;
 function createObjectInspectHandler(getClient2) {
   return withConnection(getClient2, async (args, client2) => {
     const depth = Math.min(Math.max(args.depth ?? 1, 0), 3);
     const maxProps = Math.min(Math.max(args.maxProperties ?? 20, 1), 100);
+    if (!SAFE_INSPECTION_EXPRESSION.test(args.expression)) {
+      return failResult("Object inspection requires a property path or literal");
+    }
     try {
       const evalResult = await client2.send("Runtime.evaluate", {
         expression: args.expression,
@@ -67560,22 +67564,23 @@ import { execFileSync as execFileSync15 } from "node:child_process";
 import { createHash as createHash14 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
-import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { createHmac as createHmac2, createSecretKey, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 function serializePayload(payload) {
   return JSON.stringify(payload);
 }
-function signPayload(payload, secret) {
-  return createHmac2("sha256", secret).update(serializePayload(payload)).digest("hex");
+function signPayload(payload, signerCapability) {
+  const signingKey = createSecretKey(Buffer.from(signerCapability, "base64url"));
+  return createHmac2("sha256", signingKey).update(serializePayload(payload)).digest("hex");
 }
 function mismatch() {
   return new Error("BUNDLE_IDENTITY_MISMATCH: signed initial-bundle binding did not match");
 }
-function verifyMetroAuthorityMarker(marker, secret, expected = {}) {
+function verifyMetroAuthorityMarker(marker, signerCapability, expected = {}) {
   if (marker.version !== 1 || !marker.payload || typeof marker.signature !== "string") {
     throw mismatch();
   }
   const signature = Buffer.from(marker.signature, "hex");
-  const actual = Buffer.from(signPayload(marker.payload, secret), "hex");
+  const actual = Buffer.from(signPayload(marker.payload, signerCapability), "hex");
   if (signature.length !== actual.length || !timingSafeEqual5(signature, actual)) {
     throw mismatch();
   }
@@ -67848,11 +67853,11 @@ function createLocalAuthorityProbe(dependencies) {
       } catch {
         throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "live CDP runtime returned an invalid bundle authority marker");
       }
-      const secret = dependencies.getSecret()?.signerCapability;
-      if (!outer?.marker || outer.status !== "signed" || !secret) {
+      const signerCapability = dependencies.getSecret()?.signerCapability;
+      if (!outer?.marker || outer.status !== "signed" || !signerCapability) {
         throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "signed authority marker or signer capability is unavailable");
       }
-      const payload = verifyMetroAuthorityMarker(outer.marker, secret, {
+      verifyMetroAuthorityMarker(outer.marker, signerCapability, {
         sessionId: status.sessionId,
         metroInstanceId: String(bundle.metroInstanceId),
         worktreeKey: status.worktreeKey,
@@ -67866,7 +67871,7 @@ function createLocalAuthorityProbe(dependencies) {
       return {
         axis,
         identity: identity({
-          payload,
+          payload: outer.marker.payload,
           targetId: client2.connectedTarget.id,
           connectionGeneration: client2.connectionGeneration
         }),
@@ -68587,8 +68592,8 @@ trackedTool("cdp_heap_usage", "Get current JS heap memory usage. Single fast CDP
 trackedTool("cdp_cpu_profile", "Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count. Requires Profiler domain (check cdp_status domains.profiler).", {
   durationMs: external_exports.number().int().min(500).max(3e4).default(3e3).optional().describe("Profile duration in ms (default 3000, max 30000)")
 }, createCpuProfileHandler(getClient));
-trackedTool("cdp_object_inspect", "Inspect a JS object by expression without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.", {
-  expression: external_exports.string().describe('JS expression to evaluate and inspect (e.g. "globalThis.__REDUX_STORE__")'),
+trackedTool("cdp_object_inspect", "Inspect a JS object by property path without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.", {
+  expression: external_exports.string().describe("JS property path or primitive literal to inspect"),
   depth: external_exports.number().int().min(0).max(3).default(1).optional().describe("Property inspection depth (default 1, max 3)"),
   maxProperties: external_exports.number().int().min(1).max(100).default(20).optional().describe("Max properties per level (default 20)")
 }, createObjectInspectHandler(getClient));

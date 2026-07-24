@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, createSecretKey, timingSafeEqual } from 'node:crypto';
 
 export interface MetroAuthorityBinding {
   sessionId: string;
@@ -35,8 +35,9 @@ function serializePayload(payload: MetroAuthorityPayload): string {
   return JSON.stringify(payload);
 }
 
-function signPayload(payload: MetroAuthorityPayload, secret: string): string {
-  return createHmac('sha256', secret).update(serializePayload(payload)).digest('hex');
+function signPayload(payload: MetroAuthorityPayload, signerCapability: string): string {
+  const signingKey = createSecretKey(Buffer.from(signerCapability, 'base64url'));
+  return createHmac('sha256', signingKey).update(serializePayload(payload)).digest('hex');
 }
 
 function mismatch(): Error {
@@ -45,26 +46,26 @@ function mismatch(): Error {
 
 export function createMetroAuthorityMarker(
   binding: MetroAuthorityBinding,
-  secret: string,
+  signerCapability: string,
 ): MetroAuthorityMarker {
   const payload: MetroAuthorityPayload = {
     ...binding,
     authorityScope: 'initial-bundle',
     sourceFidelity: 'not-proven',
   };
-  return { version: 1, payload, signature: signPayload(payload, secret) };
+  return { version: 1, payload, signature: signPayload(payload, signerCapability) };
 }
 
 export function verifyMetroAuthorityMarker(
   marker: MetroAuthorityMarker,
-  secret: string,
+  signerCapability: string,
   expected: Partial<MetroAuthorityBinding> = {},
 ): MetroAuthorityPayload {
   if (marker.version !== 1 || !marker.payload || typeof marker.signature !== 'string') {
     throw mismatch();
   }
   const signature = Buffer.from(marker.signature, 'hex');
-  const actual = Buffer.from(signPayload(marker.payload, secret), 'hex');
+  const actual = Buffer.from(signPayload(marker.payload, signerCapability), 'hex');
   if (signature.length !== actual.length || !timingSafeEqual(signature, actual)) {
     throw mismatch();
   }
