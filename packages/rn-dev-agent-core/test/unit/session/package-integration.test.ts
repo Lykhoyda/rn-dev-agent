@@ -253,7 +253,7 @@ test('confirmed integration rejects a symlinked .rn-agent ancestor before writin
   }
 });
 
-test('confirmed integration never mutates through a replaced .rn-agent ancestor', () => {
+test('confirmed integration never mutates through a replaced integration ancestor', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-swap-'));
   const external = mkdtempSync(join(tmpdir(), 'rn-session-apply-swap-external-'));
   try {
@@ -270,8 +270,8 @@ test('confirmed integration never mutates through a replaced .rn-agent ancestor'
           { appRoot: root, sessionCli: join(root, 'rn-session.js') },
           {
             beforeCommit: () => {
-              rmSync(join(root, '.rn-agent'), { recursive: true });
-              symlinkSync(external, join(root, '.rn-agent'));
+              rmSync(join(root, '.rn-agent', 'integration'), { recursive: true });
+              symlinkSync(external, join(root, '.rn-agent', 'integration'));
             },
           },
         ),
