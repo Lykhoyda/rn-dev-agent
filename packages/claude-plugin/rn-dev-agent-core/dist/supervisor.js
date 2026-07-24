@@ -670,6 +670,9 @@ function probeProcessBirth(pid, dependencies = {}) {
       if (!processMatch || Number(processMatch[1]) !== pid || !launchMatch) {
         return { status: "unknown" };
       }
+      const launchTime = Date.parse(launchMatch[1].replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) ([+-]\d{4})$/, "$1T$2$3"));
+      if (!Number.isSafeInteger(launchTime))
+        return { status: "unknown" };
       const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
         return { status: "unknown" };
@@ -679,7 +682,7 @@ function probeProcessBirth(pid, dependencies = {}) {
         birth: {
           pid,
           source: "darwin-vmmap",
-          token: token([platform, bootSession.toLowerCase(), launchMatch[1]])
+          token: token([platform, bootSession.toLowerCase(), String(launchTime)])
         }
       };
     }
@@ -53681,13 +53684,15 @@ process.on('disconnect', () => {
   try {
     const lock = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
     if (lock.owner === lifecycleCapability) fs.unlinkSync(transactionLock);
-  } catch {
-    try {
-      fs.writeFileSync(path.join(controlPath, 'lock-retained'), '', {
-        flag: 'wx',
-        mode: 0o600,
-      });
-    } catch {}
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      try {
+        fs.writeFileSync(path.join(controlPath, 'lock-retained'), '', {
+          flag: 'wx',
+          mode: 0o600,
+        });
+      } catch {}
+    }
   }
   process.exit(0);
 });
@@ -53886,6 +53891,40 @@ function authenticate(value) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+function readTransactionLock() {
+  try {
+    return JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function validateTransactionLock(lock) {
+  return (
+    lock !== null &&
+    lock.version === 1 &&
+    typeof lock.controlPath === 'string' &&
+    typeof lock.owner === 'string' &&
+    authenticate(lock)
+  );
+}
+
+function publishTransactionLock(lock) {
+  const temporary = transactionLock + '.' + binding.lifecycleCapability + '.initial';
+  removeOptional(temporary);
+  fs.writeFileSync(temporary, JSON.stringify(lock), {
+    flag: 'wx',
+    mode: 0o600,
+    flush: true,
+  });
+  try {
+    fs.linkSync(temporary, transactionLock);
+  } finally {
+    removeOptional(temporary);
+  }
+}
+
 function acquireTransactionLock() {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const lock = {
@@ -53895,26 +53934,17 @@ function acquireTransactionLock() {
     };
     lock.signature = sign(lock);
     try {
-      fs.writeFileSync(transactionLock, JSON.stringify(lock), {
-        flag: 'wx',
-        mode: 0o600,
-        flush: true,
-      });
+      publishTransactionLock(lock);
       return;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       let existing;
       try {
-        existing = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
+        existing = readTransactionLock();
       } catch {
         throw new Error('bound-directory transaction lock is invalid');
       }
-      if (
-        existing.version !== 1 ||
-        typeof existing.controlPath !== 'string' ||
-        typeof existing.owner !== 'string' ||
-        !authenticate(existing)
-      ) {
+      if (!validateTransactionLock(existing)) {
         throw new Error('bound-directory transaction lock is invalid');
       }
       if (!fs.existsSync(path.join(existing.controlPath, 'stopped'))) {
@@ -53927,18 +53957,24 @@ function acquireTransactionLock() {
   throw new Error('bound-directory transaction lock is unavailable');
 }
 
-function releaseTransactionLock() {
-  let lock;
-  try {
-    lock = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
-  } catch (error) {
-    if (error.code === 'ENOENT') return;
-    throw error;
-  }
+function ensureTransactionLock() {
+  const lock = readTransactionLock();
   if (
-    lock.version !== 1 ||
+    validateTransactionLock(lock) &&
+    lock.owner === binding.lifecycleCapability
+  ) {
+    return;
+  }
+  acquireTransactionLock();
+}
+
+function releaseTransactionLock() {
+  const lock = readTransactionLock();
+  if (lock === null) return;
+  if (
+    !validateTransactionLock(lock) ||
     lock.owner !== binding.lifecycleCapability ||
-    !authenticate(lock)
+    typeof lock.owner !== 'string'
   ) {
     throw new Error('bound-directory transaction lock is invalid');
   }
@@ -54078,10 +54114,17 @@ function allReplacementsPresent(writes) {
   });
 }
 
-function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnlinkMs = 0) {
+function recoverTransaction(
+  journalName,
+  requestedWrites,
+  recoveryDelayAfterUnlinkMs = 0,
+  releaseLock = true,
+) {
   const journal = readJournal(journalName);
   if (journal === null) {
-    return { committed: allReplacementsPresent(requestedWrites) };
+    const committed = allReplacementsPresent(requestedWrites);
+    if (releaseLock) releaseTransactionLock();
+    return { committed };
   }
   if (
     journal.version !== 1 ||
@@ -54094,7 +54137,7 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   if (journal.state === 'committed') {
     cleanupArtifacts(journal.writes);
     cleanupJournal(journalName);
-    releaseTransactionLock();
+    if (releaseLock) releaseTransactionLock();
     return { committed: true };
   }
   if (journal.state !== 'applying') {
@@ -54102,16 +54145,18 @@ function recoverTransaction(journalName, requestedWrites, recoveryDelayAfterUnli
   }
   rollbackOwnedWrites(journal.writes, recoveryDelayAfterUnlinkMs);
   cleanupJournal(journalName);
-  releaseTransactionLock();
+  if (releaseLock) releaseTransactionLock();
   return { committed: false };
 }
 
-function discoverTransactions() {
-  acquireTransactionLock();
-  try {
-    const transactions = fs
-      .readdirSync('.')
-      .filter((name) => /^\.rn-bound-([0-9a-f-]{36})\.journal$/.test(name))
+function transactionJournalNames() {
+  return fs
+    .readdirSync('.')
+    .filter((name) => /^\.rn-bound-([0-9a-f-]{36})\.journal$/.test(name));
+}
+
+function inspectTransactions() {
+  const transactions = transactionJournalNames()
       .map((journalName) => {
       let journal;
       try {
@@ -54159,9 +54204,17 @@ function discoverTransactions() {
       };
       })
       .filter((transaction) => transaction !== null);
-    if (transactions.length > 1) {
-      throw new Error('bound-directory has multiple pending transactions');
-    }
+  if (transactions.length > 1) {
+    throw new Error('bound-directory has multiple pending transactions');
+  }
+  return transactions;
+}
+
+function discoverTransactions() {
+  if (transactionJournalNames().length === 0) return [];
+  acquireTransactionLock();
+  try {
+    const transactions = inspectTransactions();
     if (transactions.length === 0) releaseTransactionLock();
     return transactions;
   } catch (error) {
@@ -54174,6 +54227,10 @@ function discoverTransactions() {
 
 function applyBatch(request) {
   acquireTransactionLock();
+  const pending = inspectTransactions();
+  if (pending.length === 1) {
+    recoverTransaction(pending[0].journal, pending[0].writes, 0, false);
+  }
   const journal = {
     version: 1,
     name: request.journal,
@@ -54201,12 +54258,8 @@ function applyBatch(request) {
     try {
       recoverTransaction(request.journal, request.writes);
     } catch (recoveryError) {
-      try {
-        releaseTransactionLock();
-      } catch {}
       throw new AggregateError([error, recoveryError]);
     }
-    releaseTransactionLock();
     throw error;
   }
 }
@@ -54321,6 +54374,7 @@ function execute(request) {
     return applyBatch(request);
   }
   if (request.operation === 'recover') {
+    ensureTransactionLock();
     if (request.cleanupRecoveryDelayMs) wait(request.cleanupRecoveryDelayMs);
     if (request.failCleanupRecovery) {
       throw new Error('bound-directory cleanup recovery unavailable');

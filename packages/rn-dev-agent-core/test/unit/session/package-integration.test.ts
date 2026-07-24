@@ -763,6 +763,73 @@ test(
   },
 );
 
+test(
+  'an already-open worker resolves a stopped owner journal before its next CAS',
+  { skip: process.platform === 'win32' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-already-open-recovery-'));
+    const markerPath = join(root, 'authority-marker.js');
+    writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+    const first = openBoundDirectory(root);
+    const second = openBoundDirectory(root);
+    try {
+      const result = casBoundDirectoryFiles(
+        first,
+        [
+          {
+            expected: Buffer.from('before\n'),
+            expectedMode: 0o600,
+            mode: 0o600,
+            name: 'authority-marker.js',
+            replacement: Buffer.from('after\n'),
+          },
+        ],
+        { failCleanupAfterCommit: true, failCleanupRecovery: true },
+      );
+      assert.equal(result.cleanupPending, true);
+      chmodSync(root, 0o500);
+      assert.throws(() => closeBoundDirectory(first), /bound-directory cleanup/);
+      chmodSync(root, 0o700);
+      const next = casBoundDirectoryFiles(second, [
+        {
+          expected: Buffer.from('after\n'),
+          expectedMode: 0o600,
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('final\n'),
+        },
+      ]);
+      assert.equal(next.cleanupPending, false);
+      assert.equal(readFileSync(markerPath, 'utf8'), 'final\n');
+      assert.deepEqual(readdirSync(root), ['authority-marker.js']);
+    } finally {
+      chmodSync(root, 0o700);
+      if (!first.closed) closeBoundDirectory(first);
+      closeBoundDirectory(second);
+      rmSync(root, { force: true, recursive: true });
+    }
+  },
+);
+
+test(
+  'read-only bound directory open does not create transaction files',
+  { skip: process.platform === 'win32' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-read-only-'));
+    chmodSync(root, 0o500);
+    const directory = openBoundDirectory(root);
+    const controlPath = directory.worker.controlPath;
+    try {
+      assert.deepEqual(readdirSync(root), []);
+    } finally {
+      closeBoundDirectory(directory);
+      chmodSync(root, 0o700);
+      assert.equal(existsSync(controlPath), false);
+      rmSync(root, { force: true, recursive: true });
+    }
+  },
+);
+
 test('bound discovery quarantines unauthenticated journals without applying them', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-forged-journal-'));
   const journal = join(root, '.rn-bound-11111111-1111-1111-1111-111111111111.journal');

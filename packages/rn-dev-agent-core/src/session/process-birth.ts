@@ -63,6 +63,13 @@ export function probeProcessBirth(
       if (!processMatch || Number(processMatch[1]) !== pid || !launchMatch) {
         return { status: 'unknown' };
       }
+      const launchTime = Date.parse(
+        launchMatch[1].replace(
+          /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) ([+-]\d{4})$/,
+          '$1T$2$3',
+        ),
+      );
+      if (!Number.isSafeInteger(launchTime)) return { status: 'unknown' };
       const bootSession = run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
         return { status: 'unknown' };
@@ -72,7 +79,7 @@ export function probeProcessBirth(
         birth: {
           pid,
           source: 'darwin-vmmap',
-          token: token([platform, bootSession.toLowerCase(), launchMatch[1]]),
+          token: token([platform, bootSession.toLowerCase(), String(launchTime)]),
         },
       };
     }

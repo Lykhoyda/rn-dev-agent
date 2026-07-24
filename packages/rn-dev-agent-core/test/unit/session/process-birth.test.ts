@@ -7,23 +7,23 @@ import {
 } from '../../../dist/session/process-birth.js';
 
 test('macOS process identity uses shipped vmmap launch time and boot session', () => {
-  const runForBoot = (bootSession) => (command, args) => {
-    if (command === '/bin/ps') {
-      assert.deepEqual(args, ['-p', '123', '-o', 'pid=']);
-      return '123\n';
-    }
-    if (command === '/usr/bin/vmmap') {
-      assert.deepEqual(args, ['-summary', '123']);
-      return ['Process:         node [123]', 'Launch Time:     2026-07-23 09:41:08.345 +0200'].join(
-        '\n',
-      );
-    }
-    if (command === '/usr/sbin/sysctl') {
-      assert.deepEqual(args, ['-n', 'kern.bootsessionuuid']);
-      return `${bootSession}\n`;
-    }
-    throw new Error(`unexpected command ${command}`);
-  };
+  const runForBoot =
+    (bootSession, launchTime = '2026-07-23 09:41:08.345 +0200') =>
+    (command, args) => {
+      if (command === '/bin/ps') {
+        assert.deepEqual(args, ['-p', '123', '-o', 'pid=']);
+        return '123\n';
+      }
+      if (command === '/usr/bin/vmmap') {
+        assert.deepEqual(args, ['-summary', '123']);
+        return ['Process:         node [123]', `Launch Time:     ${launchTime}`].join('\n');
+      }
+      if (command === '/usr/sbin/sysctl') {
+        assert.deepEqual(args, ['-n', 'kern.bootsessionuuid']);
+        return `${bootSession}\n`;
+      }
+      throw new Error(`unexpected command ${command}`);
+    };
   const before = readProcessBirth(123, {
     platform: 'darwin',
     run: runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
@@ -32,10 +32,15 @@ test('macOS process identity uses shipped vmmap launch time and boot session', (
     platform: 'darwin',
     run: runForBoot('D9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
+  const timezoneChanged = readProcessBirth(123, {
+    platform: 'darwin',
+    run: runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F', '2026-07-23 07:41:08.345 +0000'),
+  });
 
   assert.equal(before?.source, 'darwin-vmmap');
   assert.match(before?.token ?? '', /^[a-f0-9]{64}$/);
   assert.notEqual(before?.token, after?.token);
+  assert.equal(before?.token, timezoneChanged?.token);
 });
 
 test('macOS process probes distinguish confirmed absence from unreadable identity', () => {
