@@ -17,6 +17,7 @@ import {
 } from '../runners/rn-fast-runner-client.js';
 import {
   stopAndroidRunner,
+  reapActiveAndroidRunner,
   startAndroidRunner,
   runAndroid,
   consumePendingAndroidUpgradeNote,
@@ -573,7 +574,11 @@ export function createDeviceSnapshotHandler(
         closeUnderlyingSession: async () => okResult({ closed: true }),
         clearActiveSession,
         stopFastRunner,
-        stopAndroidRunner,
+        stopAndroidRunner: async (deviceId) => {
+          if (getActiveSession()?.platform === 'android') {
+            await reapActiveAndroidRunner(deviceId);
+          }
+        },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId,
       });

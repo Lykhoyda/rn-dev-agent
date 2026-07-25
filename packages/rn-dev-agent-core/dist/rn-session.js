@@ -25,12 +25,14 @@ function resolveStatus() {
     });
     const candidates = explicit
         ? [registry.getSessionStatus(explicit)].filter((status) => status !== null)
-        : registry.findSessionsByWorktree(source.worktreeKey);
+        : registry
+            .findSessionsByWorktree(source.worktreeKey)
+            .filter((status) => status.appRootKey === source.appRootKey);
     if (candidates.length !== 1) {
         registry.close();
         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', candidates.length === 0
-            ? 'no live session matches this canonical worktree'
-            : 'multiple live sessions match this worktree; set RN_DEV_AGENT_SESSION_ID');
+            ? 'no live session matches this canonical worktree and app root'
+            : 'multiple live sessions match this worktree and app root; set RN_DEV_AGENT_SESSION_ID');
     }
     const status = candidates[0];
     if (explicit &&

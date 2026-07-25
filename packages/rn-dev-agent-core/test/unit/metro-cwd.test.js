@@ -6,6 +6,7 @@ import {
   parseLsofCwd,
   cwdForPort,
   cwdForProcess,
+  parseWindowsMetroRoot,
   pathMatchesRoot,
   _resetMetroCwdCacheForTest,
 } from '../../dist/cdp/metro-cwd.js';
@@ -72,6 +73,31 @@ test('cwdForProcess: accepts an explicit Windows Metro project root', () => {
   assert.equal(
     cwdForProcess(777, 'win32', () => 'node metro.js start --projectRoot "C:\\repo\\worktreeA"'),
     resolve('C:\\repo\\worktreeA'),
+  );
+});
+
+test('cwdForProcess: derives a conservative Windows root from the absolute Metro script', () => {
+  const commandLine =
+    '"C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\worktreeA\\node_modules\\expo\\bin\\cli" start';
+  assert.equal(parseWindowsMetroRoot(commandLine), 'C:\\repo\\worktreeA');
+  assert.equal(
+    cwdForProcess(777, 'win32', () => commandLine),
+    resolve('C:\\repo\\worktreeA'),
+  );
+});
+
+test('cwdForPort: resolves Windows listener ownership before proving the Metro root', () => {
+  const calls = [];
+  const exec = (_cmd, args) => {
+    calls.push(args.join(' '));
+    if (args.some((arg) => arg.includes('Get-NetTCPConnection'))) return '777\n';
+    return 'node "C:\\repo\\worktreeA\\node_modules\\react-native\\cli.js" start';
+  };
+
+  assert.equal(cwdForPort(8081, exec, 'win32'), resolve('C:\\repo\\worktreeA'));
+  assert.equal(
+    calls.some((call) => call.includes('Get-NetTCPConnection')),
+    true,
   );
 });
 

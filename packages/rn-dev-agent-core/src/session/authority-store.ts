@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 const require = createRequire(import.meta.url);
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 const INITIALIZATION_TIMEOUT_MS = 1_000;
+const DATABASE_OPERATION_TIMEOUT_MS = 100;
 
 interface PreparedStatement {
   get(...params: unknown[]): Record<string, unknown> | undefined;
@@ -85,11 +86,14 @@ function secureDatabaseFiles(path: string): void {
 }
 
 function runInitialization(operation: () => void): void {
-  const deadline = Date.now() + INITIALIZATION_TIMEOUT_MS;
+  runWithBusyRetry(operation, INITIALIZATION_TIMEOUT_MS);
+}
+
+function runWithBusyRetry<T>(operation: () => T, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS): T {
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      operation();
-      return;
+      return operation();
     } catch (error) {
       const code = (error as { code?: string }).code;
       const message = error instanceof Error ? error.message : '';
@@ -99,6 +103,21 @@ function runInitialization(operation: () => void): void {
       Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
     }
   }
+}
+
+function retryingDatabase(database: AuthorityDatabase): AuthorityDatabase {
+  return {
+    close: () => database.close(),
+    exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
+    prepare: (sql) => {
+      const statement = database.prepare(sql);
+      return {
+        get: (...params) => runWithBusyRetry(() => statement.get(...params)),
+        run: (...params) => runWithBusyRetry(() => statement.run(...params)),
+        all: (...params) => runWithBusyRetry(() => statement.all(...params)),
+      };
+    },
+  };
 }
 
 export function probeAuthorityStore(
@@ -136,7 +155,8 @@ export function openAuthorityStore(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    const openedDatabase = new ctor(path);
+    const rawDatabase = new ctor(path);
+    const openedDatabase = retryingDatabase(rawDatabase);
     database = openedDatabase;
     secureDatabaseFiles(path);
     runInitialization(() =>

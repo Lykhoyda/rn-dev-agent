@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   captureInstalledArtifact,
@@ -75,6 +78,37 @@ test('iOS install identity changes when any installed app resource changes', () 
 
   assert.notEqual(first.artifactDigest, second.artifactDigest);
   assert.notEqual(first.installGeneration, second.installGeneration);
+});
+
+test('iOS install identity rejects symlinks that escape the installed app bundle', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-install-symlink-'));
+  const appPath = join(root, 'App.app');
+  const external = join(root, 'external.bin');
+  writeFileSync(external, 'external');
+  symlinkSync(external, appPath);
+  try {
+    assert.throws(
+      () =>
+        captureInstalledArtifact(
+          { platform: 'ios', deviceId: 'IOS-UUID', appId: 'com.example.app' },
+          {
+            runText: (command, args) => {
+              if (args[1] === 'get_app_container') return `${appPath}\n`;
+              if (command === 'plutil') return 'ExampleApp\n';
+              throw new Error('unexpected command');
+            },
+            listAppFiles: () => ['External'],
+            lstat: () => ({ isFile: () => false, isSymbolicLink: () => true }),
+            readLink: () => external,
+            realpath: (path) => (path.endsWith('External') ? external : appPath),
+            stat: () => ({ ino: 1, size: 8, mtimeMs: 100 }),
+          },
+        ),
+      /symlink escapes/,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 });
 
 test('Android install identity hashes the exact serial APK without first-device fallback', () => {

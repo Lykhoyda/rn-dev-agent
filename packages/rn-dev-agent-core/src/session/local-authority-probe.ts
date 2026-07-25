@@ -4,7 +4,7 @@ import type { CDPClient } from '../cdp-client.js';
 import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import type { HermesTarget } from '../types.js';
-import { captureInstallGeneration } from './install-authority.js';
+import { captureInstalledArtifact, verifyInstalledArtifact } from './install-authority.js';
 import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
 import { metroListenerPid } from './metro-binding.js';
@@ -31,6 +31,7 @@ interface LocalAuthorityProbeDependencies {
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
   proofActive?: (runId: string) => boolean;
   inspectOwner?: typeof inspectSessionOwner;
+  captureInstalled?: typeof captureInstalledArtifact;
 }
 
 function identity(value: unknown): string {
@@ -142,6 +143,7 @@ export function createLocalAuthorityProbe(
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+  const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
 
   return async ({ axis, phase, status, tool, args }) => {
     if (axis === 'C') {
@@ -199,13 +201,17 @@ export function createLocalAuthorityProbe(
         platform: 'ios' | 'android';
         deviceId: string;
         appId: string;
+        artifactDigest: string;
         installGeneration: string;
       };
-      const observedGeneration = captureInstallGeneration(expected);
-      if (observedGeneration !== expected.installGeneration) {
+      let observed: ReturnType<typeof captureInstalledArtifact>;
+      try {
+        observed = captureInstalled(expected);
+        verifyInstalledArtifact(expected, observed);
+      } catch {
         throw new SessionAuthorityError(
           'APP_INSTALL_IDENTITY_CHANGED',
-          'installed artifact generation no longer matches the session build',
+          'installed artifact bytes no longer match the session build',
         );
       }
       return {
@@ -214,7 +220,8 @@ export function createLocalAuthorityProbe(
           platform: expected.platform,
           deviceId: expected.deviceId,
           appId: expected.appId,
-          installGeneration: observedGeneration,
+          artifactDigest: observed.artifactDigest,
+          installGeneration: observed.installGeneration,
         }),
       };
     }

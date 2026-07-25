@@ -1728,7 +1728,7 @@ test('confirmed restoration rejects a manifest Metro path outside the app root',
   }
 });
 
-test('copied adapter injects the active session into literal package scripts', () => {
+test('copied adapter accepts build identity only from the package-local session CLI', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-adapter-'));
   try {
     const integrationRoot = join(root, '.rn-agent', 'integration');
@@ -1760,7 +1760,7 @@ test('copied adapter injects the active session into literal package scripts', (
     chmodSync(fakeNpx, 0o755);
     writeFileSync(
       sessionCliPath,
-      "require('node:fs').writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args:process.argv.slice(2),session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n')",
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:'build-token-ios'}));}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
 
     const result = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -1773,11 +1773,11 @@ test('copied adapter injects the active session into literal package scripts', (
         ADAPTER_COMPLETION: completionPath,
         RN_DEV_AGENT_SESSION_BUILD_JSON: JSON.stringify({
           platform: 'ios',
-          deviceId: 'session-ios-device',
-          appId: 'dev.example',
-          metroPort: 8341,
-          sessionId: 'session-ios',
-          buildToken: 'build-token-ios',
+          deviceId: 'foreign-device',
+          appId: 'dev.foreign',
+          metroPort: 9999,
+          sessionId: 'foreign-session',
+          buildToken: 'foreign-token',
         }),
       },
     });

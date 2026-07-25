@@ -102,7 +102,7 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
  * `flow` lease (no concurrent device_* can re-grab the slot between release and bind).
  */
 export async function releaseAndroidInteractionSlot(
-  opts: { deviceId?: string } = {},
+  opts: { deviceId?: string; includeLegacy?: boolean } = {},
   deps: ReleaseAndroidSlotDeps = defaultDeps(),
 ): Promise<ReleaseAndroidSlotResult> {
   const timings: Record<string, number> = {};
@@ -146,7 +146,7 @@ export async function releaseAndroidInteractionSlot(
   // belong to another project, so kill by SPECIFIC pid, never pkill, guarded
   // against our own process tree).
   const tLegacy = deps.now();
-  if (deps.killLegacy()) {
+  if (opts.includeLegacy !== false && deps.killLegacy()) {
     try {
       const pid = deps.readDaemonPid();
       let keepFiles = false;

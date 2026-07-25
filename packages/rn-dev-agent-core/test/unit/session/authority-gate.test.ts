@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 import {
   completeManagedRunnerParkAuthority,
@@ -21,7 +22,7 @@ function fixture() {
     claimEpoch: 4,
     authorityVersion: 9,
     leaseUntilMs: 1000,
-    source: { kind: 'git' },
+    source: { kind: 'git', appRoot: process.cwd() },
     bindings: {
       install: {
         digest: 'install',
@@ -59,6 +60,10 @@ function fixture() {
     commitPlatformAuthorityReceipts: () => calls.push('commit-receipts'),
     endOperation: () => calls.push('end'),
     cancelOperation: () => calls.push('cancel'),
+    updateBindings: (_session, input) => {
+      status.bindings = { ...status.bindings, ...input.bindings };
+      status.authorityVersion += 1;
+    },
     refreshOperation: (operation) => {
       calls.push('refresh-operation');
       return { ...operation, authorityVersion: status.authorityVersion };
@@ -121,6 +126,41 @@ test('postflight drift rejects the result instead of returning a false success',
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
   assert.equal(envelope.data, undefined);
+});
+
+test('finalized proof is discarded when postflight authority changes', async () => {
+  const { runtime, status } = fixture();
+  const actions = [];
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => ({
+      axis,
+      identity: phase === 'postflight' && axis === 'D' ? 'foreign-device' : `${axis}-identity`,
+    }),
+  });
+  const result = await gate.wrap('proof_capture', async (args) => {
+    actions.push(args.action);
+    return okResult(args.action === 'discard' ? { discarded: true } : { stage: 'accepted' });
+  })({ action: 'finalize', evidenceReview: {} });
+
+  assert.equal(JSON.parse(result.content[0].text).ok, false);
+  assert.deepEqual(actions, ['finalize', 'discard']);
+  assert.equal(status.bindings.proof, null);
+});
+
+test('authoritative source paths cannot escape the bound app root', async () => {
+  const { runtime } = fixture();
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  const result = await gate.wrap('cdp_run_action', async () => {
+    dispatched = true;
+    return okResult({});
+  })({ actionId: 'login', projectRoot: resolve(process.cwd(), '..') });
+
+  const envelope = JSON.parse(result.content[0].text);
+  assert.equal(envelope.code, 'SOURCE_WORKTREE_MISMATCH');
+  assert.equal(dispatched, false);
 });
 
 test('origin-disrupting lifecycle tools replace bundle authority at successful completion', async () => {

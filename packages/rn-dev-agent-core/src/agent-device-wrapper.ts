@@ -178,6 +178,7 @@ let snapshotAuthorityProvider: {
   current: () => Record<string, unknown> | null;
   record: (receipt: SnapshotAuthorityReceipt) => void;
   validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+  validateEvidence?: (receipt: SnapshotAuthorityReceipt) => boolean;
   validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
 } | null = null;
 
@@ -207,6 +208,7 @@ export function setSnapshotAuthorityProvider(
     current: () => Record<string, unknown> | null;
     record: (receipt: SnapshotAuthorityReceipt) => void;
     validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+    validateEvidence?: (receipt: SnapshotAuthorityReceipt) => boolean;
     validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
   } | null,
 ): void {
@@ -271,11 +273,38 @@ function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: s
   );
 }
 
+function snapshotEvidenceAuthorityIsValid(
+  receipt: SnapshotAuthorityReceipt,
+  platform: string,
+): boolean {
+  if (receipt.sessionId === null) return snapshotAuthorityIsValid(receipt, platform);
+  return Boolean(
+    receipt.platform === platform &&
+    receipt.sessionId !== null &&
+    receipt.claimEpoch !== null &&
+    receipt.sourceKey !== null &&
+    receipt.worktreeKey !== null &&
+    receipt.appRootKey !== null &&
+    receipt.deviceId !== null &&
+    receipt.installGeneration !== null &&
+    receipt.appId !== null &&
+    receipt.artifactDigest !== null &&
+    snapshotAuthorityProvider?.validateEvidence?.(receipt),
+  );
+}
+
 export async function validateCachedSnapshotAuthority(platform: string): Promise<boolean> {
   const snapshot = snapshotCache.get(platform);
   if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)) return false;
   if (snapshot.authorityReceipt.sessionId === null) return true;
   return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
+}
+
+export function getCachedSnapshotEvidence(platform: string): CachedSnapshot | undefined {
+  const snapshot = snapshotCache.get(platform);
+  return snapshot && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
+    ? snapshot
+    : undefined;
 }
 
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already

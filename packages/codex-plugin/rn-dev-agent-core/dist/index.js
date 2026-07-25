@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve8.call(this, root, ref);
+      let _sch = resolve9.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve8(root, ref) {
+    function resolve9(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3750,55 +3750,55 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve8(baseURI, relativeURI, options) {
+    function resolve9(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative5, options, skipNormalization) {
+    function resolveComponent(base, relative6, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize2(base, options), options);
-        relative5 = parse3(serialize2(relative5, options), options);
+        relative6 = parse3(serialize2(relative6, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative5.scheme) {
-        target.scheme = relative5.scheme;
-        target.userinfo = relative5.userinfo;
-        target.host = relative5.host;
-        target.port = relative5.port;
-        target.path = removeDotSegments(relative5.path || "");
-        target.query = relative5.query;
+      if (!options.tolerant && relative6.scheme) {
+        target.scheme = relative6.scheme;
+        target.userinfo = relative6.userinfo;
+        target.host = relative6.host;
+        target.port = relative6.port;
+        target.path = removeDotSegments(relative6.path || "");
+        target.query = relative6.query;
       } else {
-        if (relative5.userinfo !== void 0 || relative5.host !== void 0 || relative5.port !== void 0) {
-          target.userinfo = relative5.userinfo;
-          target.host = relative5.host;
-          target.port = relative5.port;
-          target.path = removeDotSegments(relative5.path || "");
-          target.query = relative5.query;
+        if (relative6.userinfo !== void 0 || relative6.host !== void 0 || relative6.port !== void 0) {
+          target.userinfo = relative6.userinfo;
+          target.host = relative6.host;
+          target.port = relative6.port;
+          target.path = removeDotSegments(relative6.path || "");
+          target.query = relative6.query;
         } else {
-          if (!relative5.path) {
+          if (!relative6.path) {
             target.path = base.path;
-            if (relative5.query !== void 0) {
-              target.query = relative5.query;
+            if (relative6.query !== void 0) {
+              target.query = relative6.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative5.path[0] === "/") {
-              target.path = removeDotSegments(relative5.path);
+            if (relative6.path[0] === "/") {
+              target.path = removeDotSegments(relative6.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative5.path;
+                target.path = "/" + relative6.path;
               } else if (!base.path) {
-                target.path = relative5.path;
+                target.path = relative6.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative5.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative6.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative5.query;
+            target.query = relative6.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3806,7 +3806,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative5.fragment;
+      target.fragment = relative6.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -4007,7 +4007,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve8,
+      resolve: resolve9,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -18900,12 +18900,33 @@ function parseLsofCwd(stdout) {
   }
   return null;
 }
-function pidForPort(port, exec = defaultExec) {
+function pidForPort(port, exec = defaultExec, platform = process.platform) {
   try {
+    if (platform === "win32") {
+      const output = exec("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)`
+      ]);
+      const pid = Number.parseInt(output.trim(), 10);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
     return parseLsofPid(exec("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"]));
   } catch {
     return null;
   }
+}
+function parseWindowsMetroRoot(commandLine) {
+  const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
+  const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+  if (explicit)
+    return explicit;
+  const scriptPath = /"([A-Za-z]:[\\/][^"]*[\\/]node_modules[\\/][^"]+)"/i.exec(commandLine)?.[1] ?? /'([A-Za-z]:[\\/][^']*[\\/]node_modules[\\/][^']+)'/i.exec(commandLine)?.[1] ?? /(?:^|\s)([A-Za-z]:[\\/]\S*[\\/]node_modules[\\/]\S+)/i.exec(commandLine)?.[1];
+  if (!scriptPath)
+    return null;
+  const marker = scriptPath.toLowerCase().lastIndexOf(`${scriptPath.includes("\\") ? "\\" : "/"}node_modules`);
+  return marker > 2 ? scriptPath.slice(0, marker) : null;
 }
 function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync) {
   try {
@@ -18923,8 +18944,7 @@ function cwdForProcess(pid, platform = process.platform, exec = defaultExec, rea
         "-Command",
         `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`
       ]);
-      const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
-      const root = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+      const root = parseWindowsMetroRoot(commandLine);
       return root ? realpathOrResolve(root) : null;
     }
     return null;
@@ -18939,13 +18959,11 @@ function realpathOrResolve(p) {
     return resolve(p);
   }
 }
-function cwdForPort(port, exec = defaultExec) {
-  if (exec === defaultExec && process.platform !== "darwin")
-    return null;
-  const pid = pidForPort(port, exec);
+function cwdForPort(port, exec = defaultExec, platform = process.platform) {
+  const pid = pidForPort(port, exec, platform);
   if (pid == null)
     return null;
-  return cwdForProcess(pid, "darwin", exec);
+  return cwdForProcess(pid, platform, exec);
 }
 function pathMatchesRoot(servingCwd, projectRoot) {
   if (!servingCwd || !projectRoot)
@@ -19902,7 +19920,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve8) => setTimeout(resolve8, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve9) => setTimeout(resolve9, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -21071,7 +21089,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -21089,7 +21107,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve8();
+        resolve9();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -21130,7 +21148,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -21195,7 +21213,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve8(state);
+      resolve9(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -21485,7 +21503,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve8) => spawnedChild.once("exit", () => resolve8())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve9) => spawnedChild.once("exit", () => resolve9())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -21678,7 +21696,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve8) => setTimeout(resolve8, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve9) => setTimeout(resolve9, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -22125,7 +22143,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve8) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve9) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -22151,7 +22169,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve8(ok);
+        resolve9(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -22220,7 +22238,7 @@ var init_no_change_tracker = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer as createServer2 } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer2();
       srv.once("error", (err) => {
@@ -22236,7 +22254,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve8(chosen));
+        srv.close(() => resolve9(chosen));
       });
     };
     tryListen(preferred, true);
@@ -22293,7 +22311,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync9(p),
     removeFile: (p) => unlinkSync4(p),
-    delay: (ms) => new Promise((resolve8) => setTimeout(resolve8, ms)),
+    delay: (ms) => new Promise((resolve9) => setTimeout(resolve9, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -22329,7 +22347,7 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps()) {
   }
   timings.forceStop = deps.now() - tForceStop;
   const tLegacy = deps.now();
-  if (deps.killLegacy()) {
+  if (opts.includeLegacy !== false && deps.killLegacy()) {
     try {
       const pid = deps.readDaemonPid();
       let keepFiles = false;
@@ -22434,6 +22452,7 @@ __export(rn_android_runner_client_exports, {
   parseLegacyAndroidState: () => parseLegacyAndroidState,
   parsePersistedAndroidState: () => parsePersistedAndroidState,
   probeAndroidRunnerHealthInfo: () => probeAndroidRunnerHealthInfo,
+  reapActiveAndroidRunner: () => reapActiveAndroidRunner,
   reapMismatchedAndroidRunner: () => reapMismatchedAndroidRunner,
   resolveAndroidInstallAction: () => resolveAndroidInstallAction,
   resolveAndroidSerial: () => resolveAndroidSerial,
@@ -22783,7 +22802,7 @@ function consumePendingAndroidUpgradeNote() {
   pendingUpgradeNote = void 0;
   return note;
 }
-async function reapMismatchedAndroidRunner(state, release) {
+async function reapMismatchedAndroidRunner(state, release, verify) {
   const deviceId = state?.deviceId;
   if (!deviceId) {
     throw new Error("RUNNER_CLEANUP_UNCONFIRMED: stale Android runner has no recorded device identity");
@@ -22792,7 +22811,7 @@ async function reapMismatchedAndroidRunner(state, release) {
     const { releaseAndroidInteractionSlot: releaseAndroidInteractionSlot2 } = await Promise.resolve().then(() => (init_release_android_slot(), release_android_slot_exports));
     return releaseAndroidInteractionSlot2(opts);
   });
-  const receipt2 = await releaseSlot({ deviceId });
+  const receipt2 = await releaseSlot({ deviceId, includeLegacy: false });
   const requiredPackages = [
     "dev.lykhoyda.rndevagent.androidrunner.test",
     "dev.lykhoyda.rndevagent.androidrunner"
@@ -22801,6 +22820,36 @@ async function reapMismatchedAndroidRunner(state, release) {
   if (!receipt2.stoppedOwnRunner || missingPackages.length > 0) {
     throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
   }
+  const verifyReleased = verify ?? (release ? async () => {
+  } : async (expected) => {
+    const forwards = String((await execFileAsync2("adb", ["forward", "--list"])).stdout);
+    const instrumentation = String((await execFileAsync2("adb", [
+      "-s",
+      expected.deviceId,
+      "shell",
+      "dumpsys",
+      "activity",
+      "instrumentation"
+    ])).stdout);
+    const forwardRemains = forwards.split("\n").filter((line) => line.startsWith(`${expected.deviceId} `)).some((line) => {
+      if (expected.hostPort !== void 0 && line.includes(`tcp:${expected.hostPort}`)) {
+        return true;
+      }
+      return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
+    });
+    if (forwardRemains || instrumentation.includes("dev.lykhoyda.rndevagent.androidrunner")) {
+      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected.deviceId}`);
+    }
+  });
+  await verifyReleased({
+    deviceId,
+    ...state?.hostPort !== void 0 ? { hostPort: state.hostPort } : {},
+    ...state?.devicePort !== void 0 ? { devicePort: state.devicePort } : {}
+  });
+}
+async function reapActiveAndroidRunner(deviceId) {
+  adoptPersistedAndroidState(deviceId);
+  await reapMismatchedAndroidRunner(runnerState2 ?? (deviceId ? { deviceId } : null));
 }
 function classifyAndroidHealth(info) {
   return classifyRunnerCompatibility({
@@ -22903,7 +22952,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     hostPort = await findFreePort(0);
     await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort));
   }
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
@@ -22969,7 +23018,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve8(state);
+      resolve9(state);
     };
     child.on("error", (err) => {
       removeForward();
@@ -23557,13 +23606,14 @@ function snapshotAuthorityIsValid(receipt2, platform) {
   }
   return Boolean(receipt2.platform === platform && receipt2.sessionId === current.sessionId && receipt2.claimEpoch === current.claimEpoch && receipt2.sourceKey === current.sourceKey && receipt2.worktreeKey === current.worktreeKey && receipt2.appRootKey === current.appRootKey && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.runnerInstanceId !== null && receipt2.runnerClaim !== null && receipt2.deviceClaim !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && receipt2.runnerPid !== null && receipt2.runnerProcessBirth !== null && receipt2.runnerCapabilityHash !== null && receipt2.runnerPort !== null && snapshotAuthorityProvider?.validate(receipt2));
 }
-async function validateCachedSnapshotAuthority(platform) {
+function snapshotEvidenceAuthorityIsValid(receipt2, platform) {
+  if (receipt2.sessionId === null)
+    return snapshotAuthorityIsValid(receipt2, platform);
+  return Boolean(receipt2.platform === platform && receipt2.sessionId !== null && receipt2.claimEpoch !== null && receipt2.sourceKey !== null && receipt2.worktreeKey !== null && receipt2.appRootKey !== null && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && snapshotAuthorityProvider?.validateEvidence?.(receipt2));
+}
+function getCachedSnapshotEvidence(platform) {
   const snapshot = snapshotCache.get(platform);
-  if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform))
-    return false;
-  if (snapshot.authorityReceipt.sessionId === null)
-    return true;
-  return await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt) === true;
+  return snapshot && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
 }
 function cacheSnapshot(platform, nodes) {
   const authorityReceipt = currentSnapshotAuthority(platform);
@@ -25143,8 +25193,8 @@ async function probeFreshness(client2, timeoutMs = FRESHNESS_PROBE_MS) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve8) => {
-        probeTimer = setTimeout(() => resolve8({ error: "timeout" }), timeoutMs);
+      new Promise((resolve9) => {
+        probeTimer = setTimeout(() => resolve9({ error: "timeout" }), timeoutMs);
       })
     ]);
     if (probeTimer)
@@ -25189,8 +25239,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve8) => {
-        timer = setTimeout(() => resolve8({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve9) => {
+        timer = setTimeout(() => resolve9({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -25460,11 +25510,13 @@ function secureDatabaseFiles(path) {
   }
 }
 function runInitialization(operation) {
-  const deadline = Date.now() + INITIALIZATION_TIMEOUT_MS;
+  runWithBusyRetry(operation, INITIALIZATION_TIMEOUT_MS);
+}
+function runWithBusyRetry(operation, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
   for (; ; ) {
     try {
-      operation();
-      return;
+      return operation();
     } catch (error2) {
       const code = error2.code;
       const message = error2 instanceof Error ? error2.message : "";
@@ -25476,6 +25528,20 @@ function runInitialization(operation) {
       Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
     }
   }
+}
+function retryingDatabase(database) {
+  return {
+    close: () => database.close(),
+    exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
+    prepare: (sql) => {
+      const statement = database.prepare(sql);
+      return {
+        get: (...params) => runWithBusyRetry(() => statement.get(...params)),
+        run: (...params) => runWithBusyRetry(() => statement.run(...params)),
+        all: (...params) => runWithBusyRetry(() => statement.all(...params))
+      };
+    }
+  };
 }
 function openAuthorityStore(path, options = {}) {
   const ctor = options.sqliteCtor === void 0 ? loadAuthoritySqlite() : options.sqliteCtor;
@@ -25494,7 +25560,8 @@ function openAuthorityStore(path, options = {}) {
       if (error2.code !== "ENOENT")
         throw error2;
     }
-    const openedDatabase = new ctor(path);
+    const rawDatabase = new ctor(path);
+    const openedDatabase = retryingDatabase(rawDatabase);
     database = openedDatabase;
     secureDatabaseFiles(path);
     runInitialization(() => openedDatabase.exec(`
@@ -25541,13 +25608,14 @@ function openAuthorityStore(path, options = {}) {
     throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
   }
 }
-var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
+var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, DATABASE_OPERATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
 var init_authority_store = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
     "use strict";
     require2 = createRequire(import.meta.url);
     INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
     INITIALIZATION_TIMEOUT_MS = 1e3;
+    DATABASE_OPERATION_TIMEOUT_MS = 100;
     AuthorityStoreUnavailableError = class extends Error {
       code = "AUTHORITY_STORE_UNAVAILABLE";
       constructor(reason, options) {
@@ -25901,7 +25969,7 @@ var init_registry = __esm({
               throw claimConflict(claim);
             }
           }
-          if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install") || Object.hasOwn(input.bindings, "runner")) {
+          if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install")) {
             const currentBindings = JSON.parse(current.bindings_json);
             const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
             if (platform) {
@@ -26538,30 +26606,7 @@ var init_registry = __esm({
           this.verifyOperation(operation);
           for (const staged of pending2) {
             const current = this.#platformReceiptFromCurrentAuthority(staged.session, staged.platform, staged.receipt);
-            const runnerClaim = String(staged.receipt.runnerClaim);
-            const deviceClaim = String(staged.receipt.deviceClaim);
-            for (const resource of [
-              { type: "runner-receipt", key: runnerClaim },
-              { type: "device-receipt", key: deviceClaim }
-            ]) {
-              const existing = this.#findClaim(resource.type, resource.key);
-              if (existing && (existing.session_id !== staged.session.sessionId || existing.claim_epoch !== staged.session.claimEpoch)) {
-                throw claimConflict(existing);
-              }
-            }
             this.#invalidatePlatformReceipt(staged.session, staged.platform);
-            for (const resource of [
-              { type: "runner-receipt", key: runnerClaim },
-              { type: "device-receipt", key: deviceClaim }
-            ]) {
-              this.#database.prepare(`INSERT INTO claims(
-                 resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-               ) VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-                 session_id = excluded.session_id,
-                 claim_epoch = excluded.claim_epoch,
-                 lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, staged.session.sessionId, staged.session.claimEpoch, now + this.#leaseMs);
-            }
             this.#database.prepare(`INSERT INTO platform_authority_receipts(
                session_id, claim_epoch, platform, receipt_json, updated_ms
              ) VALUES (?, ?, ?, ?, ?)
@@ -26578,9 +26623,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
         const persisted = typeof row?.receipt_json === "string" ? JSON.parse(row.receipt_json) : null;
         const persistedReceipt = persisted?.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
-        const runnerClaim = this.#findClaim("runner-receipt", String(receipt2.runnerClaim));
-        const deviceClaim = this.#findClaim("device-receipt", String(receipt2.deviceClaim));
-        return row?.claim_epoch === session.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt2) && runnerClaim?.session_id === session.sessionId && runnerClaim.claim_epoch === session.claimEpoch && deviceClaim?.session_id === session.sessionId && deviceClaim.claim_epoch === session.claimEpoch;
+        return row?.claim_epoch === session.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt2);
       }
       getPlatformAuthorityProbe(session, platform, receipt2) {
         if (!this.validatePlatformAuthorityReceipt(session, platform, receipt2))
@@ -27178,7 +27221,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve8) => setTimeout(resolve8, retryDelayMs));
+            await new Promise((resolve9) => setTimeout(resolve9, retryDelayMs));
           }
         }
       }
@@ -27423,6 +27466,8 @@ var init_tool_profiles = __esm({
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID4 } from "node:crypto";
+import { realpathSync as realpathSync3 } from "node:fs";
+import { isAbsolute as isAbsolute2, relative, resolve as resolve2 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -27499,7 +27544,37 @@ function bindExactArgument(args, field, expected, code) {
   }
   args[field] = expected;
 }
+function bindSourcePaths(status, args) {
+  let appRoot;
+  try {
+    if (typeof status.source.appRoot !== "string")
+      throw new Error("missing app root");
+    appRoot = realpathSync3(status.source.appRoot);
+  } catch {
+    throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "active session app root is unavailable");
+  }
+  for (const field of ["projectRoot", "flowPath", "flowDir", "scanDir"]) {
+    const supplied = args[field];
+    if (supplied === void 0)
+      continue;
+    if (typeof supplied !== "string" || supplied.length === 0) {
+      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field} must be a non-empty path within the active app root`);
+    }
+    let candidate;
+    try {
+      candidate = realpathSync3(isAbsolute2(supplied) ? supplied : resolve2(appRoot, supplied));
+    } catch {
+      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field} cannot be resolved within the active app root`);
+    }
+    const child = relative(appRoot, candidate);
+    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute2(child)) {
+      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field} is outside the active session app root`);
+    }
+    args[field] = candidate;
+  }
+}
 function bindSessionArguments(status, profile, args) {
+  bindSourcePaths(status, args);
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const install = status.bindings.install;
@@ -27842,6 +27917,7 @@ function createAuthorityGate(runtime, dependencies) {
       }
       let operation = null;
       let registry2 = null;
+      let publishedProofFinalize = false;
       try {
         const available = runtime.requireAvailable();
         registry2 = available.registry;
@@ -28087,6 +28163,7 @@ function createAuthorityGate(runtime, dependencies) {
         }
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
+        publishedProofFinalize = tool === "proof_capture" && args.action === "finalize" && resultIsCanonicalSuccess(result);
         const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
         const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && Boolean(status.bindings.bundle);
         const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
@@ -28214,6 +28291,31 @@ function createAuthorityGate(runtime, dependencies) {
           } : {}
         });
       } catch (error2) {
+        if (publishedProofFinalize) {
+          try {
+            const rollback = await handler({ action: "discard" });
+            if (!resultIsCanonicalSuccess(rollback)) {
+              throw new Error("PROOF_AUTHORITY_MISMATCH: finalized proof rollback was rejected");
+            }
+            if (!registry2 || !operation) {
+              throw new Error("PROOF_AUTHORITY_MISMATCH: proof operation fence was lost");
+            }
+            const current = runtime.requireAvailable();
+            const rollbackStatus = runtime.status();
+            if (!rollbackStatus.available) {
+              throw new SessionAuthorityError(rollbackStatus.code, rollbackStatus.reason);
+            }
+            registry2.verifyOperation(operation);
+            registry2.endOperation(operation);
+            operation = null;
+            current.registry.updateBindings(current.session, {
+              bindings: { proof: null },
+              expectedAuthorityVersion: rollbackStatus.authorityVersion
+            });
+          } catch (rollbackError) {
+            return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
+          }
+        }
         return authorityFailure(error2);
       } finally {
         if (registry2 && operation) {
@@ -29186,7 +29288,7 @@ function defaultDeps2() {
     },
     fileExists: (path) => existsSync16(path),
     removeFile: (path) => unlinkSync6(path),
-    delay: (ms) => new Promise((resolve8) => setTimeout(resolve8, ms)),
+    delay: (ms) => new Promise((resolve9) => setTimeout(resolve9, ms)),
     listApps: (udid) => execFileSync6("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
@@ -30168,7 +30270,11 @@ function createDeviceSnapshotHandler(deps = {}) {
         closeUnderlyingSession: async () => okResult({ closed: true }),
         clearActiveSession,
         stopFastRunner,
-        stopAndroidRunner,
+        stopAndroidRunner: async (deviceId) => {
+          if (getActiveSession()?.platform === "android") {
+            await reapActiveAndroidRunner(deviceId);
+          }
+        },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId
       });
@@ -44146,7 +44252,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
+        await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -44163,7 +44269,7 @@ var Protocol = class {
    */
   request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -44241,7 +44347,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve8(parseResult.data);
+            resolve9(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -44502,12 +44608,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve8, interval);
+      const timeoutId = setTimeout(resolve9, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -45607,7 +45713,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
+      await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -46256,12 +46362,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve8();
+        resolve9();
       } else {
-        this._stdout.once("drain", resolve8);
+        this._stdout.once("drain", resolve9);
       }
     });
   }
@@ -46813,7 +46919,7 @@ var MetroEventsClient = class {
   async connectOnce() {
     this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       const ws = new wrapper_default(url, {
         headers: { Origin: metroOrigin(url) }
       });
@@ -46827,7 +46933,7 @@ var MetroEventsClient = class {
         this._connectionEpoch += 1;
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
-        resolve8();
+        resolve9();
       };
       const onFail = (reason) => {
         if (outcome !== null)
@@ -46835,7 +46941,7 @@ var MetroEventsClient = class {
         outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
-        resolve8();
+        resolve9();
       };
       ws.once("open", onOpen);
       ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -47013,7 +47119,7 @@ var CDPMultiplexer = class {
     logger.info(this.opts.logTag, "multiplexer stopped");
   }
   startConsumerServer() {
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       this.httpServer = createServer();
       this.wss = new import_websocket_server.default({
         server: this.httpServer,
@@ -47045,12 +47151,12 @@ var CDPMultiplexer = class {
           return;
         }
         this.boundPort = addr.port;
-        resolve8(addr.port);
+        resolve9(addr.port);
       });
     });
   }
   connectHermes() {
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       const ws = new wrapper_default(this.opts.hermesUrl, {
         headers: { Origin: metroOrigin(this.opts.hermesUrl) }
       });
@@ -47061,7 +47167,7 @@ var CDPMultiplexer = class {
           ws.send(msg3);
         this.hermesBuffer = [];
         logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-        resolve8();
+        resolve9();
       };
       const onError = (err) => {
         ws.off("open", onOpen);
@@ -47239,8 +47345,8 @@ var CDPMultiplexer = class {
       this.wss = null;
     }
     if (this.httpServer) {
-      await new Promise((resolve8) => {
-        this.httpServer?.close(() => resolve8());
+      await new Promise((resolve9) => {
+        this.httpServer?.close(() => resolve9());
       });
       this.httpServer = null;
     }
@@ -50570,13 +50676,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve8, reject, timer });
+    pending2.set(id, { resolve: resolve9, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -50955,7 +51061,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
   throw new Error(formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null));
 }
 function connectWs(ctx, url) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const ws = new wrapper_default(url, {
       handshakeTimeout: 5e3,
       maxPayload: 100 * 1024 * 1024,
@@ -50977,7 +51083,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve8();
+      resolve9();
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -52220,7 +52326,7 @@ import { dirname as dirname9, join as join25 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/runtime-paths.js
 import { chmodSync as chmodSync2, lstatSync as lstatSync4, mkdirSync as mkdirSync9 } from "node:fs";
-import { join as join24, resolve as resolve2 } from "node:path";
+import { join as join24, resolve as resolve3 } from "node:path";
 function privateDirectory(path) {
   mkdirSync9(path, { recursive: true, mode: 448 });
   const stat2 = lstatSync4(path);
@@ -52232,7 +52338,7 @@ function privateDirectory(path) {
 }
 function sessionRuntimeRoot(projectRoot) {
   const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
-  return configured ? privateDirectory(resolve2(configured)) : join24(resolve2(projectRoot), ".rn-agent");
+  return configured ? privateDirectory(resolve3(configured)) : join24(resolve3(projectRoot), ".rn-agent");
 }
 function sessionStateDirectory(projectRoot) {
   const path = join24(sessionRuntimeRoot(projectRoot), "state");
@@ -52810,7 +52916,7 @@ import { join as join29 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn4 } from "node:child_process";
 import { randomUUID as randomUUID6 } from "node:crypto";
-import { closeSync as closeSync2, constants, existsSync as existsSync21, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync2, readFileSync as readFileSync20, realpathSync as realpathSync3, renameSync as renameSync5, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
+import { closeSync as closeSync2, constants, existsSync as existsSync21, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync2, readFileSync as readFileSync20, realpathSync as realpathSync4, renameSync as renameSync5, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9 } from "node:os";
 import { join as join28 } from "node:path";
 
@@ -54170,7 +54276,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
   let currentRealPath;
   try {
     current = lstatSync6(directory.path, { bigint: true });
-    currentRealPath = realpathSync3(directory.path);
+    currentRealPath = realpathSync4(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
@@ -54293,7 +54399,7 @@ function openValidatedDirectory(path, expected) {
     descriptor = openSync2(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync6(path, { bigint: true });
-    const realPath = realpathSync3(path);
+    const realPath = realpathSync4(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
@@ -55918,7 +56024,7 @@ init_device_arbiter();
 init_foreign_flow_gate();
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve3, sep as sep4 } from "node:path";
+import { resolve as resolve4, sep as sep4 } from "node:path";
 var PathTraversalError = class extends Error {
   constructor(message) {
     super(message);
@@ -55943,8 +56049,8 @@ function assertValidActionId(s, context) {
   }
 }
 function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve3(baseDir);
-  const resolvedChild = resolve3(baseDir, child);
+  const resolvedBase = resolve4(baseDir);
+  const resolvedChild = resolve4(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
   const baseWithSep = resolvedBase.endsWith(sep4) ? resolvedBase : resolvedBase + sep4;
@@ -55963,7 +56069,7 @@ init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync3, constants as constants2, fstatSync as fstatSync2, openSync as openSync3, readSync } from "node:fs";
-import { isAbsolute as isAbsolute2 } from "node:path";
+import { isAbsolute as isAbsolute3 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/redact.js
 import { homedir as homedir8 } from "node:os";
@@ -56202,7 +56308,7 @@ var SHOT_REGISTRY_CAP = 64;
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute2(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute3(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
@@ -56286,7 +56392,7 @@ var Recorder = class {
    * whatever path the pipeline actually captured to.
    */
   registerCapturedScreenshot(p) {
-    if (typeof p !== "string" || !isAbsolute2(p))
+    if (typeof p !== "string" || !isAbsolute3(p))
       return;
     this.trustedShotPaths.delete(p);
     this.trustedShotPaths.add(p);
@@ -56936,10 +57042,10 @@ function createDeviceBatchHandler(getClient2) {
       let stepTimedOut = false;
       const result = await Promise.race([
         executeStep(step, getClient2),
-        new Promise((resolve8) => {
+        new Promise((resolve9) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
-            resolve8(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
+            resolve9(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
           }, stepTimeout);
         })
       ]);
@@ -60379,7 +60485,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -60448,7 +60554,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve8(entries);
+        resolve9(entries);
       }
     });
     proc.on("error", (err) => {
@@ -60513,7 +60619,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -60581,7 +60687,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve8(entries);
+        resolve9(entries);
       }
     });
     proc.on("error", (err) => {
@@ -62196,7 +62302,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve8) => setTimeout(resolve8, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve9) => setTimeout(resolve9, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -62279,7 +62385,7 @@ async function waitForExactStopped(probe, deadlineMs, code, message) {
     if (Date.now() >= deadlineMs) {
       throw new SessionAuthorityError(code, message);
     }
-    await new Promise((resolve8) => setTimeout(resolve8, 25));
+    await new Promise((resolve9) => setTimeout(resolve9, 25));
   }
 }
 async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request2 = fetch) {
@@ -62873,8 +62979,8 @@ function createDeviceRecordHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash9, randomUUID as randomUUID7 } from "node:crypto";
 import { execFileSync as execFileSync9 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync4, existsSync as existsSync27, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync15, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync4, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
-import { basename as basename5, dirname as dirname15, extname, isAbsolute as isAbsolute3, join as join34, relative, resolve as resolve4, sep as sep5 } from "node:path";
+import { chmodSync as chmodSync4, closeSync as closeSync4, existsSync as existsSync27, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync15, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync5, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
+import { basename as basename5, dirname as dirname15, extname, isAbsolute as isAbsolute4, join as join34, relative as relative2, resolve as resolve5, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
@@ -63402,7 +63508,7 @@ function readStartupIntegrityAttestation() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute3, "path must be absolute");
+var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute4, "path must be absolute");
 var beginRehearsalSchema = external_exports.object({
   action: external_exports.literal("begin_rehearsal"),
   projectRoot: absolutePathSchema,
@@ -63511,15 +63617,15 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute3(argv[1])) {
-      executedEntrypointPath = realpathSync4(argv[1]);
+    if (typeof argv[1] === "string" && isAbsolute4(argv[1])) {
+      executedEntrypointPath = realpathSync5(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync4(fileURLToPath3(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync5(fileURLToPath3(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -63536,7 +63642,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 var proofWorkerStartup = captureProofWorkerStartup();
 function realpathOrSelf(path) {
   try {
-    return realpathSync4(path);
+    return realpathSync5(path);
   } catch {
     return path;
   }
@@ -63544,16 +63650,16 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync4(candidateRoot);
+    root = realpathSync5(candidateRoot);
   } catch {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute3(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute4(authorityArg))
     return null;
   let arg;
   try {
-    arg = realpathSync4(authorityArg);
+    arg = realpathSync5(authorityArg);
   } catch {
     return null;
   }
@@ -63598,10 +63704,10 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute3(value))
+    if (!value || !isAbsolute4(value))
       return value ? null : "";
     try {
-      return realpathSync4(value);
+      return realpathSync5(value);
     } catch {
       return null;
     }
@@ -63623,7 +63729,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync4(candidateRoot);
+    const root = realpathSync5(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -63636,8 +63742,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync4(artifactPath);
-      const artifactRelativePath = relative(root, resolvedArtifactPath).split(sep5).join("/");
+      const resolvedArtifactPath = realpathSync5(artifactPath);
+      const artifactRelativePath = relative2(root, resolvedArtifactPath).split(sep5).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
@@ -63656,7 +63762,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync4(resolve4(candidateRoot));
+  const root = realpathSync5(resolve5(candidateRoot));
   const sha = execFileSync9("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -63740,16 +63846,16 @@ function readProofActionIdentity(appProjectRoot, actionId) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute3(root) || !isAbsolute3(path) || resolve4(root) !== root || resolve4(path) !== path) {
+  if (!isAbsolute4(root) || !isAbsolute4(path) || resolve5(root) !== root || resolve5(path) !== path) {
     return false;
   }
-  const fromRoot = relative(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep5}`) && !isAbsolute3(fromRoot);
+  const fromRoot = relative2(root, path);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep5}`) && !isAbsolute4(fromRoot);
 }
 function hasExistingSymlink(root, path) {
-  const parts = relative(root, path).split(sep5);
+  const parts = relative2(root, path).split(sep5);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve4(root, ...parts.slice(0, length));
+    const candidate = resolve5(root, ...parts.slice(0, length));
     try {
       if (lstatSync7(candidate).isSymbolicLink())
         return true;
@@ -63759,7 +63865,7 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve4(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve5(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
@@ -63787,7 +63893,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute3(detectedProjectRoot) || resolve4(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute4(detectedProjectRoot) || resolve5(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -63795,7 +63901,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute3(root) && resolve4(root) === root ? root : null;
+    return root && isAbsolute4(root) && resolve5(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -63834,7 +63940,7 @@ function readProofGitInfo(root) {
 function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
-  const path = relative(root, proofRoot).replaceAll(sep5, "/");
+  const path = relative2(root, proofRoot).replaceAll(sep5, "/");
   return execFileSync9("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
@@ -63913,8 +64019,8 @@ function traceFor(storyboard, events) {
 function readProofContractAt(moduleUrl = import.meta.url) {
   const moduleDir = dirname15(fileURLToPath3(moduleUrl));
   const candidates = [
-    resolve4(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve4(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve5(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve5(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
@@ -63928,7 +64034,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname15(path);
   mkdirSync15(directory, { recursive: true, mode: 448 });
-  const temporary = resolve4(directory, `.${randomUUID7()}.proof-receipt.tmp`);
+  const temporary = resolve5(directory, `.${randomUUID7()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync4(temporary, "wx", 384);
@@ -64102,7 +64208,7 @@ function createProofCaptureHandler(deps) {
       return current.reasons;
     return sameProofAction(current.value, active.actionIdentity) ? [] : ["PROOF_ACTION_IDENTITY_CHANGED"];
   };
-  const repositoryPath = (active, path) => relative(active.context.projectRoot, path).replaceAll(sep5, "/");
+  const repositoryPath = (active, path) => relative2(active.context.projectRoot, path).replaceAll(sep5, "/");
   const observedSetupScreenshots = (active) => {
     const owned = /* @__PURE__ */ new Set();
     for (const observation of deps.monitor.observations()) {
@@ -64121,7 +64227,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git.changes.some((change) => isAbsolute3(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git.changes.some((change) => isAbsolute4(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -66740,10 +66846,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve8) => {
+    const timeout = new Promise((resolve9) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve8();
+        resolve9();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -66758,7 +66864,7 @@ import { createHash as createHash11 } from "node:crypto";
 import { execFileSync as execFileSync11 } from "node:child_process";
 import { closeSync as closeSync5, existsSync as existsSync29, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync25, statSync as statSync10, unlinkSync as unlinkSync10, writeFileSync as writeFileSync16, writeSync as writeSync2 } from "node:fs";
 import { tmpdir as tmpdir11, userInfo as userInfo2 } from "node:os";
-import { join as join37, resolve as resolve5 } from "node:path";
+import { join as join37, resolve as resolve6 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var DEFAULT_STALE_MS2 = 9e4;
@@ -66802,7 +66908,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash11("md5").update(resolve5(projectRoot)).digest("hex").slice(0, 8);
+  return createHash11("md5").update(resolve6(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -67452,13 +67558,13 @@ function createCrossPlatformVerifyHandler(dependencies = {}) {
       return failResult("Provide elements[] or scanDir to discover testIDs from source.");
     }
     const matchBy = args.matchBy ?? "any";
-    const validateAuthority = dependencies.validateAuthority ?? validateCachedSnapshotAuthority;
+    const validateAuthority = dependencies.validateAuthority ?? ((platform) => Boolean(getCachedSnapshotEvidence(platform)));
     const [iosValid, androidValid] = await Promise.all([
       validateAuthority("ios"),
       validateAuthority("android")
     ]);
-    const iosSnap = iosValid ? getCachedSnapshot("ios") : void 0;
-    const androidSnap = androidValid ? getCachedSnapshot("android") : void 0;
+    const iosSnap = iosValid ? getCachedSnapshotEvidence("ios") : void 0;
+    const androidSnap = androidValid ? getCachedSnapshotEvidence("android") : void 0;
     if (!iosSnap && !androidSnap) {
       return failResult("No cached snapshots for either platform. Run device_snapshot on iOS and Android first, then call this tool to compare.", {
         hint: "Workflow: open iOS session \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify"
@@ -67640,14 +67746,22 @@ init_rn_android_runner_client();
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash12 } from "node:crypto";
-import { lstatSync as lstatSync9, readFileSync as readFileSync28, readdirSync as readdirSync10, readlinkSync as readlinkSync2, statSync as statSync11 } from "node:fs";
-import { join as join41, relative as relative2 } from "node:path";
+import { lstatSync as lstatSync9, readFileSync as readFileSync28, readdirSync as readdirSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync6, statSync as statSync11 } from "node:fs";
+import { isAbsolute as isAbsolute5, join as join41, relative as relative3 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
     maxBuffer: 8 * 1024 * 1024
+  });
+}
+function runBuffer(command, args) {
+  return execFileSync12(command, [...args], {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 3e4,
+    maxBuffer: 512 * 1024 * 1024
   });
 }
 function digest(parts) {
@@ -67669,7 +67783,7 @@ function listAppFiles(appPath) {
       if (entry.isDirectory()) {
         visit(path);
       } else if (entry.isFile() || entry.isSymbolicLink()) {
-        files.push(relative2(appPath, path));
+        files.push(relative3(appPath, path));
       } else {
         throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
       }
@@ -67680,6 +67794,13 @@ function listAppFiles(appPath) {
 }
 function iosAppFiles(appPath, dependencies) {
   return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
+}
+function assertIosSymlinkContained(appPath, path, realpath) {
+  const target = realpath(path);
+  const child = relative3(realpath(appPath), target);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute5(child)) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
+  }
 }
 function androidApkPaths(target, text) {
   return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
@@ -67734,6 +67855,72 @@ function captureInstallGeneration(target, dependencies = {}) {
     throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
   }
   return generation(metadata);
+}
+function captureInstalledArtifact(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  const buffer = dependencies.runBuffer ?? runBuffer;
+  const read = dependencies.read ?? readFileSync28;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join41(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const files = iosAppFiles(appPath, dependencies);
+    const lstat = dependencies.lstat ?? lstatSync9;
+    const readLink = dependencies.readLink ?? readlinkSync2;
+    const realpath = dependencies.realpath ?? realpathSync6;
+    const artifactParts = [];
+    for (const entry of files) {
+      const path = join41(appPath, entry);
+      const stat2 = lstat(path);
+      artifactParts.push(Buffer.from(entry));
+      if (stat2.isFile()) {
+        artifactParts.push(Buffer.from("file"), read(path));
+      } else if (stat2.isSymbolicLink()) {
+        assertIosSymlinkContained(appPath, path, realpath);
+        artifactParts.push(Buffer.from("symlink"), Buffer.from(readLink(path)));
+      } else {
+        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
+      }
+    }
+    return {
+      ...target,
+      artifactDigest: digest(artifactParts),
+      installGeneration: captureInstallGeneration(target, dependencies)
+    };
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  return {
+    ...target,
+    artifactDigest: digest(apkPaths.map((path) => buffer("adb", ["-s", target.deviceId, "exec-out", "cat", path]))),
+    installGeneration: captureInstallGeneration(target, dependencies)
+  };
+}
+function verifyInstalledArtifact(expected, observed) {
+  if (expected.platform !== observed.platform || expected.deviceId !== observed.deviceId || expected.appId !== observed.appId || expected.artifactDigest !== observed.artifactDigest || expected.installGeneration !== observed.installGeneration) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: installed artifact no longer matches the session build");
+  }
 }
 
 // packages/rn-dev-agent-core/dist/index.js
@@ -68285,20 +68472,20 @@ var ObservabilityServer = class {
   // handle() fire-and-forgets the async routes, so a rejecting await here
   // would crash the process on an oversized/aborted request (GH #438 review).
   readBody(req) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       let body = "";
       let bytes = 0;
       req.on("data", (chunk) => {
         bytes += chunk.length;
         if (bytes > 65536) {
           req.destroy();
-          resolve8(null);
+          resolve9(null);
           return;
         }
         body += chunk.toString();
       });
-      req.on("end", () => resolve8(body));
-      req.on("error", () => resolve8(null));
+      req.on("end", () => resolve9(body));
+      req.on("error", () => resolve9(null));
     });
   }
   json(res, status, obj) {
@@ -68429,7 +68616,7 @@ var ObservabilityServer = class {
   }
 };
 function listen(server3, port) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -68438,7 +68625,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve8(typeof addr === "object" && addr ? addr.port : port);
+      resolve9(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -68726,7 +68913,7 @@ var RestartGate = class {
 var SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
 var IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-var sleep5 = (ms) => new Promise((resolve8) => setTimeout(resolve8, ms));
+var sleep5 = (ms) => new Promise((resolve9) => setTimeout(resolve9, ms));
 var scheduleAfter = (fn, delayMs) => {
   if (delayMs <= 0)
     setImmediate(fn);
@@ -68735,8 +68922,8 @@ var scheduleAfter = (fn, delayMs) => {
 };
 var defaultSpawn = (cmd, args) => spawn7(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
 async function detectIdb(execFileFn = execFile26) {
-  return new Promise((resolve8) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve8(!err));
+  return new Promise((resolve9) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve9(!err));
   });
 }
 function isEnoent(err) {
@@ -68867,7 +69054,7 @@ var IosSimctlLoopSource = class {
 };
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     execFile26(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -68876,7 +69063,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile2(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve8(buf);
+        resolve9(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -69922,15 +70109,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve8((res.statusCode ?? 500) < 500);
+      resolve9((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve8(false));
+    req.on("error", () => resolve9(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve8(false);
+      resolve9(false);
     });
     req.end();
   });
@@ -70076,7 +70263,7 @@ function createBuildLaunchPlan(input) {
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
 import { closeSync as closeSync6, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync6, readFileSync as readFileSync35 } from "node:fs";
-import { basename as basename6, isAbsolute as isAbsolute4, join as join51, relative as relative3, resolve as resolve6, sep as sep6 } from "node:path";
+import { basename as basename6, isAbsolute as isAbsolute6, join as join51, relative as relative4, resolve as resolve7, sep as sep6 } from "node:path";
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
@@ -70160,7 +70347,7 @@ function previewPackageIntegration(packageJson, existing, sessionCli) {
   if (existing && packageJson.scripts?.ios === SENTINELS.ios && packageJson.scripts?.android === SENTINELS.android) {
     return {
       packageJson,
-      manifest: sessionCli ? { ...existing, sessionCli: resolve6(sessionCli) } : existing
+      manifest: sessionCli ? { ...existing, sessionCli: resolve7(sessionCli) } : existing
     };
   }
   const ios = packageJson.scripts?.ios;
@@ -70171,7 +70358,7 @@ function previewPackageIntegration(packageJson, existing, sessionCli) {
   const manifest = {
     version: 1,
     adapter: ADAPTER,
-    ...sessionCli ? { sessionCli: resolve6(sessionCli) } : {},
+    ...sessionCli ? { sessionCli: resolve7(sessionCli) } : {},
     originalScripts: {
       ios: parseSupportedScript(ios, "ios"),
       android: parseSupportedScript(android, "android")
@@ -70218,22 +70405,13 @@ if (!Array.isArray(original) || original.length === 0 || original.some((part) =>
   process.exit(2);
 }
 const command = [...original, ...process.argv.slice(3)];
-const rawSession = process.env.RN_DEV_AGENT_SESSION_BUILD_JSON;
 let session = null;
 let sessionCli = null;
-if (rawSession) {
-  try {
-    session = JSON.parse(rawSession);
-  } catch {
-    process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is invalid\n');
-    process.exit(2);
-  }
-}
-if (!session && typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
+if (typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
   process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
   process.exit(2);
 }
-if (!session && typeof manifest.sessionCli === 'string') {
+if (typeof manifest.sessionCli === 'string') {
   sessionCli = manifest.sessionCli;
   const [major, minor] = process.versions.node.split('.').map(Number);
   const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
@@ -70272,10 +70450,6 @@ if (!session && typeof manifest.sessionCli === 'string') {
     process.exit(2);
   }
 }
-if (session && !sessionCli && typeof manifest.sessionCli === 'string' && fs.existsSync(manifest.sessionCli)) {
-  sessionCli = manifest.sessionCli;
-}
-
 function ensureValue(flag, value) {
   const index = command.indexOf(flag);
   if (index >= 0) {
@@ -70379,8 +70553,8 @@ function assertBoundCleanup(result) {
   }
 }
 function assertNoSymlinkPath(root, candidate) {
-  const child = relative3(root, candidate);
-  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child)) {
+  const child = relative4(root, candidate);
+  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute6(child)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
   }
   let current = root;
@@ -70432,7 +70606,7 @@ function readOptionalRegularFileNoFollow(root, candidate) {
   return readOptionalRegularFile(root, candidate);
 }
 function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
-  const appRoot = resolve6(appRootInput);
+  const appRoot = resolve7(appRootInput);
   const app = openBoundDirectory(appRoot);
   let agent = null;
   let integration = null;
@@ -70508,7 +70682,7 @@ function rollbackWrites(writes) {
   return errors;
 }
 function applyPackageIntegration(input, dependencies = {}) {
-  const appRoot = resolve6(input.appRoot);
+  const appRoot = resolve7(input.appRoot);
   const packagePath = join51(appRoot, "package.json");
   let metroConfigPath;
   for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join51(appRoot, name))) {
@@ -70636,7 +70810,7 @@ function applyPackageIntegration(input, dependencies = {}) {
   }
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
-  const appRoot = resolve6(input.appRoot);
+  const appRoot = resolve7(input.appRoot);
   const packagePath = join51(appRoot, "package.json");
   const directories = openIntegrationDirectories(appRoot);
   const generatedNames = [
@@ -71309,8 +71483,8 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash14 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { lstatSync as lstatSync11, readFileSync as readFileSync36, readlinkSync as readlinkSync3, realpathSync as realpathSync5 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join53, relative as relative4, resolve as resolve7 } from "node:path";
+import { closeSync as closeSync7, lstatSync as lstatSync11, openSync as openSync7, readFileSync as readFileSync36, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync7 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve8 } from "node:path";
 function digest2(parts) {
   const hash = createHash14("sha256");
   for (const part of parts) {
@@ -71319,14 +71493,47 @@ function digest2(parts) {
   }
   return hash.digest("hex");
 }
-function framedDigest(parts) {
-  const hash = createHash14("sha256");
-  for (const part of parts) {
-    const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
-    hash.update(`${bytes.byteLength}:`);
-    hash.update(bytes);
+var MAX_STRICT_PROOF_FILES = 4096;
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
+var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
+var IGNORED_RUNTIME_INPUT_PATHS = [
+  ":(glob)**/.env",
+  ":(glob)**/.env.*",
+  ":(glob)**/app.json",
+  ":(glob)**/app.config.*",
+  ":(glob)**/eas.json",
+  ":(glob)**/google-services.json",
+  ":(glob)**/GoogleService-Info.plist",
+  ":(glob)**/metro.config.*",
+  ":(glob)**/babel.config.*",
+  ":(glob)**/react-native.config.*",
+  ":(glob)**/*.xcconfig",
+  ":(glob)**/gradle.properties",
+  ":(glob)**/local.properties"
+];
+function updateFramed(hash, part) {
+  const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
+  hash.update(`${bytes.byteLength}:`);
+  hash.update(bytes);
+}
+function updateFramedFile(hash, path, size) {
+  hash.update(`${size}:`);
+  const descriptor = openSync7(path, "r");
+  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(size, 1)));
+  try {
+    let offset = 0;
+    while (offset < size) {
+      const bytesRead = readSync2(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
+      if (bytesRead === 0) {
+        throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: source file changed while hashing");
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync7(descriptor);
   }
-  return hash.digest("hex");
 }
 function defaultGit(root, args) {
   return execFileSync14("git", ["-C", root, ...args], {
@@ -71344,8 +71551,8 @@ function isDefinitiveNonGitError(error2) {
 ${stderr}`.toLowerCase().includes("not a git repository");
 }
 function assertContained(root, candidate, code) {
-  const child = relative4(root, candidate);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute5(child)) {
+  const child = relative5(root, candidate);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute7(child)) {
     throw new Error(`${code}: path is outside the declared content root`);
   }
 }
@@ -71353,16 +71560,16 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
     throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
   }
-  const contentRoot = canonicalize(resolve7(dependencies.declaredRoot));
+  const contentRoot = canonicalize(resolve8(dependencies.declaredRoot));
   assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
   const manifestParts = [];
   for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve7(contentRoot, entry));
+    const manifest = canonicalize(resolve8(contentRoot, entry));
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
-    manifestParts.push(relative4(contentRoot, manifest), readFileSync36(manifest));
+    manifestParts.push(relative5(contentRoot, manifest), readFileSync36(manifest));
   }
   const manifestDigest = digest2(manifestParts);
-  const appRelative = relative4(contentRoot, appRoot) || ".";
+  const appRelative = relative5(contentRoot, appRoot) || ".";
   return {
     kind: "declared-root",
     contentRoot,
@@ -71375,16 +71582,16 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   };
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync5;
-  const appRoot = canonicalize(resolve7(inputRoot));
+  const canonicalize = dependencies.canonicalize ?? realpathSync7;
+  const appRoot = canonicalize(resolve8(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
     const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
     assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
     const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
-    const commonDirectory = canonicalize(isAbsolute5(commonRaw) ? commonRaw : join53(contentRoot, commonRaw));
+    const commonDirectory = canonicalize(isAbsolute7(commonRaw) ? commonRaw : join53(appRoot, commonRaw));
     const head = git(appRoot, ["rev-parse", "HEAD"]);
-    const appRelative = relative4(contentRoot, appRoot) || ".";
+    const appRelative = relative5(contentRoot, appRoot) || ".";
     return {
       kind: "git",
       contentRoot,
@@ -71416,14 +71623,16 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     "--others",
     "--ignored",
     "--exclude-standard",
-    "-z"
+    "-z",
+    "--",
+    ...IGNORED_RUNTIME_INPUT_PATHS
   ]).split("\0").filter(Boolean).sort();
   const gitlinks = git(identity2.contentRoot, ["ls-files", "--stage", "-z"]).split("\0").flatMap((entry) => {
     const match = /^160000 [0-9a-f]+ \d+\t(.+)$/i.exec(entry);
     return match?.[1] ? [match[1]] : [];
   });
   for (const entry of gitlinks) {
-    const submodule = resolve7(identity2.contentRoot, entry);
+    const submodule = resolve8(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
     const status = git(submodule, [
       "status",
@@ -71435,22 +71644,53 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
     }
   }
-  const dirtyParts = ["git-dirty-v2", diff];
-  for (const [classification, entry] of [
-    ...untracked.map((entry2) => ["untracked", entry2]),
-    ...ignored.map((entry2) => ["ignored", entry2])
-  ]) {
-    const file = resolve7(identity2.contentRoot, entry);
+  const dirtyHash = createHash14("sha256");
+  updateFramed(dirtyHash, "git-dirty-v3");
+  updateFramed(dirtyHash, diff);
+  const sourceEntries = [
+    ...untracked.map((entry) => ["untracked", entry]),
+    ...ignored.map((entry) => ["ignored-runtime", entry])
+  ];
+  if (sourceEntries.length > MAX_STRICT_PROOF_FILES) {
+    throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs");
+  }
+  let totalBytes = 0;
+  for (const [classification, entry] of [...sourceEntries]) {
+    const file = resolve8(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
     const stat2 = lstatSync11(file);
+    updateFramed(dirtyHash, classification);
+    updateFramed(dirtyHash, entry);
     if (stat2.isFile()) {
-      dirtyParts.push(classification, entry, "file", readFileSync36(file));
+      if (stat2.size > MAX_STRICT_PROOF_FILE_BYTES) {
+        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+      }
+      totalBytes += stat2.size;
+      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
+      }
+      updateFramed(dirtyHash, "file");
+      updateFramedFile(dirtyHash, file, stat2.size);
       continue;
     }
     if (stat2.isSymbolicLink()) {
-      const target = realpathSync5(file);
+      const target = realpathSync7(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
-      dirtyParts.push(classification, entry, "symlink", readlinkSync3(file));
+      const link = readlinkSync3(file);
+      const targetStat = lstatSync11(target);
+      if (!targetStat.isFile()) {
+        throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
+      }
+      if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+      }
+      totalBytes += Buffer.byteLength(link) + targetStat.size;
+      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
+      }
+      updateFramed(dirtyHash, "symlink");
+      updateFramed(dirtyHash, link);
+      updateFramedFile(dirtyHash, target, targetStat.size);
       continue;
     }
     throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
@@ -71461,7 +71701,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     worktreeKey: identity2.worktreeKey,
     appRootKey: identity2.appRootKey,
     head,
-    dirtyDigest: framedDigest(dirtyParts)
+    dirtyDigest: dirtyHash.digest("hex")
   };
 }
 
@@ -71569,6 +71809,7 @@ function createLocalAuthorityProbe(dependencies) {
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+  const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
   return async ({ axis, phase, status, tool, args }) => {
     if (axis === "C") {
       const { registry: registry2, session } = dependencies.runtime.requireAvailable();
@@ -71603,9 +71844,12 @@ function createLocalAuthorityProbe(dependencies) {
     }
     if (axis === "I") {
       const expected = objectBinding(status, "install");
-      const observedGeneration = captureInstallGeneration(expected);
-      if (observedGeneration !== expected.installGeneration) {
-        throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact generation no longer matches the session build");
+      let observed;
+      try {
+        observed = captureInstalled(expected);
+        verifyInstalledArtifact(expected, observed);
+      } catch {
+        throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact bytes no longer match the session build");
       }
       return {
         axis,
@@ -71613,7 +71857,8 @@ function createLocalAuthorityProbe(dependencies) {
           platform: expected.platform,
           deviceId: expected.deviceId,
           appId: expected.appId,
-          installGeneration: observedGeneration
+          artifactDigest: observed.artifactDigest,
+          installGeneration: observed.installGeneration
         })
       };
     }
@@ -72018,6 +72263,31 @@ setSnapshotAuthorityProvider({
         return false;
       }
       return typeof receipt2.runnerPid === "number" && typeof receipt2.runnerProcessBirth === "string" && readProcessBirth(receipt2.runnerPid)?.token === receipt2.runnerProcessBirth;
+    } catch {
+      return false;
+    }
+  },
+  validateEvidence: (receipt2) => {
+    try {
+      const { registry: registry2, session } = authorityRuntime.requireOperational();
+      if (!registry2.validatePlatformAuthorityReceipt(session, String(receipt2.platform), {
+        ...receipt2
+      }) || receipt2.platform !== "ios" && receipt2.platform !== "android" || typeof receipt2.deviceId !== "string" || typeof receipt2.appId !== "string" || typeof receipt2.artifactDigest !== "string" || typeof receipt2.installGeneration !== "string") {
+        return false;
+      }
+      const observed = captureInstalledArtifact({
+        platform: receipt2.platform,
+        deviceId: receipt2.deviceId,
+        appId: receipt2.appId
+      });
+      verifyInstalledArtifact({
+        platform: receipt2.platform,
+        deviceId: receipt2.deviceId,
+        appId: receipt2.appId,
+        artifactDigest: receipt2.artifactDigest,
+        installGeneration: receipt2.installGeneration
+      }, observed);
+      return true;
     } catch {
       return false;
     }
@@ -72690,7 +72960,7 @@ trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots.
       const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
       if (probe.value === true)
         return true;
-      await new Promise((resolve8) => setTimeout(resolve8, 250));
+      await new Promise((resolve9) => setTimeout(resolve9, 250));
     }
     return false;
   }

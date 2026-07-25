@@ -156,6 +156,21 @@ function snapshotAuthorityIsValid(receipt, platform) {
         receipt.runnerPort !== null &&
         snapshotAuthorityProvider?.validate(receipt));
 }
+function snapshotEvidenceAuthorityIsValid(receipt, platform) {
+    if (receipt.sessionId === null)
+        return snapshotAuthorityIsValid(receipt, platform);
+    return Boolean(receipt.platform === platform &&
+        receipt.sessionId !== null &&
+        receipt.claimEpoch !== null &&
+        receipt.sourceKey !== null &&
+        receipt.worktreeKey !== null &&
+        receipt.appRootKey !== null &&
+        receipt.deviceId !== null &&
+        receipt.installGeneration !== null &&
+        receipt.appId !== null &&
+        receipt.artifactDigest !== null &&
+        snapshotAuthorityProvider?.validateEvidence?.(receipt));
+}
 export async function validateCachedSnapshotAuthority(platform) {
     const snapshot = snapshotCache.get(platform);
     if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform))
@@ -163,6 +178,12 @@ export async function validateCachedSnapshotAuthority(platform) {
     if (snapshot.authorityReceipt.sessionId === null)
         return true;
     return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
+}
+export function getCachedSnapshotEvidence(platform) {
+    const snapshot = snapshotCache.get(platform);
+    return snapshot && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
+        ? snapshot
+        : undefined;
 }
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot

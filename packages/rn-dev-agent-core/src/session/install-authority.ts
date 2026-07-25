@@ -1,7 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import {
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
 
 export interface InstalledArtifactIdentity {
   platform: 'ios' | 'android';
@@ -16,6 +23,7 @@ interface InstallProbeDependencies {
   runBuffer?: (command: string, args: readonly string[]) => Buffer;
   read?: (path: string) => Buffer;
   readLink?: (path: string) => string;
+  realpath?: (path: string) => string;
   listAppFiles?: (appPath: string) => readonly string[];
   lstat?: (path: string) => { isFile(): boolean; isSymbolicLink(): boolean };
   stat?: (path: string) => { ino: number | bigint; size: number; mtimeMs: number };
@@ -74,6 +82,22 @@ function listAppFiles(appPath: string): string[] {
 
 function iosAppFiles(appPath: string, dependencies: InstallProbeDependencies): readonly string[] {
   return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
+}
+
+function assertIosSymlinkContained(
+  appPath: string,
+  path: string,
+  realpath: (path: string) => string,
+): void {
+  const target = realpath(path);
+  const child = relative(realpath(appPath), target);
+  if (
+    child === '..' ||
+    child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+    isAbsolute(child)
+  ) {
+    throw new Error('APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle');
+  }
 }
 
 function androidApkPaths(
@@ -182,6 +206,7 @@ export function captureInstalledArtifact(
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync;
     const readLink = dependencies.readLink ?? readlinkSync;
+    const realpath = dependencies.realpath ?? realpathSync;
     const artifactParts: Buffer[] = [];
     for (const entry of files) {
       const path = join(appPath, entry);
@@ -190,6 +215,7 @@ export function captureInstalledArtifact(
       if (stat.isFile()) {
         artifactParts.push(Buffer.from('file'), read(path));
       } else if (stat.isSymbolicLink()) {
+        assertIosSymlinkContained(appPath, path, realpath);
         artifactParts.push(Buffer.from('symlink'), Buffer.from(readLink(path)));
       } else {
         throw new Error(

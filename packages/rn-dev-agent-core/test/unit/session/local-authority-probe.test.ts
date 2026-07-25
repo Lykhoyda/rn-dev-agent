@@ -88,6 +88,38 @@ test('bundle probe normalizes CDP transport failure to optional bundle unavailab
   );
 });
 
+test('install authority rejects changed bytes even when install metadata is unchanged', async () => {
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      captureInstalled: () => ({
+        platform: 'ios',
+        deviceId: 'SIM-A',
+        appId: 'dev.example',
+        artifactDigest: 'changed-bytes',
+        installGeneration: 'same-generation',
+      }),
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      probe({
+        axis: 'I',
+        status: statusWith({
+          install: {
+            platform: 'ios',
+            deviceId: 'SIM-A',
+            appId: 'dev.example',
+            artifactDigest: 'expected-bytes',
+            installGeneration: 'same-generation',
+          },
+        }),
+      }),
+    (error) =>
+      error instanceof SessionAuthorityError && error.code === 'APP_INSTALL_IDENTITY_CHANGED',
+  );
+});
+
 test('native app origin accepts a matching app target on the exact claimed device', async () => {
   const probe = createLocalAuthorityProbe(
     dependencies({

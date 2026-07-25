@@ -36,12 +36,44 @@ export function parseLsofCwd(stdout: string): string | null {
   return null;
 }
 
-export function pidForPort(port: number, exec: ExecFn = defaultExec): number | null {
+export function pidForPort(
+  port: number,
+  exec: ExecFn = defaultExec,
+  platform: NodeJS.Platform = process.platform,
+): number | null {
   try {
+    if (platform === 'win32') {
+      const output = exec('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)`,
+      ]);
+      const pid = Number.parseInt(output.trim(), 10);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
     return parseLsofPid(exec('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN']));
   } catch {
     return null;
   }
+}
+
+export function parseWindowsMetroRoot(commandLine: string): string | null {
+  const explicitRoot =
+    /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
+      commandLine,
+    );
+  const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+  if (explicit) return explicit;
+  const scriptPath =
+    /"([A-Za-z]:[\\/][^"]*[\\/]node_modules[\\/][^"]+)"/i.exec(commandLine)?.[1] ??
+    /'([A-Za-z]:[\\/][^']*[\\/]node_modules[\\/][^']+)'/i.exec(commandLine)?.[1] ??
+    /(?:^|\s)([A-Za-z]:[\\/]\S*[\\/]node_modules[\\/]\S+)/i.exec(commandLine)?.[1];
+  if (!scriptPath) return null;
+  const marker = scriptPath
+    .toLowerCase()
+    .lastIndexOf(`${scriptPath.includes('\\') ? '\\' : '/'}node_modules`);
+  return marker > 2 ? scriptPath.slice(0, marker) : null;
 }
 
 export function cwdForProcess(
@@ -65,11 +97,7 @@ export function cwdForProcess(
         '-Command',
         `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`,
       ]);
-      const explicitRoot =
-        /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
-          commandLine,
-        );
-      const root = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+      const root = parseWindowsMetroRoot(commandLine);
       return root ? realpathOrResolve(root) : null;
     }
     return null;
@@ -86,11 +114,14 @@ function realpathOrResolve(p: string): string {
   }
 }
 
-export function cwdForPort(port: number, exec: ExecFn = defaultExec): string | null {
-  if (exec === defaultExec && process.platform !== 'darwin') return null;
-  const pid = pidForPort(port, exec);
+export function cwdForPort(
+  port: number,
+  exec: ExecFn = defaultExec,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const pid = pidForPort(port, exec, platform);
   if (pid == null) return null;
-  return cwdForProcess(pid, 'darwin', exec);
+  return cwdForProcess(pid, platform, exec);
 }
 
 export function pathMatchesRoot(

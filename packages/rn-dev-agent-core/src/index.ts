@@ -135,7 +135,11 @@ import {
   androidHealthMatchesAuthority,
   probeAndroidRunnerHealthInfo,
 } from './runners/rn-android-runner-client.js';
-import { captureInstallGeneration } from './session/install-authority.js';
+import {
+  captureInstalledArtifact,
+  captureInstallGeneration,
+  verifyInstalledArtifact,
+} from './session/install-authority.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
@@ -402,6 +406,41 @@ setSnapshotAuthorityProvider({
         typeof receipt.runnerProcessBirth === 'string' &&
         readProcessBirth(receipt.runnerPid)?.token === receipt.runnerProcessBirth
       );
+    } catch {
+      return false;
+    }
+  },
+  validateEvidence: (receipt) => {
+    try {
+      const { registry, session } = authorityRuntime.requireOperational();
+      if (
+        !registry.validatePlatformAuthorityReceipt(session, String(receipt.platform), {
+          ...receipt,
+        }) ||
+        (receipt.platform !== 'ios' && receipt.platform !== 'android') ||
+        typeof receipt.deviceId !== 'string' ||
+        typeof receipt.appId !== 'string' ||
+        typeof receipt.artifactDigest !== 'string' ||
+        typeof receipt.installGeneration !== 'string'
+      ) {
+        return false;
+      }
+      const observed = captureInstalledArtifact({
+        platform: receipt.platform,
+        deviceId: receipt.deviceId,
+        appId: receipt.appId,
+      });
+      verifyInstalledArtifact(
+        {
+          platform: receipt.platform,
+          deviceId: receipt.deviceId,
+          appId: receipt.appId,
+          artifactDigest: receipt.artifactDigest,
+          installGeneration: receipt.installGeneration,
+        },
+        observed,
+      );
+      return true;
     } catch {
       return false;
     }

@@ -65,6 +65,50 @@ test('package-local CLI resolves one exact worktree session for literal build sc
   });
 });
 
+test('package-local CLI does not discover a sibling app session in the same worktree', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-monorepo-'));
+  const appA = join(root, 'apps', 'a');
+  const appB = join(root, 'apps', 'b');
+  const stateHome = join(root, 'state');
+  mkdirSync(appA, { recursive: true });
+  mkdirSync(appB, { recursive: true });
+  execFileSync('git', ['init', '-q', root]);
+  execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.invalid']);
+  execFileSync('git', ['-C', root, 'config', 'user.name', 'Test']);
+  writeFileSync(join(appA, 'package.json'), '{}\n');
+  writeFileSync(join(appB, 'package.json'), '{}\n');
+  execFileSync('git', ['-C', root, 'add', '.']);
+  execFileSync('git', ['-C', root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = stateHome;
+  const sourceA = resolveSourceIdentity(appA);
+  const layout = createAuthorityStateLayout();
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+  registry.createSession({
+    sessionId: 'session-app-a',
+    sourceKey: sourceA.sourceKey,
+    worktreeKey: sourceA.worktreeKey,
+    appRootKey: sourceA.appRootKey,
+    supervisor: { pid: process.pid, token: 'fixture' },
+    source: { ...sourceA },
+  });
+  registry.close();
+
+  const result = spawnSync(process.execPath, [cliPath, 'status'], {
+    cwd: appB,
+    env: { ...process.env, XDG_STATE_HOME: stateHome },
+    encoding: 'utf8',
+  });
+
+  if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = previousStateHome;
+  rmSync(root, { force: true, recursive: true });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /no live session matches this canonical worktree and app root/);
+});
+
 test('package-local CLI rejects an explicit session from another worktree', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-foreign-'));
   const appRoot = join(root, 'app');

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 function digest(parts) {
     const hash = createHash('sha256');
@@ -10,14 +10,48 @@ function digest(parts) {
     }
     return hash.digest('hex');
 }
-function framedDigest(parts) {
-    const hash = createHash('sha256');
-    for (const part of parts) {
-        const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
-        hash.update(`${bytes.byteLength}:`);
-        hash.update(bytes);
+const MAX_STRICT_PROOF_FILES = 4_096;
+const MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
+const STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
+const IGNORED_RUNTIME_INPUT_PATHS = [
+    ':(glob)**/.env',
+    ':(glob)**/.env.*',
+    ':(glob)**/app.json',
+    ':(glob)**/app.config.*',
+    ':(glob)**/eas.json',
+    ':(glob)**/google-services.json',
+    ':(glob)**/GoogleService-Info.plist',
+    ':(glob)**/metro.config.*',
+    ':(glob)**/babel.config.*',
+    ':(glob)**/react-native.config.*',
+    ':(glob)**/*.xcconfig',
+    ':(glob)**/gradle.properties',
+    ':(glob)**/local.properties',
+];
+function updateFramed(hash, part) {
+    const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
+    hash.update(`${bytes.byteLength}:`);
+    hash.update(bytes);
+}
+function updateFramedFile(hash, path, size) {
+    hash.update(`${size}:`);
+    const descriptor = openSync(path, 'r');
+    const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(size, 1)));
+    try {
+        let offset = 0;
+        while (offset < size) {
+            const bytesRead = readSync(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
+            if (bytesRead === 0) {
+                throw new Error('STRICT_PROOF_SOURCE_READ_FAILED: source file changed while hashing');
+            }
+            hash.update(buffer.subarray(0, bytesRead));
+            offset += bytesRead;
+        }
     }
-    return hash.digest('hex');
+    finally {
+        closeSync(descriptor);
+    }
 }
 function defaultGit(root, args) {
     return execFileSync('git', ['-C', root, ...args], {
@@ -78,7 +112,7 @@ export function resolveSourceIdentity(inputRoot, dependencies = {}) {
         const contentRoot = canonicalize(git(appRoot, ['rev-parse', '--show-toplevel']));
         assertContained(contentRoot, appRoot, 'APP_ROOT_OUTSIDE_WORKTREE');
         const commonRaw = git(appRoot, ['rev-parse', '--git-common-dir']);
-        const commonDirectory = canonicalize(isAbsolute(commonRaw) ? commonRaw : join(contentRoot, commonRaw));
+        const commonDirectory = canonicalize(isAbsolute(commonRaw) ? commonRaw : join(appRoot, commonRaw));
         const head = git(appRoot, ['rev-parse', 'HEAD']);
         const appRelative = relative(contentRoot, appRoot) || '.';
         return {
@@ -119,6 +153,8 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         '--ignored',
         '--exclude-standard',
         '-z',
+        '--',
+        ...IGNORED_RUNTIME_INPUT_PATHS,
     ])
         .split('\0')
         .filter(Boolean)
@@ -142,22 +178,53 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
             throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
         }
     }
-    const dirtyParts = ['git-dirty-v2', diff];
-    for (const [classification, entry] of [
+    const dirtyHash = createHash('sha256');
+    updateFramed(dirtyHash, 'git-dirty-v3');
+    updateFramed(dirtyHash, diff);
+    const sourceEntries = [
         ...untracked.map((entry) => ['untracked', entry]),
-        ...ignored.map((entry) => ['ignored', entry]),
-    ]) {
+        ...ignored.map((entry) => ['ignored-runtime', entry]),
+    ];
+    if (sourceEntries.length > MAX_STRICT_PROOF_FILES) {
+        throw new Error('STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs');
+    }
+    let totalBytes = 0;
+    for (const [classification, entry] of [...sourceEntries]) {
         const file = resolve(identity.contentRoot, entry);
         assertContained(identity.contentRoot, file, 'STRICT_PROOF_PATH_ESCAPE');
         const stat = lstatSync(file);
+        updateFramed(dirtyHash, classification);
+        updateFramed(dirtyHash, entry);
         if (stat.isFile()) {
-            dirtyParts.push(classification, entry, 'file', readFileSync(file));
+            if (stat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+                throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+            }
+            totalBytes += stat.size;
+            if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+                throw new Error('STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit');
+            }
+            updateFramed(dirtyHash, 'file');
+            updateFramedFile(dirtyHash, file, stat.size);
             continue;
         }
         if (stat.isSymbolicLink()) {
             const target = realpathSync(file);
             assertContained(identity.contentRoot, target, 'STRICT_PROOF_PATH_ESCAPE');
-            dirtyParts.push(classification, entry, 'symlink', readlinkSync(file));
+            const link = readlinkSync(file);
+            const targetStat = lstatSync(target);
+            if (!targetStat.isFile()) {
+                throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file');
+            }
+            if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+                throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+            }
+            totalBytes += Buffer.byteLength(link) + targetStat.size;
+            if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+                throw new Error('STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit');
+            }
+            updateFramed(dirtyHash, 'symlink');
+            updateFramed(dirtyHash, link);
+            updateFramedFile(dirtyHash, target, targetStat.size);
             continue;
         }
         throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink');
@@ -168,6 +235,6 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         worktreeKey: identity.worktreeKey,
         appRootKey: identity.appRootKey,
         head,
-        dirtyDigest: framedDigest(dirtyParts),
+        dirtyDigest: dirtyHash.digest('hex'),
     };
 }

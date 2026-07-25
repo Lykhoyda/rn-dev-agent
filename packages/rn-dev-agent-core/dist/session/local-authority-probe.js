@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
-import { captureInstallGeneration } from './install-authority.js';
+import { captureInstalledArtifact, verifyInstalledArtifact } from './install-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
@@ -92,6 +92,7 @@ export function createLocalAuthorityProbe(dependencies) {
     const sourceResolver = dependencies.resolveSource ?? defaultSource;
     const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
     const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
+    const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
     return async ({ axis, phase, status, tool, args }) => {
         if (axis === 'C') {
             const { registry, session } = dependencies.runtime.requireAvailable();
@@ -133,9 +134,13 @@ export function createLocalAuthorityProbe(dependencies) {
         }
         if (axis === 'I') {
             const expected = objectBinding(status, 'install');
-            const observedGeneration = captureInstallGeneration(expected);
-            if (observedGeneration !== expected.installGeneration) {
-                throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact generation no longer matches the session build');
+            let observed;
+            try {
+                observed = captureInstalled(expected);
+                verifyInstalledArtifact(expected, observed);
+            }
+            catch {
+                throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact bytes no longer match the session build');
             }
             return {
                 axis,
@@ -143,7 +148,8 @@ export function createLocalAuthorityProbe(dependencies) {
                     platform: expected.platform,
                     deviceId: expected.deviceId,
                     appId: expected.appId,
-                    installGeneration: observedGeneration,
+                    artifactDigest: observed.artifactDigest,
+                    installGeneration: observed.installGeneration,
                 }),
             };
         }

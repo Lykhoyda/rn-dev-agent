@@ -725,11 +725,7 @@ export class SessionRegistry {
           throw claimConflict(claim);
         }
       }
-      if (
-        Object.hasOwn(input.bindings, 'device') ||
-        Object.hasOwn(input.bindings, 'install') ||
-        Object.hasOwn(input.bindings, 'runner')
-      ) {
+      if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
         const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
         const platform = String(
           ((input.bindings.device ?? currentBindings.device) as Record<string, unknown> | undefined)
@@ -1993,44 +1989,7 @@ export class SessionRegistry {
           staged.platform,
           staged.receipt,
         );
-        const runnerClaim = String(staged.receipt.runnerClaim);
-        const deviceClaim = String(staged.receipt.deviceClaim);
-        for (const resource of [
-          { type: 'runner-receipt', key: runnerClaim },
-          { type: 'device-receipt', key: deviceClaim },
-        ]) {
-          const existing = this.#findClaim(resource.type, resource.key);
-          if (
-            existing &&
-            (existing.session_id !== staged.session.sessionId ||
-              existing.claim_epoch !== staged.session.claimEpoch)
-          ) {
-            throw claimConflict(existing);
-          }
-        }
         this.#invalidatePlatformReceipt(staged.session, staged.platform);
-        for (const resource of [
-          { type: 'runner-receipt', key: runnerClaim },
-          { type: 'device-receipt', key: deviceClaim },
-        ]) {
-          this.#database
-            .prepare(
-              `INSERT INTO claims(
-                 resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-               ) VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-                 session_id = excluded.session_id,
-                 claim_epoch = excluded.claim_epoch,
-                 lease_until_ms = excluded.lease_until_ms`,
-            )
-            .run(
-              resource.type,
-              resource.key,
-              staged.session.sessionId,
-              staged.session.claimEpoch,
-              now + this.#leaseMs,
-            );
-        }
         this.#database
           .prepare(
             `INSERT INTO platform_authority_receipts(
@@ -2074,15 +2033,9 @@ export class SessionRegistry {
       persisted?.receipt && typeof persisted.receipt === 'object'
         ? (persisted.receipt as Record<string, unknown>)
         : persisted;
-    const runnerClaim = this.#findClaim('runner-receipt', String(receipt.runnerClaim));
-    const deviceClaim = this.#findClaim('device-receipt', String(receipt.deviceClaim));
     return (
       row?.claim_epoch === session.claimEpoch &&
-      JSON.stringify(persistedReceipt) === JSON.stringify(receipt) &&
-      runnerClaim?.session_id === session.sessionId &&
-      runnerClaim.claim_epoch === session.claimEpoch &&
-      deviceClaim?.session_id === session.sessionId &&
-      deviceClaim.claim_epoch === session.claimEpoch
+      JSON.stringify(persistedReceipt) === JSON.stringify(receipt)
     );
   }
 

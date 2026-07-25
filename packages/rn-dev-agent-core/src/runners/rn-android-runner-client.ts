@@ -723,11 +723,12 @@ export function consumePendingAndroidUpgradeNote(): string | undefined {
 // Dynamic import because release-android-slot.ts statically imports this
 // module — a static back-import would be a cycle.
 export async function reapMismatchedAndroidRunner(
-  state: { deviceId?: string } | null,
-  release?: (opts: { deviceId: string }) => Promise<{
+  state: { deviceId?: string; hostPort?: number; devicePort?: number } | null,
+  release?: (opts: { deviceId: string; includeLegacy?: boolean }) => Promise<{
     stoppedOwnRunner: boolean;
     forceStoppedPackages: string[];
   }>,
+  verify?: (state: { deviceId: string; hostPort?: number; devicePort?: number }) => Promise<void>,
 ): Promise<void> {
   const deviceId = state?.deviceId;
   if (!deviceId) {
@@ -741,7 +742,7 @@ export async function reapMismatchedAndroidRunner(
       const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
       return releaseAndroidInteractionSlot(opts);
     });
-  const receipt = await releaseSlot({ deviceId });
+  const receipt = await releaseSlot({ deviceId, includeLegacy: false });
   const requiredPackages = [
     'dev.lykhoyda.rndevagent.androidrunner.test',
     'dev.lykhoyda.rndevagent.androidrunner',
@@ -754,6 +755,49 @@ export async function reapMismatchedAndroidRunner(
       `RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`,
     );
   }
+  const verifyReleased =
+    verify ??
+    (release
+      ? async () => {}
+      : async (expected: { deviceId: string; hostPort?: number; devicePort?: number }) => {
+          const forwards = String((await execFileAsync('adb', ['forward', '--list'])).stdout);
+          const instrumentation = String(
+            (
+              await execFileAsync('adb', [
+                '-s',
+                expected.deviceId,
+                'shell',
+                'dumpsys',
+                'activity',
+                'instrumentation',
+              ])
+            ).stdout,
+          );
+          const forwardRemains = forwards
+            .split('\n')
+            .filter((line) => line.startsWith(`${expected.deviceId} `))
+            .some((line) => {
+              if (expected.hostPort !== undefined && line.includes(`tcp:${expected.hostPort}`)) {
+                return true;
+              }
+              return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
+            });
+          if (forwardRemains || instrumentation.includes('dev.lykhoyda.rndevagent.androidrunner')) {
+            throw new Error(
+              `RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected.deviceId}`,
+            );
+          }
+        });
+  await verifyReleased({
+    deviceId,
+    ...(state?.hostPort !== undefined ? { hostPort: state.hostPort } : {}),
+    ...(state?.devicePort !== undefined ? { devicePort: state.devicePort } : {}),
+  });
+}
+
+export async function reapActiveAndroidRunner(deviceId?: string): Promise<void> {
+  adoptPersistedAndroidState(deviceId);
+  await reapMismatchedAndroidRunner(runnerState ?? (deviceId ? { deviceId } : null));
 }
 
 function classifyAndroidHealth(info: AndroidHealthInfo) {

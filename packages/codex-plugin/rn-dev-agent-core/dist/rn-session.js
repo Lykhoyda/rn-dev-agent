@@ -7383,7 +7383,7 @@ var init_storage = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { readlinkSync as readlinkSync2, realpathSync } from "node:fs";
+import { readlinkSync as readlinkSync2, realpathSync as realpathSync2 } from "node:fs";
 import { resolve, sep } from "node:path";
 function parseLsofCwd(stdout) {
   for (const line of stdout.split("\n")) {
@@ -7394,6 +7394,17 @@ function parseLsofCwd(stdout) {
     }
   }
   return null;
+}
+function parseWindowsMetroRoot(commandLine) {
+  const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
+  const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+  if (explicit)
+    return explicit;
+  const scriptPath = /"([A-Za-z]:[\\/][^"]*[\\/]node_modules[\\/][^"]+)"/i.exec(commandLine)?.[1] ?? /'([A-Za-z]:[\\/][^']*[\\/]node_modules[\\/][^']+)'/i.exec(commandLine)?.[1] ?? /(?:^|\s)([A-Za-z]:[\\/]\S*[\\/]node_modules[\\/]\S+)/i.exec(commandLine)?.[1];
+  if (!scriptPath)
+    return null;
+  const marker = scriptPath.toLowerCase().lastIndexOf(`${scriptPath.includes("\\") ? "\\" : "/"}node_modules`);
+  return marker > 2 ? scriptPath.slice(0, marker) : null;
 }
 function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync2) {
   try {
@@ -7411,8 +7422,7 @@ function cwdForProcess(pid, platform = process.platform, exec = defaultExec, rea
         "-Command",
         `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`
       ]);
-      const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
-      const root = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+      const root = parseWindowsMetroRoot(commandLine);
       return root ? realpathOrResolve(root) : null;
     }
     return null;
@@ -7422,7 +7432,7 @@ function cwdForProcess(pid, platform = process.platform, exec = defaultExec, rea
 }
 function realpathOrResolve(p) {
   try {
-    return realpathSync(resolve(p));
+    return realpathSync2(resolve(p));
   } catch {
     return resolve(p);
   }
@@ -7607,11 +7617,13 @@ function secureDatabaseFiles(path) {
   }
 }
 function runInitialization(operation) {
-  const deadline = Date.now() + INITIALIZATION_TIMEOUT_MS;
+  runWithBusyRetry(operation, INITIALIZATION_TIMEOUT_MS);
+}
+function runWithBusyRetry(operation, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
   for (; ; ) {
     try {
-      operation();
-      return;
+      return operation();
     } catch (error) {
       const code = error.code;
       const message = error instanceof Error ? error.message : "";
@@ -7623,6 +7635,20 @@ function runInitialization(operation) {
       Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
     }
   }
+}
+function retryingDatabase(database) {
+  return {
+    close: () => database.close(),
+    exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
+    prepare: (sql) => {
+      const statement = database.prepare(sql);
+      return {
+        get: (...params) => runWithBusyRetry(() => statement.get(...params)),
+        run: (...params) => runWithBusyRetry(() => statement.run(...params)),
+        all: (...params) => runWithBusyRetry(() => statement.all(...params))
+      };
+    }
+  };
 }
 function openAuthorityStore(path, options = {}) {
   const ctor = options.sqliteCtor === void 0 ? loadAuthoritySqlite() : options.sqliteCtor;
@@ -7641,7 +7667,8 @@ function openAuthorityStore(path, options = {}) {
       if (error.code !== "ENOENT")
         throw error;
     }
-    const openedDatabase = new ctor(path);
+    const rawDatabase = new ctor(path);
+    const openedDatabase = retryingDatabase(rawDatabase);
     database = openedDatabase;
     secureDatabaseFiles(path);
     runInitialization(() => openedDatabase.exec(`
@@ -7688,13 +7715,14 @@ function openAuthorityStore(path, options = {}) {
     throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
   }
 }
-var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
+var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, DATABASE_OPERATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
 var init_authority_store = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
     "use strict";
     require2 = createRequire(import.meta.url);
     INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
     INITIALIZATION_TIMEOUT_MS = 1e3;
+    DATABASE_OPERATION_TIMEOUT_MS = 100;
     AuthorityStoreUnavailableError = class extends Error {
       code = "AUTHORITY_STORE_UNAVAILABLE";
       constructor(reason, options) {
@@ -8009,7 +8037,7 @@ var init_registry = __esm({
               throw claimConflict(claim);
             }
           }
-          if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install") || Object.hasOwn(input.bindings, "runner")) {
+          if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install")) {
             const currentBindings = JSON.parse(current.bindings_json);
             const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
             if (platform) {
@@ -8646,30 +8674,7 @@ var init_registry = __esm({
           this.verifyOperation(operation);
           for (const staged of pending) {
             const current = this.#platformReceiptFromCurrentAuthority(staged.session, staged.platform, staged.receipt);
-            const runnerClaim = String(staged.receipt.runnerClaim);
-            const deviceClaim = String(staged.receipt.deviceClaim);
-            for (const resource of [
-              { type: "runner-receipt", key: runnerClaim },
-              { type: "device-receipt", key: deviceClaim }
-            ]) {
-              const existing = this.#findClaim(resource.type, resource.key);
-              if (existing && (existing.session_id !== staged.session.sessionId || existing.claim_epoch !== staged.session.claimEpoch)) {
-                throw claimConflict(existing);
-              }
-            }
             this.#invalidatePlatformReceipt(staged.session, staged.platform);
-            for (const resource of [
-              { type: "runner-receipt", key: runnerClaim },
-              { type: "device-receipt", key: deviceClaim }
-            ]) {
-              this.#database.prepare(`INSERT INTO claims(
-                 resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-               ) VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(resource_type, resource_key) DO UPDATE SET
-                 session_id = excluded.session_id,
-                 claim_epoch = excluded.claim_epoch,
-                 lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, staged.session.sessionId, staged.session.claimEpoch, now + this.#leaseMs);
-            }
             this.#database.prepare(`INSERT INTO platform_authority_receipts(
                session_id, claim_epoch, platform, receipt_json, updated_ms
              ) VALUES (?, ?, ?, ?, ?)
@@ -8686,9 +8691,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
         const persisted = typeof row?.receipt_json === "string" ? JSON.parse(row.receipt_json) : null;
         const persistedReceipt = persisted?.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
-        const runnerClaim = this.#findClaim("runner-receipt", String(receipt.runnerClaim));
-        const deviceClaim = this.#findClaim("device-receipt", String(receipt.deviceClaim));
-        return row?.claim_epoch === session.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt) && runnerClaim?.session_id === session.sessionId && runnerClaim.claim_epoch === session.claimEpoch && deviceClaim?.session_id === session.sessionId && deviceClaim.claim_epoch === session.claimEpoch;
+        return row?.claim_epoch === session.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt);
       }
       getPlatformAuthorityProbe(session, platform, receipt) {
         if (!this.validatePlatformAuthorityReceipt(session, platform, receipt))
@@ -10359,8 +10362,8 @@ function createBuildReceipt(payload, capability) {
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
 function runText(command, args) {
   return execFileSync(command, [...args], {
     encoding: "utf8",
@@ -10407,6 +10410,13 @@ function listAppFiles(appPath) {
 }
 function iosAppFiles(appPath, dependencies) {
   return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
+}
+function assertIosSymlinkContained(appPath, path, realpath) {
+  const target = realpath(path);
+  const child = relative(realpath(appPath), target);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(child)) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
+  }
 }
 function androidApkPaths(target, text) {
   return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
@@ -10492,6 +10502,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync;
     const readLink = dependencies.readLink ?? readlinkSync;
+    const realpath = dependencies.realpath ?? realpathSync;
     const artifactParts = [];
     for (const entry of files) {
       const path = join(appPath, entry);
@@ -10500,6 +10511,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
       if (stat.isFile()) {
         artifactParts.push(Buffer.from("file"), read(path));
       } else if (stat.isSymbolicLink()) {
+        assertIosSymlinkContained(appPath, path, realpath);
         artifactParts.push(Buffer.from("symlink"), Buffer.from(readLink(path)));
       } else {
         throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
@@ -10976,8 +10988,8 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { lstatSync as lstatSync3, readFileSync as readFileSync4, readlinkSync as readlinkSync3, realpathSync as realpathSync2 } from "node:fs";
-import { isAbsolute, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
+import { closeSync as closeSync2, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync4, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync3 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
 function digest2(parts) {
   const hash = createHash4("sha256");
   for (const part of parts) {
@@ -10986,6 +10998,9 @@ function digest2(parts) {
   }
   return hash.digest("hex");
 }
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
+var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
 function defaultGit(root, args) {
   return execFileSync6("git", ["-C", root, ...args], {
     encoding: "utf8",
@@ -11003,7 +11018,7 @@ ${stderr}`.toLowerCase().includes("not a git repository");
 }
 function assertContained(root, candidate, code) {
   const child = relative2(root, candidate);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(child)) {
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute2(child)) {
     throw new Error(`${code}: path is outside the declared content root`);
   }
 }
@@ -11033,14 +11048,14 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   };
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync2;
+  const canonicalize = dependencies.canonicalize ?? realpathSync3;
   const appRoot = canonicalize(resolve2(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
     const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
     assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
     const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
-    const commonDirectory = canonicalize(isAbsolute(commonRaw) ? commonRaw : join4(contentRoot, commonRaw));
+    const commonDirectory = canonicalize(isAbsolute2(commonRaw) ? commonRaw : join4(appRoot, commonRaw));
     const head = git(appRoot, ["rev-parse", "HEAD"]);
     const appRelative = relative2(contentRoot, appRoot) || ".";
     return {
@@ -11154,7 +11169,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync2, constants, existsSync as existsSync3, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync2, readFileSync as readFileSync7, realpathSync as realpathSync3, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync3, constants, existsSync as existsSync3, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync3, readFileSync as readFileSync7, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -12440,7 +12455,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
   let currentRealPath;
   try {
     current = lstatSync6(directory.path, { bigint: true });
-    currentRealPath = realpathSync3(directory.path);
+    currentRealPath = realpathSync4(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
@@ -12560,10 +12575,10 @@ function openValidatedDirectory(path, expected) {
     if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
     }
-    descriptor = openSync2(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    descriptor = openSync3(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync6(path, { bigint: true });
-    const realPath = realpathSync3(path);
+    const realPath = realpathSync4(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
@@ -12592,7 +12607,7 @@ function openValidatedDirectory(path, expected) {
     }
     if (descriptor !== void 0) {
       try {
-        closeSync2(descriptor);
+        closeSync3(descriptor);
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)));
       }
@@ -12636,7 +12651,7 @@ function closeBoundDirectory(directory) {
   directory.parent?.children.delete(directory);
   if (directory.descriptor !== void 0) {
     try {
-      closeSync2(directory.descriptor);
+      closeSync3(directory.descriptor);
     } catch (error) {
       cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
     }
@@ -13130,10 +13145,10 @@ function resolveStatus() {
     declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
     declaredManifests: process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(",").filter(Boolean)
   });
-  const candidates = explicit ? [registry.getSessionStatus(explicit)].filter((status2) => status2 !== null) : registry.findSessionsByWorktree(source.worktreeKey);
+  const candidates = explicit ? [registry.getSessionStatus(explicit)].filter((status2) => status2 !== null) : registry.findSessionsByWorktree(source.worktreeKey).filter((status2) => status2.appRootKey === source.appRootKey);
   if (candidates.length !== 1) {
     registry.close();
-    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", candidates.length === 0 ? "no live session matches this canonical worktree" : "multiple live sessions match this worktree; set RN_DEV_AGENT_SESSION_ID");
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", candidates.length === 0 ? "no live session matches this canonical worktree and app root" : "multiple live sessions match this worktree and app root; set RN_DEV_AGENT_SESSION_ID");
   }
   const status = candidates[0];
   if (explicit && (status.worktreeKey !== source.worktreeKey || status.appRootKey !== source.appRootKey)) {

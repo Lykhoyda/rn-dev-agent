@@ -991,7 +991,7 @@ test('persistent platform receipts reject exact authority replacement', async ()
   assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), false);
 });
 
-test('retained platform receipt claims block runner and device authority reuse', async () => {
+test('retained platform evidence survives a controlled switch without retaining live claims', async () => {
   const { registry, create } = fixture();
   const owner = create('a');
   const contender = create('b');
@@ -1043,13 +1043,11 @@ test('retained platform receipt claims block runner and device authority reuse',
   });
 
   assert.equal(registry.validatePlatformAuthorityReceipt(owner, 'ios', receipt), true);
-  assert.throws(
-    () => registry.claimResources(contender, [{ type: 'runner', key: 'ios:device-a:9100' }]),
-    /RUNNER_CLAIM_CONFLICT/,
+  assert.doesNotThrow(() =>
+    registry.claimResources(contender, [{ type: 'runner', key: 'ios:device-a:9100' }]),
   );
-  assert.throws(
-    () => registry.claimResources(contender, [{ type: 'device', key: 'ios:device-a' }]),
-    /DEVICE_CLAIM_CONFLICT/,
+  assert.doesNotThrow(() =>
+    registry.claimResources(contender, [{ type: 'device', key: 'ios:device-a' }]),
   );
 });
 

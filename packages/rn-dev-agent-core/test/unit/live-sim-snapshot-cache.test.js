@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   cacheSnapshot,
   getCachedSnapshot,
+  getCachedSnapshotEvidence,
   markSnapshotDirty,
   isSnapshotCacheValid,
   setSnapshotAuthorityProvider,
@@ -199,6 +200,40 @@ test('snapshot cache rejects unavailable live runner authority', async () => {
   cacheSnapshot('ios', NODES);
 
   assert.equal(await validateCachedSnapshotAuthority('ios'), false);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot evidence remains available after live runner authority is released', async () => {
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform: 'ios',
+      deviceId: 'ios-device',
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: 'ios-install',
+      artifactDigest: 'ios-artifact',
+      runnerInstanceId: 'ios-runner',
+      runnerPid: 123,
+      runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
+      runnerClaim: 'ios:ios-device:9100',
+      deviceClaim: 'ios:ios-device',
+    }),
+    record: () => {},
+    validate: () => false,
+    validateEvidence: () => true,
+    validateLive: async () => false,
+  });
+  cacheSnapshot('ios', NODES);
+
+  assert.equal(await validateCachedSnapshotAuthority('ios'), false);
+  assert.deepEqual(getCachedSnapshotEvidence('ios')?.nodes, NODES);
   setSnapshotAuthorityProvider(null);
 });
 

@@ -177,11 +177,15 @@ test('strict proof includes ignored runtime inputs', () => {
     appRootKey: 'app',
     head: 'abc123',
   };
+  const ignoredQueries: (readonly string[])[] = [];
   const git = (_root: string, args: readonly string[]) => {
     if (args[0] === 'rev-parse') return 'abc123';
     if (args[0] === 'diff') return '';
     if (args.includes('--stage')) return '';
-    if (args.includes('--ignored')) return '.env\0';
+    if (args.includes('--ignored')) {
+      ignoredQueries.push(args);
+      return '.env\0';
+    }
     if (args[0] === 'ls-files') return '';
     throw new Error('unexpected git command');
   };
@@ -191,6 +195,34 @@ test('strict proof includes ignored runtime inputs', () => {
   const second = strictProofSourceIdentity(identity, { git });
 
   assert.notEqual(first.dirtyDigest, second.dirtyDigest);
+  assert.ok(ignoredQueries.every((args) => args.includes(':(glob)**/.env')));
+  assert.ok(ignoredQueries.every((args) => !args.includes(':(glob)**/node_modules/**')));
+});
+
+test('strict proof rejects oversized untracked runtime inputs before buffering them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-limit-'));
+  roots.push(root);
+  writeFileSync(join(root, 'oversized.bin'), Buffer.alloc(16 * 1024 * 1024 + 1));
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args[0] === 'diff' || args.includes('--stage') || args.includes('--ignored')) return '';
+    if (args[0] === 'ls-files') return 'oversized.bin\0';
+    throw new Error('unexpected git command');
+  };
+
+  assert.throws(
+    () => strictProofSourceIdentity(identity, { git }),
+    /STRICT_PROOF_RUNTIME_INPUT_LIMIT/,
+  );
 });
 
 test('strict proof rejects dirty submodules whose content is not represented by the parent diff', () => {

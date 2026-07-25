@@ -115,7 +115,7 @@ export async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDep
     // belong to another project, so kill by SPECIFIC pid, never pkill, guarded
     // against our own process tree).
     const tLegacy = deps.now();
-    if (deps.killLegacy()) {
+    if (opts.includeLegacy !== false && deps.killLegacy()) {
         try {
             const pid = deps.readDaemonPid();
             let keepFiles = false;

@@ -202,22 +202,13 @@ if (!Array.isArray(original) || original.length === 0 || original.some((part) =>
   process.exit(2);
 }
 const command = [...original, ...process.argv.slice(3)];
-const rawSession = process.env.RN_DEV_AGENT_SESSION_BUILD_JSON;
 let session = null;
 let sessionCli = null;
-if (rawSession) {
-  try {
-    session = JSON.parse(rawSession);
-  } catch {
-    process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is invalid\n');
-    process.exit(2);
-  }
-}
-if (!session && typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
+if (typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
   process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
   process.exit(2);
 }
-if (!session && typeof manifest.sessionCli === 'string') {
+if (typeof manifest.sessionCli === 'string') {
   sessionCli = manifest.sessionCli;
   const [major, minor] = process.versions.node.split('.').map(Number);
   const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
@@ -256,10 +247,6 @@ if (!session && typeof manifest.sessionCli === 'string') {
     process.exit(2);
   }
 }
-if (session && !sessionCli && typeof manifest.sessionCli === 'string' && fs.existsSync(manifest.sessionCli)) {
-  sessionCli = manifest.sessionCli;
-}
-
 function ensureValue(flag, value) {
   const index = command.indexOf(flag);
   if (index >= 0) {

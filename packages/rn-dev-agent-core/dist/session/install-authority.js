@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
 function runText(command, args) {
     return execFileSync(command, [...args], {
         encoding: 'utf8',
@@ -50,6 +50,15 @@ function listAppFiles(appPath) {
 }
 function iosAppFiles(appPath, dependencies) {
     return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
+}
+function assertIosSymlinkContained(appPath, path, realpath) {
+    const target = realpath(path);
+    const child = relative(realpath(appPath), target);
+    if (child === '..' ||
+        child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+        isAbsolute(child)) {
+        throw new Error('APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle');
+    }
 }
 function androidApkPaths(target, text) {
     return text('adb', ['-s', target.deviceId, 'shell', 'pm', 'path', target.appId])
@@ -144,6 +153,7 @@ export function captureInstalledArtifact(target, dependencies = {}) {
         const files = iosAppFiles(appPath, dependencies);
         const lstat = dependencies.lstat ?? lstatSync;
         const readLink = dependencies.readLink ?? readlinkSync;
+        const realpath = dependencies.realpath ?? realpathSync;
         const artifactParts = [];
         for (const entry of files) {
             const path = join(appPath, entry);
@@ -153,6 +163,7 @@ export function captureInstalledArtifact(target, dependencies = {}) {
                 artifactParts.push(Buffer.from('file'), read(path));
             }
             else if (stat.isSymbolicLink()) {
+                assertIosSymlinkContained(appPath, path, realpath);
                 artifactParts.push(Buffer.from('symlink'), Buffer.from(readLink(path)));
             }
             else {

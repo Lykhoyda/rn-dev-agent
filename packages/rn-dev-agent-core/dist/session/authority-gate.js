@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
 import { authorityProfileFor } from './tool-profiles.js';
@@ -104,7 +106,41 @@ function bindExactArgument(args, field, expected, code) {
     }
     args[field] = expected;
 }
+function bindSourcePaths(status, args) {
+    let appRoot;
+    try {
+        if (typeof status.source.appRoot !== 'string')
+            throw new Error('missing app root');
+        appRoot = realpathSync(status.source.appRoot);
+    }
+    catch {
+        throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'active session app root is unavailable');
+    }
+    for (const field of ['projectRoot', 'flowPath', 'flowDir', 'scanDir']) {
+        const supplied = args[field];
+        if (supplied === undefined)
+            continue;
+        if (typeof supplied !== 'string' || supplied.length === 0) {
+            throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} must be a non-empty path within the active app root`);
+        }
+        let candidate;
+        try {
+            candidate = realpathSync(isAbsolute(supplied) ? supplied : resolve(appRoot, supplied));
+        }
+        catch {
+            throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} cannot be resolved within the active app root`);
+        }
+        const child = relative(appRoot, candidate);
+        if (child === '..' ||
+            child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+            isAbsolute(child)) {
+            throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} is outside the active session app root`);
+        }
+        args[field] = candidate;
+    }
+}
 function bindSessionArguments(status, profile, args) {
+    bindSourcePaths(status, args);
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -519,6 +555,7 @@ export function createAuthorityGate(runtime, dependencies) {
             }
             let operation = null;
             let registry = null;
+            let publishedProofFinalize = false;
             try {
                 const available = runtime.requireAvailable();
                 registry = available.registry;
@@ -776,6 +813,10 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 registry.verifyOperation(operation);
                 const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+                publishedProofFinalize =
+                    tool === 'proof_capture' &&
+                        args.action === 'finalize' &&
+                        resultIsCanonicalSuccess(result);
                 const directRuntimeReset = tool === 'cdp_reload' || tool === 'cdp_restart';
                 const nestedRuntimeReset = tool === 'cdp_run_e2e_suite' ||
                     tool === 'cdp_auto_login' ||
@@ -930,6 +971,32 @@ export function createAuthorityGate(runtime, dependencies) {
                 });
             }
             catch (error) {
+                if (publishedProofFinalize) {
+                    try {
+                        const rollback = await handler({ action: 'discard' });
+                        if (!resultIsCanonicalSuccess(rollback)) {
+                            throw new Error('PROOF_AUTHORITY_MISMATCH: finalized proof rollback was rejected');
+                        }
+                        if (!registry || !operation) {
+                            throw new Error('PROOF_AUTHORITY_MISMATCH: proof operation fence was lost');
+                        }
+                        const current = runtime.requireAvailable();
+                        const rollbackStatus = runtime.status();
+                        if (!rollbackStatus.available) {
+                            throw new SessionAuthorityError(rollbackStatus.code, rollbackStatus.reason);
+                        }
+                        registry.verifyOperation(operation);
+                        registry.endOperation(operation);
+                        operation = null;
+                        current.registry.updateBindings(current.session, {
+                            bindings: { proof: null },
+                            expectedAuthorityVersion: rollbackStatus.authorityVersion,
+                        });
+                    }
+                    catch (rollbackError) {
+                        return authorityFailure(new AggregateError([error, rollbackError], 'PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed'));
+                    }
+                }
                 return authorityFailure(error);
             }
             finally {

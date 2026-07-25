@@ -109,3 +109,38 @@ test('authority store opens a transactional registry with private permissions', 
     store.close();
   }
 });
+
+test('authority store retries ordinary SQLite operations during brief writer contention', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-authority-store-retry-'));
+  roots.push(root);
+  const path = join(root, 'registry.sqlite3');
+  let attempts = 0;
+  class BusyDatabase {
+    constructor(databasePath: string) {
+      writeFileSync(databasePath, '');
+    }
+    close() {}
+    exec() {}
+    prepare() {
+      return {
+        all: () => [],
+        get: () => undefined,
+        run: () => {
+          attempts += 1;
+          if (attempts < 3) {
+            const error = new Error('database is busy');
+            (error as Error & { code: string }).code = 'SQLITE_BUSY';
+            throw error;
+          }
+        },
+      };
+    }
+  }
+  const store = openAuthorityStore(path, { sqliteCtor: BusyDatabase });
+  try {
+    store.database.prepare('UPDATE sessions SET updated_ms = 1').run();
+    assert.equal(attempts, 3);
+  } finally {
+    store.close();
+  }
+});

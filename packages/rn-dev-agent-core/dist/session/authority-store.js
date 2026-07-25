@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 const require = createRequire(import.meta.url);
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 const INITIALIZATION_TIMEOUT_MS = 1_000;
+const DATABASE_OPERATION_TIMEOUT_MS = 100;
 export class AuthorityStoreUnavailableError extends Error {
     code = 'AUTHORITY_STORE_UNAVAILABLE';
     constructor(reason, options) {
@@ -53,11 +54,13 @@ function secureDatabaseFiles(path) {
     }
 }
 function runInitialization(operation) {
-    const deadline = Date.now() + INITIALIZATION_TIMEOUT_MS;
+    runWithBusyRetry(operation, INITIALIZATION_TIMEOUT_MS);
+}
+function runWithBusyRetry(operation, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS) {
+    const deadline = Date.now() + timeoutMs;
     for (;;) {
         try {
-            operation();
-            return;
+            return operation();
         }
         catch (error) {
             const code = error.code;
@@ -70,6 +73,20 @@ function runInitialization(operation) {
             Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
         }
     }
+}
+function retryingDatabase(database) {
+    return {
+        close: () => database.close(),
+        exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
+        prepare: (sql) => {
+            const statement = database.prepare(sql);
+            return {
+                get: (...params) => runWithBusyRetry(() => statement.get(...params)),
+                run: (...params) => runWithBusyRetry(() => statement.run(...params)),
+                all: (...params) => runWithBusyRetry(() => statement.all(...params)),
+            };
+        },
+    };
 }
 export function probeAuthorityStore(options = {}) {
     const ctor = options.sqliteCtor === undefined ? loadAuthoritySqlite() : options.sqliteCtor;
@@ -99,7 +116,8 @@ export function openAuthorityStore(path, options = {}) {
             if (error.code !== 'ENOENT')
                 throw error;
         }
-        const openedDatabase = new ctor(path);
+        const rawDatabase = new ctor(path);
+        const openedDatabase = retryingDatabase(rawDatabase);
         database = openedDatabase;
         secureDatabaseFiles(path);
         runInitialization(() => openedDatabase.exec(`
