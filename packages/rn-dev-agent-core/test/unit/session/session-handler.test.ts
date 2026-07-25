@@ -299,6 +299,82 @@ test('handoff cleanup resumes after a later resource fails', async () => {
   assert.equal(finished, 1);
 });
 
+test('stale adoption stops durable Metro cleanup before becoming operational', async () => {
+  const calls: string[] = [];
+  const metroCleanup = {
+    mode: 'managed',
+    port: 8193,
+    sourceSessionId: 'prior-session',
+    stopRequestedAt: null as number | null,
+    completedAt: null as number | null,
+  };
+  const status = {
+    sessionId: 'target',
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    state: 'blocked',
+    claimEpoch: 1,
+    authorityVersion: 2,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {} as Record<string, unknown>,
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const registry = {
+    getSessionStatus: () => status,
+    adoptStaleWithHandle: () => {
+      status.state = 'handoff_cleanup';
+      status.bindings = { handoffCleanup: { metro: metroCleanup } };
+      calls.push('adopt');
+    },
+    beginHandoffCleanupResource: () => {
+      metroCleanup.stopRequestedAt = Date.now();
+      return metroCleanup;
+    },
+    completeHandoffCleanupResource: () => {
+      metroCleanup.completedAt = Date.now();
+      calls.push('complete');
+    },
+    finishHandoffCleanup: () => {
+      status.state = 'source_bound';
+      calls.push('finish');
+    },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireRecovery: () => ({
+        registry,
+        session: { sessionId: 'target', claimEpoch: 1 },
+      }),
+      requireOperational: () => {
+        throw new Error('unexpected operational access');
+      },
+    },
+    {
+      getSignerCapability: (sessionId) => {
+        assert.equal(sessionId, 'prior-session');
+        return 'prior-signer';
+      },
+      stopManagedMetro: async (_binding, authority) => {
+        assert.deepEqual(authority, {
+          sessionId: 'prior-session',
+          signerCapability: 'prior-signer',
+        });
+        calls.push('stop');
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'adopt_stale', adoptionHandle: 'handle' });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls, ['adopt', 'stop', 'complete', 'finish']);
+});
+
 test('Metro rebinding clears the prior bundle and releases its target claim', async () => {
   let update;
   const status = {

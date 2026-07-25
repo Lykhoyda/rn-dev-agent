@@ -654,9 +654,17 @@ async function rebindSessionRuntime(status) {
     };
 }
 const sessionHandler = createSessionHandler(authorityRuntime, {
-    getSignerCapability: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
-        ? (readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)?.signerCapability ?? null)
-        : null,
+    getSignerCapability: (sessionId) => {
+        const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
+        if (!currentSecretPath)
+            return null;
+        if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
+            return null;
+        const secretPath = sessionId
+            ? join(dirname(dirname(currentSecretPath)), sessionId, 'secret.json')
+            : currentSecretPath;
+        return readJsonStateFile(secretPath)?.signerCapability ?? null;
+    },
     pinDevClient: pinSessionDevClient,
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);

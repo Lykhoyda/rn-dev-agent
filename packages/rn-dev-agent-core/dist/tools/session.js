@@ -347,7 +347,32 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!current?.worker.instanceId) {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'recovery worker identity is unavailable');
                 }
-                registry.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
+                if (current.state !== 'handoff_cleanup') {
+                    registry.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
+                }
+                const adopted = registry.getSessionStatus(session.sessionId);
+                const cleanup = adopted?.bindings.handoffCleanup;
+                if (cleanup?.metro && typeof cleanup.metro.completedAt !== 'number') {
+                    const metroCleanup = registry.beginHandoffCleanupResource(session, current.worker.instanceId, 'metro');
+                    if (!metroCleanup || typeof metroCleanup.sourceSessionId !== 'string') {
+                        throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'stale Metro cleanup binding disappeared while fenced');
+                    }
+                    const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
+                    if (!signerCapability) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'stale Metro cleanup requires the source session signer capability');
+                    }
+                    const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
+                        sessionId: metroCleanup.sourceSessionId,
+                        signerCapability,
+                    });
+                    if (!stopped) {
+                        throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'stale managed Metro could not be stopped with exact process authority');
+                    }
+                    registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'metro');
+                }
+                if (adopted?.state === 'handoff_cleanup') {
+                    registry.finishHandoffCleanup(session, current.worker.instanceId);
+                }
                 return okResult({
                     adopted: true,
                     session: projectPublicAuthorityStatus(runtime.status()),

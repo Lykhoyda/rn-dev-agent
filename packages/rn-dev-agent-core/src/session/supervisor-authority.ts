@@ -215,11 +215,21 @@ export function createSupervisorAuthority(
     close: async () => {
       if (heartbeat) clearInterval(heartbeat);
       try {
-        const status = registry.getSessionStatus(session.sessionId);
+        let status = registry.getSessionStatus(session.sessionId);
         if (status) {
+          const isReleasable = RELEASABLE_SESSION_STATES.has(status.state);
+          const activeOperation = isReleasable ? registry.getActiveOperation(session) : null;
+          if (isReleasable) {
+            status = registry.getSessionStatus(session.sessionId) ?? status;
+          }
           const metro = (status.bindings.metroCleanup ?? status.bindings.metro) as
             | Partial<ManagedMetroBinding>
             | undefined;
+          if (activeOperation?.profile === 'transition:ensure-metro' && metro?.mode !== 'managed') {
+            throw new Error(
+              'SESSION_OPERATION_ACTIVE: managed Metro transition has not published exact cleanup authority',
+            );
+          }
           if (
             metro?.mode === 'managed' &&
             !(await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {

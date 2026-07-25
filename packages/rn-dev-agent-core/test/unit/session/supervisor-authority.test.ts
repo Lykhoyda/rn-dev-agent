@@ -189,6 +189,52 @@ test('supervisor close cancels an interrupted operation before releasing claims'
   }
 });
 
+test('supervisor close retains an unpublished managed Metro transition', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  const authority = createSupervisorAuthority({
+    stateDir,
+    source: {
+      kind: 'git',
+      contentRoot: '/repo',
+      appRoot: '/repo',
+      sourceKey: 'source-key',
+      worktreeKey: 'worktree-key',
+      appRootKey: 'app-key',
+      head: 'abc123',
+    },
+    supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+    uid: '501',
+    startHeartbeat: false,
+    ownerStatus: () => 'match',
+  });
+  authority.registry.beginOperation(authority.session, {
+    operationId: 'starting-metro',
+    tool: 'rn-session ensure-metro',
+    profile: 'transition:ensure-metro',
+  });
+
+  await assert.rejects(authority.close(), /SESSION_OPERATION_ACTIVE/);
+
+  const registry = openSessionRegistry(authority.layout.registry, {
+    ownerStatus: () => 'match',
+  });
+  try {
+    assert.equal(registry.getSessionStatus(authority.session.sessionId)?.state, 'source_bound');
+    assert.throws(
+      () =>
+        registry.beginOperation(authority.session, {
+          operationId: 'replacement-operation',
+          tool: 'device_snapshot',
+          profile: 'CSIMDR',
+        }),
+      /OPERATION_ALREADY_IN_PROGRESS/,
+    );
+  } finally {
+    registry.close();
+  }
+});
+
 test('supervisor close retains authority when durable Metro cleanup is unproven', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);

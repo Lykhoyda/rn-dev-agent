@@ -8646,6 +8646,16 @@ var SessionRegistry = class {
       }
     };
   }
+  getActiveOperation(session) {
+    this.#requireSession(session);
+    const row = this.#database.prepare(`SELECT operation_id, tool, profile FROM operations
+         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+    return row ? {
+      operationId: String(row.operation_id),
+      tool: String(row.tool),
+      profile: String(row.profile)
+    } : null;
+  }
   countOtherOperationalSessions(sessionId) {
     const rows = this.#database.prepare(`SELECT state FROM sessions
          WHERE session_id <> ?`).all(sessionId);
@@ -8990,6 +9000,12 @@ var SessionRegistry = class {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner cleanup claim no longer matches the authenticated binding");
         }
       }
+      if (resource === "metro") {
+        const claim = this.#findClaim("metro-port", String(binding.port));
+        if (binding.port !== bindings.metroPort || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "handoff Metro cleanup claim no longer matches the authenticated binding");
+        }
+      }
       const requested = {
         ...binding,
         stopRequestedAt: typeof binding.stopRequestedAt === "number" ? binding.stopRequestedAt : now
@@ -9042,7 +9058,7 @@ var SessionRegistry = class {
       }
       const bindings = JSON.parse(row.bindings_json);
       const cleanup = bindings.handoffCleanup;
-      for (const resource of ["runner", "observe"]) {
+      for (const resource of ["metro", "runner", "observe"]) {
         const binding = cleanup?.[resource];
         if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
@@ -9053,7 +9069,8 @@ var SessionRegistry = class {
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
         ...bindings,
-        handoffCleanup: null
+        handoffCleanup: null,
+        recoveryHandles: null
       }), now, target.sessionId, target.claimEpoch);
     });
   }
@@ -9173,21 +9190,37 @@ var SessionRegistry = class {
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
       const priorBindings = JSON.parse(prior.bindings_json);
       const targetBindings = JSON.parse(targetRow.bindings_json);
-      const sameMetro = Number(priorBindings.metro?.port) === Number(targetBindings.metroPort);
+      const activeOperation = this.#database.prepare(`SELECT profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(prior.session_id, prior.claim_epoch);
+      const priorMetro = priorBindings.metro && typeof priorBindings.metro === "object" ? priorBindings.metro : null;
+      const metroCleanup = priorBindings.metroCleanup && typeof priorBindings.metroCleanup === "object" ? priorBindings.metroCleanup : priorMetro?.mode === "managed" ? priorMetro : null;
+      if (activeOperation?.profile === "transition:ensure-metro" && !metroCleanup && !priorBindings.metro) {
+        throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "stale Metro transition has not published exact cleanup authority");
+      }
+      const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(metroCleanup ? "handoff_cleanup" : sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
         ...targetBindings,
         adoptionRequired: null,
-        recoveryHandles: null,
-        metro: sameMetro ? priorBindings.metro : null,
+        recoveryHandles: metroCleanup ? targetBindings.recoveryHandles : null,
+        metro: metroCleanup ? null : sameMetro ? priorBindings.metro : null,
+        metroCleanup: null,
         device: priorBindings.device ?? null,
         install: priorBindings.install ?? null,
         bundle: null,
         runner: null,
         observe: null,
-        proof: null
+        proof: null,
+        handoffCleanup: metroCleanup ? {
+          metro: {
+            ...metroCleanup,
+            sourceSessionId: prior.session_id,
+            stopRequestedAt: null,
+            completedAt: null
+          }
+        } : null
       }), now, target.sessionId, target.claimEpoch);
       this.#fenceSession(prior.session_id, now);
     });

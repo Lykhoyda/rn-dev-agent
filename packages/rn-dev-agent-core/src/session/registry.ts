@@ -59,6 +59,7 @@ export interface HandoffCapability {
 }
 
 export interface HandoffCleanupPlan {
+  metro?: Record<string, unknown>;
   observe?: Record<string, unknown>;
   runner?: Record<string, unknown>;
 }
@@ -925,6 +926,27 @@ export class SessionRegistry {
     };
   }
 
+  getActiveOperation(
+    session: SessionRef,
+  ): { operationId: string; tool: string; profile: string } | null {
+    this.#requireSession(session);
+    const row = this.#database
+      .prepare(
+        `SELECT operation_id, tool, profile FROM operations
+         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`,
+      )
+      .get(session.sessionId, session.claimEpoch) as
+      | { operation_id?: unknown; tool?: unknown; profile?: unknown }
+      | undefined;
+    return row
+      ? {
+          operationId: String(row.operation_id),
+          tool: String(row.tool),
+          profile: String(row.profile),
+        }
+      : null;
+  }
+
   countOtherOperationalSessions(sessionId: string): number {
     const rows = this.#database
       .prepare(
@@ -1599,7 +1621,7 @@ export class SessionRegistry {
   beginHandoffCleanupResource(
     target: SessionRef,
     targetInstance: string,
-    resource: 'runner' | 'observe',
+    resource: 'metro' | 'runner' | 'observe',
   ): Record<string, unknown> | null {
     const now = this.#now();
     return this.#transaction(() => {
@@ -1630,6 +1652,19 @@ export class SessionRegistry {
           );
         }
       }
+      if (resource === 'metro') {
+        const claim = this.#findClaim('metro-port', String(binding.port));
+        if (
+          binding.port !== bindings.metroPort ||
+          claim?.session_id !== target.sessionId ||
+          claim.claim_epoch !== target.claimEpoch
+        ) {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'handoff Metro cleanup claim no longer matches the authenticated binding',
+          );
+        }
+      }
       const requested = {
         ...binding,
         stopRequestedAt:
@@ -1656,7 +1691,7 @@ export class SessionRegistry {
   completeHandoffCleanupResource(
     target: SessionRef,
     targetInstance: string,
-    resource: 'runner' | 'observe',
+    resource: 'metro' | 'runner' | 'observe',
   ): void {
     const now = this.#now();
     this.#transaction(() => {
@@ -1726,7 +1761,7 @@ export class SessionRegistry {
       }
       const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
       const cleanup = bindings.handoffCleanup as Record<string, unknown> | undefined;
-      for (const resource of ['runner', 'observe'] as const) {
+      for (const resource of ['metro', 'runner', 'observe'] as const) {
         const binding = cleanup?.[resource];
         if (
           binding &&
@@ -1750,6 +1785,7 @@ export class SessionRegistry {
           JSON.stringify({
             ...bindings,
             handoffCleanup: null,
+            recoveryHandles: null,
           }),
           now,
           target.sessionId,
@@ -1998,9 +2034,33 @@ export class SessionRegistry {
         );
       const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
       const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
-      const sameMetro =
-        Number((priorBindings.metro as Record<string, unknown> | undefined)?.port) ===
-        Number(targetBindings.metroPort);
+      const activeOperation = this.#database
+        .prepare(
+          `SELECT profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`,
+        )
+        .get(prior.session_id, prior.claim_epoch) as { profile?: unknown } | undefined;
+      const priorMetro =
+        priorBindings.metro && typeof priorBindings.metro === 'object'
+          ? (priorBindings.metro as Record<string, unknown>)
+          : null;
+      const metroCleanup =
+        priorBindings.metroCleanup && typeof priorBindings.metroCleanup === 'object'
+          ? (priorBindings.metroCleanup as Record<string, unknown>)
+          : priorMetro?.mode === 'managed'
+            ? priorMetro
+            : null;
+      if (
+        activeOperation?.profile === 'transition:ensure-metro' &&
+        !metroCleanup &&
+        !priorBindings.metro
+      ) {
+        throw new SessionAuthorityError(
+          'SESSION_OPERATION_ACTIVE',
+          'stale Metro transition has not published exact cleanup authority',
+        );
+      }
+      const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
       this.#database
         .prepare(
           `UPDATE sessions
@@ -2009,18 +2069,33 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`,
         )
         .run(
-          sameMetro && priorBindings.device ? 'device_bound' : 'source_bound',
+          metroCleanup
+            ? 'handoff_cleanup'
+            : sameMetro && priorBindings.device
+              ? 'device_bound'
+              : 'source_bound',
           JSON.stringify({
             ...targetBindings,
             adoptionRequired: null,
-            recoveryHandles: null,
-            metro: sameMetro ? priorBindings.metro : null,
+            recoveryHandles: metroCleanup ? targetBindings.recoveryHandles : null,
+            metro: metroCleanup ? null : sameMetro ? priorBindings.metro : null,
+            metroCleanup: null,
             device: priorBindings.device ?? null,
             install: priorBindings.install ?? null,
             bundle: null,
             runner: null,
             observe: null,
             proof: null,
+            handoffCleanup: metroCleanup
+              ? {
+                  metro: {
+                    ...metroCleanup,
+                    sourceSessionId: prior.session_id,
+                    stopRequestedAt: null,
+                    completedAt: null,
+                  },
+                }
+              : null,
           }),
           now,
           target.sessionId,

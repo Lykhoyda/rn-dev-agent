@@ -397,6 +397,94 @@ test('blocked recovery atomically adopts only a proven-stale exact source owner'
   assert.equal(registry.getSessionStatus(prior.sessionId)?.state, 'stale');
 });
 
+test('stale adoption transfers managed Metro cleanup before fencing the prior owner', () => {
+  const { registry, create, ownerStates } = fixture();
+  const prior = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.claimResources(prior, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'metro-port', key: '8341' },
+  ]);
+  const metroCleanup = {
+    mode: 'managed',
+    port: 8341,
+    pid: 301,
+    birth: 'listener-birth',
+    launcherPid: 302,
+    launcherBirth: 'launcher-birth',
+    instanceId: 'metro-a',
+    managementProof: 'proof',
+  };
+  registry.updateBindings(prior, {
+    state: 'source_bound',
+    bindings: { metroPort: 8341, metroCleanup },
+  });
+  registry.bindWorker(target, {
+    instanceId: 'recovery-worker',
+    pid: 202,
+    token: 'recovery-birth',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { metroPort: 8341, recoveryCapabilityHash: 'recovery-target' },
+  });
+  ownerStates.set(prior.sessionId, 'mismatch');
+
+  registry.adoptStaleIntoBlocked(target, prior.sessionId, 'recovery-worker');
+
+  const status = registry.getSessionStatus(target.sessionId);
+  assert.equal(status?.state, 'handoff_cleanup');
+  assert.deepEqual((status?.bindings.handoffCleanup as { metro?: Record<string, unknown> }).metro, {
+    ...metroCleanup,
+    sourceSessionId: prior.sessionId,
+    stopRequestedAt: null,
+    completedAt: null,
+  });
+  assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, target.sessionId);
+  assert.equal(registry.getSessionStatus(prior.sessionId)?.state, 'stale');
+  registry.beginHandoffCleanupResource(target, 'recovery-worker', 'metro');
+  registry.completeHandoffCleanupResource(target, 'recovery-worker', 'metro');
+  registry.finishHandoffCleanup(target, 'recovery-worker');
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'source_bound');
+});
+
+test('stale adoption retains an unpublished managed Metro transition', () => {
+  const { registry, create, ownerStates } = fixture();
+  const prior = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.claimResources(prior, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'metro-port', key: '8341' },
+  ]);
+  registry.updateBindings(prior, {
+    state: 'source_bound',
+    bindings: { metroPort: 8341 },
+  });
+  registry.beginOperation(prior, {
+    operationId: 'starting-metro',
+    tool: 'rn-session ensure-metro',
+    profile: 'transition:ensure-metro',
+  });
+  registry.bindWorker(target, {
+    instanceId: 'recovery-worker',
+    pid: 202,
+    token: 'recovery-birth',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { metroPort: 8341, recoveryCapabilityHash: 'recovery-target' },
+  });
+  ownerStates.set(prior.sessionId, 'mismatch');
+
+  assert.throws(
+    () => registry.adoptStaleIntoBlocked(target, prior.sessionId, 'recovery-worker'),
+    /SESSION_OPERATION_ACTIVE/,
+  );
+  assert.equal(registry.getSessionStatus(prior.sessionId)?.state, 'source_bound');
+  assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, prior.sessionId);
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'blocked');
+});
+
 test('busy retries yield to heartbeats instead of blocking the worker event loop', async () => {
   const { registry, path, create } = fixture();
   const owner = create('a');
