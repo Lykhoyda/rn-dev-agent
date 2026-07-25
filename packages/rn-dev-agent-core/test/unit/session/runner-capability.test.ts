@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { afterEach, test } from 'node:test';
 import {
+  clearFastRunnerAfterVerifiedStop,
   _setFastRunnerStateForTest,
   _setFetchForTest,
   buildRunnerAuthorityEnv,
+  getFastRunnerState,
   probeFastRunnerAuthority,
   stopFastRunner,
 } from '../../../dist/runners/rn-fast-runner-client.js';
@@ -147,4 +149,29 @@ test('persisted iOS teardown never signals a reused PID', async () => {
   } finally {
     child.kill('SIGKILL');
   }
+});
+
+test('verified runner cleanup clears local state without signalling the child again', () => {
+  const deviceId = `unit-test-device-${process.pid}`;
+  const binding = {
+    pid: 4242,
+    processBirth: 'birth-token',
+    instanceId: 'runner-instance',
+    deviceId,
+  };
+  _setFastRunnerStateForTest({
+    schemaVersion: 1,
+    port: 12345,
+    pid: binding.pid,
+    deviceId: binding.deviceId,
+    bundleId: 'dev.example',
+    startedAt: new Date().toISOString(),
+    protocolVersion: 1,
+    processBirth: binding.processBirth,
+    instanceId: binding.instanceId,
+  });
+
+  clearFastRunnerAfterVerifiedStop(binding);
+
+  assert.equal(getFastRunnerState(), null);
 });

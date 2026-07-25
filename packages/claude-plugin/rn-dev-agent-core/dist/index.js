@@ -20700,6 +20700,7 @@ __export(rn_fast_runner_client_exports, {
   buildRunnerTestFaultEnv: () => buildRunnerTestFaultEnv,
   buildRunnerVersionEnv: () => buildRunnerVersionEnv,
   captureFastRunnerCommandAuthority: () => captureFastRunnerCommandAuthority,
+  clearFastRunnerAfterVerifiedStop: () => clearFastRunnerAfterVerifiedStop,
   consumePendingFastRunnerArtifactNote: () => consumePendingFastRunnerArtifactNote,
   createReadySignalParser: () => createReadySignalParser,
   derivedDataPathForRunner: () => derivedDataPathForRunner,
@@ -21217,6 +21218,31 @@ function stopFastRunner(deviceId) {
     }
   }
   clearStateFile();
+}
+function clearFastRunnerAfterVerifiedStop(binding) {
+  const expected = {
+    pid: Number(binding.pid),
+    processBirth: String(binding.processBirth ?? ""),
+    instanceId: String(binding.instanceId ?? ""),
+    deviceId: String(binding.deviceId ?? "")
+  };
+  if (!Number.isSafeInteger(expected.pid) || !expected.processBirth || !expected.instanceId || !expected.deviceId) {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete");
+  }
+  const path = iosStatePath(expected.deviceId);
+  const persisted = readJsonStateFile(path);
+  const identityMatches2 = (observed) => observed.pid === expected.pid && observed.processBirth === expected.processBirth && observed.instanceId === expected.instanceId && observed.deviceId === expected.deviceId;
+  if (runnerState && !identityMatches2(runnerState) || persisted && !identityMatches2(persisted)) {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup");
+  }
+  if (runnerProcess?.pid !== void 0 && runnerProcess.pid !== expected.pid) {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup");
+  }
+  runnerState = null;
+  runnerProcess = null;
+  lastKnownCapabilities = [];
+  if (persisted !== null)
+    deleteStateFile(path);
 }
 async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
   const body = { command: "drag", x: x1, y: y1, x2, y2 };
@@ -61291,6 +61317,21 @@ var finalProofReceiptSchema = external_exports.object({
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 init_utils();
+
+// packages/rn-dev-agent-core/dist/startup-integrity.js
+var STARTUP_INTEGRITY_SYMBOL = "rn-dev-agent.startup-integrity";
+function readStartupIntegrityAttestation() {
+  const value = globalThis[Symbol.for(STARTUP_INTEGRITY_SYMBOL)];
+  if (!value || typeof value.entrypointUrl !== "string" || !value.entrypointUrl.startsWith("file:") || typeof value.coreBundleSha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.coreBundleSha256)) {
+    return null;
+  }
+  return {
+    entrypointUrl: value.entrypointUrl,
+    coreBundleSha256: value.coreBundleSha256
+  };
+}
+
+// packages/rn-dev-agent-core/dist/tools/proof-capture.js
 var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute3, "path must be absolute");
 var beginRehearsalSchema = external_exports.object({
   action: external_exports.literal("begin_rehearsal"),
@@ -61395,7 +61436,7 @@ var readinessSchema = external_exports.object({
 function hashBytes(bytes) {
   return createHash8("sha256").update(bytes).digest("hex");
 }
-function captureProofWorkerStartup(argv = process.argv, loadedModuleUrl = import.meta.url) {
+function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
@@ -61406,12 +61447,14 @@ function captureProofWorkerStartup(argv = process.argv, loadedModuleUrl = import
   } catch {
     executedEntrypointPath = null;
   }
-  try {
-    loadedCoreBundlePath = realpathSync4(fileURLToPath3(loadedModuleUrl));
-    coreBundleSha256 = hashBytes(readFileSync23(loadedCoreBundlePath));
-  } catch {
-    loadedCoreBundlePath = null;
-    coreBundleSha256 = null;
+  if (attestation) {
+    try {
+      loadedCoreBundlePath = realpathSync4(fileURLToPath3(attestation.entrypointUrl));
+      coreBundleSha256 = attestation.coreBundleSha256;
+    } catch {
+      loadedCoreBundlePath = null;
+      coreBundleSha256 = null;
+    }
   }
   return Object.freeze({
     argv: Object.freeze([...argv]),
@@ -66299,6 +66342,7 @@ function setObserveAuthorityDeps(deps) {
   authorityDeps = deps;
 }
 var starting = null;
+var boundAuthority = null;
 async function startObserveServer() {
   if (starting)
     return starting;
@@ -66308,10 +66352,16 @@ async function startObserveServer() {
       server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority, stopObserveServer);
     }
     const port = resolved?.port ?? resolveObservePort().port;
+    let bindAttempted = false;
+    let stateWriteAttempted = false;
     try {
       const res = await server.start(port);
-      if (resolved)
+      if (resolved) {
+        bindAttempted = true;
         authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        boundAuthority = resolved.authority;
+      }
+      stateWriteAttempted = true;
       writeObserveState(res.url, res.port);
       return res;
     } catch (error2) {
@@ -66323,15 +66373,22 @@ async function startObserveServer() {
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
-      try {
-        authorityDeps?.unbind();
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
+      if (bindAttempted && resolved) {
+        try {
+          authorityDeps?.unbind(resolved.authority);
+          if (boundAuthority?.sessionId === resolved.authority.sessionId && boundAuthority.claimEpoch === resolved.authority.claimEpoch && boundAuthority.instanceId === resolved.authority.instanceId) {
+            boundAuthority = null;
+          }
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
       }
-      try {
-        removeObserveState();
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
+      if (stateWriteAttempted) {
+        try {
+          removeObserveState();
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
       }
       if (cleanupErrors.length > 0) {
         throw new AggregateError([error2, ...cleanupErrors], `OBSERVE_START_ROLLBACK_FAILED: ${error2 instanceof Error ? error2.message : String(error2)}`);
@@ -66356,7 +66413,9 @@ async function stopObserveServer() {
   starting = null;
   await server?.stop();
   server = null;
-  authorityDeps?.unbind();
+  if (boundAuthority)
+    authorityDeps?.unbind(boundAuthority);
+  boundAuthority = null;
   removeObserveState();
 }
 async function observeHandler(args) {
@@ -70986,8 +71045,13 @@ setObserveAuthorityDeps({
       }
     });
   },
-  unbind: () => {
+  unbind: (authority) => {
     const { registry: registry2, session } = authorityRuntime.requireAvailable();
+    const status = registry2.getSessionStatus(session.sessionId);
+    const observe2 = status?.bindings.observe;
+    if (observe2?.sessionId !== authority.sessionId || observe2.claimEpoch !== authority.claimEpoch || observe2.instanceId !== authority.instanceId) {
+      return;
+    }
     registry2.updateBindings(session, { bindings: { observe: null } });
   }
 });
@@ -71997,9 +72061,10 @@ trackedTool("cdp_restart", "Reset and reconnect the authority-bound Hermes clien
     const { registry: registry2, session } = authorityRuntime.requireAvailable();
     const status = registry2.getSessionStatus(session.sessionId);
     const runner = status?.bindings.runner;
-    if (runner)
+    if (runner) {
       await stopBoundRunner(runner);
-    stopFastRunner(deviceId);
+      clearFastRunnerAfterVerifiedStop(runner);
+    }
   },
   unbindRunner: () => unbindNativeRunner(authorityRuntime)
 }));

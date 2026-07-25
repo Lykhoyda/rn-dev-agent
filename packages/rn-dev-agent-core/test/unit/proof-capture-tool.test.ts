@@ -9,6 +9,10 @@ import assert from 'node:assert/strict';
 import Ajv from 'ajv';
 import { StrictProofMonitor, type ProofObservation } from '../../dist/domain/proof-capture.js';
 import {
+  instrumentStartupSource,
+  STARTUP_INTEGRITY_SYMBOL,
+} from '../../dist/startup-integrity.js';
+import {
   finalProofReceiptSchema,
   type EvidenceReview,
   type FinalProofReceipt,
@@ -93,16 +97,40 @@ test('strict proof rejects restored disk bytes that differ from the startup bund
     'index.js',
   );
   await mkdir(dirname(coreBundle), { recursive: true });
-  await writeFile(coreBundle, 'tampered startup bytes\n');
-  const startup = captureProofWorkerStartup(
-    [process.execPath, coreBundle],
+  const loaded = instrumentStartupSource(
     pathToFileURL(coreBundle).href,
+    Buffer.from('tampered startup bytes\n'),
   );
   await writeFile(coreBundle, 'clean head bytes\n');
+  const startup = captureProofWorkerStartup([process.execPath, coreBundle], loaded.attestation);
   const entrypoint = resolveProofCandidateEntrypoint(root, [process.execPath, coreBundle]);
 
   assert.ok(entrypoint);
+  assert.equal(loaded.attestation.coreBundleSha256, HASH('tampered startup bytes\n'));
   assert.equal(proofCandidateStartupMatches(entrypoint, startup, HASH('clean head bytes\n')), false);
+});
+
+test('startup loader attests the exact worker source supplied to Node', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'proof-loader-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const worker = join(root, 'worker.mjs');
+  const source = `console.log(JSON.stringify(globalThis[Symbol.for(${JSON.stringify(
+    STARTUP_INTEGRITY_SYMBOL,
+  )})]));\n`;
+  await writeFile(worker, source);
+
+  const stdout = execFileSync(
+    process.execPath,
+    ['--import', resolve(CORE_ROOT, 'dist/startup-integrity-register.js'), worker],
+    { encoding: 'utf8' },
+  );
+  const attestation = JSON.parse(stdout) as {
+    entrypointUrl: string;
+    coreBundleSha256: string;
+  };
+
+  assert.equal(attestation.entrypointUrl, pathToFileURL(await realpath(worker)).href);
+  assert.equal(attestation.coreBundleSha256, HASH(source));
 });
 
 const CORE_ROOT = resolve(import.meta.dirname, '../..');

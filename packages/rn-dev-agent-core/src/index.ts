@@ -126,7 +126,11 @@ import {
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
-import { probeFastRunnerAuthority, stopFastRunner } from './runners/rn-fast-runner-client.js';
+import {
+  clearFastRunnerAfterVerifiedStop,
+  probeFastRunnerAuthority,
+  stopFastRunner,
+} from './runners/rn-fast-runner-client.js';
 import {
   androidHealthMatchesAuthority,
   probeAndroidRunnerHealthInfo,
@@ -484,8 +488,23 @@ setObserveAuthorityDeps({
       },
     });
   },
-  unbind: () => {
+  unbind: (authority) => {
     const { registry, session } = authorityRuntime.requireAvailable();
+    const status = registry.getSessionStatus(session.sessionId);
+    const observe = status?.bindings.observe as
+      | {
+          sessionId?: unknown;
+          claimEpoch?: unknown;
+          instanceId?: unknown;
+        }
+      | undefined;
+    if (
+      observe?.sessionId !== authority.sessionId ||
+      observe.claimEpoch !== authority.claimEpoch ||
+      observe.instanceId !== authority.instanceId
+    ) {
+      return;
+    }
     registry.updateBindings(session, { bindings: { observe: null } });
   },
 });
@@ -2865,8 +2884,10 @@ trackedTool(
       const { registry, session } = authorityRuntime.requireAvailable();
       const status = registry.getSessionStatus(session.sessionId);
       const runner = status?.bindings.runner as Record<string, unknown> | undefined;
-      if (runner) await stopBoundRunner(runner);
-      stopFastRunner(deviceId);
+      if (runner) {
+        await stopBoundRunner(runner);
+        clearFastRunnerAfterVerifiedStop(runner);
+      }
     },
     unbindRunner: () => unbindNativeRunner(authorityRuntime),
   }),

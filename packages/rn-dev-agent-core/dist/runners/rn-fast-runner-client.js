@@ -689,6 +689,38 @@ export function stopFastRunner(deviceId) {
     }
     clearStateFile();
 }
+export function clearFastRunnerAfterVerifiedStop(binding) {
+    const expected = {
+        pid: Number(binding.pid),
+        processBirth: String(binding.processBirth ?? ''),
+        instanceId: String(binding.instanceId ?? ''),
+        deviceId: String(binding.deviceId ?? ''),
+    };
+    if (!Number.isSafeInteger(expected.pid) ||
+        !expected.processBirth ||
+        !expected.instanceId ||
+        !expected.deviceId) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete');
+    }
+    const path = iosStatePath(expected.deviceId);
+    const persisted = readJsonStateFile(path);
+    const identityMatches = (observed) => observed.pid === expected.pid &&
+        observed.processBirth === expected.processBirth &&
+        observed.instanceId === expected.instanceId &&
+        observed.deviceId === expected.deviceId;
+    if ((runnerState && !identityMatches(runnerState)) ||
+        (persisted && !identityMatches(persisted))) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup');
+    }
+    if (runnerProcess?.pid !== undefined && runnerProcess.pid !== expected.pid) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup');
+    }
+    runnerState = null;
+    runnerProcess = null;
+    lastKnownCapabilities = [];
+    if (persisted !== null)
+        deleteStateFile(path);
+}
 export async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
     const body = { command: 'drag', x: x1, y: y1, x2, y2 };
     if (durationMs != null)

@@ -75,6 +75,8 @@ describe('workerSpawnArgs', () => {
         '--experimental-sqlite',
         '--import',
         '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
         '/abs/dist/index.js',
         '--no-lock',
       ],
@@ -84,14 +86,28 @@ describe('workerSpawnArgs', () => {
   test('default-on version still preloads the selective warning filter', () => {
     assert.deepEqual(
       workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '24.0.0'),
-      ['--import', '/abs/dist/sqlite-warning-filter.js', '/abs/dist/index.js', '--no-lock'],
+      [
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+      ],
     );
   });
 
   test('22.4.0 (below threshold): no flag', () => {
     assert.deepEqual(
       workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '22.4.0'),
-      ['--import', '/abs/dist/sqlite-warning-filter.js', '/abs/dist/index.js', '--no-lock'],
+      [
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+      ],
     );
   });
 
@@ -104,6 +120,8 @@ describe('workerSpawnArgs', () => {
       [
         '--import',
         '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
         '/abs/dist/index.js',
         '--no-lock',
         '--diagnostic-contract-probe',

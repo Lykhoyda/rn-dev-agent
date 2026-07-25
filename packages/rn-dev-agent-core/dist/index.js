@@ -73,7 +73,7 @@ import { createRecordTestStartHandler, createRecordTestStopHandler, createRecord
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
-import { probeFastRunnerAuthority, stopFastRunner } from './runners/rn-fast-runner-client.js';
+import { clearFastRunnerAfterVerifiedStop, probeFastRunnerAuthority, stopFastRunner, } from './runners/rn-fast-runner-client.js';
 import { androidHealthMatchesAuthority, probeAndroidRunnerHealthInfo, } from './runners/rn-android-runner-client.js';
 import { captureInstallGeneration } from './session/install-authority.js';
 import { readProcessBirth } from './session/process-birth.js';
@@ -382,8 +382,15 @@ setObserveAuthorityDeps({
             },
         });
     },
-    unbind: () => {
+    unbind: (authority) => {
         const { registry, session } = authorityRuntime.requireAvailable();
+        const status = registry.getSessionStatus(session.sessionId);
+        const observe = status?.bindings.observe;
+        if (observe?.sessionId !== authority.sessionId ||
+            observe.claimEpoch !== authority.claimEpoch ||
+            observe.instanceId !== authority.instanceId) {
+            return;
+        }
         registry.updateBindings(session, { bindings: { observe: null } });
     },
 });
@@ -2130,9 +2137,10 @@ trackedTool('cdp_restart', 'Reset and reconnect the authority-bound Hermes clien
         const { registry, session } = authorityRuntime.requireAvailable();
         const status = registry.getSessionStatus(session.sessionId);
         const runner = status?.bindings.runner;
-        if (runner)
+        if (runner) {
             await stopBoundRunner(runner);
-        stopFastRunner(deviceId);
+            clearFastRunnerAfterVerifiedStop(runner);
+        }
     },
     unbindRunner: () => unbindNativeRunner(authorityRuntime),
 }));

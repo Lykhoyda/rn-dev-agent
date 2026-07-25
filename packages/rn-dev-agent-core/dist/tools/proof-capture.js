@@ -8,6 +8,7 @@ import { actionPathFor, loadAction } from '../domain/action-store.js';
 import { hashProofArgs, hashProofValue, validateTrace, } from '../domain/proof-capture.js';
 import { acceptanceMappingSchema, evidenceReviewSchema, finalProofReceiptSchema, mechanicallyAcceptedProofReceiptSchema, proofActionSchema, proofClassSchema, proofDeviceSchema, proofFixtureSchema, proofIssueSchema, proofPullRequestSchema, proofRuntimeSchema, proofCandidateRuntimeSchema, storyboardSchema, } from '../domain/proof-receipt.js';
 import { failResult, okResult } from '../utils.js';
+import { readStartupIntegrityAttestation, } from '../startup-integrity.js';
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, 'path must be absolute');
 const beginRehearsalSchema = z
     .object({
@@ -161,7 +162,7 @@ const readinessSchema = z
 function hashBytes(bytes) {
     return createHash('sha256').update(bytes).digest('hex');
 }
-export function captureProofWorkerStartup(argv = process.argv, loadedModuleUrl = import.meta.url) {
+export function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
     let executedEntrypointPath = null;
     let loadedCoreBundlePath = null;
     let coreBundleSha256 = null;
@@ -173,13 +174,15 @@ export function captureProofWorkerStartup(argv = process.argv, loadedModuleUrl =
     catch {
         executedEntrypointPath = null;
     }
-    try {
-        loadedCoreBundlePath = realpathSync(fileURLToPath(loadedModuleUrl));
-        coreBundleSha256 = hashBytes(readFileSync(loadedCoreBundlePath));
-    }
-    catch {
-        loadedCoreBundlePath = null;
-        coreBundleSha256 = null;
+    if (attestation) {
+        try {
+            loadedCoreBundlePath = realpathSync(fileURLToPath(attestation.entrypointUrl));
+            coreBundleSha256 = attestation.coreBundleSha256;
+        }
+        catch {
+            loadedCoreBundlePath = null;
+            coreBundleSha256 = null;
+        }
     }
     return Object.freeze({
         argv: Object.freeze([...argv]),

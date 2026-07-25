@@ -53,6 +53,10 @@ import {
 import type { DeviceRecordArgs } from './device-record.js';
 import { validateMedia, type MediaProcess, type MediaValidationInput } from './proof-media.js';
 import { failResult, okResult, type ToolResult } from '../utils.js';
+import {
+  readStartupIntegrityAttestation,
+  type StartupIntegrityAttestation,
+} from '../startup-integrity.js';
 
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, 'path must be absolute');
 
@@ -322,7 +326,7 @@ export interface ProofWorkerStartup {
 
 export function captureProofWorkerStartup(
   argv: readonly string[] = process.argv,
-  loadedModuleUrl: string = import.meta.url,
+  attestation: StartupIntegrityAttestation | null = readStartupIntegrityAttestation(),
 ): ProofWorkerStartup {
   let executedEntrypointPath: string | null = null;
   let loadedCoreBundlePath: string | null = null;
@@ -334,12 +338,14 @@ export function captureProofWorkerStartup(
   } catch {
     executedEntrypointPath = null;
   }
-  try {
-    loadedCoreBundlePath = realpathSync(fileURLToPath(loadedModuleUrl));
-    coreBundleSha256 = hashBytes(readFileSync(loadedCoreBundlePath));
-  } catch {
-    loadedCoreBundlePath = null;
-    coreBundleSha256 = null;
+  if (attestation) {
+    try {
+      loadedCoreBundlePath = realpathSync(fileURLToPath(attestation.entrypointUrl));
+      coreBundleSha256 = attestation.coreBundleSha256;
+    } catch {
+      loadedCoreBundlePath = null;
+      coreBundleSha256 = null;
+    }
   }
   return Object.freeze({
     argv: Object.freeze([...argv]),

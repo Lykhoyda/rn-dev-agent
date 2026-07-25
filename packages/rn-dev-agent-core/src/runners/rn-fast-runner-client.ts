@@ -857,6 +857,43 @@ export function stopFastRunner(deviceId?: string): void {
   clearStateFile();
 }
 
+export function clearFastRunnerAfterVerifiedStop(binding: Record<string, unknown>): void {
+  const expected = {
+    pid: Number(binding.pid),
+    processBirth: String(binding.processBirth ?? ''),
+    instanceId: String(binding.instanceId ?? ''),
+    deviceId: String(binding.deviceId ?? ''),
+  };
+  if (
+    !Number.isSafeInteger(expected.pid) ||
+    !expected.processBirth ||
+    !expected.instanceId ||
+    !expected.deviceId
+  ) {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete');
+  }
+  const path = iosStatePath(expected.deviceId);
+  const persisted = readJsonStateFile<Partial<FastRunnerState>>(path);
+  const identityMatches = (observed: Partial<FastRunnerState>): boolean =>
+    observed.pid === expected.pid &&
+    observed.processBirth === expected.processBirth &&
+    observed.instanceId === expected.instanceId &&
+    observed.deviceId === expected.deviceId;
+  if (
+    (runnerState && !identityMatches(runnerState)) ||
+    (persisted && !identityMatches(persisted))
+  ) {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup');
+  }
+  if (runnerProcess?.pid !== undefined && runnerProcess.pid !== expected.pid) {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup');
+  }
+  runnerState = null;
+  runnerProcess = null;
+  lastKnownCapabilities = [];
+  if (persisted !== null) deleteStateFile(path);
+}
+
 // --- Legacy helper kept for device-interact.ts swipe path ---
 //
 // GH #105 iOS-MVP follow-up: the upstream agent-device runner exposed

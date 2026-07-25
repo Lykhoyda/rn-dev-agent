@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { ObservabilityServer } from '../../dist/observability/server.js';
 import {
   observeHandler,
   setObserveAuthorityDeps,
@@ -106,8 +107,8 @@ test('authority publication failure rolls back the listening server', async (t) 
     bind: () => {
       throw new Error('binding failed');
     },
-    unbind: () => {
-      unbound += 1;
+    unbind: (authority) => {
+      if (authority.instanceId === 'observe-test') unbound += 1;
     },
   });
   t.after(async () => {
@@ -120,4 +121,37 @@ test('authority publication failure rolls back the listening server', async (t) 
   await assert.rejects(
     fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) }),
   );
+});
+
+test('listen failure preserves a pre-existing Observe binding and state', async (t) => {
+  const owner = new ObservabilityServer(recorder);
+  const { port } = await owner.start();
+  let binding = 'observe-existing';
+  let unbound = 0;
+  setObserveAuthorityDeps({
+    resolve: () => ({
+      port,
+      authority: {
+        sessionId: 'session-test',
+        claimEpoch: 1,
+        instanceId: 'observe-contender',
+        capability: 'capability-test',
+      },
+    }),
+    bind: () => {
+      binding = 'observe-contender';
+    },
+    unbind: (authority) => {
+      unbound += 1;
+      if (binding === authority.instanceId) binding = '';
+    },
+  });
+  t.after(async () => {
+    await owner.stop();
+    setObserveAuthorityDeps(undefined);
+  });
+
+  await assert.rejects(startObserveServer(), /OBSERVE_PORT_CLAIM_CONFLICT/);
+  assert.equal(binding, 'observe-existing');
+  assert.equal(unbound, 0);
 });

@@ -34,7 +34,7 @@ let authorityDeps:
   | {
       resolve(): { port: number; authority: ObserveAuthority };
       bind(input: { port: number; authority: ObserveAuthority }): void;
-      unbind(): void;
+      unbind(authority: ObserveAuthority): void;
     }
   | undefined;
 
@@ -55,6 +55,7 @@ export function setObserveAuthorityDeps(deps: typeof authorityDeps): void {
 }
 
 let starting: Promise<{ url: string; port: number }> | null = null;
+let boundAuthority: ObserveAuthority | null = null;
 
 /**
  * Start (or return) the module-global observability server on the resolved
@@ -79,9 +80,16 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
       );
     }
     const port = resolved?.port ?? resolveObservePort().port;
+    let bindAttempted = false;
+    let stateWriteAttempted = false;
     try {
       const res = await server.start(port);
-      if (resolved) authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+      if (resolved) {
+        bindAttempted = true;
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        boundAuthority = resolved.authority;
+      }
+      stateWriteAttempted = true;
       writeObserveState(res.url, res.port);
       return res;
     } catch (error) {
@@ -93,15 +101,26 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
-      try {
-        authorityDeps?.unbind();
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
+      if (bindAttempted && resolved) {
+        try {
+          authorityDeps?.unbind(resolved.authority);
+          if (
+            boundAuthority?.sessionId === resolved.authority.sessionId &&
+            boundAuthority.claimEpoch === resolved.authority.claimEpoch &&
+            boundAuthority.instanceId === resolved.authority.instanceId
+          ) {
+            boundAuthority = null;
+          }
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
       }
-      try {
-        removeObserveState();
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
+      if (stateWriteAttempted) {
+        try {
+          removeObserveState();
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
       }
       if (cleanupErrors.length > 0) {
         throw new AggregateError(
@@ -131,7 +150,8 @@ export async function stopObserveServer(): Promise<void> {
   starting = null;
   await server?.stop();
   server = null;
-  authorityDeps?.unbind();
+  if (boundAuthority) authorityDeps?.unbind(boundAuthority);
+  boundAuthority = null;
   removeObserveState();
 }
 

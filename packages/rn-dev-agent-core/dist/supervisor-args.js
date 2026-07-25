@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 /**
  * Pure, side-effect-free helpers for building the worker spawn argument list.
  *
@@ -53,6 +54,8 @@ export function workerSpawnArgs(workerPath, sqliteWarningFilterPath, version, fo
         ...sqliteFlagForNode(version),
         '--import',
         sqliteWarningFilterPath,
+        '--import',
+        join(dirname(sqliteWarningFilterPath), 'startup-integrity-register.js'),
         workerPath,
         '--no-lock',
         ...diagnosticArgs,

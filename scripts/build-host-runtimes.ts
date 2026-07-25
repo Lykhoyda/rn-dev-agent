@@ -81,6 +81,8 @@ const RUNTIME_ENTRIES = [
   'index.js',
   'learned-actions.js',
   'sqlite-warning-filter.js',
+  'startup-integrity-loader.js',
+  'startup-integrity-register.js',
   'rn-session.js',
 ];
 
