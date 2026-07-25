@@ -183,11 +183,13 @@ probe_local_process() {
 }
 
 SUPERVISOR_PID=""
+SUPERVISOR_BIRTH=""
 
 start_supervised_recorder() {
   local scope="$1"
   local recorder_log="$2"
-  shift 2
+  local process_marker="$3"
+  shift 3
   local token
   token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
   local request_path
@@ -200,8 +202,7 @@ start_supervised_recorder() {
   state_path="$(supervisor_state_file "$scope")"
   child_path="$(child_pid_file "$scope")"
   token_path="$(control_token_file "$scope")"
-  (umask 077; printf '%s\n' "$token" > "$token_path")
-  rm -f "$request_path" "$response_path" "$state_path" "$child_path"
+  rm -f "$token_path" "$request_path" "$response_path" "$state_path" "$child_path"
 
   python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log") > "$recorder_log" 2>&1 <<'PY' &
 import os
@@ -230,19 +231,47 @@ def write_atomic(path, value):
 
 child = None
 terminal_state_written = False
+stop_requested = False
 try:
     with open(log_path, "ab", buffering=0) as log:
-        child = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-        )
-        write_atomic(child_path, f"{child.pid}\n")
-        write_atomic(state_path, "running\n")
+        write_atomic(state_path, "starting\n")
         last_nonce = None
+        startup_deadline = time.monotonic() + 5
 
-        while True:
+        while child is None and not terminal_state_written:
+            try:
+                with open(request_path, encoding="utf-8") as handle:
+                    parts = handle.read().split()
+            except FileNotFoundError:
+                parts = []
+
+            if len(parts) == 3 and parts[0] == token and parts[1] != last_nonce:
+                nonce, action = parts[1], parts[2]
+                last_nonce = nonce
+                if action == "START":
+                    child = subprocess.Popen(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                    )
+                    write_atomic(child_path, f"{child.pid}\n")
+                    write_atomic(state_path, "running\n")
+                    result = "started"
+                elif action == "ABORT":
+                    write_atomic(state_path, "exited 0\n")
+                    terminal_state_written = True
+                    result = "gone"
+                else:
+                    result = "rejected"
+                write_atomic(response_path, f"{nonce} {result}\n")
+
+            if child is None and not terminal_state_written:
+                if time.monotonic() >= startup_deadline:
+                    raise TimeoutError("recorder supervisor start was not authorized")
+                time.sleep(0.05)
+
+        while child is not None and not terminal_state_written:
             try:
                 with open(request_path, encoding="utf-8") as handle:
                     parts = handle.read().split()
@@ -254,8 +283,15 @@ try:
                 last_nonce = nonce
                 if action not in {"INT", "KILL", "ABORT"}:
                     result = "rejected"
-                elif child.poll() is not None:
+                elif (return_code := child.poll()) is not None:
                     result = "gone"
+                    state = (
+                        f"exited {return_code}\n"
+                        if return_code == 0
+                        else f"failed {return_code}\n"
+                    )
+                    write_atomic(state_path, state)
+                    terminal_state_written = True
                 else:
                     try:
                         os.kill(
@@ -263,20 +299,24 @@ try:
                             signal.SIGINT if action == "INT" else signal.SIGKILL,
                         )
                         result = "signaled"
+                        stop_requested = True
                     except ProcessLookupError:
                         result = "gone"
                 write_atomic(response_path, f"{nonce} {result}\n")
-                if action == "ABORT":
+                if action == "ABORT" and not terminal_state_written:
                     return_code = child.wait()
                     write_atomic(state_path, f"exited {return_code}\n")
                     terminal_state_written = True
-                    break
 
             return_code = child.poll()
-            if return_code is not None:
-                write_atomic(state_path, f"exited {return_code}\n")
+            if return_code is not None and not terminal_state_written:
+                state = (
+                    f"exited {return_code}\n"
+                    if stop_requested or return_code == 0
+                    else f"failed {return_code}\n"
+                )
+                write_atomic(state_path, state)
                 terminal_state_written = True
-                break
             time.sleep(0.05)
 finally:
     if child is not None:
@@ -285,11 +325,28 @@ finally:
         child.wait()
     if not terminal_state_written:
         try:
-            write_atomic(state_path, "failed\n")
+            write_atomic(state_path, "failed supervisor\n")
         except OSError:
             pass
 PY
   SUPERVISOR_PID=$!
+
+  local token_tmp="${token_path}.$$"
+  (umask 077; printf '%s\n' "$token" > "$token_tmp")
+  mv "$token_tmp" "$token_path"
+  local pid_tmp="${PID_PREFIX}-${scope}.pid.$$"
+  (umask 077; printf '%s\n' "$SUPERVISOR_PID" > "$pid_tmp")
+  mv "$pid_tmp" "$(pid_file "$scope")"
+  probe_local_process "$SUPERVISOR_PID" "$process_marker"
+  [[ "$LOCAL_PROCESS_STATE" == "present" && "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
+    echo "Error: recorder supervisor died before identity capture" >&2
+    return 1
+  }
+  SUPERVISOR_BIRTH="$LOCAL_PROCESS_BIRTH"
+  local birth_tmp="${PID_PREFIX}-${scope}.birth.$$"
+  (umask 077; printf '%s\n' "$SUPERVISOR_BIRTH" > "$birth_tmp")
+  mv "$birth_tmp" "$(birth_file "$scope")"
+  request_supervisor_signal "$scope" "START"
 
   local waited=0
   while [[ $waited -lt 40 ]]; do
@@ -316,7 +373,7 @@ wait_for_supervisor_terminal() {
     if [[ -s "$state_path" ]]; then
       local state
       state="$(cat "$state_path")"
-      if [[ "$state" == exited\ * || "$state" == "failed" ]]; then
+      if [[ "$state" == exited\ * || "$state" == failed\ * ]]; then
         SUPERVISOR_TERMINAL_STATE="$state"
         return 0
       fi
@@ -361,7 +418,11 @@ request_supervisor_signal() {
       local response_result
       read -r response_nonce response_result < "$response_path"
       if [[ "$response_nonce" == "$nonce" ]]; then
-        [[ "$response_result" == "signaled" || "$response_result" == "gone" ]] || {
+        [[
+          "$response_result" == "signaled" ||
+            "$response_result" == "gone" ||
+            ( "$action" == "START" && "$response_result" == "started" )
+        ]] || {
           echo "Error: recorder supervisor rejected $action request" >&2
           return 1
         }
@@ -376,7 +437,7 @@ request_supervisor_signal() {
         SUPERVISOR_RESPONSE="gone"
         return 0
       fi
-      if [[ "$supervisor_state" == "failed" ]]; then
+      if [[ "$supervisor_state" == failed\ * ]]; then
         echo "Error: recorder supervisor failed while handling $action request" >&2
         return 1
       fi
@@ -595,18 +656,11 @@ cmd_start() {
     fi
   fi
 
-  start_supervised_recorder "$scope" "$recorder_log" "${recorder_command[@]}"
-  rec_pid="$SUPERVISOR_PID"
-  echo "$rec_pid" > "$pf"
   local process_marker="$raw_file"
   [[ "$platform" == "android" ]] && process_marker="$device_path"
-  probe_local_process "$rec_pid" "$process_marker"
-  [[ "$LOCAL_PROCESS_STATE" == "present" && "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
-    echo "Error: Recording process died before identity capture" >&2
-    exit 1
-  }
-  local rec_birth="$LOCAL_PROCESS_BIRTH"
-  echo "$rec_birth" > "$(birth_file "$scope")"
+  start_supervised_recorder "$scope" "$recorder_log" "$process_marker" "${recorder_command[@]}"
+  rec_pid="$SUPERVISOR_PID"
+  local rec_birth="$SUPERVISOR_BIRTH"
   sleep 0.5
   probe_local_process "$rec_pid" "$process_marker"
   if [[
@@ -717,14 +771,16 @@ cmd_abort() {
   statef="$(supervisor_state_file "$scope")"
   local supervisor_state=""
   [[ -s "$statef" ]] && supervisor_state="$(cat "$statef")"
-  if [[ -s "$tokenf" && ( -z "$supervisor_state" || "$supervisor_state" == "running" ) ]]; then
+  if [[ -s "$tokenf" && ( "$supervisor_state" == "starting" || "$supervisor_state" == "running" ) ]]; then
     local abort_failed="false"
     request_supervisor_signal "$scope" "ABORT" || abort_failed="true"
     wait_for_supervisor_terminal "$scope"
-    if [[ "$abort_failed" == "true" && "$SUPERVISOR_TERMINAL_STATE" != "failed" ]]; then
+    if [[ "$abort_failed" == "true" && "$SUPERVISOR_TERMINAL_STATE" != failed\ * ]]; then
       echo "Error: recorder supervisor rejected authenticated abort" >&2
       exit 1
     fi
+  elif [[ "$supervisor_state" == "starting" ]]; then
+    wait_for_supervisor_terminal "$scope"
   elif [[ "$supervisor_state" == "running" ]]; then
     echo "Error: recorder supervisor capability is unavailable" >&2
     exit 1
@@ -781,9 +837,13 @@ cmd_stop() {
   local supervisor_state=""
   [[ -s "$(supervisor_state_file "$scope")" ]] && supervisor_state="$(cat "$(supervisor_state_file "$scope")")"
   local supervisor_failed="false"
-  [[ "$supervisor_state" == "failed" ]] && supervisor_failed="true"
+  [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
+  local supervisor_terminal="false"
+  [[ "$supervisor_state" == exited\ * || "$supervisor_state" == failed\ * ]] && supervisor_terminal="true"
 
-  if is_alive "$pid"; then
+  if [[ "$supervisor_terminal" == "true" ]]; then
+    :
+  elif is_alive "$pid"; then
     local process_marker="$raw_file"
     if [[ "$platform" == "android" && -f "${PID_PREFIX}-${scope}.device-path" ]]; then
       process_marker="$(cat "${PID_PREFIX}-${scope}.device-path")"
@@ -852,7 +912,7 @@ cmd_stop() {
       echo "Error: authenticated recorder process termination is unproven" >&2
       exit 1
     }
-  elif [[ "$supervisor_state" == "running" ]]; then
+  elif [[ "$supervisor_state" == "starting" || "$supervisor_state" == "running" ]]; then
     echo "Error: authenticated recorder supervisor disappeared before termination proof" >&2
     exit 1
   fi
