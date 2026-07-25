@@ -784,7 +784,7 @@ var init_process_owner = __esm({
 import { createHash as createHash3 } from "node:crypto";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { closeSync as closeSync2, existsSync as existsSync4, lstatSync, openSync as openSync2, readdirSync, readFileSync as readFileSync3, readlinkSync, readSync, realpathSync } from "node:fs";
-import { delimiter, dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve2 } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve2 } from "node:path";
 function digest(parts) {
   const hash = createHash3("sha256");
   for (const part of parts) {
@@ -817,58 +817,73 @@ function updateFramedFile(hash, path, size) {
   }
 }
 function updateDependencyPath(hash, path, label, state) {
-  const stat2 = lstatSync(path);
-  updateFramed(hash, label);
-  updateFramed(hash, String(stat2.mode & 511));
-  if (stat2.isSymbolicLink()) {
-    const link = readlinkSync(path);
-    const target = realpathSync(path);
-    state.totalBytes += Buffer.byteLength(link);
+  const pending2 = [{ path, label, depth: 0 }];
+  while (pending2.length > 0) {
+    const current = pending2.pop();
+    state.entries += 1;
+    if (state.entries > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency entry count exceeds the limit");
+    }
+    if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit");
+    }
+    const stat2 = lstatSync(current.path);
+    updateFramed(hash, current.label);
+    updateFramed(hash, String(stat2.mode & 511));
+    if (stat2.isSymbolicLink()) {
+      const link = readlinkSync(current.path);
+      const target = realpathSync(current.path);
+      state.totalBytes += Buffer.byteLength(link);
+      if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
+      }
+      updateFramed(hash, "symlink");
+      updateFramed(hash, link);
+      updateFramed(hash, target);
+      pending2.push({
+        path: target,
+        label: `target:${target}`,
+        depth: current.depth + 1
+      });
+      continue;
+    }
+    if (stat2.isDirectory()) {
+      const canonical = realpathSync(current.path);
+      if (state.visitedDirectories.has(canonical)) {
+        updateFramed(hash, "directory-reference");
+        updateFramed(hash, canonical);
+        continue;
+      }
+      state.visitedDirectories.add(canonical);
+      updateFramed(hash, "directory");
+      for (const entry of readdirSync(current.path).sort().reverse()) {
+        pending2.push({
+          path: join4(current.path, entry),
+          label: `${current.label}/${entry}`,
+          depth: current.depth + 1
+        });
+      }
+      continue;
+    }
+    if (!stat2.isFile()) {
+      throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${current.label} is not a regular file, directory, or symlink`);
+    }
+    if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
+      throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
+    }
+    state.totalBytes += stat2.size;
     if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
       throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
     }
-    updateFramed(hash, "symlink");
-    updateFramed(hash, link);
-    updateFramed(hash, target);
-    updateDependencyPath(hash, target, `target:${target}`, state);
-    return;
+    updateFramed(hash, "file");
+    updateFramedFile(hash, current.path, stat2.size);
   }
-  if (stat2.isDirectory()) {
-    const canonical = realpathSync(path);
-    if (state.visitedDirectories.has(canonical)) {
-      updateFramed(hash, "directory-reference");
-      updateFramed(hash, canonical);
-      return;
-    }
-    state.visitedDirectories.add(canonical);
-    updateFramed(hash, "directory");
-    for (const entry of readdirSync(path).sort()) {
-      updateDependencyPath(hash, join4(path, entry), `${label}/${entry}`, state);
-    }
-    return;
-  }
-  if (!stat2.isFile()) {
-    throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${label} is not a regular file, directory, or symlink`);
-  }
-  state.files += 1;
-  if (state.files > MAX_STRICT_PROOF_DEPENDENCY_FILES) {
-    throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency file count exceeds the limit");
-  }
-  if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
-    throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${label} exceeds the per-file limit`);
-  }
-  state.totalBytes += stat2.size;
-  if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
-    throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
-  }
-  updateFramed(hash, "file");
-  updateFramedFile(hash, path, stat2.size);
 }
 function isContained(root, candidate) {
   const child = relative(root, candidate);
   return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(child);
 }
-function dependencyStoreRoots(identity2, git) {
+function dependencyStoreRoots(identity2, git, pathExists) {
   const entries = git(identity2.contentRoot, [
     "ls-files",
     "--others",
@@ -883,26 +898,33 @@ function dependencyStoreRoots(identity2, git) {
     join4(identity2.contentRoot, "node_modules"),
     join4(identity2.appRoot, "node_modules")
   ]) {
-    if (existsSync4(candidate))
+    if (pathExists(candidate))
       entries.push(relative(identity2.contentRoot, candidate));
   }
-  const pnpLoaders = [".pnp.cjs", ".pnp.loader.mjs"].filter((entry) => existsSync4(join4(identity2.contentRoot, entry)));
+  const pnpRoots = [];
+  let pnpRoot = identity2.appRoot;
+  while (true) {
+    pnpRoots.push(pnpRoot);
+    if (pnpRoot === identity2.contentRoot)
+      break;
+    const parent = dirname2(pnpRoot);
+    if (parent === pnpRoot || !isContained(identity2.contentRoot, parent))
+      break;
+    pnpRoot = parent;
+  }
+  const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => [".pnp.js", ".pnp.cjs", ".pnp.loader.mjs"].map((entry) => join4(root, entry)).filter(pathExists));
   if (pnpLoaders.length > 0) {
     throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
   }
-  for (const configuredPath of (process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)) {
-    const candidate = realpathSync(resolve2(configuredPath));
-    if (!isContained(identity2.contentRoot, candidate)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: NODE_PATH resolves outside the content root");
-    }
-    entries.push(relative(identity2.contentRoot, candidate));
-  }
   let ancestor = dirname2(identity2.contentRoot);
-  while (ancestor !== dirname2(ancestor)) {
-    if (existsSync4(join4(ancestor, "node_modules"))) {
+  while (true) {
+    if (pathExists(join4(ancestor, "node_modules"))) {
       throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
     }
-    ancestor = dirname2(ancestor);
+    const parent = dirname2(ancestor);
+    if (parent === ancestor)
+      break;
+    ancestor = parent;
   }
   const roots = [...new Set(entries.map((entry) => resolve2(identity2.contentRoot, entry)))].sort();
   for (const root of roots) {
@@ -910,16 +932,16 @@ function dependencyStoreRoots(identity2, git) {
   }
   return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
 }
-function updateDependencyStores(hash, identity2, git) {
-  const roots = dependencyStoreRoots(identity2, git);
+function updateDependencyStores(hash, identity2, git, pathExists) {
+  const roots = dependencyStoreRoots(identity2, git, pathExists);
   const state = {
-    files: 0,
+    entries: 0,
     totalBytes: 0,
     visitedDirectories: /* @__PURE__ */ new Set()
   };
   updateFramed(hash, "dependency-stores-v1");
   for (const root of roots) {
-    if (!existsSync4(root))
+    if (!pathExists(root))
       continue;
     updateDependencyPath(hash, root, relative(identity2.contentRoot, root), state);
   }
@@ -1004,6 +1026,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
   }
   const git = dependencies.git ?? defaultGit;
+  const pathExists = dependencies.exists ?? existsSync4;
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
@@ -1036,7 +1059,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   const dirtyHash = createHash3("sha256");
   updateFramed(dirtyHash, "git-dirty-v3");
   updateFramed(dirtyHash, diff);
-  updateDependencyStores(dirtyHash, identity2, git);
+  updateDependencyStores(dirtyHash, identity2, git, pathExists);
   const sourceEntries = [
     ...untracked.map((entry) => ["untracked", entry]),
     ...ignored.map((entry) => ["ignored-runtime", entry])
@@ -1094,14 +1117,15 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     dirtyDigest: dirtyHash.digest("hex")
   };
 }
-var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_FILES, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, IGNORED_RUNTIME_INPUT_PATHS;
+var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, IGNORED_RUNTIME_INPUT_PATHS;
 var init_source_identity = __esm({
   "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
     "use strict";
     MAX_STRICT_PROOF_FILES = 4096;
     MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
     MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-    MAX_STRICT_PROOF_DEPENDENCY_FILES = 5e4;
+    MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
+    MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
     MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
     MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
     STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
@@ -70023,7 +70047,8 @@ function toolInvalidatesSnapshotCache(tool, args) {
 }
 function resolveSnapshotInvalidationPlatform(tool, args, activePlatform) {
   if (tool === "device_snapshot" && args?.action === "open") {
-    return args.platform === "android" ? "android" : "ios";
+    if (args.platform === "ios" || args.platform === "android")
+      return args.platform;
   }
   return activePlatform === "ios" || activePlatform === "android" ? activePlatform : void 0;
 }
@@ -72362,12 +72387,59 @@ import { closeSync as closeSync7, constants as constants3, fstatSync as fstatSyn
 import { basename as basename6, isAbsolute as isAbsolute7, join as join54, relative as relative5, resolve as resolve9, sep as sep6 } from "node:path";
 function renderMetroIntegrationAdapter() {
   return `'use strict';
+const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+function sourceRoot() {
+  try {
+    return fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim());
+  } catch (error) {
+    if (String(error && error.stderr || '').toLowerCase().includes('not a git repository')) return null;
+    throw error;
+  }
+}
+function contained(root, candidate) {
+  const child = path.relative(root, candidate);
+  return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
+}
+function assertLocalPaths(root, values, field) {
+  if (values === undefined) return;
+  if (!Array.isArray(values) || values.some((value) => typeof value !== 'string')) {
+    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' must contain paths');
+  }
+  for (const value of values) {
+    const candidate = fs.realpathSync(path.resolve(process.cwd(), value));
+    if (!contained(root, candidate)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' resolves outside the content root');
+    }
+  }
+}
+function validateResolverPolicy(config) {
+  const root = sourceRoot();
+  if (root === null) return;
+  const resolver = config.resolver || {};
+  if (resolver.resolveRequest !== undefined) {
+    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: custom Metro resolvers are unsupported');
+  }
+  assertLocalPaths(root, config.watchFolders, 'watchFolders');
+  assertLocalPaths(root, resolver.nodeModulesPaths, 'nodeModulesPaths');
+  if (resolver.extraNodeModules !== undefined) {
+    if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: extraNodeModules must be a path map');
+    }
+    assertLocalPaths(root, Object.values(resolver.extraNodeModules), 'extraNodeModules');
+  }
+  assertLocalPaths(root, (process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
+}
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
   const current = config || {};
+  validateResolverPolicy(current);
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
@@ -74058,11 +74130,11 @@ function trackedTool(name, desc, schema, handler) {
       return failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
     }
     const args = a[0];
-    const snapshotPlatform = resolveSnapshotInvalidationPlatform(name, args, getActiveSession()?.platform);
     let result;
     try {
       result = await base(...a);
     } finally {
+      const snapshotPlatform = resolveSnapshotInvalidationPlatform(name, args, getActiveSession()?.platform);
       if (toolInvalidatesSnapshotCache(name, args))
         markSnapshotDirty(snapshotPlatform);
       if (toolInvalidatesRetryBaseline(name, args))

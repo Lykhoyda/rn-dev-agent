@@ -334,6 +334,10 @@ test('cache invalidation: snapshot open targets the requested platform', () => {
     ),
     'android',
   );
+  assert.equal(
+    resolveSnapshotInvalidationPlatform('device_snapshot', { action: 'open' }, 'android'),
+    'android',
+  );
   assert.equal(resolveSnapshotInvalidationPlatform('cdp_reload', undefined, 'ios'), 'ios');
 });
 
@@ -385,6 +389,11 @@ test('source guard: the central trackedTool boundary wires fail-safe cache inval
     src,
     /markSnapshotDirty\(/,
     'trackedTool must invalidate the cache for mutating tools',
+  );
+  assert.match(
+    src,
+    /finally\s*\{[\s\S]*resolveSnapshotInvalidationPlatform\(/,
+    'trackedTool must resolve invalidation authority after the gate returns',
   );
 });
 

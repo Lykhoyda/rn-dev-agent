@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 function digest(parts) {
     const hash = createHash('sha256');
     for (const part of parts) {
@@ -13,7 +13,8 @@ function digest(parts) {
 const MAX_STRICT_PROOF_FILES = 4_096;
 const MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-const MAX_STRICT_PROOF_DEPENDENCY_FILES = 50_000;
+const MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 50_000;
+const MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
 const MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
 const STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
@@ -62,52 +63,67 @@ function updateFramedFile(hash, path, size) {
     }
 }
 function updateDependencyPath(hash, path, label, state) {
-    const stat = lstatSync(path);
-    updateFramed(hash, label);
-    updateFramed(hash, String(stat.mode & 0o777));
-    if (stat.isSymbolicLink()) {
-        const link = readlinkSync(path);
-        const target = realpathSync(path);
-        state.totalBytes += Buffer.byteLength(link);
+    const pending = [{ path, label, depth: 0 }];
+    while (pending.length > 0) {
+        const current = pending.pop();
+        state.entries += 1;
+        if (state.entries > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+            throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency entry count exceeds the limit');
+        }
+        if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
+            throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit');
+        }
+        const stat = lstatSync(current.path);
+        updateFramed(hash, current.label);
+        updateFramed(hash, String(stat.mode & 0o777));
+        if (stat.isSymbolicLink()) {
+            const link = readlinkSync(current.path);
+            const target = realpathSync(current.path);
+            state.totalBytes += Buffer.byteLength(link);
+            if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+                throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit');
+            }
+            updateFramed(hash, 'symlink');
+            updateFramed(hash, link);
+            updateFramed(hash, target);
+            pending.push({
+                path: target,
+                label: `target:${target}`,
+                depth: current.depth + 1,
+            });
+            continue;
+        }
+        if (stat.isDirectory()) {
+            const canonical = realpathSync(current.path);
+            if (state.visitedDirectories.has(canonical)) {
+                updateFramed(hash, 'directory-reference');
+                updateFramed(hash, canonical);
+                continue;
+            }
+            state.visitedDirectories.add(canonical);
+            updateFramed(hash, 'directory');
+            for (const entry of readdirSync(current.path).sort().reverse()) {
+                pending.push({
+                    path: join(current.path, entry),
+                    label: `${current.label}/${entry}`,
+                    depth: current.depth + 1,
+                });
+            }
+            continue;
+        }
+        if (!stat.isFile()) {
+            throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${current.label} is not a regular file, directory, or symlink`);
+        }
+        if (stat.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
+            throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
+        }
+        state.totalBytes += stat.size;
         if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
             throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit');
         }
-        updateFramed(hash, 'symlink');
-        updateFramed(hash, link);
-        updateFramed(hash, target);
-        updateDependencyPath(hash, target, `target:${target}`, state);
-        return;
+        updateFramed(hash, 'file');
+        updateFramedFile(hash, current.path, stat.size);
     }
-    if (stat.isDirectory()) {
-        const canonical = realpathSync(path);
-        if (state.visitedDirectories.has(canonical)) {
-            updateFramed(hash, 'directory-reference');
-            updateFramed(hash, canonical);
-            return;
-        }
-        state.visitedDirectories.add(canonical);
-        updateFramed(hash, 'directory');
-        for (const entry of readdirSync(path).sort()) {
-            updateDependencyPath(hash, join(path, entry), `${label}/${entry}`, state);
-        }
-        return;
-    }
-    if (!stat.isFile()) {
-        throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${label} is not a regular file, directory, or symlink`);
-    }
-    state.files += 1;
-    if (state.files > MAX_STRICT_PROOF_DEPENDENCY_FILES) {
-        throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency file count exceeds the limit');
-    }
-    if (stat.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
-        throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${label} exceeds the per-file limit`);
-    }
-    state.totalBytes += stat.size;
-    if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
-        throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit');
-    }
-    updateFramed(hash, 'file');
-    updateFramedFile(hash, path, stat.size);
 }
 function isContained(root, candidate) {
     const child = relative(root, candidate);
@@ -115,7 +131,7 @@ function isContained(root, candidate) {
         !child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
         !isAbsolute(child));
 }
-function dependencyStoreRoots(identity, git) {
+function dependencyStoreRoots(identity, git, pathExists) {
     const entries = git(identity.contentRoot, [
         'ls-files',
         '--others',
@@ -132,26 +148,35 @@ function dependencyStoreRoots(identity, git) {
         join(identity.contentRoot, 'node_modules'),
         join(identity.appRoot, 'node_modules'),
     ]) {
-        if (existsSync(candidate))
+        if (pathExists(candidate))
             entries.push(relative(identity.contentRoot, candidate));
     }
-    const pnpLoaders = ['.pnp.cjs', '.pnp.loader.mjs'].filter((entry) => existsSync(join(identity.contentRoot, entry)));
+    const pnpRoots = [];
+    let pnpRoot = identity.appRoot;
+    while (true) {
+        pnpRoots.push(pnpRoot);
+        if (pnpRoot === identity.contentRoot)
+            break;
+        const parent = dirname(pnpRoot);
+        if (parent === pnpRoot || !isContained(identity.contentRoot, parent))
+            break;
+        pnpRoot = parent;
+    }
+    const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => ['.pnp.js', '.pnp.cjs', '.pnp.loader.mjs']
+        .map((entry) => join(root, entry))
+        .filter(pathExists));
     if (pnpLoaders.length > 0) {
         throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug’n’Play dependency resolution is unsupported');
     }
-    for (const configuredPath of (process.env.NODE_PATH ?? '').split(delimiter).filter(Boolean)) {
-        const candidate = realpathSync(resolve(configuredPath));
-        if (!isContained(identity.contentRoot, candidate)) {
-            throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: NODE_PATH resolves outside the content root');
-        }
-        entries.push(relative(identity.contentRoot, candidate));
-    }
     let ancestor = dirname(identity.contentRoot);
-    while (ancestor !== dirname(ancestor)) {
-        if (existsSync(join(ancestor, 'node_modules'))) {
+    while (true) {
+        if (pathExists(join(ancestor, 'node_modules'))) {
             throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root');
         }
-        ancestor = dirname(ancestor);
+        const parent = dirname(ancestor);
+        if (parent === ancestor)
+            break;
+        ancestor = parent;
     }
     const roots = [...new Set(entries.map((entry) => resolve(identity.contentRoot, entry)))].sort();
     for (const root of roots) {
@@ -159,16 +184,16 @@ function dependencyStoreRoots(identity, git) {
     }
     return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
 }
-function updateDependencyStores(hash, identity, git) {
-    const roots = dependencyStoreRoots(identity, git);
+function updateDependencyStores(hash, identity, git, pathExists) {
+    const roots = dependencyStoreRoots(identity, git, pathExists);
     const state = {
-        files: 0,
+        entries: 0,
         totalBytes: 0,
         visitedDirectories: new Set(),
     };
     updateFramed(hash, 'dependency-stores-v1');
     for (const root of roots) {
-        if (!existsSync(root))
+        if (!pathExists(root))
             continue;
         updateDependencyPath(hash, root, relative(identity.contentRoot, root), state);
     }
@@ -261,6 +286,7 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         throw new Error('STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree');
     }
     const git = dependencies.git ?? defaultGit;
+    const pathExists = dependencies.exists ?? existsSync;
     const head = git(identity.contentRoot, ['rev-parse', 'HEAD']);
     const diff = git(identity.contentRoot, ['diff', '--binary', '--no-ext-diff', head, '--']);
     const untracked = git(identity.contentRoot, ['ls-files', '--others', '--exclude-standard', '-z'])
@@ -301,7 +327,7 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
     const dirtyHash = createHash('sha256');
     updateFramed(dirtyHash, 'git-dirty-v3');
     updateFramed(dirtyHash, diff);
-    updateDependencyStores(dirtyHash, identity, git);
+    updateDependencyStores(dirtyHash, identity, git, pathExists);
     const sourceEntries = [
         ...untracked.map((entry) => ['untracked', entry]),
         ...ignored.map((entry) => ['ignored-runtime', entry]),

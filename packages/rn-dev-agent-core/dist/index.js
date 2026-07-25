@@ -522,7 +522,6 @@ function trackedTool(name, desc, schema, handler) {
             return failResult('Tool calls are disabled in the read-only MCP contract probe.', 'DIAGNOSTIC_MODE_READ_ONLY');
         }
         const args = a[0];
-        const snapshotPlatform = resolveSnapshotInvalidationPlatform(name, args, getActiveSession()?.platform);
         let result;
         try {
             result = await base(...a);
@@ -535,6 +534,7 @@ function trackedTool(name, desc, schema, handler) {
             // same boundary as the GH #321 snapshot-cache dirty flag above it — see
             // toolInvalidatesRetryBaseline's doc comment for why native device verbs
             // are excluded (they manage it themselves via settle).
+            const snapshotPlatform = resolveSnapshotInvalidationPlatform(name, args, getActiveSession()?.platform);
             if (toolInvalidatesSnapshotCache(name, args))
                 markSnapshotDirty(snapshotPlatform);
             if (toolInvalidatesRetryBaseline(name, args))

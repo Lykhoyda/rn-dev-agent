@@ -89,7 +89,8 @@ export function toolInvalidatesSnapshotCache(tool, args) {
 }
 export function resolveSnapshotInvalidationPlatform(tool, args, activePlatform) {
     if (tool === 'device_snapshot' && args?.action === 'open') {
-        return args.platform === 'android' ? 'android' : 'ios';
+        if (args.platform === 'ios' || args.platform === 'android')
+            return args.platform;
     }
     return activePlatform === 'ios' || activePlatform === 'android' ? activePlatform : undefined;
 }

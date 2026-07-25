@@ -13,12 +13,59 @@ const SENTINELS = {
 };
 export function renderMetroIntegrationAdapter() {
     return `'use strict';
+const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+function sourceRoot() {
+  try {
+    return fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim());
+  } catch (error) {
+    if (String(error && error.stderr || '').toLowerCase().includes('not a git repository')) return null;
+    throw error;
+  }
+}
+function contained(root, candidate) {
+  const child = path.relative(root, candidate);
+  return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
+}
+function assertLocalPaths(root, values, field) {
+  if (values === undefined) return;
+  if (!Array.isArray(values) || values.some((value) => typeof value !== 'string')) {
+    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' must contain paths');
+  }
+  for (const value of values) {
+    const candidate = fs.realpathSync(path.resolve(process.cwd(), value));
+    if (!contained(root, candidate)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' resolves outside the content root');
+    }
+  }
+}
+function validateResolverPolicy(config) {
+  const root = sourceRoot();
+  if (root === null) return;
+  const resolver = config.resolver || {};
+  if (resolver.resolveRequest !== undefined) {
+    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: custom Metro resolvers are unsupported');
+  }
+  assertLocalPaths(root, config.watchFolders, 'watchFolders');
+  assertLocalPaths(root, resolver.nodeModulesPaths, 'nodeModulesPaths');
+  if (resolver.extraNodeModules !== undefined) {
+    if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: extraNodeModules must be a path map');
+    }
+    assertLocalPaths(root, Object.values(resolver.extraNodeModules), 'extraNodeModules');
+  }
+  assertLocalPaths(root, (process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
+}
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
   const current = config || {};
+  validateResolverPolicy(current);
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});

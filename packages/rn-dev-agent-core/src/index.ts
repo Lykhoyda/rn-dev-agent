@@ -667,11 +667,6 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
       );
     }
     const args = a[0] as Record<string, unknown> | undefined;
-    const snapshotPlatform = resolveSnapshotInvalidationPlatform(
-      name,
-      args,
-      getActiveSession()?.platform,
-    );
     let result: unknown;
     try {
       result = await base(...a);
@@ -683,6 +678,11 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
       // same boundary as the GH #321 snapshot-cache dirty flag above it — see
       // toolInvalidatesRetryBaseline's doc comment for why native device verbs
       // are excluded (they manage it themselves via settle).
+      const snapshotPlatform = resolveSnapshotInvalidationPlatform(
+        name,
+        args,
+        getActiveSession()?.platform,
+      );
       if (toolInvalidatesSnapshotCache(name, args)) markSnapshotDirty(snapshotPlatform);
       if (toolInvalidatesRetryBaseline(name, args)) invalidateLastSnapshotHash();
     }

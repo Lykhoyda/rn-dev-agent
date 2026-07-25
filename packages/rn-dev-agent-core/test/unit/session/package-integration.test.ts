@@ -137,6 +137,47 @@ test('Metro integration composes object and promise configs and is reversible', 
   }
 });
 
+test('Metro integration rejects external and custom resolver inputs', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-policy-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const adapterPath = join(root, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const compose = await import(`${pathToFileURL(adapterPath).href}?v=${Date.now()}`);
+
+    assert.throws(
+      () => compose.default({ resolver: { resolveRequest() {} } }),
+      /STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT/,
+    );
+    assert.throws(
+      () => compose.default({ resolver: { nodeModulesPaths: [tmpdir()] } }),
+      /STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT/,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro integration preserves non-Git development configs', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-non-git-'));
+  try {
+    const adapterPath = join(root, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ resolver: { resolveRequest() {} } });`,
+      ],
+      { cwd: root, encoding: 'utf8' },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro restoration preserves edits after the generated block', () => {
   const original = 'module.exports = { resolver: {} };\n';
   const integrated = previewMetroIntegration(original);

@@ -11007,7 +11007,7 @@ init_registry();
 import { createHash as createHash4 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { closeSync as closeSync2, existsSync as existsSync3, lstatSync as lstatSync3, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync4, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync3 } from "node:fs";
-import { delimiter, dirname as dirname3, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
 function digest2(parts) {
   const hash = createHash4("sha256");
   for (const part of parts) {

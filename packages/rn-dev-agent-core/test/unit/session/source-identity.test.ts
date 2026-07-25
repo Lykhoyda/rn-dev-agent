@@ -265,14 +265,16 @@ test('strict proof authenticates dependency symlink targets outside the content 
   assert.notEqual(first.dirtyDigest, second.dirtyDigest);
 });
 
-test('strict proof rejects Plug’n’Play without a Git-tracked local cache', () => {
+test('strict proof rejects Plug’n’Play loaders under a nested app root', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-pnp-'));
   roots.push(root);
-  writeFileSync(join(root, '.pnp.cjs'), 'module.exports = {};');
+  const appRoot = join(root, 'apps', 'mobile');
+  mkdirSync(appRoot, { recursive: true });
+  writeFileSync(join(appRoot, '.pnp.js'), 'module.exports = {};');
   const identity = {
     kind: 'git' as const,
     contentRoot: root,
-    appRoot: root,
+    appRoot,
     sourceKey: 'source',
     worktreeKey: 'worktree',
     appRootKey: 'app',
@@ -289,6 +291,66 @@ test('strict proof rejects Plug’n’Play without a Git-tracked local cache', (
   assert.throws(
     () => strictProofSourceIdentity(identity, { git }),
     /STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT/,
+  );
+});
+
+test('strict proof checks the terminal ancestor for external node_modules', () => {
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: '/repo/worktree',
+    appRoot: '/repo/worktree',
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args.includes('--directory')) return '';
+    if (args[0] === 'diff' || args.includes('--stage') || args.includes('--ignored')) return '';
+    if (args[0] === 'ls-files') return '';
+    throw new Error('unexpected git command');
+  };
+
+  assert.throws(
+    () =>
+      strictProofSourceIdentity(identity, {
+        git,
+        exists: (path) => path === '/node_modules',
+      }),
+    /STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT/,
+  );
+});
+
+test('strict proof bounds dependency traversal depth', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-dependency-depth-'));
+  roots.push(root);
+  let directory = join(root, 'node_modules');
+  mkdirSync(directory);
+  for (let depth = 0; depth < 130; depth += 1) {
+    directory = join(directory, 'd');
+    mkdirSync(directory);
+  }
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args.includes('--directory')) return 'node_modules/\0';
+    if (args[0] === 'diff' || args.includes('--stage') || args.includes('--ignored')) return '';
+    if (args[0] === 'ls-files') return '';
+    throw new Error('unexpected git command');
+  };
+
+  assert.throws(
+    () => strictProofSourceIdentity(identity, { git }),
+    /STRICT_PROOF_DEPENDENCY_LIMIT/,
   );
 });
 
