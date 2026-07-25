@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes7, createHash: createHash16 } = __require("crypto");
+    var { randomBytes: randomBytes7, createHash: createHash17 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest2 = createHash16("sha1").update(key + GUID).digest("base64");
+        const digest2 = createHash17("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest2) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash16 } = __require("crypto");
+    var { createHash: createHash17 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest2 = createHash16("sha1").update(key + GUID).digest("base64");
+        const digest2 = createHash17("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -27113,6 +27113,32 @@ function authorityProfileFor(tool, args = {}) {
   if (tool === "device_find" && args.action === "click") {
     return profiles.get("device_press");
   }
+  if (tool === "device_deeplink") {
+    return {
+      kind: "authoritative",
+      axes: ["C", "S", "I", "M", "D"],
+      managedOrigin: true,
+      mutation: true,
+      liveBundleProbe: false
+    };
+  }
+  if (tool === "device_permission") {
+    return {
+      kind: "authoritative",
+      axes: ["C", "S", "I", "D"],
+      mutation: args.action !== "query",
+      liveBundleProbe: false
+    };
+  }
+  if (tool === "device_record") {
+    return {
+      kind: "authoritative",
+      axes: ["C", "S", "I", "D"],
+      sessionIdentity: true,
+      mutation: args.action !== "status",
+      liveBundleProbe: false
+    };
+  }
   if (tool === "device_reset_state") {
     const storageMutation = Array.isArray(args.storageKeys) && args.storageKeys.length > 0;
     return {
@@ -27398,6 +27424,10 @@ function bindSessionArguments(status, profile, args) {
   }
   if (metro && (profile.axes.includes("M") || profile.kind === "transition")) {
     bindExactArgument(args, "metroPort", metro.port, "METRO_AUTHORITY_MISMATCH");
+  }
+  if (profile.sessionIdentity) {
+    bindExactArgument(args, "sessionId", status.sessionId, "AUTHORITY_LOST_DURING_OPERATION");
+    bindExactArgument(args, "claimEpoch", status.claimEpoch, "AUTHORITY_LOST_DURING_OPERATION");
   }
 }
 function authorityFailure(error2) {
@@ -28155,7 +28185,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       results.push(await executeStage(stage.commands));
     } catch (error2) {
       await completeOrigin(false);
-      throw error2;
+      throw new MaestroStageExecutionError(results, error2);
     }
   }
   await completeOrigin(plan.targetExpected);
@@ -28194,6 +28224,7 @@ function createMaestroRunHandler(deps = {}) {
   const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
   const parkFlow = deps.parkFlow ?? runFlowParked;
   const execute = deps.execFile ?? defaultExecFile;
+  const now = deps.now ?? Date.now;
   return async (args) => {
     if (args.params) {
       for (const [key, value] of Object.entries(args.params)) {
@@ -28260,6 +28291,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(dispatch.error);
     }
     const timeout = args.timeoutMs ?? 12e4;
+    const flowDeadline = now() + timeout;
     const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile);
     if (!appFileResolution.ok) {
       return failResult(appFileResolution.error);
@@ -28287,9 +28319,15 @@ function createMaestroRunHandler(deps = {}) {
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? (() => claimManagedNativeOriginAuthority(args));
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
+        const remainingTimeout = flowDeadline - now();
+        if (remainingTimeout <= 0) {
+          const error2 = new Error("Maestro flow timeout exhausted before the next stage");
+          Object.assign(error2, { code: "ETIMEDOUT" });
+          throw error2;
+        }
         writeFileSync7(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
         return execute(dispatch.binPath, finalArgs, {
-          timeout,
+          timeout: remainingTimeout,
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
         });
@@ -28354,12 +28392,20 @@ function createMaestroRunHandler(deps = {}) {
     } catch (err) {
       if (err instanceof SessionAuthorityError)
         throw err;
-      const msg3 = err instanceof Error ? err.message : String(err);
-      const errAny = err;
-      const stdout = typeof errAny?.stdout === "string" ? errAny.stdout : "";
-      const stderr = typeof errAny?.stderr === "string" ? errAny.stderr : "";
+      const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
+      const errAny = stageError;
+      const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];
+      const stdout = [
+        ...completed.map((result) => typeof result.stdout === "string" ? result.stdout : ""),
+        typeof errAny?.stdout === "string" ? errAny.stdout : ""
+      ].join("\n");
+      const stderr = [
+        ...completed.map((result) => typeof result.stderr === "string" ? result.stderr : ""),
+        typeof errAny?.stderr === "string" ? errAny.stderr : ""
+      ].join("\n");
       const combined = combineRunnerOutput(stdout, stderr);
-      const { timedOut, outputTruncated } = classifyExecError(err);
+      const { timedOut, outputTruncated } = classifyExecError(stageError);
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
@@ -28370,7 +28416,7 @@ function createMaestroRunHandler(deps = {}) {
         directReportIdentityStrength: directEvidence.reportDeviceIdStrength
       });
       const summary = buildStepSummary(combined, { failed: true });
-      const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(err?.code ?? ""));
+      const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(stageError?.code ?? ""));
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
       const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg3) : null;
@@ -28418,7 +28464,7 @@ function createMaestroRunHandler(deps = {}) {
     }
   };
 }
-var defaultExecFile, lifecycleCommands, PARAM_KEY_RE;
+var defaultExecFile, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE;
 var init_maestro_run = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
     "use strict";
@@ -28440,6 +28486,18 @@ var init_maestro_run = __esm({
     init_authority_gate();
     init_registry();
     defaultExecFile = promisify6(execFileCb4);
+    MaestroStageExecutionError = class extends Error {
+      completedResults;
+      stageError;
+      constructor(completedResults, stageError) {
+        super(stageError instanceof Error ? stageError.message : String(stageError), {
+          cause: stageError
+        });
+        this.name = "MaestroStageExecutionError";
+        this.completedResults = [...completedResults];
+        this.stageError = stageError;
+      }
+    };
     lifecycleCommands = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
     PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
   }
@@ -31827,10 +31885,10 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash15, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { readFileSync as readFileSync37, rmSync as rmSync9 } from "node:fs";
-import { execFile as execFile26 } from "node:child_process";
-import { promisify as promisify28 } from "node:util";
+import { execFile as execFile27 } from "node:child_process";
+import { promisify as promisify29 } from "node:util";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 import { dirname as dirname20, join as join54 } from "node:path";
 
@@ -51780,7 +51838,7 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured) {
   return { ok: true, platformMatched, finalPlatform };
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
-  const execFile27 = deps.execFile ?? defaultExecFile2;
+  const execFile28 = deps.execFile ?? defaultExecFile2;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured);
   if (first.ok) {
@@ -51802,12 +51860,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   const platform = captured.platform ?? "ios";
   try {
     if (platform === "ios") {
-      await execFile27("xcrun", ["simctl", "terminate", deviceId, bundleId], {
+      await execFile28("xcrun", ["simctl", "terminate", deviceId, bundleId], {
         timeout: 5e3
       });
       steps.push(`simctl terminate ${bundleId}:ok`);
     } else {
-      await execFile27("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
+      await execFile28("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
         timeout: 5e3
       });
       steps.push(`adb force-stop ${bundleId}:ok`);
@@ -51817,12 +51875,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   }
   try {
     if (platform === "ios") {
-      await execFile27("xcrun", ["simctl", "launch", deviceId, bundleId], {
+      await execFile28("xcrun", ["simctl", "launch", deviceId, bundleId], {
         timeout: 8e3
       });
       steps.push(`simctl launch ${bundleId}:ok`);
     } else {
-      await execFile27("adb", [
+      await execFile28("adb", [
         "-s",
         deviceId,
         "shell",
@@ -61511,6 +61569,7 @@ function createDeviceDismissSystemDialogHandler() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
+init_authority_gate();
 var execFile21 = promisify23(execFileCb18);
 var EXEC_TIMEOUT_MS = 1e4;
 function iosDeeplinkCommandArgs(url, deviceId) {
@@ -61608,7 +61667,7 @@ function annotatePicker(result, outcome, openConfirmation) {
   result.content[0].text = JSON.stringify(envelope);
   return result;
 }
-function createDeviceDeeplinkHandler() {
+function createDeviceDeeplinkHandler(deps = {}) {
   return async (args) => {
     if (!args.url || args.url.length === 0) {
       return failResult("url is required", { code: "INVALID_ARGS" });
@@ -61631,14 +61690,22 @@ function createDeviceDeeplinkHandler() {
     if (!platform || !args.deviceId) {
       return failResult("device_deeplink requires the exact authority-bound platform and deviceId.", "DEVICE_AUTHORITY_MISMATCH");
     }
-    const result = platform === "ios" ? await openIosDeeplink(args.url, args.deviceId) : await openAndroidDeeplink(args.url, args.packageName, args.deviceId);
-    const annotated = annotateDeepLinkDepth(result, { url: args.url });
-    if (!annotated.isError) {
-      const openConfirmation = platform === "ios" ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
-      const outcome = await clearDevClientPickerIfPresent(platform, args.metroPort).catch(() => null);
-      return annotatePicker(annotated, outcome, openConfirmation);
+    let transitionDispatched = false;
+    try {
+      transitionDispatched = true;
+      const result = platform === "ios" ? await openIosDeeplink(args.url, args.deviceId) : await openAndroidDeeplink(args.url, args.packageName, args.deviceId);
+      const annotated = annotateDeepLinkDepth(result, { url: args.url });
+      if (!annotated.isError) {
+        const openConfirmation = platform === "ios" ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
+        const outcome = await clearDevClientPickerIfPresent(platform, args.metroPort).catch(() => null);
+        return annotatePicker(annotated, outcome, openConfirmation);
+      }
+      return annotated;
+    } finally {
+      if (transitionDispatched) {
+        await (args.completeNativeOrigin ?? ((targetExpected) => (deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority)(args, targetExpected)))(false);
+      }
     }
-    return annotated;
   };
 }
 
@@ -61649,10 +61716,12 @@ init_dev_client_picker();
 init_utils();
 init_platform_utils();
 import { execFile as execFile22 } from "node:child_process";
+import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync26 } from "node:fs";
 import { promisify as promisify24 } from "node:util";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { dirname as dirname14, join as join33 } from "node:path";
+init_process_birth();
 var execFileAsync5 = promisify24(execFile22);
 var START_TIMEOUT_MS = 1e4;
 var STOP_TIMEOUT_MS = 6e4;
@@ -61784,17 +61853,24 @@ function parseStatusOutput(stdout) {
   if (/^No active recordings/m.test(stdout))
     return [];
   const active = [];
-  const re = /^(ios|android): pid=(\d+) status=(\w+) output=(.*?)\s*$/gm;
+  const re = /^(ios|android): pid=(\d+) birth=(\S+) status=(\w+) output=(.*?)\s*$/gm;
   let m;
   while ((m = re.exec(stdout)) !== null) {
     active.push({
       platform: m[1],
       pid: Number(m[2]),
-      status: m[3],
-      output: m[4].trim()
+      processBirth: m[3],
+      status: m[4],
+      output: m[5].trim()
     });
   }
   return active;
+}
+function recordingScope(args) {
+  if (!args.sessionId || !Number.isSafeInteger(args.claimEpoch) || !args.platform || !args.deviceId) {
+    return null;
+  }
+  return createHash7("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 async function runStart(args) {
   const platform = args.platform ?? await detectPlatform();
@@ -61819,7 +61895,15 @@ async function runStart(args) {
     return failResult(`device_record: ${resolution.candidates.length} ${platform} ${argName === "UDID" ? "simulators booted" : "devices connected"} \u2014 refusing to auto-pick to avoid recording the wrong device. Pass deviceId=<${argName}> to disambiguate:
 ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidates });
   }
-  const scriptArgs = ["start", platform, outputPath];
+  args.platform = platform;
+  args.deviceId = resolution.deviceId;
+  const scope = recordingScope(args);
+  if (!scope) {
+    return failResult("device_record requires an authority-bound session identity", {
+      code: "SESSION_STALE"
+    });
+  }
+  const scriptArgs = ["start", platform, outputPath, "--scope", scope];
   scriptArgs.push(platform === "ios" ? "--udid" : "--serial", resolution.deviceId);
   try {
     const { stdout } = await execFileAsync5(getRecordScript(), scriptArgs, {
@@ -61829,6 +61913,13 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
     if (!parsed) {
       return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
     }
+    const processIdentity = probeProcessBirth(parsed.pid);
+    if (processIdentity.status !== "present") {
+      return failResult("Recording started but its process identity could not be proven", {
+        code: "RECORDING_AUTHORITY_MISMATCH"
+      });
+    }
+    await execFileAsync5(getRecordScript(), ["bind-identity", scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
     return okResult({
       action: "start",
       platform,
@@ -61836,6 +61927,7 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
       autoSelected: resolution.autoSelected,
       output: parsed.output,
       pid: parsed.pid,
+      processBirth: processIdentity.birth.token,
       note: "Call device_record action=stop to finalize. Android caps at 180s; iOS has no inherent cap but xcrun simctl io may stall on long captures."
     });
   } catch (e) {
@@ -61856,9 +61948,35 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
   }
 }
 async function runStop(args) {
+  const scope = recordingScope(args);
+  if (!scope) {
+    return failResult("device_record requires an authority-bound session and exact device", {
+      code: "SESSION_STALE"
+    });
+  }
+  let status;
+  try {
+    status = await readScopedStatus(scope);
+  } catch (e) {
+    const err = e;
+    const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);
+    return failResult(`record_proof.sh status failed: ${detail}`);
+  }
+  if (status.length === 0) {
+    return warnResult({ saved: [] }, "No active recording for this session and device.", {
+      code: "NO_ACTIVE_RECORDING"
+    });
+  }
+  const recording = status[0];
+  const current = probeProcessBirth(recording.pid);
+  if (current.status !== "present" || current.birth.token !== recording.processBirth || recording.platform !== args.platform) {
+    return failResult("Recording process identity no longer matches this session", {
+      code: "RECORDING_AUTHORITY_MISMATCH"
+    });
+  }
   let stopOutput = "";
   try {
-    const { stdout } = await execFileAsync5(getRecordScript(), ["stop"], {
+    const { stdout } = await execFileAsync5(getRecordScript(), ["stop", scope, String(recording.pid), recording.processBirth], {
       timeout: STOP_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024
     });
@@ -61910,12 +62028,21 @@ async function runStop(args) {
     ...gifWarnings.length > 0 ? { gifWarnings } : {}
   });
 }
-async function runStatus() {
-  try {
-    const { stdout } = await execFileAsync5(getRecordScript(), ["status"], {
-      timeout: STATUS_TIMEOUT_MS
+async function readScopedStatus(scope) {
+  const { stdout } = await execFileAsync5(getRecordScript(), ["status", scope], {
+    timeout: STATUS_TIMEOUT_MS
+  });
+  return parseStatusOutput(stdout);
+}
+async function runStatus(args) {
+  const scope = recordingScope(args);
+  if (!scope) {
+    return failResult("device_record requires an authority-bound session and exact device", {
+      code: "SESSION_STALE"
     });
-    const active = parseStatusOutput(stdout);
+  }
+  try {
+    const active = await readScopedStatus(scope);
     return okResult({ action: "status", active });
   } catch (e) {
     const err = e;
@@ -61930,20 +62057,20 @@ function createDeviceRecordHandler() {
     if (args.action === "stop")
       return runStop(args);
     if (args.action === "status")
-      return runStatus();
+      return runStatus(args);
     return failResult(`Unknown action: "${args.action}". Expected start, stop, or status.`);
   };
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash8, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID7 } from "node:crypto";
 import { execFileSync as execFileSync7 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync4, existsSync as existsSync27, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync15, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync4, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename5, dirname as dirname15, extname, isAbsolute as isAbsolute3, join as join34, relative, resolve as resolve4, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
@@ -62017,14 +62144,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash7("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash8("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash7("sha256").update(bytes).digest("hex");
+  return createHash8("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -62569,7 +62696,7 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash8("sha256").update(bytes).digest("hex");
+  return createHash9("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -62798,7 +62925,7 @@ function readProofActionIdentity(appProjectRoot, actionId) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash8("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash9("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
@@ -63745,7 +63872,7 @@ function createProofCaptureHandler(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir10 } from "node:os";
@@ -63788,7 +63915,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash9("sha256");
+  const hash = createHash10("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -65598,7 +65725,7 @@ function safeSimctlTarget(deviceId) {
 }
 var inflightRestart = null;
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile27 = deps.execFile ?? defaultExecFile3;
+  const execFile28 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const unbindRunner = deps.unbindRunner ?? (() => {
   });
@@ -65638,7 +65765,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             return failResult("cdp_restart refused a non-exact iOS simulator identifier", "DEVICE_AUTHORITY_MISMATCH");
           }
           try {
-            await execFile27("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile28("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -65646,7 +65773,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile27("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile28("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -65666,11 +65793,11 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
           await sleep6(3e3);
         } else if (bundleId && targetPlatform === "android") {
           try {
-            await execFile27("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
+            await execFile28("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`adb force-stop ${bundleId}:ok`);
-            await execFile27("adb", [
+            await execFile28("adb", [
               "-s",
               args.deviceId,
               "shell",
@@ -65788,7 +65915,7 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { execFileSync as execFileSync9 } from "node:child_process";
 import { closeSync as closeSync5, existsSync as existsSync29, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync25, statSync as statSync10, unlinkSync as unlinkSync10, writeFileSync as writeFileSync16, writeSync as writeSync2 } from "node:fs";
 import { tmpdir as tmpdir11, userInfo as userInfo2 } from "node:os";
@@ -65836,7 +65963,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash10("md5").update(resolve5(projectRoot)).digest("hex").slice(0, 8);
+  return createHash11("md5").update(resolve5(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -66306,11 +66433,17 @@ function createMaestroTestAllHandler() {
       const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
       try {
         const stageResults = await runFlowParked(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
+          const remainingTimeout = start + timeout - Date.now();
+          if (remainingTimeout <= 0) {
+            const error2 = new Error("Maestro flow timeout exhausted before the next stage");
+            Object.assign(error2, { code: "ETIMEDOUT" });
+            throw error2;
+          }
           writeFileSync18(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
           return execFile24(flowDispatch.binPath, finalArgs, {
-            timeout,
+            timeout: remainingTimeout,
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
           });
@@ -66347,9 +66480,15 @@ function createMaestroTestAllHandler() {
       } catch (err) {
         if (err instanceof SessionAuthorityError)
           throw err;
-        const msg3 = err instanceof Error ? err.message : String(err);
-        const errWithOutput = err;
-        const capturedOutput = [errWithOutput.stdout, errWithOutput.stderr].filter((value) => typeof value === "string").join("\n").trim();
+        const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+        const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
+        const errWithOutput = stageError;
+        const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];
+        const capturedOutput = [
+          ...completed.flatMap((result) => [result.stdout, result.stderr]),
+          errWithOutput.stdout,
+          errWithOutput.stderr
+        ].filter((value) => typeof value === "string").join("\n").trim();
         const directEvidence = capturedOutput ? collectDirectRunnerEvidence(runnerReportDir, capturedOutput) : null;
         const deviceAuthority = directEvidence ? verifyMaestroDeviceAuthority({
           runner: flowDispatch.runner,
@@ -66657,7 +66796,7 @@ init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync10 } from "node:child_process";
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { readFileSync as readFileSync28, statSync as statSync11 } from "node:fs";
 import { join as join41 } from "node:path";
 function runText(command, args) {
@@ -66669,7 +66808,7 @@ function runText(command, args) {
   });
 }
 function generation(parts) {
-  return createHash11("sha256").update(parts.join("\0")).digest("hex");
+  return createHash12("sha256").update(parts.join("\0")).digest("hex");
 }
 function androidApkPaths(target, text) {
   return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
@@ -68258,7 +68397,7 @@ import { readFileSync as readFileSync32 } from "node:fs";
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname18, join as join46 } from "node:path";
 import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync30, readdirSync as readdirSync10, existsSync as existsSync32 } from "node:fs";
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
   return join46(projectRoot, ".rn-agent", "e2e");
@@ -68290,7 +68429,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash12("sha256").update(s).digest("hex");
+  return createHash13("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -70094,8 +70233,12 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
 init_device_arbiter();
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
+init_release_android_slot();
+import { execFile as execFileCb22 } from "node:child_process";
+import { promisify as promisify28 } from "node:util";
 init_process_birth();
 init_registry();
+var execFile26 = promisify28(execFileCb22);
 async function waitForExactStopped(probe, deadlineMs, code, message) {
   while (true) {
     const status = probe();
@@ -70167,7 +70310,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile26("adb", args, { timeout: 5e3, encoding: "utf8" })) {
   const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
@@ -70176,19 +70319,52 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
   if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
   }
+  const platform = String(binding.platform ?? "");
+  const deviceId = String(binding.deviceId ?? "");
+  const port = Number(binding.port);
   const current = processProbe(pid);
   if (current.status === "unknown") {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
   }
-  if (current.status === "absent" || current.birth.token !== expectedBirth)
+  if (current.status === "present" && current.birth.token === expectedBirth) {
+    signalProcess(pid, "SIGTERM");
+    await waitForExactStopped(() => {
+      const observed = processProbe(pid);
+      if (observed.status === "unknown")
+        return "unknown";
+      return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
+    }, deadlineMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+  }
+  if (platform !== "android")
     return;
-  signalProcess(pid, "SIGTERM");
-  await waitForExactStopped(() => {
-    const observed = processProbe(pid);
-    if (observed.status === "unknown")
-      return "unknown";
-    return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
-  }, deadlineMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+  if (!deviceId || !Number.isSafeInteger(port)) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "Android runner cleanup identity is incomplete");
+  }
+  const serial = ["-s", deviceId];
+  try {
+    await runAdb([...serial, "forward", "--remove", `tcp:${port}`]);
+    for (const pkg of OWNED_PACKAGES) {
+      await runAdb([...serial, "shell", "am", "force-stop", pkg]);
+      const process3 = await runAdb([...serial, "shell", "sh", "-c", `pidof ${pkg} || true`]);
+      if (process3.stdout.trim()) {
+        throw new Error(`${pkg} remains alive after force-stop`);
+      }
+    }
+    const instrumentation = await runAdb([
+      ...serial,
+      "shell",
+      "dumpsys",
+      "activity",
+      "instrumentation"
+    ]);
+    const output = `${instrumentation.stdout}
+${instrumentation.stderr}`;
+    if (OWNED_PACKAGES.some((pkg) => output.includes(pkg))) {
+      throw new Error("owned instrumentation remains registered");
+    }
+  } catch (error2) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
@@ -70697,7 +70873,7 @@ init_authority_gate();
 init_discovery();
 init_metro_cwd();
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
@@ -70732,12 +70908,12 @@ init_process_birth();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
 import { lstatSync as lstatSync10, readFileSync as readFileSync36, readlinkSync, realpathSync as realpathSync5 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join53, relative as relative3, resolve as resolve7 } from "node:path";
 function digest(parts) {
-  const hash = createHash13("sha256");
+  const hash = createHash14("sha256");
   for (const part of parts) {
     hash.update(part);
     hash.update("\0");
@@ -70879,7 +71055,7 @@ async function proveTargetDeviceAssociations(input, dependencies) {
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 function identity(value) {
-  return createHash14("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash15("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -71287,7 +71463,7 @@ var setClient = (c) => {
   client = c;
 };
 var createClient = (port) => new CDPClient(port);
-var execFileP = promisify28(execFile26);
+var execFileP = promisify29(execFile27);
 var mustOk = (res, what) => {
   const env = JSON.parse(res.content[0].text);
   if (env.ok === false)
@@ -71367,7 +71543,7 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
-      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash15("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash16("sha256").update(runner.capability).digest("hex") : void 0,
       runnerPort: runner?.port,
       runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
       deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -72246,7 +72422,7 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash15("sha256").update(errorBytes).digest("hex"),
+    errorSha256: createHash16("sha256").update(errorBytes).digest("hex"),
     device: identity2.device,
     runtime: identity2.runtime
   };

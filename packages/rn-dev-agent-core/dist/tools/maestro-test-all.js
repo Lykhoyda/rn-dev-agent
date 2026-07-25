@@ -8,7 +8,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
-import { assembleMaestroArgs, executeMaestroAuthorityStages, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
+import { assembleMaestroArgs, executeMaestroAuthorityStages, MaestroStageExecutionError, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
@@ -155,11 +155,17 @@ export function createMaestroTestAllHandler() {
             const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
             try {
                 const stageResults = await runFlowParked(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
+                    const remainingTimeout = start + timeout - Date.now();
+                    if (remainingTimeout <= 0) {
+                        const error = new Error('Maestro flow timeout exhausted before the next stage');
+                        Object.assign(error, { code: 'ETIMEDOUT' });
+                        throw error;
+                    }
                     writeFileSync(safeFlowFile, buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
                         ...commands,
                     ]), 'utf-8');
                     return execFile(flowDispatch.binPath, finalArgs, {
-                        timeout,
+                        timeout: remainingTimeout,
                         encoding: 'utf8',
                         maxBuffer: 10 * 1024 * 1024,
                     });
@@ -201,9 +207,17 @@ export function createMaestroTestAllHandler() {
             catch (err) {
                 if (err instanceof SessionAuthorityError)
                     throw err;
-                const msg = err instanceof Error ? err.message : String(err);
-                const errWithOutput = err;
-                const capturedOutput = [errWithOutput.stdout, errWithOutput.stderr]
+                const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+                const msg = stageError instanceof Error ? stageError.message : String(stageError);
+                const errWithOutput = stageError;
+                const completed = err instanceof MaestroStageExecutionError
+                    ? err.completedResults
+                    : [];
+                const capturedOutput = [
+                    ...completed.flatMap((result) => [result.stdout, result.stderr]),
+                    errWithOutput.stdout,
+                    errWithOutput.stderr,
+                ]
                     .filter((value) => typeof value === 'string')
                     .join('\n')
                     .trim();

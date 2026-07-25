@@ -124,6 +124,71 @@ test('failed grouped UI stages invalidate target authority after partial dispatc
   assert.deepEqual(calls, ['claim', 'execute', 'complete:false']);
 });
 
+test('later stage failures retain earlier device-authority evidence', async () => {
+  let stage = 0;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => undefined,
+    completeNativeOrigin: async () => undefined,
+    execFile: async () => {
+      stage += 1;
+      if (stage === 1) return { stdout: runnerLog(FOREIGN), stderr: '' };
+      throw new Error('second stage failed before producing output');
+    },
+  });
+
+  const result = await handler({
+    inlineYaml: `appId: ${APP_ID}\n---\n- launchApp\n- tapOn: Continue`,
+    platform: 'ios',
+    deviceId: EXACT,
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.match(envelope.meta.output, new RegExp(FOREIGN));
+});
+
+test('staged execution shares one flow timeout budget', async () => {
+  const timeouts: number[] = [];
+  let now = 1_000;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => undefined,
+    completeNativeOrigin: async () => undefined,
+    now: () => now,
+    execFile: async (_file, _args, options) => {
+      timeouts.push(options.timeout);
+      now += 250;
+      return { stdout: runnerLog(EXACT), stderr: '' };
+    },
+  });
+
+  await handler({
+    inlineYaml: `appId: ${APP_ID}\n---\n- launchApp\n- tapOn: Continue`,
+    platform: 'ios',
+    deviceId: EXACT,
+    timeoutMs: 1_000,
+  });
+
+  assert.deepEqual(timeouts, [1_000, 750]);
+});
+
 test('flow headers cannot override the authority-bound app', async () => {
   assert.equal(resolveMaestroFlowAppId(APP_ID, APP_ID), APP_ID);
   assert.throws(

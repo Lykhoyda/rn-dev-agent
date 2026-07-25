@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { stopBoundObserve } from '../../../dist/session/process-cleanup.js';
+import { stopBoundObserve, stopBoundRunner } from '../../../dist/session/process-cleanup.js';
 
 const binding = {
   port: 7333,
@@ -51,5 +51,63 @@ test('Observe cleanup classifies stop-request network failures', async () => {
       error instanceof Error &&
       error.message.includes('OBSERVE_AUTHORITY_MISMATCH') &&
       error.message.includes('failed or timed out'),
+  );
+});
+
+test('Android runner cleanup proves device-side instrumentation stopped', async () => {
+  const adbCalls: string[][] = [];
+  await stopBoundRunner(
+    {
+      platform: 'android',
+      deviceId: 'emulator-5554',
+      port: 27183,
+      pid: 900,
+      processBirth: 'runner-birth',
+      instanceId: 'runner-a',
+      capability: 'runner-capability',
+    },
+    () => ({ status: 'absent' as const }),
+    () => undefined,
+    2_000,
+    async (args) => {
+      adbCalls.push(args);
+      return { stdout: '', stderr: '' };
+    },
+  );
+
+  assert.deepEqual(adbCalls[0], [
+    '-s',
+    'emulator-5554',
+    'forward',
+    '--remove',
+    'tcp:27183',
+  ]);
+  assert.equal(adbCalls.filter((args) => args.includes('force-stop')).length, 2);
+  assert.equal(adbCalls.at(-1)?.includes('instrumentation'), true);
+});
+
+test('Android runner cleanup refuses release while instrumentation remains', async () => {
+  await assert.rejects(
+    stopBoundRunner(
+      {
+        platform: 'android',
+        deviceId: 'emulator-5554',
+        port: 27183,
+        pid: 900,
+        processBirth: 'runner-birth',
+        instanceId: 'runner-a',
+        capability: 'runner-capability',
+      },
+      () => ({ status: 'absent' as const }),
+      () => undefined,
+      2_000,
+      async (args) => ({
+        stdout: args.includes('instrumentation')
+          ? 'dev.lykhoyda.rndevagent.androidrunner.test'
+          : '',
+        stderr: '',
+      }),
+    ),
+    /device-side runner termination is unproven/,
   );
 });

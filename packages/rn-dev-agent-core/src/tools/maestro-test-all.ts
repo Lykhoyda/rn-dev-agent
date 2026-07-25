@@ -20,6 +20,7 @@ import {
 import {
   assembleMaestroArgs,
   executeMaestroAuthorityStages,
+  MaestroStageExecutionError,
   planMaestroAuthorityStages,
   resolveMaestroFlowAppId,
   runFlowParked,
@@ -236,6 +237,12 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
             executeMaestroAuthorityStages(
               parsedCommands,
               async (commands) => {
+                const remainingTimeout = start + timeout - Date.now();
+                if (remainingTimeout <= 0) {
+                  const error = new Error('Maestro flow timeout exhausted before the next stage');
+                  Object.assign(error, { code: 'ETIMEDOUT' });
+                  throw error;
+                }
                 writeFileSync(
                   safeFlowFile,
                   buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
@@ -244,7 +251,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
                   'utf-8',
                 );
                 return execFile(flowDispatch.binPath, finalArgs, {
-                  timeout,
+                  timeout: remainingTimeout,
                   encoding: 'utf8',
                   maxBuffer: 10 * 1024 * 1024,
                 });
@@ -289,9 +296,22 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         if (!ok && args.stopOnFailure) break;
       } catch (err) {
         if (err instanceof SessionAuthorityError) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        const errWithOutput = err as { stdout?: unknown; stderr?: unknown };
-        const capturedOutput = [errWithOutput.stdout, errWithOutput.stderr]
+        const stageError =
+          err instanceof MaestroStageExecutionError ? err.stageError : err;
+        const msg = stageError instanceof Error ? stageError.message : String(stageError);
+        const errWithOutput = stageError as { stdout?: unknown; stderr?: unknown };
+        const completed =
+          err instanceof MaestroStageExecutionError
+            ? (err.completedResults as ReadonlyArray<{
+                stdout?: unknown;
+                stderr?: unknown;
+              }>)
+            : [];
+        const capturedOutput = [
+          ...completed.flatMap((result) => [result.stdout, result.stderr]),
+          errWithOutput.stdout,
+          errWithOutput.stderr,
+        ]
           .filter((value): value is string => typeof value === 'string')
           .join('\n')
           .trim();

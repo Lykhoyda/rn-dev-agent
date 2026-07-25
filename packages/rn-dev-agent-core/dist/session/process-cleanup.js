@@ -1,6 +1,10 @@
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { OWNED_PACKAGES } from '../runners/release-android-slot.js';
 import { probeManagedMetroListener } from './managed-metro.js';
 import { probeProcessBirth } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
+const execFile = promisify(execFileCb);
 async function waitForExactStopped(probe, deadlineMs, code, message) {
     while (true) {
         const status = probe();
@@ -78,7 +82,7 @@ export async function stopBoundObserve(binding, listenerProbe = probeManagedMetr
         return observed.status === 'listening' && observed.pid === pid ? 'running' : 'stopped';
     }, deadlineMs, 'OBSERVE_AUTHORITY_MISMATCH', 'Observe listener did not stop before the cleanup deadline');
 }
-export async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2_000) {
+export async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2_000, runAdb = async (args) => execFile('adb', args, { timeout: 5_000, encoding: 'utf8' })) {
     const deadlineMs = Date.now() + timeoutMs;
     const pid = Number(binding.pid);
     const expectedBirth = String(binding.processBirth ?? '');
@@ -87,19 +91,52 @@ export async function stopBoundRunner(binding, processProbe = probeProcessBirth,
     if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
         throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'runner cleanup identity is incomplete');
     }
+    const platform = String(binding.platform ?? '');
+    const deviceId = String(binding.deviceId ?? '');
+    const port = Number(binding.port);
     const current = processProbe(pid);
     if (current.status === 'unknown') {
         throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'runner process identity is unavailable');
     }
-    if (current.status === 'absent' || current.birth.token !== expectedBirth)
+    if (current.status === 'present' && current.birth.token === expectedBirth) {
+        signalProcess(pid, 'SIGTERM');
+        await waitForExactStopped(() => {
+            const observed = processProbe(pid);
+            if (observed.status === 'unknown')
+                return 'unknown';
+            return observed.status === 'present' && observed.birth.token === expectedBirth
+                ? 'running'
+                : 'stopped';
+        }, deadlineMs, 'RUNNER_ADOPTION_REQUIRED', 'runner process did not stop before the cleanup deadline');
+    }
+    if (platform !== 'android')
         return;
-    signalProcess(pid, 'SIGTERM');
-    await waitForExactStopped(() => {
-        const observed = processProbe(pid);
-        if (observed.status === 'unknown')
-            return 'unknown';
-        return observed.status === 'present' && observed.birth.token === expectedBirth
-            ? 'running'
-            : 'stopped';
-    }, deadlineMs, 'RUNNER_ADOPTION_REQUIRED', 'runner process did not stop before the cleanup deadline');
+    if (!deviceId || !Number.isSafeInteger(port)) {
+        throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'Android runner cleanup identity is incomplete');
+    }
+    const serial = ['-s', deviceId];
+    try {
+        await runAdb([...serial, 'forward', '--remove', `tcp:${port}`]);
+        for (const pkg of OWNED_PACKAGES) {
+            await runAdb([...serial, 'shell', 'am', 'force-stop', pkg]);
+            const process = await runAdb([...serial, 'shell', 'sh', '-c', `pidof ${pkg} || true`]);
+            if (process.stdout.trim()) {
+                throw new Error(`${pkg} remains alive after force-stop`);
+            }
+        }
+        const instrumentation = await runAdb([
+            ...serial,
+            'shell',
+            'dumpsys',
+            'activity',
+            'instrumentation',
+        ]);
+        const output = `${instrumentation.stdout}\n${instrumentation.stderr}`;
+        if (OWNED_PACKAGES.some((pkg) => output.includes(pkg))) {
+            throw new Error('owned instrumentation remains registered');
+        }
+    }
+    catch (error) {
+        throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', `Android device-side runner termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
+    }
 }

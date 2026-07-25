@@ -9,6 +9,7 @@ import {
   acceptDeeplinkOpenConfirmation,
   type RunnerDialogOutcome,
 } from './device-system-dialog.js';
+import { completeManagedNativeOriginAuthority } from '../session/authority-gate.js';
 
 const execFile = promisify(execFileCb);
 const EXEC_TIMEOUT_MS = 10_000;
@@ -19,6 +20,7 @@ export interface DeeplinkArgs {
   packageName?: string;
   deviceId?: string;
   metroPort?: number;
+  completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
 }
 
 export function iosDeeplinkCommandArgs(url: string, deviceId?: string): string[] {
@@ -168,7 +170,9 @@ export function annotatePicker(
   return result;
 }
 
-export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<ToolResult> {
+export function createDeviceDeeplinkHandler(deps: {
+  completeNativeOrigin?: (args: DeeplinkArgs, targetExpected: boolean) => Promise<void>;
+} = {}): (args: DeeplinkArgs) => Promise<ToolResult> {
   return async (args) => {
     if (!args.url || args.url.length === 0) {
       return failResult('url is required', { code: 'INVALID_ARGS' });
@@ -213,28 +217,34 @@ export function createDeviceDeeplinkHandler(): (args: DeeplinkArgs) => Promise<T
         'DEVICE_AUTHORITY_MISMATCH',
       );
     }
-    const result =
-      platform === 'ios'
-        ? await openIosDeeplink(args.url, args.deviceId)
-        : await openAndroidDeeplink(args.url, args.packageName, args.deviceId);
-    // GH #61 B.1: warn on suspicious-looking deep links (3+ segments OR
-    // success-state suffix). Stateless heuristic; no overhead on short URLs.
-    const annotated = annotateDeepLinkDepth(result, { url: args.url });
-    // GH #136 sub-3 / GH #523 sub-3: the picker can appear after a deep link.
-    // Best-effort dismiss on both platforms now that iOS routes through
-    // rn-fast-runner (no-op when no session is open); never fail the deeplink.
-    if (!annotated.isError) {
-      // GH #545: on iOS, simctl openurl can park the deeplink behind a
-      // SpringBoard "Open in <app>?" confirmation that Maestro/idb cannot
-      // reach. Accept it via the fast-runner before the picker check;
-      // best-effort — a failure never fails the deeplink.
-      const openConfirmation =
-        platform === 'ios' ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
-      const outcome = await clearDevClientPickerIfPresent(platform, args.metroPort).catch(
-        () => null,
-      );
-      return annotatePicker(annotated, outcome, openConfirmation);
+    let transitionDispatched = false;
+    try {
+      transitionDispatched = true;
+      const result =
+        platform === 'ios'
+          ? await openIosDeeplink(args.url, args.deviceId)
+          : await openAndroidDeeplink(args.url, args.packageName, args.deviceId);
+      const annotated = annotateDeepLinkDepth(result, { url: args.url });
+      if (!annotated.isError) {
+        const openConfirmation =
+          platform === 'ios' ? await acceptDeeplinkOpenConfirmation().catch(() => null) : null;
+        const outcome = await clearDevClientPickerIfPresent(platform, args.metroPort).catch(
+          () => null,
+        );
+        return annotatePicker(annotated, outcome, openConfirmation);
+      }
+      return annotated;
+    } finally {
+      if (transitionDispatched) {
+        await (
+          args.completeNativeOrigin ??
+          ((targetExpected: boolean) =>
+            (deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority)(
+              args,
+              targetExpected,
+            ))
+        )(false);
+      }
     }
-    return annotated;
   };
 }

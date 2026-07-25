@@ -162,6 +162,32 @@ export function authorityProfileFor(tool, args = {}) {
     if (tool === 'device_find' && args.action === 'click') {
         return profiles.get('device_press');
     }
+    if (tool === 'device_deeplink') {
+        return {
+            kind: 'authoritative',
+            axes: ['C', 'S', 'I', 'M', 'D'],
+            managedOrigin: true,
+            mutation: true,
+            liveBundleProbe: false,
+        };
+    }
+    if (tool === 'device_permission') {
+        return {
+            kind: 'authoritative',
+            axes: ['C', 'S', 'I', 'D'],
+            mutation: args.action !== 'query',
+            liveBundleProbe: false,
+        };
+    }
+    if (tool === 'device_record') {
+        return {
+            kind: 'authoritative',
+            axes: ['C', 'S', 'I', 'D'],
+            sessionIdentity: true,
+            mutation: args.action !== 'status',
+            liveBundleProbe: false,
+        };
+    }
     if (tool === 'device_reset_state') {
         const storageMutation = Array.isArray(args.storageKeys) && args.storageKeys.length > 0;
         return {

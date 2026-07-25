@@ -9,9 +9,10 @@ usage() {
 Usage: record_proof.sh <subcommand> [args]
 
 Subcommands:
-  start <platform> <output-path>   Start background video recording
-  stop                             Stop all active recordings
-  status                           Show active recordings
+  start <platform> <output-path> --scope <id>  Start a scoped recording
+  bind-identity <scope> <pid> <birth>          Bind process identity
+  stop <scope> <pid> <birth>                   Stop one scoped recording
+  status <scope>                               Show one scoped recording
   convert-gif <input> <output>     Convert video to GIF (requires ffmpeg)
   label <input> <output> <labels-json>
     Add timed text labels to a recorded video.
@@ -26,6 +27,8 @@ EOF
 
 pid_file() { echo "${PID_PREFIX}-${1}.pid"; }
 path_file() { echo "${PID_PREFIX}-${1}.path"; }
+platform_file() { echo "${PID_PREFIX}-${1}.platform"; }
+birth_file() { echo "${PID_PREFIX}-${1}.birth"; }
 
 is_alive() {
   local pid="$1"
@@ -47,11 +50,17 @@ cmd_start() {
   # and only forwards an identifier when there are 2+ candidates; the
   # single-device case still uses the implicit `booted`/auto resolver below.
   local target_id=""
+  local scope=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --udid|--serial)
         target_id="${2:-}"
         [[ -z "$target_id" ]] && { echo "Error: $1 requires a value" >&2; exit 1; }
+        shift 2
+        ;;
+      --scope)
+        scope="${2:-}"
+        [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
         shift 2
         ;;
       *)
@@ -60,9 +69,10 @@ cmd_start() {
         ;;
     esac
   done
+  [[ -z "$scope" ]] && { echo "Error: start requires --scope" >&2; exit 1; }
 
   local pf
-  pf="$(pid_file "$platform")"
+  pf="$(pid_file "$scope")"
   if [[ -f "$pf" ]] && is_alive "$(cat "$pf")"; then
     echo "Error: Recording already in progress for $platform (PID $(cat "$pf"))" >&2
     exit 1
@@ -73,7 +83,7 @@ cmd_start() {
 
   # Record to temp file in native format; stop will convert to MP4
   local raw_file="${RAW_PREFIX}-${platform}-$$.mov"
-  local recorder_log="${PID_PREFIX}-${platform}.log"
+  local recorder_log="${PID_PREFIX}-${scope}.log"
 
   if [[ "$platform" == "ios" ]]; then
     if ! xcrun simctl list devices booted 2>/dev/null | grep -q "Booted"; then
@@ -90,6 +100,12 @@ cmd_start() {
       exit 1
     fi
     local device_path="/sdcard/rn-dev-agent-proof-$$.mp4"
+    local -a adb_args=()
+    [[ -n "$target_id" ]] && adb_args+=(-s "$target_id")
+    if [[ -n "$(adb "${adb_args[@]+"${adb_args[@]}"}" shell pidof screenrecord 2>/dev/null || true)" ]]; then
+      echo "Error: A screenrecord process already owns this device" >&2
+      exit 1
+    fi
     if [[ -n "$target_id" ]]; then
       adb -s "$target_id" shell screenrecord "$device_path" > "$recorder_log" 2>&1 &
     else
@@ -102,175 +118,159 @@ cmd_start() {
   if ! is_alive "$rec_pid"; then
     echo "Error: Recording process died immediately" >&2
     [[ -s "$recorder_log" ]] && sed -n '1,20p' "$recorder_log" >&2
-    rm -f "$pf" "$(path_file "$platform")" "${PID_PREFIX}-${platform}.device-path" "$recorder_log"
+    rm -f "$pf" "$(path_file "$scope")" "${PID_PREFIX}-${scope}.device-path" "$recorder_log"
     exit 1
   fi
 
   echo "$rec_pid" > "$pf"
-  echo "$output_path" > "$(path_file "$platform")"
-  echo "$raw_file" > "${PID_PREFIX}-${platform}.raw-path"
-  [[ "$platform" == "android" ]] && echo "$device_path" > "${PID_PREFIX}-${platform}.device-path"
+  echo "$platform" > "$(platform_file "$scope")"
+  echo "$output_path" > "$(path_file "$scope")"
+  echo "$raw_file" > "${PID_PREFIX}-${scope}.raw-path"
+  [[ "$platform" == "android" ]] && echo "$device_path" > "${PID_PREFIX}-${scope}.device-path"
   # Persist the Android serial so the stop path scopes pkill/pull/rm to
   # the same device. Unconditionally write or clear — leaving a stale
   # sidecar from a prior recording would misroute this stop to a now-
   # disconnected device.
   if [[ "$platform" == "android" ]]; then
     if [[ -n "$target_id" ]]; then
-      echo "$target_id" > "${PID_PREFIX}-${platform}.serial"
+      echo "$target_id" > "${PID_PREFIX}-${scope}.serial"
     else
-      rm -f "${PID_PREFIX}-${platform}.serial"
+      rm -f "${PID_PREFIX}-${scope}.serial"
     fi
+    local remote_pid
+    remote_pid="$(adb "${adb_args[@]+"${adb_args[@]}"}" shell pidof screenrecord 2>/dev/null | tr -d '\r' | xargs)"
+    [[ ! "$remote_pid" =~ ^[0-9]+$ ]] && { echo "Error: Could not bind the device-side screenrecord PID" >&2; exit 1; }
+    echo "$remote_pid" > "${PID_PREFIX}-${scope}.remote-pid"
   fi
   echo "Recording started: platform=$platform pid=$rec_pid output=$output_path"
 }
 
+cmd_bind_identity() {
+  local scope="${1:-}"
+  local pid="${2:-}"
+  local birth="${3:-}"
+  [[ ! "$scope" =~ ^[a-f0-9]{64}$ || ! "$pid" =~ ^[0-9]+$ || -z "$birth" ]] && {
+    echo "Error: bind-identity requires valid <scope> <pid> <birth>" >&2
+    exit 1
+  }
+  [[ ! -f "$(pid_file "$scope")" || "$(cat "$(pid_file "$scope")")" != "$pid" ]] && {
+    echo "Error: recording PID does not match scope" >&2
+    exit 1
+  }
+  echo "$birth" > "$(birth_file "$scope")"
+}
+
 cmd_stop() {
-  local found=false
-  local saved_paths=()
+  local scope="${1:-}"
+  local expected_pid="${2:-}"
+  local expected_birth="${3:-}"
+  [[ ! "$scope" =~ ^[a-f0-9]{64}$ || ! "$expected_pid" =~ ^[0-9]+$ || -z "$expected_birth" ]] && {
+    echo "Error: stop requires valid <scope> <pid> <birth>" >&2
+    exit 1
+  }
+  local pf
+  pf="$(pid_file "$scope")"
+  [[ ! -f "$pf" ]] && { echo "No active recordings found"; return; }
+  local pid
+  pid="$(cat "$pf")"
+  local birth="unbound"
+  [[ -f "$(birth_file "$scope")" ]] && birth="$(cat "$(birth_file "$scope")")"
+  [[ "$pid" != "$expected_pid" || "$birth" != "$expected_birth" ]] && {
+    echo "Error: recording identity does not match scope" >&2
+    exit 1
+  }
+  local platform
+  platform="$(cat "$(platform_file "$scope")")"
+  local pathf
+  pathf="$(path_file "$scope")"
+  local output_path=""
+  [[ -f "$pathf" ]] && output_path="$(cat "$pathf")"
+  local raw_pathf="${PID_PREFIX}-${scope}.raw-path"
+  local raw_file=""
+  [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
 
-  for pf in "${PID_PREFIX}"-*.pid; do
-    [[ -f "$pf" ]] || continue
-    found=true
-
-    local platform
-    platform="$(basename "$pf" .pid | sed "s/^$(basename "$PID_PREFIX")-//")"
-    local pid
-    pid="$(cat "$pf")"
-    local output_path=""
-    local pathf
-    pathf="$(path_file "$platform")"
-    [[ -f "$pathf" ]] && output_path="$(cat "$pathf")"
-
-    local raw_file=""
-    local raw_pathf="${PID_PREFIX}-${platform}.raw-path"
-    [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
-
-    # --- Stop the recording process ---
+  if is_alive "$pid"; then
+    kill -INT "$pid"
+    local waited=0
+    while is_alive "$pid" && [[ $waited -lt 10 ]]; do
+      sleep 0.5
+      waited=$((waited + 1))
+    done
     if is_alive "$pid"; then
-      kill -INT "$pid" 2>/dev/null || true
-
-      local waited=0
-      while is_alive "$pid" && [[ $waited -lt 10 ]]; do
-        sleep 0.5
-        waited=$((waited + 1))
-      done
-
-      if is_alive "$pid"; then
-        echo "Warning: Recording process $pid did not stop gracefully, force killing" >&2
-        kill -9 "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-        sleep 3
-      fi
+      kill -9 "$pid"
+      sleep 3
     fi
+  fi
+  sleep 1
 
-    # Wait for file to be fully written to disk
-    sleep 1
-
-    # --- Pull Android recording from device ---
-    if [[ "$platform" == "android" ]]; then
-      # GH #173 sub-issue 1: scope every adb call to the serial that
-      # cmd_start recorded against, so multi-device stop doesn't hit
-      # "ambiguous device" or operate on the wrong target. Falls back to
-      # implicit selection when no serial sidecar exists (single-device
-      # case, or recording started before this change).
-      local -a adb_args=()
-      local serialf="${PID_PREFIX}-${platform}.serial"
-      if [[ -f "$serialf" ]]; then
-        adb_args+=(-s "$(cat "$serialf")")
-      fi
-      # Ensure remote screenrecord is stopped (local SIGINT may not propagate)
-      adb "${adb_args[@]+"${adb_args[@]}"}" shell pkill -2 screenrecord 2>/dev/null || true
-      local device_pathf="${PID_PREFIX}-${platform}.device-path"
-      if [[ -f "$device_pathf" ]]; then
-        local device_path
-        device_path="$(cat "$device_pathf")"
-        sleep 2
-        adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
-        adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
-        rm -f "$device_pathf"
-      fi
-      rm -f "$serialf"
+  if [[ "$platform" == "android" ]]; then
+    local -a adb_args=()
+    local serialf="${PID_PREFIX}-${scope}.serial"
+    [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
+    local remote_pidf="${PID_PREFIX}-${scope}.remote-pid"
+    if [[ -f "$remote_pidf" ]]; then
+      local remote_pid
+      remote_pid="$(cat "$remote_pidf")"
+      [[ "$remote_pid" =~ ^[0-9]+$ ]] && adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -2 "$remote_pid" 2>/dev/null || true
     fi
-
-    # --- Convert to MP4 with faststart + validate ---
-    # Normalize output path to .mp4 (strip any video extension first)
-    output_path="${output_path%.*}.mp4"
-    mkdir -p "$(dirname "$output_path")" || true
-
-    if [[ -n "$raw_file" && -f "$raw_file" ]]; then
-      if command -v ffmpeg >/dev/null 2>&1; then
-        local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
-        if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$tmp_mp4" 2>/dev/null; then
-          # Validate with ffprobe
-          if command -v ffprobe >/dev/null 2>&1; then
-            if ffprobe -v error -show_entries format=duration "$tmp_mp4" 2>/dev/null | grep -q "duration="; then
-              mv "$tmp_mp4" "$output_path"
-            else
-              echo "Warning: Converted file failed validation. Keeping raw file as .mov" >&2
-              mv "$raw_file" "${output_path%.mp4}.mov"
-              output_path="${output_path%.mp4}.mov"
-              rm -f "$tmp_mp4"
-            fi
-          else
-            mv "$tmp_mp4" "$output_path"
-          fi
-        else
-          echo "Warning: ffmpeg conversion failed. Keeping raw file as .mov" >&2
-          mv "$raw_file" "${output_path%.mp4}.mov"
-          output_path="${output_path%.mp4}.mov"
-          rm -f "$tmp_mp4"
-        fi
-      else
-        echo "Warning: ffmpeg not available. Output is raw ${platform} format (install: brew install ffmpeg)" >&2
-        if [[ "$platform" == "ios" ]]; then
-          mv "$raw_file" "${output_path%.mp4}.mov"
-          output_path="${output_path%.mp4}.mov"
-        else
-          mv "$raw_file" "$output_path"
-        fi
-      fi
-      rm -f "$raw_file"
+    local device_pathf="${PID_PREFIX}-${scope}.device-path"
+    if [[ -f "$device_pathf" ]]; then
+      local device_path
+      device_path="$(cat "$device_pathf")"
+      sleep 2
+      adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
+      adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
     fi
-
-    rm -f "$pf" "$pathf" "$raw_pathf" "${PID_PREFIX}-${platform}.log"
-
-    if [[ -n "$output_path" && -f "$output_path" ]]; then
-      local size
-      size="$(wc -c < "$output_path" | tr -d ' ')"
-      echo "Saved: $output_path ($size bytes)"
-      saved_paths+=("$output_path")
-    else
-      echo "Warning: Recording for $platform may not have saved correctly" >&2
-    fi
-  done
-
-  if [[ "$found" == "false" ]]; then
-    echo "No active recordings found"
   fi
 
-  for p in "${saved_paths[@]+"${saved_paths[@]}"}"; do
-    echo "$p"
-  done
+  output_path="${output_path%.*}.mp4"
+  mkdir -p "$(dirname "$output_path")" || true
+  if [[ -n "$raw_file" && -f "$raw_file" ]]; then
+    if command -v ffmpeg >/dev/null 2>&1; then
+      local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
+      if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$tmp_mp4" 2>/dev/null; then
+        mv "$tmp_mp4" "$output_path"
+      else
+        mv "$raw_file" "${output_path%.mp4}.mov"
+        output_path="${output_path%.mp4}.mov"
+        rm -f "$tmp_mp4"
+      fi
+    elif [[ "$platform" == "ios" ]]; then
+      mv "$raw_file" "${output_path%.mp4}.mov"
+      output_path="${output_path%.mp4}.mov"
+    else
+      mv "$raw_file" "$output_path"
+    fi
+    rm -f "$raw_file"
+  fi
+
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,device-path}
+  if [[ -n "$output_path" && -f "$output_path" ]]; then
+    local size
+    size="$(wc -c < "$output_path" | tr -d ' ')"
+    echo "Saved: $output_path ($size bytes)"
+  else
+    echo "Warning: Recording for $platform may not have saved correctly" >&2
+  fi
 }
 
 cmd_status() {
-  local found=false
-  for pf in "${PID_PREFIX}"-*.pid; do
-    [[ -f "$pf" ]] || continue
-    found=true
-    local platform
-    platform="$(basename "$pf" .pid | sed "s/^$(basename "$PID_PREFIX")-//")"
-    local pid
-    pid="$(cat "$pf")"
-    local status="dead"
-    is_alive "$pid" && status="recording"
-    local pathf
-    pathf="$(path_file "$platform")"
-    local output=""
-    [[ -f "$pathf" ]] && output="$(cat "$pathf")"
-    echo "$platform: pid=$pid status=$status output=$output"
-  done
-  [[ "$found" == "false" ]] && echo "No active recordings"
+  local scope="${1:-}"
+  [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
+  local pf
+  pf="$(pid_file "$scope")"
+  [[ ! -f "$pf" ]] && { echo "No active recordings"; return; }
+  local pid
+  pid="$(cat "$pf")"
+  local platform
+  platform="$(cat "$(platform_file "$scope")")"
+  local birth="unbound"
+  [[ -f "$(birth_file "$scope")" ]] && birth="$(cat "$(birth_file "$scope")")"
+  local status="dead"
+  is_alive "$pid" && status="recording"
+  local output=""
+  [[ -f "$(path_file "$scope")" ]] && output="$(cat "$(path_file "$scope")")"
+  echo "$platform: pid=$pid birth=$birth status=$status output=$output"
 }
 
 cmd_convert_gif() {
@@ -435,8 +435,9 @@ PYEOF
 
 case "${1:-}" in
   start)       shift; cmd_start "$@" ;;
-  stop)        cmd_stop ;;
-  status)      cmd_status ;;
+  bind-identity) shift; cmd_bind_identity "$@" ;;
+  stop)        shift; cmd_stop "$@" ;;
+  status)      shift; cmd_status "$@" ;;
   convert-gif) shift; cmd_convert_gif "$@" ;;
   label)       shift; cmd_label "$@" ;;
   *)           usage ;;

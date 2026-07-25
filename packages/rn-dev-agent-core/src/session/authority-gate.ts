@@ -194,6 +194,20 @@ function bindSessionArguments(
   if (metro && (profile.axes.includes('M') || profile.kind === 'transition')) {
     bindExactArgument(args, 'metroPort', metro.port, 'METRO_AUTHORITY_MISMATCH');
   }
+  if (profile.sessionIdentity) {
+    bindExactArgument(
+      args,
+      'sessionId',
+      status.sessionId,
+      'AUTHORITY_LOST_DURING_OPERATION',
+    );
+    bindExactArgument(
+      args,
+      'claimEpoch',
+      status.claimEpoch,
+      'AUTHORITY_LOST_DURING_OPERATION',
+    );
+  }
 }
 
 function authorityFailure(error: unknown): ToolResult {

@@ -48,6 +48,24 @@ test('device_find click and lifecycle tools use mutation-aware origin authority'
   assert.equal(storageReset.postflightAxes?.includes('B'), false);
 });
 
+test('OS-scoped device tools do not require a live app origin or runner', () => {
+  const deeplink = authorityProfileFor('device_deeplink');
+  assert.deepEqual(deeplink.axes, ['C', 'S', 'I', 'M', 'D']);
+  assert.equal(deeplink.managedOrigin, true);
+
+  const permissionQuery = authorityProfileFor('device_permission', { action: 'query' });
+  const permissionGrant = authorityProfileFor('device_permission', { action: 'grant' });
+  assert.deepEqual(permissionQuery.axes, ['C', 'S', 'I', 'D']);
+  assert.equal(permissionQuery.mutation, false);
+  assert.equal(permissionGrant.mutation, true);
+
+  const recordingStatus = authorityProfileFor('device_record', { action: 'status' });
+  assert.deepEqual(recordingStatus.axes, ['C', 'S', 'I', 'D']);
+  assert.equal(recordingStatus.sessionIdentity, true);
+  assert.equal(recordingStatus.mutation, false);
+  assert.equal(authorityProfileFor('device_record', { action: 'stop' }).mutation, true);
+});
+
 test('hybrid execution separates required and optional bundle authority', () => {
   for (const tool of ['cdp_auto_login', 'cdp_run_e2e_suite']) {
     const profile = authorityProfileFor(tool);

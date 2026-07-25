@@ -126,6 +126,20 @@ interface AuthorityStage {
   requiresOrigin: boolean;
 }
 
+export class MaestroStageExecutionError<T> extends Error {
+  readonly completedResults: readonly T[];
+  readonly stageError: unknown;
+
+  constructor(completedResults: readonly T[], stageError: unknown) {
+    super(stageError instanceof Error ? stageError.message : String(stageError), {
+      cause: stageError,
+    });
+    this.name = 'MaestroStageExecutionError';
+    this.completedResults = [...completedResults];
+    this.stageError = stageError;
+  }
+}
+
 const lifecycleCommands = new Set(['launchApp', 'clearState', 'killApp', 'stopApp']);
 
 function commandName(command: unknown): string | null {
@@ -194,7 +208,7 @@ export async function executeMaestroAuthorityStages<T>(
       results.push(await executeStage(stage.commands));
     } catch (error) {
       await completeOrigin(false);
-      throw error;
+      throw new MaestroStageExecutionError(results, error);
     }
   }
   await completeOrigin(plan.targetExpected);
@@ -242,6 +256,7 @@ export interface MaestroRunDeps {
   parkFlow?: typeof runFlowParked;
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+  now?: () => number;
   execFile?: (
     file: string,
     args: string[],
@@ -275,6 +290,7 @@ export function createMaestroRunHandler(
   const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
   const parkFlow = deps.parkFlow ?? runFlowParked;
   const execute = deps.execFile ?? defaultExecFile;
+  const now = deps.now ?? Date.now;
   return async (args) => {
     // GH #116: validate params shape FIRST so a malformed payload is rejected
     // regardless of platform / dispatch-tier availability. CI envs without
@@ -403,6 +419,7 @@ export function createMaestroRunHandler(
     }
 
     const timeout = args.timeoutMs ?? 120_000;
+    const flowDeadline = now() + timeout;
 
     // GH #116: build the final argv. Start with the dispatch tier's
     // base args, then append `-e KEY=VALUE` pairs for any supplied
@@ -469,13 +486,19 @@ export function createMaestroRunHandler(
           executeMaestroAuthorityStages(
             validatedCommands,
             async (commands) => {
+              const remainingTimeout = flowDeadline - now();
+              if (remainingTimeout <= 0) {
+                const error = new Error('Maestro flow timeout exhausted before the next stage');
+                Object.assign(error, { code: 'ETIMEDOUT' });
+                throw error;
+              }
               writeFileSync(
                 flowFile,
                 buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
                 'utf-8',
               );
               return execute(dispatch.binPath, finalArgs, {
-                timeout,
+                timeout: remainingTimeout,
                 encoding: 'utf8',
                 maxBuffer: 10 * 1024 * 1024,
               });
@@ -573,7 +596,9 @@ export function createMaestroRunHandler(
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       if (err instanceof SessionAuthorityError) throw err;
-      const msg = err instanceof Error ? err.message : String(err);
+      const stageError =
+        err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const msg = stageError instanceof Error ? stageError.message : String(stageError);
       // Multi-LLM review of PR #115 (Codex conf 95): when execFile
       // throws on timeout (or kill), Node attaches the partial stdout
       // and stderr to the error object. Preserve them in `data.output`
@@ -582,11 +607,21 @@ export function createMaestroRunHandler(
       // failure — e.g. a SELECTOR_NOT_FOUND emitted just before the
       // timeout boundary. Without this, auto-repair is silently
       // pessimised exactly when devices are slow / under load.
-      const errAny = err as { stdout?: unknown; stderr?: unknown };
-      const stdout = typeof errAny?.stdout === 'string' ? errAny.stdout : '';
-      const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
+      const errAny = stageError as { stdout?: unknown; stderr?: unknown };
+      const completed =
+        err instanceof MaestroStageExecutionError
+          ? (err.completedResults as ReadonlyArray<{ stdout?: unknown; stderr?: unknown }>)
+          : [];
+      const stdout = [
+        ...completed.map((result) => (typeof result.stdout === 'string' ? result.stdout : '')),
+        typeof errAny?.stdout === 'string' ? errAny.stdout : '',
+      ].join('\n');
+      const stderr = [
+        ...completed.map((result) => (typeof result.stderr === 'string' ? result.stderr : '')),
+        typeof errAny?.stderr === 'string' ? errAny.stderr : '',
+      ].join('\n');
       const combined = combineRunnerOutput(stdout, stderr);
-      const { timedOut, outputTruncated } = classifyExecError(err);
+      const { timedOut, outputTruncated } = classifyExecError(stageError);
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
@@ -599,7 +634,9 @@ export function createMaestroRunHandler(
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError =
         combined.length === 0 &&
-        ['ENOENT', 'EACCES'].includes(String((err as { code?: unknown } | null)?.code ?? ''));
+        ['ENOENT', 'EACCES'].includes(
+          String((stageError as { code?: unknown } | null)?.code ?? ''),
+        );
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
       // A run that produced no output never reached the device, so there is no
