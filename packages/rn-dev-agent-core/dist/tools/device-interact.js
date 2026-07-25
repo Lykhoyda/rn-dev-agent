@@ -137,9 +137,9 @@ export async function fetchSnapshotNodes(allowCache = false) {
         sessionName: session?.name,
     }, {
         closeSession: async () => {
-            clearActiveSession();
             await stopFastRunner(session?.deviceId);
             await stopAndroidRunner(session?.deviceId);
+            clearActiveSession();
             return okResult({ closed: true });
         },
         openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId),

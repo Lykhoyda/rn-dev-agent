@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  _setFastRunnerStateForTest,
+  getFastRunnerState,
   probeFastRunnerLiveness,
   reapStaleFastRunner,
 } from '../../dist/runners/rn-fast-runner-client.js';
@@ -422,4 +424,24 @@ test('M7 reap: unproven SIGKILL termination preserves state', async () => {
     /RUNNER_ADOPTION_REQUIRED/,
   );
   assert.equal(clearCalls, 0);
+});
+
+test('M7 reap: completed teardown cannot clear a concurrent replacement', async () => {
+  const replacement = {
+    ...STATE,
+    pid: STATE.pid + 1,
+    processBirth: 'replacement-birth',
+  };
+  _setFastRunnerStateForTest(STATE);
+  await reapStaleFastRunner({
+    getState: () => STATE,
+    ...birthProbe(MATCHING_BIRTH, ABSENT_BIRTH),
+    sendSignal: () => {},
+    sleep: async () => {
+      _setFastRunnerStateForTest(replacement);
+    },
+    graceMs: 0,
+  });
+  assert.equal(getFastRunnerState()?.pid, replacement.pid);
+  _setFastRunnerStateForTest(null);
 });

@@ -32,13 +32,43 @@ interface AuthorityGateDependencies {
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
+const managedNativeOrigin = Symbol('managedNativeOrigin');
 
 type AuthorityAwareArgs = Record<string, unknown> & {
   [optionalBundleAdmission]?: () => Promise<boolean>;
+  [managedNativeOrigin]?: {
+    claim(): Promise<void>;
+    complete(targetExpected: boolean): Promise<void>;
+  };
 };
 
 export async function claimOptionalBundleAuthority(args: object): Promise<boolean> {
   return (await (args as AuthorityAwareArgs)[optionalBundleAdmission]?.()) ?? false;
+}
+
+export async function claimManagedNativeOriginAuthority(args: object): Promise<void> {
+  const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError(
+      'METRO_ORIGIN_MISMATCH',
+      'managed native origin authority is unavailable',
+    );
+  }
+  await authority.claim();
+}
+
+export async function completeManagedNativeOriginAuthority(
+  args: object,
+  targetExpected: boolean,
+): Promise<void> {
+  const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError(
+      'METRO_ORIGIN_MISMATCH',
+      'managed native origin authority is unavailable',
+    );
+  }
+  await authority.complete(targetExpected);
 }
 
 const axisBinding: Partial<Record<AuthorityAxis, string>> = {
@@ -636,6 +666,8 @@ export function createAuthorityGate(
             ),
           );
           const optionalBefore: AuthorityObservation[] = [];
+          const managedOriginObservations: AuthorityObservation[] = [];
+          let managedOriginCompletedWithTarget = false;
           let optionalBundleClaimed = false;
           let optionalBundleRecoveryFailed = false;
           if (profile.optionalAxes?.includes('B')) {
@@ -749,6 +781,36 @@ export function createAuthorityGate(
               },
             });
           }
+          if (profile.managedOrigin) {
+            const claimOrigin = async (): Promise<void> => {
+              const currentStatus = runtime.status();
+              if (!currentStatus.available) {
+                throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+              }
+              registry!.verifyOperation(operation!);
+              managedOriginObservations.push(
+                await dependencies.probe({
+                  axis: 'A',
+                  phase: 'postflight',
+                  tool,
+                  profile,
+                  status: currentStatus,
+                  args,
+                }),
+              );
+              registry!.verifyOperation(operation!);
+            };
+            Object.defineProperty(args, managedNativeOrigin, {
+              configurable: true,
+              value: {
+                claim: claimOrigin,
+                complete: async (targetExpected: boolean) => {
+                  managedOriginCompletedWithTarget = targetExpected;
+                  if (targetExpected) await claimOrigin();
+                },
+              },
+            });
+          }
           registry.verifyOperation(operation);
           const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
           const directRuntimeReset = tool === 'cdp_reload' || tool === 'cdp_restart';
@@ -841,6 +903,13 @@ export function createAuthorityGate(
               }),
             ),
           );
+          const finalOrigin = managedOriginCompletedWithTarget
+            ? managedOriginObservations.at(-1)
+            : undefined;
+          const receiptObservations = finalOrigin ? [...after, finalOrigin] : after;
+          const receiptProfile = finalOrigin
+            ? { ...effectiveProfile, axes: [...effectiveProfile.axes, 'A' as const] }
+            : effectiveProfile;
           for (const observation of allBefore) {
             if (runtimeTargetChanged && observation.axis === 'B') continue;
             if (!postflightAxes.includes(observation.axis)) continue;
@@ -883,7 +952,7 @@ export function createAuthorityGate(
           }
           if (operation) registry.commitPlatformAuthorityReceipts(operation);
           return addMeta(result, {
-            authorityReceipt: receipt(status, effectiveProfile, after),
+            authorityReceipt: receipt(status, receiptProfile, receiptObservations),
             ...(authorityInvalidated
               ? {
                   authorityInvalidated: true,

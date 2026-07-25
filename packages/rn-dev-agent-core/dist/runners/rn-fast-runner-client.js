@@ -845,6 +845,26 @@ function clearStateFile() {
     if (path)
         deleteStateFile(path);
 }
+function clearStateFileIfMatches(expected) {
+    const identityMatches = (observed) => observed.pid === expected.pid &&
+        observed.deviceId === expected.deviceId &&
+        observed.processBirth === expected.processBirth;
+    const path = iosStatePath(expected.deviceId);
+    const persisted = readJsonStateFile(path);
+    let clearedCurrent = false;
+    if (runnerState && identityMatches(runnerState)) {
+        runnerState = null;
+        clearedCurrent = true;
+    }
+    if (runnerProcess?.pid === expected.pid) {
+        runnerProcess = null;
+        clearedCurrent = true;
+    }
+    if (persisted && identityMatches(persisted))
+        deleteStateFile(path);
+    if (clearedCurrent)
+        lastKnownCapabilities = [];
+}
 export async function probeFastRunnerLivenessDetailed(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
     const processAlive = deps.processAlive ?? defaultProcessAlive;
@@ -919,7 +939,7 @@ export async function reapStaleFastRunner(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
     const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    const clearState = deps.clearState ?? clearStateFile;
+    const clearState = deps.clearState ?? clearStateFileIfMatches;
     const graceMs = deps.graceMs ?? 500;
     const state = getState();
     if (!state)
@@ -934,7 +954,7 @@ export async function reapStaleFastRunner(deps = {}) {
                     : { status: 'absent' }
                 : probeProcessBirth(state.pid);
         if (observed.status === 'absent') {
-            clearState();
+            clearState(state);
             return;
         }
         throw new Error('RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority');
@@ -963,7 +983,7 @@ export async function reapStaleFastRunner(deps = {}) {
         throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven');
     }
     if (initial === 'gone') {
-        clearState();
+        clearState(state);
         return;
     }
     const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
@@ -982,7 +1002,7 @@ export async function reapStaleFastRunner(deps = {}) {
         throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
     }
     if (afterTerm === 'gone') {
-        clearState();
+        clearState(state);
         return;
     }
     try {
@@ -1001,7 +1021,7 @@ export async function reapStaleFastRunner(deps = {}) {
     if (afterKill !== 'gone') {
         throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
     }
-    clearState();
+    clearState(state);
 }
 let fetchImpl = globalThis.fetch;
 export function _setFetchForTest(fn) {

@@ -37,16 +37,16 @@ export async function closeDeviceSession(deps) {
     const deviceId = deps.getDeviceId?.();
     const result = await deps.closeUnderlyingSession();
     if (!result.isError) {
-        deps.clearActiveSession();
         await deps.stopFastRunner(deviceId);
         await deps.stopAndroidRunner(deviceId);
+        deps.clearActiveSession();
         deps.releaseDeviceLock();
         return result;
     }
     if (isBenignSessionGoneError(result)) {
-        deps.clearActiveSession();
         await deps.stopFastRunner(deviceId);
         await deps.stopAndroidRunner(deviceId);
+        deps.clearActiveSession();
         deps.releaseDeviceLock();
         return okResult({
             closed: true,

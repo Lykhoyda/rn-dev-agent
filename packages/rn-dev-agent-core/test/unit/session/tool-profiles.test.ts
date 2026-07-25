@@ -40,9 +40,12 @@ test('device_find click and lifecycle tools use mutation-aware origin authority'
   assert.equal(authorityProfileFor('device_find', { action: 'get' }).mutation, false);
   for (const tool of ['device_reset_state', 'maestro_run', 'maestro_test_all']) {
     const profile = authorityProfileFor(tool);
-    assert.ok(profile.axes.includes('A'));
-    assert.equal(profile.postflightAxes?.includes('A'), false);
+    assert.equal(profile.axes.includes('A'), false);
+    assert.equal(profile.managedOrigin, true);
   }
+  const storageReset = authorityProfileFor('device_reset_state', { storageKeys: ['token'] });
+  assert.equal(storageReset.axes.includes('B'), true);
+  assert.equal(storageReset.postflightAxes?.includes('B'), false);
 });
 
 test('hybrid execution separates required and optional bundle authority', () => {
@@ -54,7 +57,8 @@ test('hybrid execution separates required and optional bundle authority', () => 
   }
   const action = authorityProfileFor('cdp_run_action');
   assert.equal(action.axes.includes('B'), false);
-  assert.equal(action.axes.includes('A'), true);
+  assert.equal(action.axes.includes('A'), false);
+  assert.equal(action.managedOrigin, true);
   assert.deepEqual(action.optionalAxes, ['B']);
   assert.equal(action.axes.includes('R'), true);
 });

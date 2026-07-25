@@ -48,6 +48,11 @@ import {
   runnerReportArgs,
 } from '../domain/maestro-runner-report.js';
 import type { SessionState } from '../types.js';
+import {
+  claimManagedNativeOriginAuthority,
+  completeManagedNativeOriginAuthority,
+} from '../session/authority-gate.js';
+import { SessionAuthorityError } from '../session/registry.js';
 
 const defaultExecFile = promisify(execFileCb);
 
@@ -112,6 +117,83 @@ interface MaestroRunArgs {
    * by construction (execFile, not exec).
    */
   params?: Record<string, string>;
+  claimNativeOrigin?: () => Promise<void>;
+  completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+}
+
+interface AuthorityStage {
+  commands: unknown[];
+  requiresOrigin: boolean;
+}
+
+const lifecycleCommands = new Set(['launchApp', 'clearState', 'killApp', 'stopApp']);
+
+function commandName(command: unknown): string | null {
+  if (typeof command === 'string') return command;
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
+  const keys = Object.keys(command as Record<string, unknown>);
+  return keys.length === 1 ? keys[0]! : null;
+}
+
+function nestedLifecycleCommand(command: unknown): boolean {
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return false;
+  const runFlow = (command as Record<string, unknown>).runFlow;
+  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return false;
+  const commands = (runFlow as Record<string, unknown>).commands;
+  return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
+}
+
+function nestedLifecycleCommandOrSelf(command: unknown): boolean {
+  const name = commandName(command);
+  return (name !== null && lifecycleCommands.has(name)) || nestedLifecycleCommand(command);
+}
+
+export function planMaestroAuthorityStages(commands: readonly unknown[]): {
+  stages: AuthorityStage[];
+  targetExpected: boolean;
+} {
+  const stages: AuthorityStage[] = [];
+  let pending: unknown[] = [];
+  let targetExpected = true;
+  const flushPending = (): void => {
+    if (pending.length === 0) return;
+    stages.push({ commands: pending, requiresOrigin: true });
+    pending = [];
+  };
+
+  for (const command of commands) {
+    const name = commandName(command);
+    if (nestedLifecycleCommand(command)) {
+      throw new MaestroValidationError(
+        'conditional runFlow commands cannot mix app lifecycle transitions with UI mutations',
+      );
+    }
+    if (name !== null && lifecycleCommands.has(name)) {
+      flushPending();
+      stages.push({ commands: [command], requiresOrigin: false });
+      targetExpected = name === 'launchApp';
+      continue;
+    }
+    pending.push(command);
+  }
+  flushPending();
+  return { stages, targetExpected };
+}
+
+export async function executeMaestroAuthorityStages<T>(
+  commands: readonly unknown[],
+  executeStage: (commands: readonly unknown[]) => Promise<T>,
+  claimOrigin: () => Promise<void>,
+  completeOrigin: (targetExpected: boolean) => Promise<void>,
+): Promise<T[]> {
+  const plan = planMaestroAuthorityStages(commands);
+  const results: T[] = [];
+  for (const stage of plan.stages) {
+    if (stage.requiresOrigin) await claimOrigin();
+    results.push(await executeStage(stage.commands));
+  }
+  await completeOrigin(plan.targetExpected);
+  return results;
 }
 
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
@@ -136,6 +218,8 @@ export interface MaestroRunDeps {
   getActiveSession?: () => SessionState | null;
   chooseDispatch?: typeof chooseMaestroDispatch;
   parkFlow?: typeof runFlowParked;
+  claimNativeOrigin?: () => Promise<void>;
+  completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
   execFile?: (
     file: string,
     args: string[],
@@ -237,6 +321,7 @@ export function createMaestroRunHandler(
     let flowFile: string;
     let rawYaml: string;
     let validatedContent: string;
+    let validatedCommands: unknown[];
     let headerAppId: string | undefined;
 
     if (args.inlineYaml) {
@@ -262,6 +347,8 @@ export function createMaestroRunHandler(
         ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
         : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
+      planMaestroAuthorityStages(parsed.commands);
+      validatedCommands = parsed.commands;
       flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
       const rawAppId = resolveAppId(args.appId, platform);
       headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
@@ -352,15 +439,38 @@ export function createMaestroRunHandler(
       // logs routinely exceeds Node's 1MB execFile default, which would kill
       // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
       // run as a failure.
-      const { stdout, stderr } = await parkFlow(
+      const claimOrigin =
+        args.claimNativeOrigin ??
+        deps.claimNativeOrigin ??
+        (() => claimManagedNativeOriginAuthority(args));
+      const completeOrigin =
+        args.completeNativeOrigin ??
+        deps.completeNativeOrigin ??
+        ((targetExpected: boolean) => completeManagedNativeOriginAuthority(args, targetExpected));
+      const stageResults = await parkFlow(
         () =>
-          execute(dispatch.binPath, finalArgs, {
-            timeout,
-            encoding: 'utf8',
-            maxBuffer: 10 * 1024 * 1024,
-          }),
+          executeMaestroAuthorityStages(
+            validatedCommands,
+            async (commands) => {
+              writeFileSync(
+                flowFile,
+                buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
+                'utf-8',
+              );
+              return execute(dispatch.binPath, finalArgs, {
+                timeout,
+                encoding: 'utf8',
+                maxBuffer: 10 * 1024 * 1024,
+              });
+            },
+            claimOrigin,
+            completeOrigin,
+          ),
         { platform, deviceId: requestedDeviceId },
       );
+      writeFileSync(flowFile, validatedContent, 'utf-8');
+      const stdout = stageResults.map((result) => result.stdout).join('\n');
+      const stderr = stageResults.map((result) => result.stderr).join('\n');
 
       // combineRunnerOutput (not .trim()) so the step parser's leading-indent
       // anchor (B212) still sees the FIRST step line's indent — see GH #312.
@@ -445,6 +555,7 @@ export function createMaestroRunHandler(
       );
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
+      if (err instanceof SessionAuthorityError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       // Multi-LLM review of PR #115 (Codex conf 95): when execFile
       // throws on timeout (or kill), Node attaches the partial stdout

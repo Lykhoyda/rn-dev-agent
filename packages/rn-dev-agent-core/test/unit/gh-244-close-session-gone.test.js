@@ -65,6 +65,20 @@ test('#244 close succeeds → ok; cleanup all called once', async () => {
   assert.equal(calls.close, 1);
 });
 
+test('#244 failed runner teardown preserves session context and lock', async () => {
+  const { deps, calls } = makeDeps({
+    stopFastRunner: async () => {
+      calls.stop++;
+      throw new Error('RUNNER_ADOPTION_REQUIRED: identity unknown');
+    },
+  });
+
+  await assert.rejects(() => closeDeviceSession(deps), /RUNNER_ADOPTION_REQUIRED/);
+  assert.equal(calls.clear, 0);
+  assert.equal(calls.stopAndroid, 0);
+  assert.equal(calls.release, 0);
+});
+
 test('#244 SESSION_NOT_FOUND after a flow → ok with sessionAlreadyGone; cleanup all called', async () => {
   const { deps, calls } = makeDeps({
     closeUnderlyingSession: async () => {

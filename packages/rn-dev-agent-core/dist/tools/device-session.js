@@ -300,11 +300,11 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 await deps.bindRunner?.(lockPlatform, deviceId, appId);
             }
             catch (error) {
-                clearActiveSession();
                 if (lockPlatform === 'ios')
                     await stopFastRunner(deviceId);
                 else
                     await stopAndroidRunner(deviceId);
+                clearActiveSession();
                 releaseDeviceLockForSession();
                 const message = error instanceof Error ? error.message : String(error);
                 const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
@@ -468,9 +468,9 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 // ref-map is stale (from pre-recovery) OR non-existent (after fresh
                 // session open), and fast-runner serves the (ref-less) snapshot.
                 closeSession: async () => {
-                    clearActiveSession(); // also clears refMap via its side-effect
                     await stopFastRunner(session?.deviceId);
                     await stopAndroidRunner(session?.deviceId);
+                    clearActiveSession();
                     return okResult({ closed: true });
                 },
                 openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId),

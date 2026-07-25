@@ -128,8 +128,9 @@ add(hybridMutation, {
 });
 add(optionalHybridMutation, {
     kind: 'authoritative',
-    axes: ['C', 'S', 'I', 'M', 'A', 'D', 'R'],
+    axes: ['C', 'S', 'I', 'M', 'D', 'R'],
     optionalAxes: ['B'],
+    managedOrigin: true,
     mutation: true,
     liveBundleProbe: true,
 });
@@ -161,11 +162,24 @@ export function authorityProfileFor(tool, args = {}) {
     if (tool === 'device_find' && args.action === 'click') {
         return profiles.get('device_press');
     }
-    if (tool === 'device_reset_state' || tool === 'maestro_run' || tool === 'maestro_test_all') {
-        const profile = profiles.get(tool);
+    if (tool === 'device_reset_state') {
+        const storageMutation = Array.isArray(args.storageKeys) && args.storageKeys.length > 0;
         return {
-            ...profile,
-            postflightAxes: profile.axes.filter((axis) => axis !== 'A'),
+            kind: 'authoritative',
+            axes: storageMutation ? ['C', 'S', 'I', 'M', 'B', 'D', 'R'] : ['C', 'S', 'I', 'M', 'D', 'R'],
+            postflightAxes: ['C', 'S', 'I', 'M', 'D', 'R'],
+            managedOrigin: true,
+            mutation: true,
+            liveBundleProbe: storageMutation,
+        };
+    }
+    if (tool === 'maestro_run' || tool === 'maestro_test_all') {
+        return {
+            kind: 'authoritative',
+            axes: ['C', 'S', 'I', 'M', 'D', 'R'],
+            managedOrigin: true,
+            mutation: true,
+            liveBundleProbe: false,
         };
     }
     if (tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios') {

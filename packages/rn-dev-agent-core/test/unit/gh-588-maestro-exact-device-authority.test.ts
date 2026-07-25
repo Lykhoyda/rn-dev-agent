@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
+import {
+  createMaestroRunHandler,
+  executeMaestroAuthorityStages,
+  planMaestroAuthorityStages,
+} from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import {
   shouldRejectMaestroDeviceAuthority,
@@ -33,6 +37,40 @@ function fakeRunnerDispatch() {
   if ('error' in dispatch) throw new Error(dispatch.error);
   return dispatch;
 }
+
+test('lifecycle stages re-prove origin before subsequent UI mutation', async () => {
+  const calls: string[] = [];
+  await executeMaestroAuthorityStages(
+    ['launchApp', { tapOn: { id: 'submit' } }, 'stopApp'],
+    async (commands) => {
+      const first = commands[0];
+      calls.push(
+        `execute:${typeof first === 'string' ? first : String(Object.keys(first as object)[0])}`,
+      );
+    },
+    async () => {
+      calls.push('claim');
+    },
+    async (targetExpected) => {
+      calls.push(`complete:${targetExpected}`);
+    },
+  );
+
+  assert.deepEqual(calls, [
+    'execute:launchApp',
+    'claim',
+    'execute:tapOn',
+    'execute:stopApp',
+    'complete:false',
+  ]);
+  assert.throws(
+    () =>
+      planMaestroAuthorityStages([
+        { runFlow: { commands: ['launchApp', { tapOn: { id: 'submit' } }] } },
+      ]),
+    /cannot mix app lifecycle transitions/,
+  );
+});
 
 function envelope(result: { content: Array<{ text: string }> }): Record<string, any> {
   return JSON.parse(result.content[0].text);
@@ -164,6 +202,8 @@ test('real maestro_run path forwards active UDID and accepts only matching direc
     }),
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
     execFile: async (_file, args) => {
       argv = args;
       return { stdout: runnerLog(EXACT), stderr: '' };
@@ -193,6 +233,8 @@ test('an explicit deviceId matching the session in a different case is not a mis
     }),
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
     execFile: async () => ({ stdout: runnerLog(EXACT), stderr: '' }),
   });
   const result = await handler({
@@ -230,6 +272,8 @@ test('real maestro_run path rejects exit-zero wrong-device/shared-WDA evidence',
       }),
       chooseDispatch: () => fakeRunnerDispatch(),
       parkFlow: async (run) => run(),
+      claimNativeOrigin: async () => {},
+      completeNativeOrigin: async () => {},
       execFile: async () => ({ stdout: output, stderr: '' }),
     });
     const result = await handler({
@@ -255,6 +299,8 @@ test('real maestro_run non-zero path preserves and rejects direct foreign-device
     }),
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
     execFile: async () => {
       throw Object.assign(new Error('runner exited 1'), {
         stdout: runnerLog(FOREIGN),

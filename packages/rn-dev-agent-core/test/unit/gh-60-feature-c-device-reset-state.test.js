@@ -30,6 +30,8 @@ function handler(current = client()) {
     }),
     terminateApp: async () => {},
     launchApp: async () => {},
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
   });
 }
 
@@ -65,6 +67,7 @@ test('empty preflight terminates only the exact session app/device', async () =>
     }),
     terminateApp: async (...args) => calls.push(['terminate', ...args]),
     launchApp: async (...args) => calls.push(['launch', ...args]),
+    completeNativeOrigin: async () => {},
   });
   const result = parsed(
     await run({

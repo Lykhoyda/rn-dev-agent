@@ -5,6 +5,7 @@ import { buildMmkvExpression } from './mmkv.js';
 import { terminateApp, launchApp } from './app-lifecycle.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { waitForNavigationReady } from './startup-replay.js';
+import { claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
 const RECONNECT_ATTEMPTS = 4;
 const RECONNECT_BACKOFF_MS = 2_000;
 const POST_LAUNCH_SETTLE_MS = 1_000;
@@ -259,6 +260,8 @@ function safeParseError(r) {
 export function createDeviceResetStateHandler(getClient, deps = {}) {
     const terminate = deps.terminateApp ?? terminateApp;
     const launch = deps.launchApp ?? launchApp;
+    const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
+    const completeNativeOrigin = deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority;
     return async (args) => {
         if (!args.appId || typeof args.appId !== 'string') {
             return failResult('appId is required.', 'DEVICE_RESET_INVALID_ARGS');
@@ -361,6 +364,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
                 steps.push(reconnectStep.step);
                 reconnected = reconnectStep.reconnected;
                 if (reconnected) {
+                    await claimNativeOrigin(args);
                     const helpersStep = await runHelpersStep(getClient());
                     steps.push(helpersStep.step);
                     helpersInjected = helpersStep.helpersInjected;
@@ -370,6 +374,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
                 }
             }
         }
+        await completeNativeOrigin(args, relaunch);
         const skipped = steps.filter((s) => s.code === 'CDP_NOT_CONNECTED').length;
         const okCount = steps.filter((s) => s.ok).length;
         const failed = steps.filter((s) => !s.ok).length - skipped;

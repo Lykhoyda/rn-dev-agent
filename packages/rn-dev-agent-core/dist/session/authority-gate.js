@@ -3,8 +3,23 @@ import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
 import { authorityProfileFor } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
+const managedNativeOrigin = Symbol('managedNativeOrigin');
 export async function claimOptionalBundleAuthority(args) {
     return (await args[optionalBundleAdmission]?.()) ?? false;
+}
+export async function claimManagedNativeOriginAuthority(args) {
+    const authority = args[managedNativeOrigin];
+    if (!authority) {
+        throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin authority is unavailable');
+    }
+    await authority.claim();
+}
+export async function completeManagedNativeOriginAuthority(args, targetExpected) {
+    const authority = args[managedNativeOrigin];
+    if (!authority) {
+        throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin authority is unavailable');
+    }
+    await authority.complete(targetExpected);
 }
 const axisBinding = {
     I: 'install',
@@ -479,6 +494,8 @@ export function createAuthorityGate(runtime, dependencies) {
                 });
                 const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                 const optionalBefore = [];
+                const managedOriginObservations = [];
+                let managedOriginCompletedWithTarget = false;
                 let optionalBundleClaimed = false;
                 let optionalBundleRecoveryFailed = false;
                 if (profile.optionalAxes?.includes('B')) {
@@ -593,6 +610,35 @@ export function createAuthorityGate(runtime, dependencies) {
                         },
                     });
                 }
+                if (profile.managedOrigin) {
+                    const claimOrigin = async () => {
+                        const currentStatus = runtime.status();
+                        if (!currentStatus.available) {
+                            throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                        }
+                        registry.verifyOperation(operation);
+                        managedOriginObservations.push(await dependencies.probe({
+                            axis: 'A',
+                            phase: 'postflight',
+                            tool,
+                            profile,
+                            status: currentStatus,
+                            args,
+                        }));
+                        registry.verifyOperation(operation);
+                    };
+                    Object.defineProperty(args, managedNativeOrigin, {
+                        configurable: true,
+                        value: {
+                            claim: claimOrigin,
+                            complete: async (targetExpected) => {
+                                managedOriginCompletedWithTarget = targetExpected;
+                                if (targetExpected)
+                                    await claimOrigin();
+                            },
+                        },
+                    });
+                }
                 registry.verifyOperation(operation);
                 const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                 const directRuntimeReset = tool === 'cdp_reload' || tool === 'cdp_restart';
@@ -666,6 +712,13 @@ export function createAuthorityGate(runtime, dependencies) {
                     status,
                     args,
                 })));
+                const finalOrigin = managedOriginCompletedWithTarget
+                    ? managedOriginObservations.at(-1)
+                    : undefined;
+                const receiptObservations = finalOrigin ? [...after, finalOrigin] : after;
+                const receiptProfile = finalOrigin
+                    ? { ...effectiveProfile, axes: [...effectiveProfile.axes, 'A'] }
+                    : effectiveProfile;
                 for (const observation of allBefore) {
                     if (runtimeTargetChanged && observation.axis === 'B')
                         continue;
@@ -703,7 +756,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 if (operation)
                     registry.commitPlatformAuthorityReceipts(operation);
                 return addMeta(result, {
-                    authorityReceipt: receipt(status, effectiveProfile, after),
+                    authorityReceipt: receipt(status, receiptProfile, receiptObservations),
                     ...(authorityInvalidated
                         ? {
                             authorityInvalidated: true,

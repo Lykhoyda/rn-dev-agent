@@ -50,6 +50,8 @@ function handlerWriting(exit: 'zero' | 'nonzero', seen: { dir?: string }, flowDe
     }),
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run: () => Promise<unknown>) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
     execFile: async (_file: string, args: string[]) => {
       const dir = reportDirFrom(args);
       seen.dir = dir;

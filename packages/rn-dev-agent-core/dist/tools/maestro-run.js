@@ -18,6 +18,8 @@ import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../r
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
+import { claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
+import { SessionAuthorityError } from '../session/registry.js';
 const defaultExecFile = promisify(execFileCb);
 /**
  * GH#202 Phase 2a + GH#237: run a Maestro flow with L2 parked. iOS stops the
@@ -53,6 +55,65 @@ export function assembleMaestroArgs(baseArgs, paramArgs) {
     if (paramArgs.length === 0)
         return baseArgs;
     return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
+}
+const lifecycleCommands = new Set(['launchApp', 'clearState', 'killApp', 'stopApp']);
+function commandName(command) {
+    if (typeof command === 'string')
+        return command;
+    if (!command || typeof command !== 'object' || Array.isArray(command))
+        return null;
+    const keys = Object.keys(command);
+    return keys.length === 1 ? keys[0] : null;
+}
+function nestedLifecycleCommand(command) {
+    if (!command || typeof command !== 'object' || Array.isArray(command))
+        return false;
+    const runFlow = command.runFlow;
+    if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow))
+        return false;
+    const commands = runFlow.commands;
+    return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
+}
+function nestedLifecycleCommandOrSelf(command) {
+    const name = commandName(command);
+    return (name !== null && lifecycleCommands.has(name)) || nestedLifecycleCommand(command);
+}
+export function planMaestroAuthorityStages(commands) {
+    const stages = [];
+    let pending = [];
+    let targetExpected = true;
+    const flushPending = () => {
+        if (pending.length === 0)
+            return;
+        stages.push({ commands: pending, requiresOrigin: true });
+        pending = [];
+    };
+    for (const command of commands) {
+        const name = commandName(command);
+        if (nestedLifecycleCommand(command)) {
+            throw new MaestroValidationError('conditional runFlow commands cannot mix app lifecycle transitions with UI mutations');
+        }
+        if (name !== null && lifecycleCommands.has(name)) {
+            flushPending();
+            stages.push({ commands: [command], requiresOrigin: false });
+            targetExpected = name === 'launchApp';
+            continue;
+        }
+        pending.push(command);
+    }
+    flushPending();
+    return { stages, targetExpected };
+}
+export async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin) {
+    const plan = planMaestroAuthorityStages(commands);
+    const results = [];
+    for (const stage of plan.stages) {
+        if (stage.requiresOrigin)
+            await claimOrigin();
+        results.push(await executeStage(stage.commands));
+    }
+    await completeOrigin(plan.targetExpected);
+    return results;
 }
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
  *  syntactically be confused with a flag (`--`, `-e`) or break the
@@ -135,6 +196,7 @@ export function createMaestroRunHandler(deps = {}) {
         let flowFile;
         let rawYaml;
         let validatedContent;
+        let validatedCommands;
         let headerAppId;
         if (args.inlineYaml) {
             rawYaml = args.inlineYaml;
@@ -161,6 +223,8 @@ export function createMaestroRunHandler(deps = {}) {
                 ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
                 : {};
             const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
+            planMaestroAuthorityStages(parsed.commands);
+            validatedCommands = parsed.commands;
             flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
             const rawAppId = resolveAppId(args.appId, platform);
             headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
@@ -227,11 +291,23 @@ export function createMaestroRunHandler(deps = {}) {
             // logs routinely exceeds Node's 1MB execFile default, which would kill
             // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
             // run as a failure.
-            const { stdout, stderr } = await parkFlow(() => execute(dispatch.binPath, finalArgs, {
-                timeout,
-                encoding: 'utf8',
-                maxBuffer: 10 * 1024 * 1024,
-            }), { platform, deviceId: requestedDeviceId });
+            const claimOrigin = args.claimNativeOrigin ??
+                deps.claimNativeOrigin ??
+                (() => claimManagedNativeOriginAuthority(args));
+            const completeOrigin = args.completeNativeOrigin ??
+                deps.completeNativeOrigin ??
+                ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
+            const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
+                writeFileSync(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), 'utf-8');
+                return execute(dispatch.binPath, finalArgs, {
+                    timeout,
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024,
+                });
+            }, claimOrigin, completeOrigin), { platform, deviceId: requestedDeviceId });
+            writeFileSync(flowFile, validatedContent, 'utf-8');
+            const stdout = stageResults.map((result) => result.stdout).join('\n');
+            const stderr = stageResults.map((result) => result.stderr).join('\n');
             // combineRunnerOutput (not .trim()) so the step parser's leading-indent
             // anchor (B212) still sees the FIRST step line's indent — see GH #312.
             const output = combineRunnerOutput(stdout, stderr);
@@ -309,6 +385,8 @@ export function createMaestroRunHandler(deps = {}) {
             return warnResult(warnAug.meta, warnAug.message);
         }
         catch (err) {
+            if (err instanceof SessionAuthorityError)
+                throw err;
             const msg = err instanceof Error ? err.message : String(err);
             // Multi-LLM review of PR #115 (Codex conf 95): when execFile
             // throws on timeout (or kill), Node attaches the partial stdout

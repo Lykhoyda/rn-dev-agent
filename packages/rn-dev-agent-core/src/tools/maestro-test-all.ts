@@ -17,7 +17,12 @@ import {
   parseAndValidateFlow,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
-import { assembleMaestroArgs, runFlowParked } from './maestro-run.js';
+import {
+  assembleMaestroArgs,
+  executeMaestroAuthorityStages,
+  planMaestroAuthorityStages,
+  runFlowParked,
+} from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
@@ -32,6 +37,11 @@ import {
   disposeRunnerReportDir,
   runnerReportArgs,
 } from '../domain/maestro-runner-report.js';
+import {
+  claimManagedNativeOriginAuthority,
+  completeManagedNativeOriginAuthority,
+} from '../session/authority-gate.js';
+import { SessionAuthorityError } from '../session/registry.js';
 
 const execFile = promisify(execFileCb);
 
@@ -147,9 +157,14 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       let safeFlowFile: string;
       let appFile: string | undefined;
       let flowHasHideKeyboard = false;
+      let parsedCommands: unknown[] = [];
+      let parsedAppId: string | undefined;
       try {
         const yamlText = readFileSync(flow, 'utf-8');
         const parsed = parseAndValidateFlow(yamlText);
+        planMaestroAuthorityStages(parsed.commands);
+        parsedCommands = parsed.commands;
+        parsedAppId = parsed.appId;
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(
           parsed.appId !== undefined ? { appId: parsed.appId } : {},
@@ -213,15 +228,31 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
 
       try {
-        const { stdout, stderr } = await runFlowParked(
+        const stageResults = await runFlowParked(
           () =>
-            execFile(flowDispatch.binPath, finalArgs, {
-              timeout,
-              encoding: 'utf8',
-              maxBuffer: 10 * 1024 * 1024,
-            }),
+            executeMaestroAuthorityStages(
+              parsedCommands,
+              async (commands) => {
+                writeFileSync(
+                  safeFlowFile,
+                  buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
+                    ...commands,
+                  ]),
+                  'utf-8',
+                );
+                return execFile(flowDispatch.binPath, finalArgs, {
+                  timeout,
+                  encoding: 'utf8',
+                  maxBuffer: 10 * 1024 * 1024,
+                });
+              },
+              () => claimManagedNativeOriginAuthority(args),
+              (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+            ),
           { platform, deviceId: requestedDeviceId },
         );
+        const stdout = stageResults.map((result) => result.stdout).join('\n');
+        const stderr = stageResults.map((result) => result.stderr).join('\n');
         const output = (stdout + '\n' + stderr).trim();
         // The runner already exited 0 here, so that exit code is the
         // authoritative pass signal. The secondary scan keys on Maestro's own
@@ -254,6 +285,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
 
         if (!ok && args.stopOnFailure) break;
       } catch (err) {
+        if (err instanceof SessionAuthorityError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         const errWithOutput = err as { stdout?: unknown; stderr?: unknown };
         const capturedOutput = [errWithOutput.stdout, errWithOutput.stderr]

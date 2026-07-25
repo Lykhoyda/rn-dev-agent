@@ -40,6 +40,7 @@ test('GH-588 V4: lifecycle reset threads the matching active iOS session UDID to
     launchApp: async (appId, platform, deviceId) => {
       calls.push({ operation: 'launch', appId, platform, deviceId });
     },
+    completeNativeOrigin: async () => undefined,
   });
 
   const result = envelope(
@@ -104,6 +105,7 @@ test('GH-588 V4: lifecycle reset threads the matching active Android serial to t
     launchApp: async (_appId, _platform, deviceId) => {
       calls.push({ operation: 'launch', deviceId });
     },
+    completeNativeOrigin: async () => undefined,
   });
 
   const result = envelope(

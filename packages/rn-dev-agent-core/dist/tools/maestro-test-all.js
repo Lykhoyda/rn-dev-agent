@@ -8,11 +8,13 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
-import { assembleMaestroArgs, runFlowParked } from './maestro-run.js';
+import { assembleMaestroArgs, executeMaestroAuthorityStages, planMaestroAuthorityStages, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
+import { claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
+import { SessionAuthorityError } from '../session/registry.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
     if (!existsSync(dir))
@@ -91,9 +93,14 @@ export function createMaestroTestAllHandler() {
             let safeFlowFile;
             let appFile;
             let flowHasHideKeyboard = false;
+            let parsedCommands = [];
+            let parsedAppId;
             try {
                 const yamlText = readFileSync(flow, 'utf-8');
                 const parsed = parseAndValidateFlow(yamlText);
+                planMaestroAuthorityStages(parsed.commands);
+                parsedCommands = parsed.commands;
+                parsedAppId = parsed.appId;
                 flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
                 const canonical = buildMaestroFlow(parsed.appId !== undefined ? { appId: parsed.appId } : {}, parsed.commands);
                 safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
@@ -146,11 +153,18 @@ export function createMaestroTestAllHandler() {
             const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
             const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
             try {
-                const { stdout, stderr } = await runFlowParked(() => execFile(flowDispatch.binPath, finalArgs, {
-                    timeout,
-                    encoding: 'utf8',
-                    maxBuffer: 10 * 1024 * 1024,
-                }), { platform, deviceId: requestedDeviceId });
+                const stageResults = await runFlowParked(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
+                    writeFileSync(safeFlowFile, buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
+                        ...commands,
+                    ]), 'utf-8');
+                    return execFile(flowDispatch.binPath, finalArgs, {
+                        timeout,
+                        encoding: 'utf8',
+                        maxBuffer: 10 * 1024 * 1024,
+                    });
+                }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected)), { platform, deviceId: requestedDeviceId });
+                const stdout = stageResults.map((result) => result.stdout).join('\n');
+                const stderr = stageResults.map((result) => result.stderr).join('\n');
                 const output = (stdout + '\n' + stderr).trim();
                 // The runner already exited 0 here, so that exit code is the
                 // authoritative pass signal. The secondary scan keys on Maestro's own
@@ -184,6 +198,8 @@ export function createMaestroTestAllHandler() {
                     break;
             }
             catch (err) {
+                if (err instanceof SessionAuthorityError)
+                    throw err;
                 const msg = err instanceof Error ? err.message : String(err);
                 const errWithOutput = err;
                 const capturedOutput = [errWithOutput.stdout, errWithOutput.stderr]

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  completeManagedNativeOriginAuthority,
   claimOptionalBundleAuthority,
   createAuthorityGate,
 } from '../../../dist/session/authority-gate.js';
@@ -116,7 +117,7 @@ test('postflight drift rejects the result instead of returning a false success',
   assert.equal(envelope.data, undefined);
 });
 
-test('origin-disrupting lifecycle tools retain preflight origin proof', async () => {
+test('origin-disrupting lifecycle tools prove origin at successful completion', async () => {
   const { runtime, calls } = fixture();
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis, phase }) => {
@@ -125,17 +126,18 @@ test('origin-disrupting lifecycle tools retain preflight origin proof', async ()
     },
   });
 
-  const result = await gate.wrap('device_reset_state', async () => okResult({ reset: true }))({
-    relaunch: false,
-  });
+  const result = await gate.wrap('device_reset_state', async (args) => {
+    await completeManagedNativeOriginAuthority(args, true);
+    return okResult({ reset: true });
+  })({ relaunch: true });
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
-  assert.equal(calls.includes('preflight:A'), true);
-  assert.equal(calls.includes('postflight:A'), false);
+  assert.equal(calls.includes('preflight:A'), false);
+  assert.equal(calls.includes('postflight:A'), true);
   assert.equal(
     envelope.meta.authorityReceipt.nativeAppOrigin.authorityScope,
-    'preflight-live-metro-target-device',
+    'live-metro-target-device',
   );
 });
 
