@@ -40,6 +40,7 @@ birth_file() { echo "${PID_PREFIX}-${1}.birth"; }
 remote_birth_file() { echo "${PID_PREFIX}-${1}.remote-birth"; }
 remote_command_file() { echo "${PID_PREFIX}-${1}.remote-command"; }
 remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
+finalized_path_file() { echo "${PID_PREFIX}-${1}.finalized-path"; }
 incarnation_file() { echo "${PID_PREFIX}-${1}.incarnation"; }
 
 ensure_sidecar_temp_dir() {
@@ -191,7 +192,7 @@ PY
 scope_has_private_sidecars() {
   local scope="$1"
   local suffix
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
     sidecar_exists "${PID_PREFIX}-${scope}.${suffix}" && return 0
   done
   return 1
@@ -201,7 +202,7 @@ scope_has_sidecars_at_prefix() {
   local prefix="$1"
   local scope="$2"
   local suffix
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
     sidecar_exists "${prefix}-${scope}.${suffix}" && return 0
   done
   return 1
@@ -232,7 +233,7 @@ validate_private_scope() {
   local suffix
   local path
   local incarnation=""
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
     path="${prefix}-${scope}.${suffix}"
     if sidecar_exists "$path"; then
       validate_legacy_sidecar "$path"
@@ -268,7 +269,7 @@ validate_legacy_scope() {
   LEGACY_SCOPE_PRESENT="false"
   local suffix
   local legacy_path
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
     legacy_path="$(legacy_sidecar_file "$scope" "$suffix")"
     if sidecar_exists "$legacy_path"; then
       LEGACY_SCOPE_PRESENT="true"
@@ -422,7 +423,7 @@ remove_recording_sidecars() {
   local scope="$1"
   local incarnation="${2:-}"
   local path
-  for path in "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}; do
+  for path in "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,finalized-path}; do
     remove_owned_state_path "$path"
   done
   for path in \
@@ -1220,7 +1221,9 @@ cmd_abort() {
     local -a adb_args=()
     [[ -f "${PID_PREFIX}-${scope}.serial" ]] && adb_args+=(-s "$(cat "${PID_PREFIX}-${scope}.serial")")
     if [[ -f "${PID_PREFIX}-${scope}.device-path" ]]; then
-      adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$(cat "${PID_PREFIX}-${scope}.device-path")"
+      remove_android_device_capture \
+        "$(cat "${PID_PREFIX}-${scope}.device-path")" \
+        "${adb_args[@]+"${adb_args[@]}"}"
     fi
   fi
   if [[ -f "${PID_PREFIX}-${scope}.raw-path" ]]; then
@@ -1230,6 +1233,27 @@ cmd_abort() {
     remove_owned_state_path "$raw_path"
   fi
   remove_recording_sidecars "$scope" "$incarnation"
+}
+
+remove_android_device_capture() {
+  local device_path="$1"
+  shift
+  adb "$@" shell rm -f "$device_path" >/dev/null 2>&1 &&
+    adb "$@" shell test ! -e "$device_path" >/dev/null 2>&1
+}
+
+validate_finalized_output_path() {
+  local finalized_output="$1"
+  local requested_output="$2"
+  local expected_mp4="${requested_output%.*}.mp4"
+  local expected_mov="${expected_mp4%.mp4}.mov"
+  [[
+    ( "$finalized_output" == "$expected_mp4" || "$finalized_output" == "$expected_mov" ) &&
+      -f "$finalized_output"
+  ]] || {
+    echo "Error: finalized recording output is missing or invalid" >&2
+    return 1
+  }
 }
 
 cmd_stop() {
@@ -1260,6 +1284,15 @@ cmd_stop() {
   pathf="$(path_file "$scope")"
   local output_path=""
   [[ -f "$pathf" ]] && output_path="$(cat "$pathf")"
+  local requested_output_path="$output_path"
+  local finalized_pathf
+  finalized_pathf="$(finalized_path_file "$scope")"
+  local finalized_output=""
+  if [[ "$platform" == "android" && -s "$finalized_pathf" ]]; then
+    finalized_output="$(cat "$finalized_pathf")"
+    validate_finalized_output_path "$finalized_output" "$requested_output_path"
+    output_path="$finalized_output"
+  fi
   local raw_pathf="${PID_PREFIX}-${scope}.raw-path"
   local raw_file=""
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
@@ -1366,7 +1399,7 @@ cmd_stop() {
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
       device_path="$(cat "$device_pathf")"
-      if [[ "$supervisor_failed" != "true" ]]; then
+      if [[ "$supervisor_failed" != "true" && -z "$finalized_output" ]]; then
         sleep 2
         local prior_raw_file="$raw_file"
         local pull_file
@@ -1377,11 +1410,19 @@ cmd_stop() {
         else
           rm -f "$pull_file"
           PENDING_PULL_FILE=""
-          raw_file=""
-          android_pull_failed="true"
-          echo "Warning: Failed to pull recording from device" >&2
+          raw_file="$prior_raw_file"
+          if [[ -n "$raw_file" && -f "$raw_file" ]]; then
+            echo "Warning: Failed to pull replacement recording; using existing capture" >&2
+          else
+            android_pull_failed="true"
+            echo "Warning: Failed to pull recording from device" >&2
+          fi
         fi
-        if [[ -n "$prior_raw_file" && "$prior_raw_file" != "$raw_file" ]]; then
+        if [[
+          "$android_pull_failed" != "true" &&
+            -n "$prior_raw_file" &&
+            "$prior_raw_file" != "$raw_file"
+        ]]; then
           remove_owned_state_path "$prior_raw_file"
         fi
       fi
@@ -1392,7 +1433,10 @@ cmd_stop() {
     [[ -n "$raw_file" ]] && rm -f "$raw_file"
     PENDING_PULL_FILE=""
     if [[ "$platform" == "android" && -n "$device_path" ]]; then
-      adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
+      remove_android_device_capture "$device_path" "${adb_args[@]+"${adb_args[@]}"}" || {
+        echo "Error: failed to remove recording from device" >&2
+        return 1
+      }
     fi
     remove_recording_sidecars "$scope" "$incarnation"
     echo "Recorder failed: supervisor terminated unexpectedly"
@@ -1403,30 +1447,43 @@ cmd_stop() {
     return 1
   fi
 
-  output_path="${output_path%.*}.mp4"
-  mkdir -p "$(dirname "$output_path")" || true
-  if [[ -n "$raw_file" && -f "$raw_file" ]]; then
-    if command -v ffmpeg >/dev/null 2>&1; then
-      local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
-      if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$tmp_mp4" 2>/dev/null; then
-        mv "$tmp_mp4" "$output_path"
-      else
+  if [[ -z "$finalized_output" ]]; then
+    output_path="${output_path%.*}.mp4"
+    mkdir -p "$(dirname "$output_path")" || true
+    if [[ -n "$raw_file" && -f "$raw_file" ]]; then
+      if command -v ffmpeg >/dev/null 2>&1; then
+        local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
+        if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$tmp_mp4" 2>/dev/null; then
+          mv "$tmp_mp4" "$output_path"
+        else
+          mv "$raw_file" "${output_path%.mp4}.mov"
+          output_path="${output_path%.mp4}.mov"
+          rm -f "$tmp_mp4"
+        fi
+      elif [[ "$platform" == "ios" ]]; then
         mv "$raw_file" "${output_path%.mp4}.mov"
         output_path="${output_path%.mp4}.mov"
-        rm -f "$tmp_mp4"
+      else
+        mv "$raw_file" "$output_path"
       fi
-    elif [[ "$platform" == "ios" ]]; then
-      mv "$raw_file" "${output_path%.mp4}.mov"
-      output_path="${output_path%.mp4}.mov"
-    else
-      mv "$raw_file" "$output_path"
+      rm -f "$raw_file"
+      PENDING_PULL_FILE=""
     fi
-    rm -f "$raw_file"
-    PENDING_PULL_FILE=""
+    if [[ "$platform" == "android" ]]; then
+      [[ -f "$output_path" ]] || {
+        echo "Error: recording output was not finalized" >&2
+        return 1
+      }
+      secure_write_sidecar "$finalized_pathf" "$output_path"
+      finalized_output="$output_path"
+    fi
   fi
 
   if [[ "$platform" == "android" && -n "$device_path" ]]; then
-    adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
+    remove_android_device_capture "$device_path" "${adb_args[@]+"${adb_args[@]}"}" || {
+      echo "Error: failed to remove recording from device" >&2
+      return 1
+    }
   fi
   remove_recording_sidecars "$scope" "$incarnation"
   if [[ -n "$output_path" && -f "$output_path" ]]; then
