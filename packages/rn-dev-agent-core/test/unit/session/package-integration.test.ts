@@ -1321,9 +1321,7 @@ test('bound workers exit when their owner disconnects', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-owner-exit-'));
   const pidPath = join(root, 'worker.pid');
   try {
-    const moduleUrl = pathToFileURL(
-      join(process.cwd(), 'packages/rn-dev-agent-core/dist/session/bound-directory.js'),
-    ).href;
+    const moduleUrl = new URL('../../../dist/session/bound-directory.js', import.meta.url).href;
     const result = spawnSync(
       process.execPath,
       [
