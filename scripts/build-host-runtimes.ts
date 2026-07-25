@@ -8,6 +8,7 @@
 // hand-editing any generated copy is always wrong; edit the source and rerun:
 //   corepack yarn build:host-runtimes
 const {
+  chmodSync,
   cpSync,
   copyFileSync,
   existsSync,
@@ -25,6 +26,7 @@ const corePackageJson = join(coreRoot, 'package.json');
 const codexPluginRoot = join(repoRoot, 'packages', 'codex-plugin');
 const claudePluginRoot = join(repoRoot, 'packages', 'claude-plugin');
 const observeWebDistSource = join(coreRoot, 'dist', 'observability', 'web-dist');
+const darwinProcessBirthHelper = join(coreRoot, 'native', 'darwin-process-birth');
 const sourceMapPath = join(repoRoot, 'packages', 'shared-agent-knowledge', 'source-map.json');
 const sourceMap = JSON.parse(readFileSync(sourceMapPath, 'utf8'));
 const codexAdaptation = sourceMap.hostAdaptations?.codex;
@@ -54,6 +56,24 @@ const esbuild = join(
   '.bin',
   process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild',
 );
+
+const processBirthHelperBuild = spawnSync(
+  process.execPath,
+  [join(repoRoot, 'scripts', 'build-darwin-process-birth-helper.ts')],
+  {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  },
+);
+if (processBirthHelperBuild.error) {
+  console.error(
+    `build-host-runtimes: failed to build Darwin process helper: ${processBirthHelperBuild.error.message}`,
+  );
+  process.exit(1);
+}
+if (processBirthHelperBuild.status !== 0) {
+  process.exit(processBirthHelperBuild.status ?? 1);
+}
 
 const RUNTIME_ENTRIES = [
   'supervisor.js',
@@ -133,6 +153,12 @@ const codexRuntimeRoot = join(codexPluginRoot, 'rn-dev-agent-core');
 const claudeRuntimeRoot = join(claudePluginRoot, 'rn-dev-agent-core');
 mkdirSync(join(codexRuntimeRoot, 'dist'), { recursive: true });
 mkdirSync(join(claudeRuntimeRoot, 'dist'), { recursive: true });
+for (const runtimeRoot of [coreRoot, codexRuntimeRoot, claudeRuntimeRoot]) {
+  const target = join(runtimeRoot, 'dist', 'native', 'darwin-process-birth');
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(darwinProcessBirthHelper, target);
+  chmodSync(target, 0o755);
+}
 
 for (const file of RUNTIME_ENTRIES) {
   const result = spawnSync(

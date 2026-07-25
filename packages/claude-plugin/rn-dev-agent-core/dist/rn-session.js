@@ -7366,7 +7366,7 @@ var require_dist = __commonJS({
 // packages/rn-dev-agent-core/dist/rn-session.js
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { readFileSync as readFileSync8 } from "node:fs";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -7622,30 +7622,31 @@ function pathMatchesRoot(servingCwd, projectRoot) {
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, readFileSync as readFileSync2 } from "node:fs";
+import { dirname, join as join2 } from "node:path";
+import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
   return execFileSync3(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
-    timeout: command === "/usr/bin/swift" ? 1e4 : 2e3
+    timeout: 2e3
   });
 }
 function token(parts) {
   return createHash2("sha256").update(parts.join("\0")).digest("hex");
 }
-var DARWIN_PROCESS_BIRTH_PROBE = `import Darwin
-guard CommandLine.arguments.count == 2,
-      let pid = Int32(CommandLine.arguments[1]) else {
-  exit(2)
+function darwinProcessBirthHelperPath() {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join2(moduleDirectory, "native", "darwin-process-birth"),
+    join2(moduleDirectory, "..", "native", "darwin-process-birth")
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate))
+      return candidate;
+  }
+  return candidates[0];
 }
-var info = proc_bsdinfo()
-let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
-let observedSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, expectedSize)
-guard observedSize == expectedSize, info.pbi_pid == pid else {
-  exit(3)
-}
-print("\\(info.pbi_pid):\\(info.pbi_start_tvsec):\\(info.pbi_start_tvusec)")
-`;
 function readProcessBirth(pid, dependencies = {}) {
   const probe = probeProcessBirth(pid, dependencies);
   return probe.status === "present" ? probe.birth : null;
@@ -7663,11 +7664,7 @@ function probeProcessBirth(pid, dependencies = {}) {
         return { status: "absent" };
       if (Number(observedPid) !== pid)
         return { status: "unknown" };
-      const processInfo = run("/usr/bin/swift", [
-        "-e",
-        DARWIN_PROCESS_BIRTH_PROBE,
-        String(pid)
-      ]).trim();
+      const processInfo = run(darwinProcessBirthHelperPath(), [String(pid)]).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid)
         return { status: "unknown" };
@@ -7832,8 +7829,8 @@ async function captureMetroBinding(input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync as readFileSync3 } from "node:fs";
-import { join as join2 } from "node:path";
+import { closeSync, existsSync as existsSync2, openSync, readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
@@ -7886,19 +7883,19 @@ function probeManagedMetroListener(port, platform = process.platform, execute = 
   return probeMetroListener(port, platform, execute);
 }
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync;
+  const exists = dependencies.exists ?? existsSync2;
   const readText = dependencies.readText ?? ((path) => readFileSync3(path, "utf8"));
-  const packageJson = JSON.parse(readText(join2(appRoot, "package.json")));
+  const packageJson = JSON.parse(readText(join3(appRoot, "package.json")));
   const all = { ...packageJson.dependencies, ...packageJson.devDependencies };
   if (all.expo) {
-    const executable = join2(appRoot, "node_modules", ".bin", "expo");
+    const executable = join3(appRoot, "node_modules", ".bin", "expo");
     if (!exists(executable)) {
       throw new Error("METRO_START_UNAVAILABLE: package-local Expo CLI is unavailable");
     }
     return { executable, args: ["start", "--dev-client"] };
   }
   if (all["react-native"]) {
-    const executable = join2(appRoot, "node_modules", ".bin", "react-native");
+    const executable = join3(appRoot, "node_modules", ".bin", "react-native");
     if (!exists(executable)) {
       throw new Error("METRO_START_UNAVAILABLE: package-local React Native CLI is unavailable");
     }
@@ -7950,7 +7947,7 @@ async function stopSpawnedProcessGroup(input, dependencies) {
 }
 async function startManagedMetro(input, dependencies = {}) {
   const command = resolveManagedMetroCommand(input.appRoot, dependencies);
-  const log = openSync(join2(input.runtimeRoot, "metro.log"), "a", 384);
+  const log = openSync(join3(input.runtimeRoot, "metro.log"), "a", 384);
   const instanceId = input.instanceId;
   const child = (dependencies.spawnProcess ?? spawn)(process.execPath, ["-e", METRO_LAUNCHER_SOURCE], {
     cwd: input.appRoot,
@@ -8153,7 +8150,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // packages/rn-dev-agent-core/dist/session/authority-store.js
 import { chmodSync, lstatSync, mkdirSync, statSync as statSync2 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname as dirname2 } from "node:path";
 var require2 = createRequire(import.meta.url);
 var INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 var INITIALIZATION_TIMEOUT_MS = 1e3;
@@ -8227,7 +8224,7 @@ function openAuthorityStore(path, options = {}) {
     throw new AuthorityStoreUnavailableError("node:sqlite could not be loaded by this Node runtime");
   }
   try {
-    assertPrivateDirectory(dirname(path));
+    assertPrivateDirectory(dirname2(path));
     try {
       const existing = lstatSync(path);
       if (existing.isSymbolicLink() || !existing.isFile()) {
@@ -9656,7 +9653,7 @@ function openSessionRegistry(path, dependencies) {
 import { createHash as createHash4 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { lstatSync as lstatSync2, readFileSync as readFileSync4, readlinkSync, realpathSync as realpathSync2 } from "node:fs";
-import { isAbsolute, join as join3, relative, resolve as resolve2 } from "node:path";
+import { isAbsolute, join as join4, relative, resolve as resolve2 } from "node:path";
 function digest2(parts) {
   const hash = createHash4("sha256");
   for (const part of parts) {
@@ -9711,7 +9708,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
     const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
     assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
     const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
-    const commonDirectory = canonicalize(isAbsolute(commonRaw) ? commonRaw : join3(contentRoot, commonRaw));
+    const commonDirectory = canonicalize(isAbsolute(commonRaw) ? commonRaw : join4(contentRoot, commonRaw));
     const head = git(appRoot, ["rev-parse", "HEAD"]);
     const appRelative = relative(contentRoot, appRoot) || ".";
     return {
@@ -9734,19 +9731,19 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/state-root.js
 import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
 import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync, rmSync, statSync as statSync3, writeFileSync } from "node:fs";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { join as join4, dirname as dirname2 } from "node:path";
+import { join as join5, dirname as dirname3 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
-    return join4(process.env.XDG_STATE_HOME, "rn-dev-agent");
+    return join5(process.env.XDG_STATE_HOME, "rn-dev-agent");
   }
   if (process.platform === "darwin") {
-    return join4(homedir(), "Library", "Application Support", "rn-dev-agent");
+    return join5(homedir(), "Library", "Application Support", "rn-dev-agent");
   }
-  return join4(homedir(), ".rn-dev-agent");
+  return join5(homedir(), ".rn-dev-agent");
 }
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
@@ -9773,21 +9770,21 @@ function sessionDirectory(layout, sessionId) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) {
     fail("INVALID_SESSION_ID", "session identifier is not path-safe");
   }
-  const path = join5(layout.sessions, sessionId);
+  const path = join6(layout.sessions, sessionId);
   ensurePrivateDirectory(path);
   return path;
 }
 function createAuthorityStateLayout(stateDir = getStateDir()) {
   ensurePrivateDirectory(stateDir);
-  const root = join5(stateDir, "v2");
+  const root = join6(stateDir, "v2");
   ensurePrivateDirectory(root);
   const layout = {
     root,
-    registry: join5(root, "registry.sqlite3"),
-    sessions: join5(root, "sessions"),
-    runners: join5(root, "runner"),
-    observe: join5(root, "observe"),
-    migrations: join5(root, "migrations")
+    registry: join6(root, "registry.sqlite3"),
+    sessions: join6(root, "sessions"),
+    runners: join6(root, "runner"),
+    observe: join6(root, "observe"),
+    migrations: join6(root, "migrations")
   };
   for (const path of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
     ensurePrivateDirectory(path);
@@ -9795,8 +9792,8 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
   return layout;
 }
 function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
-  const path = join5(layout.root, "bound-directory.key");
-  const temporary = join5(layout.root, `.bound-directory.${randomUUID()}.key`);
+  const path = join6(layout.root, "bound-directory.key");
+  const temporary = join6(layout.root, `.bound-directory.${randomUUID()}.key`);
   try {
     try {
       writeFileSync(temporary, randomBytes2(32), { flag: "wx", mode: 384, flush: true });
@@ -9825,21 +9822,21 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   }
 }
 function sessionRuntimeDirectory(layout, sessionId) {
-  const path = join5(sessionDirectory(layout, sessionId), "runtime");
+  const path = join6(sessionDirectory(layout, sessionId), "runtime");
   ensurePrivateDirectory(path);
   return path;
 }
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
-import { existsSync as existsSync3, readFileSync as readFileSync7 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync7 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync2, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync4, mkdtempSync, openSync as openSync2, readFileSync as readFileSync6, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { closeSync as closeSync2, constants, existsSync as existsSync3, fstatSync, lstatSync as lstatSync4, mkdtempSync, openSync as openSync2, readFileSync as readFileSync6, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 var WORKER_READY_TIMEOUT_MS = 15e3;
 var BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
@@ -10904,28 +10901,28 @@ function sameIdentity(left, right) {
 function waitForFile(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync2(path))
+    if (existsSync3(path))
       return true;
     Atomics.wait(WAIT_BUFFER, 0, 0, 5);
   }
-  return existsSync2(path);
+  return existsSync3(path);
 }
 function stopWorker(worker, signal = "SIGTERM") {
-  const stoppedPath = join6(worker.controlPath, "stopped");
+  const stoppedPath = join7(worker.controlPath, "stopped");
   if (signal === "SIGTERM") {
     try {
-      writeFileSync2(join6(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
+      writeFileSync2(join7(worker.controlPath, "stop"), "", { flag: "wx", mode: 384 });
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
-      if (!existsSync2(join6(worker.controlPath, "lock-retained"))) {
+      if (!existsSync3(join7(worker.controlPath, "lock-retained"))) {
         rmSync2(worker.controlPath, { force: true, recursive: true });
       }
       return;
     }
   }
   try {
-    writeFileSync2(join6(worker.controlPath, "terminate"), JSON.stringify({
+    writeFileSync2(join7(worker.controlPath, "terminate"), JSON.stringify({
       lifecycleCapability: worker.lifecycleCapability,
       signal: "SIGKILL"
     }), { flag: "wx", mode: 384 });
@@ -10934,7 +10931,7 @@ function stopWorker(worker, signal = "SIGTERM") {
   if (!waitForFile(stoppedPath, 1e4)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
-  if (!existsSync2(join6(worker.controlPath, "lock-retained"))) {
+  if (!existsSync3(join7(worker.controlPath, "lock-retained"))) {
     rmSync2(worker.controlPath, { force: true, recursive: true });
   }
 }
@@ -10956,7 +10953,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
     }
     throw new Error(message);
   };
-  const readyPath = join6(controlPath, "ready");
+  const readyPath = join7(controlPath, "ready");
   if (!waitForFile(readyPath, WORKER_READY_TIMEOUT_MS)) {
     rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
@@ -10981,7 +10978,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
   };
 }
 function startWorker(path, identity, realPath) {
-  const controlPath = mkdtempSync(join6(tmpdir(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join7(tmpdir(), "rn-bound-directory-"));
   const lifecycleCapability = randomUUID2();
   const binding = Buffer.from(JSON.stringify({
     dev: identity.dev.toString(),
@@ -11011,7 +11008,7 @@ function startWorker(path, identity, realPath) {
   return bindWorker(controlPath, child, void 0, void 0, lifecycleCapability);
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
-  const controlPath = mkdtempSync(join6(tmpdir(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join7(tmpdir(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -11023,7 +11020,7 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
       controlPath,
       lifecycleCapability,
       name,
-      publicPath: join6(parent.path, name),
+      publicPath: join7(parent.path, name),
       create: false,
       mode: 448
     });
@@ -11089,9 +11086,9 @@ function rebindDescendants(directory) {
 function sendOperation(directory, request, timeoutMs) {
   const sequence = ++directory.worker.sequence;
   const prefix = String(sequence).padStart(8, "0");
-  const pendingPath = join6(directory.worker.controlPath, `${prefix}.pending`);
-  const requestPath = join6(directory.worker.controlPath, `${prefix}.request`);
-  const responsePath = join6(directory.worker.controlPath, `${prefix}.response`);
+  const pendingPath = join7(directory.worker.controlPath, `${prefix}.pending`);
+  const requestPath = join7(directory.worker.controlPath, `${prefix}.request`);
+  const responsePath = join7(directory.worker.controlPath, `${prefix}.response`);
   writeFileSync2(pendingPath, JSON.stringify(request), { flag: "wx", mode: 384 });
   renameSync2(pendingPath, requestPath);
   if (!waitForFile(responsePath, timeoutMs)) {
@@ -11350,7 +11347,7 @@ function closeBoundDirectories(directories, primaryError) {
   throw new AggregateError(errors, "bound-directory cleanup failed");
 }
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
-  const controlPath = mkdtempSync(join6(tmpdir(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join7(tmpdir(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -11362,7 +11359,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       controlPath,
       lifecycleCapability,
       name,
-      publicPath: join6(parent.path, name),
+      publicPath: join7(parent.path, name),
       create: options.create ?? false,
       mode: options.mode ?? 448,
       optional: options.optional ?? false,
@@ -11386,7 +11383,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
       },
       name,
       parent,
-      path: join6(parent.path, name),
+      path: join7(parent.path, name),
       pendingCleanups: /* @__PURE__ */ new Map(),
       realPath: result.directoryIdentity.realPath,
       worker,
@@ -11527,15 +11524,15 @@ function writeBoundDirectoryFile(directory, name, contents, mode, dependencies =
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
 function readPackageIntegrationManifest(appRoot, dependencies) {
-  const manifestPath = join7(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+  const manifestPath = join8(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
   if (dependencies.exists || dependencies.readText) {
-    const exists = dependencies.exists ?? existsSync3;
+    const exists = dependencies.exists ?? existsSync4;
     if (!exists(manifestPath))
       return void 0;
     const readText = dependencies.readText ?? ((path) => readFileSync7(path, "utf8"));
     return readText(manifestPath);
   }
-  const agent = openBoundDirectory(join7(appRoot, ".rn-agent"));
+  const agent = openBoundDirectory(join8(appRoot, ".rn-agent"));
   let integration;
   let primaryError;
   try {
@@ -11550,7 +11547,7 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
   }
 }
 function inspectAuthorityMigration(status, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync3;
+  const exists = dependencies.exists ?? existsSync4;
   const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
   let packageIntegrationInstalled = false;
   if (appRoot) {
@@ -11645,7 +11642,7 @@ function resolveStatus() {
   });
 }
 function readSigner(status) {
-  const secret = JSON.parse(readFileSync8(join8(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
+  const secret = JSON.parse(readFileSync8(join9(status.layout.sessions, status.sessionId, "secret.json"), "utf8"));
   if (typeof secret.signerCapability !== "string") {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session build signer is unavailable");
   }
@@ -11661,7 +11658,7 @@ function writeMarker(status, input) {
     platform: input.platform,
     buildGeneration: input.buildGeneration
   }, input.signerCapability);
-  const agent = openBoundDirectory(join8(appRoot, ".rn-agent"));
+  const agent = openBoundDirectory(join9(appRoot, ".rn-agent"));
   let integration;
   let primaryError;
   try {

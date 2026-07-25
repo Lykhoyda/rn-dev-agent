@@ -50,7 +50,7 @@ building, while authoritative tools return `BUNDLE_HANDSHAKE_UNAVAILABLE`.
 
 Process identity is derived from the OS and hashed:
 
-- macOS: libproc start seconds and microseconds plus `kern.bootsessionuuid`, after an exact PID presence check
+- macOS: a packaged universal libproc helper returns start seconds and microseconds, combined with `kern.bootsessionuuid` after an exact PID presence check
 - Linux: `/proc/<pid>/stat` start ticks plus kernel boot ID
 - Windows: PowerShell `StartTime` ticks
 

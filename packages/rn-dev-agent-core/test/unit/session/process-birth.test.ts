@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync, statSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   probeProcessBirth,
@@ -14,9 +15,8 @@ test('macOS process identity uses full kernel start time and boot session', () =
         assert.deepEqual(args, ['-p', '123', '-o', 'pid=']);
         return '123\n';
       }
-      if (command === '/usr/bin/swift') {
-        assert.equal(args[0], '-e');
-        assert.equal(args[2], '123');
+      if (command.endsWith('/native/darwin-process-birth')) {
+        assert.deepEqual(args, ['123']);
         return `123:1784792468:${startMicroseconds}\n`;
       }
       if (command === '/usr/sbin/sysctl') {
@@ -132,4 +132,21 @@ test('current process has a portable birth identity on supported hosts', () => {
 
   assert.equal(birth?.pid, process.pid);
   assert.match(birth?.token ?? '', /^[a-f0-9]{64}$/);
+});
+
+test('Darwin process helper ships executable in core and both host runtimes', () => {
+  const helperUrls = [
+    new URL('../../../dist/native/darwin-process-birth', import.meta.url),
+    new URL('../../../../claude-plugin/rn-dev-agent-core/dist/native/darwin-process-birth', import.meta.url),
+    new URL('../../../../codex-plugin/rn-dev-agent-core/dist/native/darwin-process-birth', import.meta.url),
+  ];
+  const helpers = helperUrls.map((url) => readFileSync(url));
+
+  assert.deepEqual(helpers[1], helpers[0]);
+  assert.deepEqual(helpers[2], helpers[0]);
+  if (process.platform !== 'win32') {
+    for (const url of helperUrls) {
+      assert.notEqual(statSync(url).mode & 0o111, 0);
+    }
+  }
 });

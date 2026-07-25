@@ -3,6 +3,7 @@
 # GitHub PR diffs and excludes them from language stats; -diff suppresses
 # textual diffs for the large bundles.
 packages/rn-dev-agent-core/dist/** linguist-generated
+packages/rn-dev-agent-core/native/darwin-process-birth binary
 packages/codex-plugin/rn-dev-agent-core/** linguist-generated -diff
 packages/claude-plugin/rn-dev-agent-core/** linguist-generated -diff
 packages/codex-plugin/scripts/** linguist-generated
