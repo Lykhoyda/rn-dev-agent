@@ -15,9 +15,6 @@ const lifecycleCapability = process.argv[2];
 const transactionLock = '.rn-bound-transaction.lock';
 process.on('disconnect', () => {
   try {
-    fs.writeFileSync(path.join(controlPath, 'stopped'), '', { flag: 'wx', mode: 0o600 });
-  } catch {}
-  try {
     const lock = JSON.parse(fs.readFileSync(transactionLock, 'utf8'));
     if (lock.owner === lifecycleCapability) fs.unlinkSync(transactionLock);
   } catch (error) {
@@ -30,6 +27,9 @@ process.on('disconnect', () => {
       } catch {}
     }
   }
+  try {
+    fs.writeFileSync(path.join(controlPath, 'stopped'), '', { flag: 'wx', mode: 0o600 });
+  } catch {}
   process.exit(0);
 });
 fs.writeFileSync(path.join(controlPath, 'monitor-ready'), '', { flag: 'wx', mode: 0o600 });
