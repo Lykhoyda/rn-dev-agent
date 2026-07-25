@@ -53117,7 +53117,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
     throw new Error(message);
   };
   const readyPath = join30(controlPath, "ready");
-  if (!waitForFile(readyPath, 5e3)) {
+  if (!waitForFile(readyPath, WORKER_READY_TIMEOUT_MS)) {
     rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
   let ready = {};
@@ -53675,12 +53675,13 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
   }
   directory.pendingCleanups.delete(obligation.transactionId);
 }
-var WAIT_BUFFER, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_ANCESTRY_MONITOR, BOUND_DIRECTORY_WORKER;
+var WAIT_BUFFER, WORKER_READY_TIMEOUT_MS, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_ANCESTRY_MONITOR, BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
   "packages/rn-dev-agent-core/dist/session/bound-directory.js"() {
     "use strict";
     init_state_root();
     WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+    WORKER_READY_TIMEOUT_MS = 15e3;
     BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');

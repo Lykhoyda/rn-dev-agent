@@ -49766,6 +49766,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+var WORKER_READY_TIMEOUT_MS = 15e3;
 var BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -50896,7 +50897,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
     throw new Error(message);
   };
   const readyPath = join27(controlPath, "ready");
-  if (!waitForFile(readyPath, 5e3)) {
+  if (!waitForFile(readyPath, WORKER_READY_TIMEOUT_MS)) {
     rejectWorker("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable");
   }
   let ready = {};

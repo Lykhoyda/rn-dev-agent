@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getBoundDirectoryJournalKey } from './state-root.js';
 const WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+const WORKER_READY_TIMEOUT_MS = 15_000;
 const BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw `
 const fs = require('node:fs');
 const path = require('node:path');
@@ -1135,7 +1136,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ''
         throw new Error(message);
     };
     const readyPath = join(controlPath, 'ready');
-    if (!waitForFile(readyPath, 5_000)) {
+    if (!waitForFile(readyPath, WORKER_READY_TIMEOUT_MS)) {
         rejectWorker('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable');
     }
     let ready = {};

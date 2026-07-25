@@ -104,6 +104,7 @@ export interface BoundOperationDependencies {
 }
 
 const WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+const WORKER_READY_TIMEOUT_MS = 15_000;
 
 const BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
@@ -1256,7 +1257,7 @@ function bindWorker(
     throw new Error(message);
   };
   const readyPath = join(controlPath, 'ready');
-  if (!waitForFile(readyPath, 5_000)) {
+  if (!waitForFile(readyPath, WORKER_READY_TIMEOUT_MS)) {
     rejectWorker('SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker unavailable');
   }
   let ready: { lifecycleCapability?: unknown; ok?: unknown; pid?: unknown } = {};
