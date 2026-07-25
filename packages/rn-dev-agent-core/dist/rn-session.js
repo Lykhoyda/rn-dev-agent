@@ -13,7 +13,7 @@ import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
-import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from './session/process-cleanup.js';
+import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './session/process-cleanup.js';
 import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, writeBoundDirectoryFile, } from './session/bound-directory.js';
 function resolveStatus() {
     const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);

@@ -75,13 +75,7 @@ test('Android runner cleanup proves device-side instrumentation stopped', async 
     },
   );
 
-  assert.deepEqual(adbCalls[0], [
-    '-s',
-    'emulator-5554',
-    'forward',
-    '--remove',
-    'tcp:27183',
-  ]);
+  assert.deepEqual(adbCalls[0], ['-s', 'emulator-5554', 'forward', '--remove', 'tcp:27183']);
   assert.equal(adbCalls.filter((args) => args.includes('force-stop')).length, 2);
   assert.equal(adbCalls.at(-1)?.includes('instrumentation'), true);
 });

@@ -296,8 +296,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         if (!ok && args.stopOnFailure) break;
       } catch (err) {
         if (err instanceof SessionAuthorityError) throw err;
-        const stageError =
-          err instanceof MaestroStageExecutionError ? err.stageError : err;
+        const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
         const msg = stageError instanceof Error ? stageError.message : String(stageError);
         const errWithOutput = stageError as { stdout?: unknown; stderr?: unknown };
         const completed =

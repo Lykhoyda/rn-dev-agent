@@ -53,7 +53,10 @@ test('an exited recorder remains safely finalizable', async () => {
   );
 
   assert.match(output, /Saved: proof\.mp4/);
-  assert.deepEqual(calls.map((args) => args[0]), ['stop', 'status']);
+  assert.deepEqual(
+    calls.map((args) => args[0]),
+    ['stop', 'status'],
+  );
 });
 
 test('provisional recorder cleanup capability-aborts an unbound live process', async () => {

@@ -142,8 +142,7 @@ test('parseStatusOutput: surfaces dead processes', () => {
 });
 
 test('parseStatusOutput: handles paths with spaces', () => {
-  const stdout =
-    'android: pid=42 birth=birth-a status=recording output=/tmp/my proof file.mp4\n';
+  const stdout = 'android: pid=42 birth=birth-a status=recording output=/tmp/my proof file.mp4\n';
   const result = parseStatusOutput(stdout);
   assert.equal(result[0].output, '/tmp/my proof file.mp4');
 });

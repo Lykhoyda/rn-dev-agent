@@ -112,13 +112,17 @@ flow until you can name what's missing.
 After the rehearsal flow has replayed clean, reset the app to the starting
 screen one more time, then start recording:
 
-```bash
+```text
 # iOS
-rn-record-proof start ios docs/proof/<slug>/flow-ios.mp4
+device_record(action="start", platform="ios", outputPath="docs/proof/<slug>/flow-ios.mp4")
 
 # Android
-rn-record-proof start android docs/proof/<slug>/flow-android.mp4
+device_record(action="start", platform="android", outputPath="docs/proof/<slug>/flow-android.mp4")
 ```
+
+`device_record` derives the private recorder scope from the fenced session and
+uses only its exact authority-bound device. A conflicting platform or device is
+refused.
 
 If recording fails to start, warn but continue — screenshots are the primary artifact.
 
@@ -158,14 +162,17 @@ recording — that's a flow bug, not a feature bug. Do not "fix it on camera."
 
 ### Step 5: Stop recording
 
-```bash
-rn-record-proof stop
+```text
+device_record(
+  action="stop",
+  gif=true,
+  gifPath="docs/proof/<slug>/flow-ios.gif"
+)
 ```
 
-Attempt GIF conversion:
-```bash
-rn-record-proof convert-gif docs/proof/<slug>/flow-ios.mp4 docs/proof/<slug>/flow-ios.gif
-```
+Stopping through `device_record` authenticates the recorder identity, resumes
+any pending finalization, and releases the session recorder claim only after
+cleanup succeeds.
 
 ### Step 5.5: Label the video (default)
 

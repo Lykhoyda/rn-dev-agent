@@ -18,7 +18,11 @@ let entrypointUrl: string | null = null;
 
 export function initialize(data: unknown): void {
   const value = data as { entrypointUrl?: unknown } | null;
-  if (!value || typeof value.entrypointUrl !== 'string' || !value.entrypointUrl.startsWith('file:')) {
+  if (
+    !value ||
+    typeof value.entrypointUrl !== 'string' ||
+    !value.entrypointUrl.startsWith('file:')
+  ) {
     throw new Error('STARTUP_INTEGRITY_UNAVAILABLE: worker entrypoint URL is invalid');
   }
   entrypointUrl = value.entrypointUrl;

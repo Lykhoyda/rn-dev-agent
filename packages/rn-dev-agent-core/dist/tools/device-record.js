@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
-import { darwinProcessBirthHelperPath, probeProcessBirth, } from '../session/process-birth.js';
+import { darwinProcessBirthHelperPath, probeProcessBirth } from '../session/process-birth.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { stopBoundRecorder } from '../session/process-cleanup.js';
 // Safe by construction: only execFile (argv-based, no shell), never exec.
@@ -199,9 +199,7 @@ export function bindRecorderSession(runtime, args) {
     const device = status.bindings.device;
     const platform = device?.platform;
     const deviceId = device?.deviceId;
-    if ((platform !== 'ios' && platform !== 'android') ||
-        typeof deviceId !== 'string' ||
-        !deviceId) {
+    if ((platform !== 'ios' && platform !== 'android') || typeof deviceId !== 'string' || !deviceId) {
         throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder requires an exact claimed device');
     }
     if (args.platform !== undefined && args.platform !== platform) {

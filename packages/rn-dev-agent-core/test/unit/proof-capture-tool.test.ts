@@ -8,10 +8,7 @@ import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import Ajv from 'ajv';
 import { StrictProofMonitor, type ProofObservation } from '../../dist/domain/proof-capture.js';
-import {
-  instrumentStartupSource,
-  STARTUP_INTEGRITY_SYMBOL,
-} from '../../dist/startup-integrity.js';
+import { instrumentStartupSource, STARTUP_INTEGRITY_SYMBOL } from '../../dist/startup-integrity.js';
 import {
   finalProofReceiptSchema,
   type EvidenceReview,
@@ -72,11 +69,7 @@ test('strict proof rejects a candidate path passed by a foreign wrapper', async 
   await writeFile(coreBundle, 'export {};\n');
 
   assert.equal(
-    resolveProofCandidateEntrypoint(root, [
-      process.execPath,
-      '/foreign/wrapper.js',
-      coreBundle,
-    ]),
+    resolveProofCandidateEntrypoint(root, [process.execPath, '/foreign/wrapper.js', coreBundle]),
     null,
   );
   assert.equal(
@@ -107,7 +100,10 @@ test('strict proof rejects restored disk bytes that differ from the startup bund
 
   assert.ok(entrypoint);
   assert.equal(loaded.attestation.coreBundleSha256, HASH('tampered startup bytes\n'));
-  assert.equal(proofCandidateStartupMatches(entrypoint, startup, HASH('clean head bytes\n')), false);
+  assert.equal(
+    proofCandidateStartupMatches(entrypoint, startup, HASH('clean head bytes\n')),
+    false,
+  );
 });
 
 test('startup loader attests the exact worker source supplied to Node', async (t) => {

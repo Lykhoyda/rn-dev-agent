@@ -7,10 +7,7 @@ import { dirname, join } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
-import {
-  darwinProcessBirthHelperPath,
-  probeProcessBirth,
-} from '../session/process-birth.js';
+import { darwinProcessBirthHelperPath, probeProcessBirth } from '../session/process-birth.js';
 import { getWorkerAuthorityRuntime, type WorkerAuthorityRuntime } from '../session/runtime.js';
 import { stopBoundRecorder } from '../session/process-cleanup.js';
 
@@ -268,7 +265,9 @@ export function parseStatusOutput(stdout: string): ActiveRecording[] {
   return active;
 }
 
-function recordingScope(args: Required<Pick<DeviceRecordArgs, 'sessionId' | 'claimEpoch' | 'platform' | 'deviceId'>>): string {
+function recordingScope(
+  args: Required<Pick<DeviceRecordArgs, 'sessionId' | 'claimEpoch' | 'platform' | 'deviceId'>>,
+): string {
   return createHash('sha256')
     .update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`)
     .digest('hex');
@@ -290,11 +289,7 @@ export function bindRecorderSession(
   const device = status.bindings.device as Record<string, unknown> | undefined;
   const platform = device?.platform;
   const deviceId = device?.deviceId;
-  if (
-    (platform !== 'ios' && platform !== 'android') ||
-    typeof deviceId !== 'string' ||
-    !deviceId
-  ) {
+  if ((platform !== 'ios' && platform !== 'android') || typeof deviceId !== 'string' || !deviceId) {
     throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder requires an exact claimed device');
   }
   if (args.platform !== undefined && args.platform !== platform) {
@@ -617,9 +612,11 @@ async function runStatus(
   }
 }
 
-export function createDeviceRecordHandler(deps: {
-  runtime?: WorkerAuthorityRuntime;
-} = {}): (args: DeviceRecordArgs) => Promise<ToolResult> {
+export function createDeviceRecordHandler(
+  deps: {
+    runtime?: WorkerAuthorityRuntime;
+  } = {},
+): (args: DeviceRecordArgs) => Promise<ToolResult> {
   const runtime = deps.runtime ?? getWorkerAuthorityRuntime();
   return async (args) => {
     if (args.action === 'start') return runStart(args, runtime);

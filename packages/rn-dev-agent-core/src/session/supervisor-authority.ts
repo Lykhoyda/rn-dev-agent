@@ -224,10 +224,7 @@ export function createSupervisorAuthority(
           status = registry.beginSessionClose(session);
         }
         if (status) {
-          const recorder = status.bindings.recorder as
-            | Record<string, unknown>
-            | null
-            | undefined;
+          const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
           if (recorder) {
             const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
             if (

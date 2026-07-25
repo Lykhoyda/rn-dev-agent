@@ -118,9 +118,7 @@ test('authority publication failure rolls back the listening server', async (t) 
 
   await assert.rejects(startObserveServer(), /binding failed/);
   assert.equal(unbound, 1);
-  await assert.rejects(
-    fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) }),
-  );
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) }));
 });
 
 test('listen failure preserves a pre-existing Observe binding and state', async (t) => {

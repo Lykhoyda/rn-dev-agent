@@ -74855,7 +74855,7 @@ var init_index = __esm({
       hardReset: external_exports.boolean().optional().describe("Relaunch the exact session app on its claimed iOS or Android device before reconnecting."),
       bundleId: external_exports.string().optional().describe("Compatibility alias for the authority-bound appId; conflicting values are refused.")
     }, createRestartHandler(getClient, setClient, createClient, {
-      stopFastRunner: async (deviceId) => {
+      stopFastRunner: async (_deviceId) => {
         const { registry: registry2, session } = authorityRuntime.requireAvailable();
         const status = registry2.getSessionStatus(session.sessionId);
         const runner = status?.bindings.runner;

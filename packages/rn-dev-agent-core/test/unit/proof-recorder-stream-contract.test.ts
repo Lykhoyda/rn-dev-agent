@@ -73,14 +73,8 @@ function fixture() {
   const xcrun = join(root, 'xcrun');
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${legacyPrefix}"`)
-    .replace(
-      'RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"',
-      `RUNTIME_DIR="${runtimeDirectory}"`,
-    )
-    .replace(
-      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
-      `RUNTIME_ROOT="${root}"`,
-    )
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${runtimeDirectory}"`)
+    .replace('RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"', `RUNTIME_ROOT="${root}"`)
     .replace(
       'RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"',
       `RUNTIME_DIR="${runtimeDirectory}"`,

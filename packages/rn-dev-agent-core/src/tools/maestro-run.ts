@@ -596,8 +596,7 @@ export function createMaestroRunHandler(
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       if (err instanceof SessionAuthorityError) throw err;
-      const stageError =
-        err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg = stageError instanceof Error ? stageError.message : String(stageError);
       // Multi-LLM review of PR #115 (Codex conf 95): when execFile
       // throws on timeout (or kill), Node attaches the partial stdout

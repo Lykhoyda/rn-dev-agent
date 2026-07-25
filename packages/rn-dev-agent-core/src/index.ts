@@ -2891,7 +2891,7 @@ trackedTool(
       ),
   },
   createRestartHandler(getClient, setClient, createClient, {
-    stopFastRunner: async (deviceId) => {
+    stopFastRunner: async (_deviceId) => {
       const { registry, session } = authorityRuntime.requireAvailable();
       const status = registry.getSessionStatus(session.sessionId);
       const runner = status?.bindings.runner as Record<string, unknown> | undefined;

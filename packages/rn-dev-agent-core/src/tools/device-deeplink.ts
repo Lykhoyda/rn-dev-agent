@@ -170,9 +170,11 @@ export function annotatePicker(
   return result;
 }
 
-export function createDeviceDeeplinkHandler(deps: {
-  completeNativeOrigin?: (args: DeeplinkArgs, targetExpected: boolean) => Promise<void>;
-} = {}): (args: DeeplinkArgs) => Promise<ToolResult> {
+export function createDeviceDeeplinkHandler(
+  deps: {
+    completeNativeOrigin?: (args: DeeplinkArgs, targetExpected: boolean) => Promise<void>;
+  } = {},
+): (args: DeeplinkArgs) => Promise<ToolResult> {
   return async (args) => {
     if (!args.url || args.url.length === 0) {
       return failResult('url is required', { code: 'INVALID_ARGS' });

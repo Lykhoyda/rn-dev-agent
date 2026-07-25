@@ -279,9 +279,7 @@ export async function stopBoundRecorder(
   } catch (error) {
     throw new SessionAuthorityError(
       'RECORDING_AUTHORITY_MISMATCH',
-      `recorder termination is unproven: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `recorder termination is unproven: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }

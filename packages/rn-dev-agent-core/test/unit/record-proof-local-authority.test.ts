@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +27,7 @@ function probeProcessPresence(pid: number): 'present' | 'absent' | 'unknown' {
     encoding: 'utf8',
   });
   if (processState.status === 0) {
-    return /^Z/.test(processState.stdout.trim()) ? 'absent' : 'present';
+    return processState.stdout.trim().startsWith('Z') ? 'absent' : 'present';
   }
   return processState.status === 1 && processState.stdout.trim() === '' ? 'absent' : 'unknown';
 }
@@ -102,10 +95,7 @@ test('recording start returns while its authenticated supervisor remains active'
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
     .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
-    .replace(
-      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
-      `RUNTIME_ROOT="${root}"`,
-    )
+    .replace('RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"', `RUNTIME_ROOT="${root}"`)
     .replace('RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
@@ -158,19 +148,15 @@ done
   }
   rmSync(`${prefix}-${scope}.pid`);
   rmSync(`${prefix}-${scope}.birth`);
-  const abort = spawnSync(
-    'bash',
-    [script, 'abort', scope],
-    {
-      encoding: 'utf8',
-      timeout: 10_000,
-      env: {
-        ...process.env,
-        PATH: `${root}:${process.env.PATH}`,
-        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
-      },
+  const abort = spawnSync('bash', [script, 'abort', scope], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    env: {
+      ...process.env,
+      PATH: `${root}:${process.env.PATH}`,
+      RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
     },
-  );
+  });
   assert.equal(abort.status, 0, abort.stderr);
   assert.equal(existsSync(tokenPath), false);
   const afterAbortBirth = await waitForDifferentBirth(parsed.pid, parsed.processBirth);
@@ -202,10 +188,7 @@ test('recording supervisor force-stops its unreaped child after SIGINT is ignore
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
     .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
-    .replace(
-      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
-      `RUNTIME_ROOT="${root}"`,
-    )
+    .replace('RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"', `RUNTIME_ROOT="${root}"`)
     .replace('RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
@@ -240,11 +223,11 @@ done
   assert.ok(parsed);
   recorderPid = parsed.pid;
 
-  const stop = spawnSync(
-    'bash',
-    [script, 'stop', scope, String(parsed.pid), parsed.processBirth],
-    { encoding: 'utf8', timeout: recorderStartTimeoutMs, env },
-  );
+  const stop = spawnSync('bash', [script, 'stop', scope, String(parsed.pid), parsed.processBirth], {
+    encoding: 'utf8',
+    timeout: recorderStartTimeoutMs,
+    env,
+  });
   assert.equal(stop.status, 0, stop.stderr);
   assert.equal(existsSync(`${prefix}-${scope}.pid`), false);
   const observedBirth = await waitForDifferentBirth(parsed.pid, parsed.processBirth);
@@ -277,10 +260,7 @@ test('recording supervisor terminates its child when request handling fails', as
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
     .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
-    .replace(
-      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
-      `RUNTIME_ROOT="${root}"`,
-    )
+    .replace('RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"', `RUNTIME_ROOT="${root}"`)
     .replace('RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
@@ -332,12 +312,10 @@ done
     childBefore.status === 'present' ? childBefore.birth.token : '',
   );
   assert.equal(
-    supervisorBirth !== parsed.processBirth ||
-      probeProcessPresence(supervisorPid) === 'absent',
+    supervisorBirth !== parsed.processBirth || probeProcessPresence(supervisorPid) === 'absent',
     true,
   );
-  const expectedChildBirth =
-    childBefore.status === 'present' ? childBefore.birth.token : null;
+  const expectedChildBirth = childBefore.status === 'present' ? childBefore.birth.token : null;
   assert.equal(
     childBirth !== expectedChildBirth || probeProcessPresence(childPid) === 'absent',
     true,

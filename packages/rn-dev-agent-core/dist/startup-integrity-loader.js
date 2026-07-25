@@ -2,7 +2,9 @@ import { instrumentStartupSource } from './startup-integrity.js';
 let entrypointUrl = null;
 export function initialize(data) {
     const value = data;
-    if (!value || typeof value.entrypointUrl !== 'string' || !value.entrypointUrl.startsWith('file:')) {
+    if (!value ||
+        typeof value.entrypointUrl !== 'string' ||
+        !value.entrypointUrl.startsWith('file:')) {
         throw new Error('STARTUP_INTEGRITY_UNAVAILABLE: worker entrypoint URL is invalid');
     }
     entrypointUrl = value.entrypointUrl;

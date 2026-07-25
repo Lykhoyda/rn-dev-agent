@@ -43,14 +43,8 @@ function fixture() {
   const conversionMarker = join(root, 'conversion-marker');
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${legacyPrefix}"`)
-    .replace(
-      'RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"',
-      `RUNTIME_DIR="${runtimeDirectory}"`,
-    )
-    .replace(
-      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
-      `RUNTIME_ROOT="${root}"`,
-    )
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${runtimeDirectory}"`)
+    .replace('RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"', `RUNTIME_ROOT="${root}"`)
     .replace(
       'RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"',
       `RUNTIME_DIR="${runtimeDirectory}"`,
@@ -206,20 +200,16 @@ test('Android stop finalizes without signaling a reused remote PID', () => {
     );
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     const stat = ['777', '(screenrecord)', 'S', ...Array(18).fill('0'), '999'].join(' ');
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_STAT: stat,
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_STAT: stat,
       },
-    );
+    });
     assert.equal(result.status, 0);
     assert.equal(existsSync(state.killMarker), false);
   } finally {
@@ -240,22 +230,18 @@ test('Android stop treats disappearance during identity capture as absence', () 
     );
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     const stat = ['777', '(screenrecord)', 'S', ...Array(18).fill('0'), '123'].join(' ');
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_STAT: stat,
-          FAKE_READLINK_FAIL: '1',
-          FAKE_PROC_PRESENT: '0',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_STAT: stat,
+        FAKE_READLINK_FAIL: '1',
+        FAKE_PROC_PRESENT: '0',
       },
-    );
+    });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(state.killMarker), false);
   } finally {
@@ -276,20 +262,16 @@ test('Android stop refuses a same-birth recorder with different output arguments
     );
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     const stat = ['777', '(screenrecord)', 'S', ...Array(18).fill('0'), '123'].join(' ');
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_STAT: stat,
-          FAKE_REMOTE_PATH: '/sdcard/foreign.mp4',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_STAT: stat,
+        FAKE_REMOTE_PATH: '/sdcard/foreign.mp4',
       },
-    );
+    });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /command identity changed/);
     assert.equal(existsSync(state.killMarker), false);
@@ -309,20 +291,16 @@ test('Android legacy stop pulls into an exclusive private-runtime file', () => {
     writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, legacyRaw);
     writeFileSync(`${state.legacyPrefix}-${scope}.device-path`, '/sdcard/proof.mp4');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.equal(result.status, 0, result.stderr);
     const pullDestination = readFileSync(state.pullMarker, 'utf8').trim();
@@ -341,21 +319,17 @@ test('Android pull removes its private partial file when stop is terminated', ()
     writeFileSync(`${state.prefix}-${scope}.path`, output);
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_STAT: '',
-          FAKE_TERMINATE_PULL_PARENT: '1',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_STAT: '',
+        FAKE_TERMINATE_PULL_PARENT: '1',
       },
-    );
+    });
 
     assert.notEqual(result.status, 0);
     const pullDestination = readFileSync(state.pullMarker, 'utf8').trim();
@@ -373,23 +347,19 @@ test('Android remote capture remains available when conversion is interrupted', 
     writeFileSync(`${state.prefix}-${scope}.path`, output);
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_CONVERSION_MARKER: state.conversionMarker,
-          FAKE_STAT: '',
-          FAKE_TERMINATE_CONVERSION: '1',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_CONVERSION_MARKER: state.conversionMarker,
+        FAKE_STAT: '',
+        FAKE_TERMINATE_CONVERSION: '1',
       },
-    );
+    });
 
     assert.notEqual(result.status, 0);
     assert.equal(existsSync(state.remoteDeleteMarker), false);
@@ -410,22 +380,18 @@ test('Android finalized output retries failed remote deletion without repulling'
     writeFileSync(`${state.prefix}-${scope}.path`, output);
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
 
-    const firstStop = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_REMOTE_DELETE_FAIL: '1',
-          FAKE_STAT: '',
-        },
+    const firstStop = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_REMOTE_DELETE_FAIL: '1',
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.notEqual(firstStop.status, 0);
     const finalizedOutput = `${output.slice(0, -4)}.mov`;
@@ -437,22 +403,18 @@ test('Android finalized output retries failed remote deletion without repulling'
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
     writeFileSync(finalizedOutput, 'replacement');
 
-    const secondStop = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_PULL_FAIL: '1',
-          FAKE_STAT: '',
-        },
+    const secondStop = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_PULL_FAIL: '1',
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.equal(secondStop.status, 0, secondStop.stderr);
     assert.equal(existsSync(state.remoteDeleteMarker), true);
@@ -475,21 +437,17 @@ test('Android migrates pending path-only finalization through a fresh pull', () 
     writeFileSync(`${state.prefix}-${scope}.finalized-path`, legacyFinalized);
     writeFileSync(legacyFinalized, 'legacy-finalized');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(state.pullMarker), true);
@@ -511,26 +469,19 @@ test('Android adopts authenticated finalized output when the device copy is gone
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     writeFileSync(`${state.prefix}-${scope}.finalized-path`, finalizedOutput);
     writeFileSync(finalizedOutput, 'authenticated-finalized');
-    writeFileSync(
-      `${state.prefix}-${scope}.finalized-identity`,
-      captureIdentity(finalizedOutput),
-    );
+    writeFileSync(`${state.prefix}-${scope}.finalized-identity`, captureIdentity(finalizedOutput));
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_FAIL: '1',
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_FAIL: '1',
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(state.pullMarker), false);
@@ -554,21 +505,17 @@ test('Android atomically replaces an output symlink without writing its target',
     writeFileSync(victim, 'unchanged');
     symlinkSync(victim, publishedOutput);
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(victim, 'utf8'), 'unchanged');
@@ -591,22 +538,18 @@ test('Android finalizes an existing raw capture when replacement pull fails', ()
     writeFileSync(raw, 'existing-recording');
     writeFileSync(`${state.prefix}-${scope}.raw-identity`, captureIdentity(raw));
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_PULL_FAIL: '1',
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_PULL_FAIL: '1',
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.equal(result.status, 0, result.stderr);
     const finalizedOutput = `${output.slice(0, -4)}.mov`;
@@ -629,27 +572,20 @@ test('Android retains an unbound prior capture in the replacement manifest', () 
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     writeFileSync(raw, 'prior-recording');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_REMOTE_DELETE_FAIL: '1',
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_REMOTE_DELETE_FAIL: '1',
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.notEqual(result.status, 0);
-    const manifest = readFileSync(
-      `${state.prefix}-${scope}.pull-manifest`,
-      'utf8',
-    ).split('\n');
+    const manifest = readFileSync(`${state.prefix}-${scope}.pull-manifest`, 'utf8').split('\n');
     assert.equal(manifest[3], raw);
     assert.equal(manifest[4], captureIdentity(raw));
     assert.equal(existsSync(raw), true);
@@ -666,22 +602,18 @@ test('Android supplies an explicit MP4 format to conversion staging', () => {
     writeFileSync(`${state.prefix}-${scope}.path`, output);
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_CONVERSION_MARKER: state.conversionMarker,
-          FAKE_FFMPEG_SUCCESS: '1',
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_CONVERSION_MARKER: state.conversionMarker,
+        FAKE_FFMPEG_SUCCESS: '1',
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(state.conversionMarker), true);
@@ -702,21 +634,17 @@ test('Android retains the device capture when fallback raw completion is unprove
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     writeFileSync(raw, '');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_PULL_FAIL: '1',
-          FAKE_STAT: '',
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_PULL_FAIL: '1',
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /recording remains on device for retry/);
@@ -737,29 +665,24 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     mkdirSync(blockingSidecar);
 
-    const firstStop = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_STAT: '',
-        },
+    const firstStop = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+        FAKE_STAT: '',
       },
-    );
+    });
 
     assert.notEqual(firstStop.status, 0);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), true);
-    const cleanupReceipt = readFileSync(
-      `${state.prefix}-${scope}.cleanup-pending`,
-      'utf8',
-    ).split('\n');
+    const cleanupReceipt = readFileSync(`${state.prefix}-${scope}.cleanup-pending`, 'utf8').split(
+      '\n',
+    );
     assert.equal(cleanupReceipt[0], 'v2');
     assert.equal(cleanupReceipt[6], '1');
     const retainedCapture = cleanupReceipt[7];
@@ -783,14 +706,10 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     assert.match(restart.stderr, /requires authenticated cleanup/);
 
     rmSync(blockingSidecar, { recursive: true });
-    const retry = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: process.env,
-      },
-    );
+    const retry = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: process.env,
+    });
     assert.equal(retry.status, 0, retry.stderr);
     assert.match(retry.stdout, /^Saved: /m);
     assert.equal(existsSync(retainedCapture), false);
@@ -827,14 +746,10 @@ test('Android cleanup receipt restores output and removes its private artifact',
     );
     writeFileSync(output, 'replacement');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: process.env,
-      },
-    );
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: process.env,
+    });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(output, 'utf8'), 'recovery-output');
@@ -875,14 +790,10 @@ test('Android cleanup preserves recovery for an unsafe output directory', () => 
     );
     writeFileSync(output, 'replacement');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: process.env,
-      },
-    );
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: process.env,
+    });
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /recording output directory is unsafe/);
@@ -923,14 +834,10 @@ test('Android v1 cleanup receipt adopts authenticated raw recovery state', () =>
     );
     writeFileSync(output, 'replacement');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: process.env,
-      },
-    );
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: process.env,
+    });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(output, 'utf8'), 'recovery-output');
@@ -952,21 +859,17 @@ test('Android legacy finalization ignores a foreign replacement raw entry', () =
     writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, legacyRaw);
     writeFileSync(`${state.legacyPrefix}-${scope}.device-path`, '/sdcard/proof.mp4');
 
-    const result = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, '999999', 'local-birth'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${state.root}:${process.env.PATH}`,
-          FAKE_KILL_MARKER: state.killMarker,
-          FAKE_PULL_MARKER: state.pullMarker,
-          FAKE_STAT: '',
-          FAKE_PRIOR_RAW_PATH: legacyRaw,
-        },
+    const result = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_KILL_MARKER: state.killMarker,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_STAT: '',
+        FAKE_PRIOR_RAW_PATH: legacyRaw,
       },
-    );
+    });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(`${output.slice(0, -4)}.mov`), true);

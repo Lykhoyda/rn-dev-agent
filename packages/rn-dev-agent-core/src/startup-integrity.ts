@@ -39,9 +39,9 @@ export function instrumentStartupSource(
 }
 
 export function readStartupIntegrityAttestation(): StartupIntegrityAttestation | null {
-  const value = (globalThis as Record<symbol, unknown>)[
-    Symbol.for(STARTUP_INTEGRITY_SYMBOL)
-  ] as Partial<StartupIntegrityAttestation> | undefined;
+  const value = (globalThis as Record<symbol, unknown>)[Symbol.for(STARTUP_INTEGRITY_SYMBOL)] as
+    | Partial<StartupIntegrityAttestation>
+    | undefined;
   if (
     !value ||
     typeof value.entrypointUrl !== 'string' ||

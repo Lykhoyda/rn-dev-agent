@@ -212,7 +212,8 @@ test('managed Metro stops polling when the launcher exits by signal', async () =
           readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
           probeBirth: () => ({ status: 'absent' }),
           probeListener: () => ({ status: 'absent' }),
-          wait: async () => assert.fail('signalled launcher must not wait for the startup deadline'),
+          wait: async () =>
+            assert.fail('signalled launcher must not wait for the startup deadline'),
         },
       ),
     /METRO_START_UNAVAILABLE/,

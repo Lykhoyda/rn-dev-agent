@@ -523,7 +523,7 @@ Each phase has shortcuts agents reach for. Don't.
 - About to skip a phase "because the feature is small"
 - About to add a dependency without asking the user first
 - Editing files outside the architect's blueprint "while I'm here"
-- About to call `rn-record-proof start` before the rehearsed flow has replayed clean (proof-capture protocol Step 2.5)
+- About to call `device_record(action="start")` before the rehearsed flow has replayed clean (proof-capture protocol Step 2.5)
 - About to use `device_*` exploratory calls during recording to "find the right testID"
 - About to take the `device_*` / `cdp_*` fallback path for the on-camera replay without naming the specific Maestro primitive that cannot express the step in PROOF.md "Deviations"
 - About to enter a fourth rehearsal-fix loop without escalating to the user
@@ -554,7 +554,7 @@ Each phase has shortcuts agents reach for. Don't.
 - Add `console.log` calls and leave them in committed code
 - Proceed past Phase 4 without user approval on architecture
 - Commit with `cdp_error_log` showing new errors
-- Start `rn-record-proof start` while still discovering testIDs, navigation paths, or state shapes — recording is for verified replay, not exploration
+- Start `device_record(action="start")` while still discovering testIDs, navigation paths, or state shapes — recording is for verified replay, not exploration
 
 ## Verification — Feature Complete When
 
