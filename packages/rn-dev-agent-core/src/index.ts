@@ -150,6 +150,7 @@ import {
   maybeCaptureLiveFrame,
   isStateMutating,
   mayTriggerLiveCapture,
+  resolveSnapshotInvalidationPlatform,
   toolInvalidatesSnapshotCache,
   toolInvalidatesRetryBaseline,
   buildLiveDeps,
@@ -666,13 +667,11 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
       );
     }
     const args = a[0] as Record<string, unknown> | undefined;
-    const requestedSnapshotPlatform =
-      name === 'device_snapshot' && args?.action === 'open'
-        ? args.platform === 'android'
-          ? 'android'
-          : 'ios'
-        : undefined;
-    const snapshotPlatform = getActiveSession()?.platform ?? requestedSnapshotPlatform;
+    const snapshotPlatform = resolveSnapshotInvalidationPlatform(
+      name,
+      args,
+      getActiveSession()?.platform,
+    );
     let result: unknown;
     try {
       result = await base(...a);

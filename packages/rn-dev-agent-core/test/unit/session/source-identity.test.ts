@@ -202,9 +202,12 @@ test('strict proof includes ignored runtime inputs', () => {
   assert.ok(ignoredQueries.every((args) => !args.some((arg) => arg.includes('.xcode.env'))));
 });
 
-test('strict proof rejects ignored dependency stores', () => {
+test('strict proof authenticates ignored dependency bytes', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-dependencies-'));
   roots.push(root);
+  const dependency = join(root, 'node_modules', 'fixture', 'index.js');
+  mkdirSync(join(root, 'node_modules', 'fixture'), { recursive: true });
+  writeFileSync(dependency, 'module.exports = "first";');
   const identity = {
     kind: 'git' as const,
     contentRoot: root,
@@ -217,12 +220,75 @@ test('strict proof rejects ignored dependency stores', () => {
   const git = (_root: string, args: readonly string[]) => {
     if (args[0] === 'rev-parse') return 'abc123';
     if (args.includes('--directory')) return 'node_modules/\0';
+    if (args[0] === 'diff' || args.includes('--stage') || args.includes('--ignored')) return '';
+    if (args[0] === 'ls-files') return '';
+    throw new Error('unexpected git command');
+  };
+
+  const first = strictProofSourceIdentity(identity, { git });
+  writeFileSync(dependency, 'module.exports = "second";');
+  const second = strictProofSourceIdentity(identity, { git });
+
+  assert.notEqual(first.dirtyDigest, second.dirtyDigest);
+});
+
+test('strict proof authenticates dependency symlink targets outside the content root', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-dependency-link-'));
+  roots.push(root);
+  const external = mkdtempSync(join(tmpdir(), 'rn-source-proof-dependency-target-'));
+  roots.push(external);
+  const dependency = join(external, 'index.js');
+  mkdirSync(join(root, 'node_modules'), { recursive: true });
+  writeFileSync(dependency, 'module.exports = "first";');
+  symlinkSync(external, join(root, 'node_modules', 'fixture'));
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args.includes('--directory')) return 'node_modules/\0';
+    if (args[0] === 'diff' || args.includes('--stage') || args.includes('--ignored')) return '';
+    if (args[0] === 'ls-files') return '';
+    throw new Error('unexpected git command');
+  };
+
+  const first = strictProofSourceIdentity(identity, { git });
+  writeFileSync(dependency, 'module.exports = "second";');
+  const second = strictProofSourceIdentity(identity, { git });
+
+  assert.notEqual(first.dirtyDigest, second.dirtyDigest);
+});
+
+test('strict proof rejects Plug’n’Play without a Git-tracked local cache', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-pnp-'));
+  roots.push(root);
+  writeFileSync(join(root, '.pnp.cjs'), 'module.exports = {};');
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args.includes('--directory')) return '';
+    if (args[0] === 'diff' || args.includes('--stage') || args.includes('--ignored')) return '';
+    if (args[0] === 'ls-files') return '';
     throw new Error('unexpected git command');
   };
 
   assert.throws(
     () => strictProofSourceIdentity(identity, { git }),
-    /STRICT_PROOF_UNVERIFIED_DEPENDENCY_STORE/,
+    /STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT/,
   );
 });
 

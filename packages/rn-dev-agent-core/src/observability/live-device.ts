@@ -89,6 +89,17 @@ export function toolInvalidatesSnapshotCache(
   return !SNAPSHOT_CACHE_READS.has(tool);
 }
 
+export function resolveSnapshotInvalidationPlatform(
+  tool: string,
+  args: Record<string, unknown> | undefined,
+  activePlatform: string | undefined,
+): 'ios' | 'android' | undefined {
+  if (tool === 'device_snapshot' && args?.action === 'open') {
+    return args.platform === 'android' ? 'android' : 'ios';
+  }
+  return activePlatform === 'ios' || activePlatform === 'android' ? activePlatform : undefined;
+}
+
 // Story 05 (#386): the exclusion is ONLY for single-action tools that leave a
 // VALID current-screen baseline (lastSnapshotHash) for the next tap —
 // invalidating after them would erase it and defeat tap-sequence change

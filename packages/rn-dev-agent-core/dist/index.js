@@ -81,7 +81,7 @@ import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
 import { hashProofValue, StrictProofMonitor } from './domain/proof-capture.js';
-import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, toolInvalidatesSnapshotCache, toolInvalidatesRetryBaseline, buildLiveDeps, } from './observability/live-device.js';
+import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, resolveSnapshotInvalidationPlatform, toolInvalidatesSnapshotCache, toolInvalidatesRetryBaseline, buildLiveDeps, } from './observability/live-device.js';
 import { invalidateLastSnapshotHash } from './fast-runner-ref-map.js';
 import { tryRawScreenshot } from './tools/device-screenshot-raw.js';
 import { observeHandler, observeSchema, setObserveE2eDeps, setObserveAuthorityDeps, setObserveMirror, setObserveStateDeps, startObserveServer, } from './tools/observe.js';
@@ -522,12 +522,7 @@ function trackedTool(name, desc, schema, handler) {
             return failResult('Tool calls are disabled in the read-only MCP contract probe.', 'DIAGNOSTIC_MODE_READ_ONLY');
         }
         const args = a[0];
-        const requestedSnapshotPlatform = name === 'device_snapshot' && args?.action === 'open'
-            ? args.platform === 'android'
-                ? 'android'
-                : 'ios'
-            : undefined;
-        const snapshotPlatform = getActiveSession()?.platform ?? requestedSnapshotPlatform;
+        const snapshotPlatform = resolveSnapshotInvalidationPlatform(name, args, getActiveSession()?.platform);
         let result;
         try {
             result = await base(...a);

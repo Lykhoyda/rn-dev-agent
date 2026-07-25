@@ -32176,7 +32176,7 @@ import { readFileSync as readFileSync37, rmSync as rmSync9 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
-import { dirname as dirname20, join as join54 } from "node:path";
+import { dirname as dirname21, join as join54 } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -68107,6 +68107,12 @@ function toolInvalidatesSnapshotCache(tool, args) {
     return args?.action === "pin_dev_client";
   return !SNAPSHOT_CACHE_READS.has(tool);
 }
+function resolveSnapshotInvalidationPlatform(tool, args, activePlatform) {
+  if (tool === "device_snapshot" && args?.action === "open") {
+    return args.platform === "android" ? "android" : "ios";
+  }
+  return activePlatform === "ios" || activePlatform === "android" ? activePlatform : void 0;
+}
 var BASELINE_SELF_MANAGED_TOOLS = /* @__PURE__ */ new Set([
   "device_press",
   "device_longpress",
@@ -71505,8 +71511,8 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash14 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { closeSync as closeSync7, lstatSync as lstatSync11, openSync as openSync7, readFileSync as readFileSync36, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync7 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve8 } from "node:path";
+import { closeSync as closeSync7, existsSync as existsSync35, lstatSync as lstatSync11, openSync as openSync7, readdirSync as readdirSync14, readFileSync as readFileSync36, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync7 } from "node:fs";
+import { delimiter, dirname as dirname20, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve8 } from "node:path";
 function digest2(parts) {
   const hash = createHash14("sha256");
   for (const part of parts) {
@@ -71518,8 +71524,11 @@ function digest2(parts) {
 var MAX_STRICT_PROOF_FILES = 4096;
 var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_FILES = 5e4;
+var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
 var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
-var UNVERIFIABLE_DEPENDENCY_PATHS = [
+var DEPENDENCY_STORE_PATHS = [
   ":(top,glob)**/node_modules/**",
   ":(top,glob)**/.yarn/cache/**",
   ":(top,glob)**/.yarn/unplugged/**"
@@ -71560,6 +71569,114 @@ function updateFramedFile(hash, path, size) {
     }
   } finally {
     closeSync7(descriptor);
+  }
+}
+function updateDependencyPath(hash, path, label, state) {
+  const stat2 = lstatSync11(path);
+  updateFramed(hash, label);
+  updateFramed(hash, String(stat2.mode & 511));
+  if (stat2.isSymbolicLink()) {
+    const link = readlinkSync3(path);
+    const target = realpathSync7(path);
+    state.totalBytes += Buffer.byteLength(link);
+    if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
+    }
+    updateFramed(hash, "symlink");
+    updateFramed(hash, link);
+    updateFramed(hash, target);
+    updateDependencyPath(hash, target, `target:${target}`, state);
+    return;
+  }
+  if (stat2.isDirectory()) {
+    const canonical = realpathSync7(path);
+    if (state.visitedDirectories.has(canonical)) {
+      updateFramed(hash, "directory-reference");
+      updateFramed(hash, canonical);
+      return;
+    }
+    state.visitedDirectories.add(canonical);
+    updateFramed(hash, "directory");
+    for (const entry of readdirSync14(path).sort()) {
+      updateDependencyPath(hash, join53(path, entry), `${label}/${entry}`, state);
+    }
+    return;
+  }
+  if (!stat2.isFile()) {
+    throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${label} is not a regular file, directory, or symlink`);
+  }
+  state.files += 1;
+  if (state.files > MAX_STRICT_PROOF_DEPENDENCY_FILES) {
+    throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency file count exceeds the limit");
+  }
+  if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
+    throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${label} exceeds the per-file limit`);
+  }
+  state.totalBytes += stat2.size;
+  if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+    throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
+  }
+  updateFramed(hash, "file");
+  updateFramedFile(hash, path, stat2.size);
+}
+function isContained(root, candidate) {
+  const child = relative5(root, candidate);
+  return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute7(child);
+}
+function dependencyStoreRoots(identity2, git) {
+  const entries = git(identity2.contentRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+    "--",
+    ...DEPENDENCY_STORE_PATHS
+  ]).split("\0").filter(Boolean);
+  for (const candidate of [
+    join53(identity2.contentRoot, "node_modules"),
+    join53(identity2.appRoot, "node_modules")
+  ]) {
+    if (existsSync35(candidate))
+      entries.push(relative5(identity2.contentRoot, candidate));
+  }
+  const pnpLoaders = [".pnp.cjs", ".pnp.loader.mjs"].filter((entry) => existsSync35(join53(identity2.contentRoot, entry)));
+  if (pnpLoaders.length > 0) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
+  }
+  for (const configuredPath of (process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)) {
+    const candidate = realpathSync7(resolve8(configuredPath));
+    if (!isContained(identity2.contentRoot, candidate)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: NODE_PATH resolves outside the content root");
+    }
+    entries.push(relative5(identity2.contentRoot, candidate));
+  }
+  let ancestor = dirname20(identity2.contentRoot);
+  while (ancestor !== dirname20(ancestor)) {
+    if (existsSync35(join53(ancestor, "node_modules"))) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
+    }
+    ancestor = dirname20(ancestor);
+  }
+  const roots = [...new Set(entries.map((entry) => resolve8(identity2.contentRoot, entry)))].sort();
+  for (const root of roots) {
+    assertContained(identity2.contentRoot, root, "STRICT_PROOF_DEPENDENCY_PATH_ESCAPE");
+  }
+  return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
+}
+function updateDependencyStores(hash, identity2, git) {
+  const roots = dependencyStoreRoots(identity2, git);
+  const state = {
+    files: 0,
+    totalBytes: 0,
+    visitedDirectories: /* @__PURE__ */ new Set()
+  };
+  updateFramed(hash, "dependency-stores-v1");
+  for (const root of roots) {
+    if (!existsSync35(root))
+      continue;
+    updateDependencyPath(hash, root, relative5(identity2.contentRoot, root), state);
   }
 }
 function defaultGit(root, args) {
@@ -71643,19 +71760,6 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   }
   const git = dependencies.git ?? defaultGit;
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
-  const unverifiableDependencies = git(identity2.contentRoot, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "--directory",
-    "-z",
-    "--",
-    ...UNVERIFIABLE_DEPENDENCY_PATHS
-  ]).split("\0").filter(Boolean);
-  if (unverifiableDependencies.length > 0) {
-    throw new Error(`STRICT_PROOF_UNVERIFIED_DEPENDENCY_STORE: ${unverifiableDependencies[0]} is not authenticated by Git`);
-  }
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
   const ignored = git(identity2.contentRoot, [
@@ -71687,6 +71791,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   const dirtyHash = createHash14("sha256");
   updateFramed(dirtyHash, "git-dirty-v3");
   updateFramed(dirtyHash, diff);
+  updateDependencyStores(dirtyHash, identity2, git);
   const sourceEntries = [
     ...untracked.map((entry) => ["untracked", entry]),
     ...ignored.map((entry) => ["ignored-runtime", entry])
@@ -72163,7 +72268,7 @@ async function pinExactDevClient(input, dependencies) {
 }
 
 // packages/rn-dev-agent-core/dist/index.js
-var pkgPath = join54(dirname20(fileURLToPath6(import.meta.url)), "..", "package.json");
+var pkgPath = join54(dirname21(fileURLToPath6(import.meta.url)), "..", "package.json");
 var pkgVersion = JSON.parse(readFileSync37(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
@@ -72487,8 +72592,7 @@ function trackedTool(name, desc, schema, handler) {
       return failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
     }
     const args = a[0];
-    const requestedSnapshotPlatform = name === "device_snapshot" && args?.action === "open" ? args.platform === "android" ? "android" : "ios" : void 0;
-    const snapshotPlatform = getActiveSession()?.platform ?? requestedSnapshotPlatform;
+    const snapshotPlatform = resolveSnapshotInvalidationPlatform(name, args, getActiveSession()?.platform);
     let result;
     try {
       result = await base(...a);
@@ -72646,7 +72750,7 @@ var sessionHandler = createSessionHandler(authorityRuntime, {
       return null;
     if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
       return null;
-    const secretPath = sessionId ? join54(dirname20(dirname20(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
+    const secretPath = sessionId ? join54(dirname21(dirname21(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
     return readJsonStateFile(secretPath)?.signerCapability ?? null;
   },
   pinDevClient: pinSessionDevClient

@@ -9317,7 +9317,7 @@ var init_registry = __esm({
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
 import { readFileSync as readFileSync5, writeFileSync, unlinkSync, mkdirSync as mkdirSync2, renameSync, lstatSync as lstatSync4 } from "node:fs";
-import { join as join5, dirname as dirname3 } from "node:path";
+import { join as join5, dirname as dirname4 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
@@ -9339,7 +9339,7 @@ function readJsonStateFile(path) {
   }
 }
 function writeJsonStateFileAtomic(path, value) {
-  mkdirSync2(dirname3(path), { recursive: true });
+  mkdirSync2(dirname4(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
   writeFileSync(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   renameSync(tmpPath, path);
@@ -9374,7 +9374,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync5, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync6, statSync as statSync4 } from "node:fs";
 import { join as join9 } from "node:path";
 function compactUnique(paths) {
   const out = [];
@@ -9506,7 +9506,7 @@ var init_no_change_tracker = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/logger.js
-import { createWriteStream, mkdirSync as mkdirSync4, existsSync as existsSync6 } from "node:fs";
+import { createWriteStream, mkdirSync as mkdirSync4, existsSync as existsSync7 } from "node:fs";
 import { join as join11 } from "node:path";
 import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
 function resolveLogPath() {
@@ -9517,7 +9517,7 @@ function resolveLogPath() {
   const pluginData = process.env.CLAUDE_PLUGIN_DATA;
   if (pluginData) {
     try {
-      if (!existsSync6(pluginData))
+      if (!existsSync7(pluginData))
         mkdirSync4(pluginData, { recursive: true });
       return join11(pluginData, "cdp-bridge.log");
     } catch {
@@ -9525,7 +9525,7 @@ function resolveLogPath() {
   }
   const fallbackDir = join11(homedir2(), ".claude", "logs");
   try {
-    if (!existsSync6(fallbackDir))
+    if (!existsSync7(fallbackDir))
       mkdirSync4(fallbackDir, { recursive: true });
     return join11(fallbackDir, "rn-dev-agent-cdp-bridge.log");
   } catch {
@@ -11006,8 +11006,8 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { closeSync as closeSync2, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync4, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync3 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
+import { closeSync as closeSync2, existsSync as existsSync3, lstatSync as lstatSync3, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync4, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync3 } from "node:fs";
+import { delimiter, dirname as dirname3, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
 function digest2(parts) {
   const hash = createHash4("sha256");
   for (const part of parts) {
@@ -11018,6 +11018,8 @@ function digest2(parts) {
 }
 var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
 var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
 function defaultGit(root, args) {
   return execFileSync6("git", ["-C", root, ...args], {
@@ -11181,13 +11183,13 @@ function sessionRuntimeDirectory(layout, sessionId) {
 }
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
-import { existsSync as existsSync4, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync8 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync3, constants, existsSync as existsSync3, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync3, readFileSync as readFileSync7, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync3, constants, existsSync as existsSync4, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync3, readFileSync as readFileSync7, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -12254,11 +12256,11 @@ function sameIdentity(left, right) {
 function waitForFile(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync3(path))
+    if (existsSync4(path))
       return true;
     Atomics.wait(WAIT_BUFFER, 0, 0, 5);
   }
-  return existsSync3(path);
+  return existsSync4(path);
 }
 function stopWorker(worker, signal = "SIGTERM") {
   const stoppedPath = join7(worker.controlPath, "stopped");
@@ -12268,7 +12270,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
-      if (!existsSync3(join7(worker.controlPath, "lock-retained"))) {
+      if (!existsSync4(join7(worker.controlPath, "lock-retained"))) {
         rmSync2(worker.controlPath, { force: true, recursive: true });
       }
       return;
@@ -12284,7 +12286,7 @@ function stopWorker(worker, signal = "SIGTERM") {
   if (!waitForFile(stoppedPath, 1e4)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
-  if (!existsSync3(join7(worker.controlPath, "lock-retained"))) {
+  if (!existsSync4(join7(worker.controlPath, "lock-retained"))) {
     rmSync2(worker.controlPath, { force: true, recursive: true });
   }
 }
@@ -12878,7 +12880,7 @@ init_registry();
 function readPackageIntegrationManifest(appRoot, dependencies) {
   const manifestPath = join8(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
   if (dependencies.exists || dependencies.readText) {
-    const exists = dependencies.exists ?? existsSync4;
+    const exists = dependencies.exists ?? existsSync5;
     if (!exists(manifestPath))
       return void 0;
     const readText = dependencies.readText ?? ((path) => readFileSync8(path, "utf8"));
@@ -12899,7 +12901,7 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
   }
 }
 function inspectAuthorityMigration(status, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync4;
+  const exists = dependencies.exists ?? existsSync5;
   const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
   let packageIntegrationInstalled = false;
   if (appRoot) {

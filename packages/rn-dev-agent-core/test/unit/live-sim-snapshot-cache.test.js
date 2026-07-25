@@ -20,7 +20,10 @@ import {
   setSnapshotAuthorityProvider,
   validateCachedSnapshotAuthority,
 } from '../../dist/agent-device-wrapper.js';
-import { toolInvalidatesSnapshotCache } from '../../dist/observability/live-device.js';
+import {
+  resolveSnapshotInvalidationPlatform,
+  toolInvalidatesSnapshotCache,
+} from '../../dist/observability/live-device.js';
 
 const NODES = [{ ref: '@e0', label: 'Continue', type: 'Button', hittable: true }];
 
@@ -320,6 +323,18 @@ test('cache invalidation: snapshot open invalidates while capture and close pres
   assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'open' }), true);
   assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'snapshot' }), false);
   assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'close' }), false);
+});
+
+test('cache invalidation: snapshot open targets the requested platform', () => {
+  assert.equal(
+    resolveSnapshotInvalidationPlatform(
+      'device_snapshot',
+      { action: 'open', platform: 'android' },
+      'ios',
+    ),
+    'android',
+  );
+  assert.equal(resolveSnapshotInvalidationPlatform('cdp_reload', undefined, 'ios'), 'ios');
 });
 
 test('cache invalidation: session switching preserves evidence but app launch invalidates it', () => {
