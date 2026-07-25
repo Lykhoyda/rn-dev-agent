@@ -99,11 +99,57 @@ const recipeSha256 = sha256(
   }),
 );
 
-function hasValidCodeSignature(path) {
-  const result = spawnSync(signer, ['--verify', '--strict', path], {
-    stdio: 'ignore',
+function runCodesign(arguments_) {
+  return spawnSync(signer, arguments_, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  return !result.error && result.status === 0;
+}
+
+function hasExpectedCodeSignature(path) {
+  const verification = runCodesign(['--verify', '--strict', path]);
+  if (verification.error || verification.status !== 0) return false;
+
+  const details = runCodesign(['--display', '--verbose=4', path]);
+  if (details.error || details.status !== 0) return false;
+  const detailLines = new Set(details.stderr.trim().split('\n'));
+  const codeDirectory = [...detailLines].find((line) => line.startsWith('CodeDirectory '));
+  if (
+    !detailLines.has('Identifier=dev.rn-dev-agent.process-birth') ||
+    !detailLines.has('Format=Mach-O universal (x86_64 arm64)') ||
+    !/^CodeDirectory v=20400 size=\d+ flags=0x2\(adhoc\) hashes=\d+\+\d+ location=embedded$/.test(
+      codeDirectory ?? '',
+    ) ||
+    !detailLines.has('Hash type=sha256 size=32') ||
+    !detailLines.has('Hash choices=sha256') ||
+    !detailLines.has('CMSDigestType=2') ||
+    !detailLines.has('Executable Segment flags=0x1') ||
+    !detailLines.has('Signature=adhoc') ||
+    !detailLines.has('Info.plist=not bound') ||
+    !detailLines.has('TeamIdentifier=not set') ||
+    !detailLines.has('Sealed Resources=none') ||
+    !detailLines.has('Internal requirements count=0 size=12')
+  ) {
+    return false;
+  }
+
+  const requirements = runCodesign(['--display', '--requirements', '-', path]);
+  if (
+    requirements.error ||
+    requirements.status !== 0 ||
+    !/^# designated => cdhash H"[0-9a-f]{40}" or cdhash H"[0-9a-f]{40}"\n$/i.test(
+      requirements.stdout,
+    )
+  ) {
+    return false;
+  }
+
+  const entitlements = runCodesign(['--display', '--entitlements', '-', path]);
+  return (
+    !entitlements.error &&
+    entitlements.status === 0 &&
+    entitlements.stdout.length === 0
+  );
 }
 
 function commandOutput(command, arguments_) {
@@ -163,7 +209,7 @@ function verifyPackagedHelper() {
     throw new Error('build-darwin-process-birth-helper: packaged helper content is stale');
   }
   processMachOUuids(output, false);
-  if (process.platform === 'darwin' && !hasValidCodeSignature(output)) {
+  if (process.platform === 'darwin' && !hasExpectedCodeSignature(output)) {
     throw new Error('build-darwin-process-birth-helper: packaged helper signature is invalid');
   }
 }
