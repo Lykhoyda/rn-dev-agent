@@ -179,7 +179,7 @@ The plugin exposes MCP tools across five families ([full reference](https://lykh
 | **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all`, `cdp_auto_login` |
 | **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
-The committed tool surface is asserted in CI against a golden registry (`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so this count can't silently drift.
+The committed tool surface is asserted in CI against a golden registry (`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so tool additions and removals can't silently drift.
 
 **Reliability features baked into the tool layer:**
 

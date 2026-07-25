@@ -780,9 +780,7 @@ test('iOS hard reset resolves its runner transition after session argument bindi
       return {
         axis,
         identity:
-          axis === 'B'
-            ? `${bundle.targetId}:${bundle.connectionGeneration}`
-            : `${axis}-identity`,
+          axis === 'B' ? `${bundle.targetId}:${bundle.connectionGeneration}` : `${axis}-identity`,
       };
     },
     refreshRuntimeBinding: async () => ({
@@ -850,10 +848,11 @@ test('failed iOS hard reset invalidates stale bundle authority', async () => {
   assert.equal(envelope.code, 'APP_NOT_INSTALLED');
   assert.equal(envelope.meta.authorityInvalidated, true);
   assert.equal(status.bindings.bundle, null);
-  assert.deepEqual(replacements[0].releaseResources, [
-    { type: 'target', key: '8193:old-target' },
-  ]);
-  assert.equal(calls.some((call) => call.startsWith('postflight:')), false);
+  assert.deepEqual(replacements[0].releaseResources, [{ type: 'target', key: '8193:old-target' }]);
+  assert.equal(
+    calls.some((call) => call.startsWith('postflight:')),
+    false,
+  );
 });
 
 test('iOS hard reset returns a typed failure for conflicting session arguments', async () => {
