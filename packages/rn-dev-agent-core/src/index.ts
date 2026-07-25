@@ -666,7 +666,13 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
       );
     }
     const args = a[0] as Record<string, unknown> | undefined;
-    const snapshotPlatform = getActiveSession()?.platform;
+    const requestedSnapshotPlatform =
+      name === 'device_snapshot' && args?.action === 'open'
+        ? args.platform === 'android'
+          ? 'android'
+          : 'ios'
+        : undefined;
+    const snapshotPlatform = getActiveSession()?.platform ?? requestedSnapshotPlatform;
     let result: unknown;
     try {
       result = await base(...a);

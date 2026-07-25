@@ -81,6 +81,8 @@ const SNAPSHOT_CACHE_READS = new Set([
 export function toolInvalidatesSnapshotCache(tool, args) {
     if (tool === 'device_find')
         return args?.action === 'click';
+    if (tool === 'device_snapshot')
+        return args?.action === 'open';
     if (tool === 'rn_session')
         return args?.action === 'pin_dev_client';
     return !SNAPSHOT_CACHE_READS.has(tool);

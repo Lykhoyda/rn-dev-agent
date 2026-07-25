@@ -9,6 +9,7 @@ import {
   cacheSnapshot,
   getCachedSnapshot,
   isSnapshotCacheValid,
+  markSnapshotDirty,
 } from '../agent-device-wrapper.js';
 import {
   isFastRunnerAvailable,
@@ -188,6 +189,7 @@ export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFe
   }
 
   const session = getActiveSession();
+  markSnapshotDirty(session?.platform);
   const recovery = await recoverFromRunnerLeak(
     {
       platform: session?.platform,

@@ -742,13 +742,11 @@ export function createAuthorityGate(
 
         let operation: OperationRef | null = null;
         let registry: SessionRegistry | null = null;
-        let authoritySession: SessionRef | null = null;
-        let proofCleanupAuthorityVersion: number | null = null;
+        let retainProofCleanupFence = false;
         let publishedProofFinalize = false;
         try {
           const available = runtime.requireAvailable();
           registry = available.registry;
-          authoritySession = available.session;
           const initialStatus = runtime.status();
           if (!initialStatus.available) {
             throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
@@ -1172,13 +1170,8 @@ export function createAuthorityGate(
               ok?: boolean;
             };
             if (envelope.ok === true) {
-              proofCleanupAuthorityVersion = status.authorityVersion;
-              registry.endOperation(operation);
+              registry.endOperationWithBindings(operation, { proof: null });
               operation = null;
-              registry.updateBindings(available.session, {
-                bindings: { proof: null },
-                expectedAuthorityVersion: status.authorityVersion,
-              });
             }
           }
           if (!resultIsCanonicalSuccess(result)) {
@@ -1211,23 +1204,14 @@ export function createAuthorityGate(
               if (!resultIsCanonicalSuccess(rollback)) {
                 throw new Error('PROOF_AUTHORITY_MISMATCH: finalized proof rollback was rejected');
               }
-              if (!registry || !authoritySession) {
+              if (!registry || !operation) {
                 throw new Error('PROOF_AUTHORITY_MISMATCH: proof registry was lost');
               }
-              if (operation) {
-                proofCleanupAuthorityVersion = operation.authorityVersion;
-                registry.verifyOperation(operation);
-                registry.endOperation(operation);
-                operation = null;
-              }
-              if (proofCleanupAuthorityVersion === null) {
-                throw new Error('PROOF_AUTHORITY_MISMATCH: proof cleanup version was lost');
-              }
-              registry.updateBindings(authoritySession, {
-                bindings: { proof: null },
-                expectedAuthorityVersion: proofCleanupAuthorityVersion,
-              });
+              registry.verifyOperation(operation);
+              registry.endOperationWithBindings(operation, { proof: null });
+              operation = null;
             } catch (rollbackError) {
+              retainProofCleanupFence = operation !== null;
               return authorityFailure(
                 new AggregateError(
                   [error, rollbackError],
@@ -1238,7 +1222,7 @@ export function createAuthorityGate(
           }
           return authorityFailure(error);
         } finally {
-          if (registry && operation) {
+          if (registry && operation && !retainProofCleanupFence) {
             try {
               registry.endOperation(operation);
             } catch {

@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, } from '../agent-device-wrapper.js';
+import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, markSnapshotDirty, } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner, adoptPersistedFastRunnerState, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { surfaceKeyboardGuard, healKeyboardOccludedTap, } from '../runners/keyboard-guard.js';
@@ -130,6 +130,7 @@ export async function fetchSnapshotNodes(allowCache = false) {
         return { ok: true, nodes: initialNodes };
     }
     const session = getActiveSession();
+    markSnapshotDirty(session?.platform);
     const recovery = await recoverFromRunnerLeak({
         platform: session?.platform,
         appId: session?.appId,

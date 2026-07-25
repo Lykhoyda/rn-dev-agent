@@ -9,6 +9,7 @@ import {
   ensureRunnerForCommand,
   attachMetaNote,
   cacheSnapshot,
+  markSnapshotDirty,
   getAdbSerial,
 } from '../agent-device-wrapper.js';
 import {
@@ -598,6 +599,7 @@ export function createDeviceSnapshotHandler(
 
     if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
       const session = getActiveSession();
+      markSnapshotDirty(session?.platform);
       const recovery = await recoverFromRunnerLeak(
         {
           platform: session?.platform,

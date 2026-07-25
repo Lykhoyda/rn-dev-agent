@@ -14,6 +14,11 @@ const MAX_STRICT_PROOF_FILES = 4_096;
 const MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
 const STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
+const UNVERIFIABLE_DEPENDENCY_PATHS = [
+    ':(top,glob)**/node_modules/**',
+    ':(top,glob)**/.yarn/cache/**',
+    ':(top,glob)**/.yarn/unplugged/**',
+];
 const IGNORED_RUNTIME_INPUT_PATHS = [
     ':(top,glob)**',
     ':(top,exclude,glob)**/node_modules/**',
@@ -142,6 +147,21 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
     }
     const git = dependencies.git ?? defaultGit;
     const head = git(identity.contentRoot, ['rev-parse', 'HEAD']);
+    const unverifiableDependencies = git(identity.contentRoot, [
+        'ls-files',
+        '--others',
+        '--ignored',
+        '--exclude-standard',
+        '--directory',
+        '-z',
+        '--',
+        ...UNVERIFIABLE_DEPENDENCY_PATHS,
+    ])
+        .split('\0')
+        .filter(Boolean);
+    if (unverifiableDependencies.length > 0) {
+        throw new Error(`STRICT_PROOF_UNVERIFIED_DEPENDENCY_STORE: ${unverifiableDependencies[0]} is not authenticated by Git`);
+    }
     const diff = git(identity.contentRoot, ['diff', '--binary', '--no-ext-diff', head, '--']);
     const untracked = git(identity.contentRoot, ['ls-files', '--others', '--exclude-standard', '-z'])
         .split('\0')

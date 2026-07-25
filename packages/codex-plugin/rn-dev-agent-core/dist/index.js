@@ -26050,6 +26050,30 @@ var init_registry = __esm({
           return { ...operation, authorityVersion: nextAuthorityVersion };
         });
       }
+      endOperationWithBindings(operation, bindings) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const current = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
+             FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+          const active = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          if (!current || !isOperationalState(current.state) || current.claim_epoch !== operation.claimEpoch || current.authority_version !== operation.authorityVersion || !active) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
+          }
+          const nextBindings = {
+            ...JSON.parse(current.bindings_json),
+            ...bindings
+          };
+          this.#database.prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(JSON.stringify(nextBindings), now, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+          this.#database.prepare(`DELETE FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
+      }
       getSessionStatus(sessionId) {
         const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
                   claim_epoch, authority_version, supervisor_pid, supervisor_birth,
@@ -27919,13 +27943,11 @@ function createAuthorityGate(runtime, dependencies) {
       }
       let operation = null;
       let registry2 = null;
-      let authoritySession = null;
-      let proofCleanupAuthorityVersion = null;
+      let retainProofCleanupFence = false;
       let publishedProofFinalize = false;
       try {
         const available = runtime.requireAvailable();
         registry2 = available.registry;
-        authoritySession = available.session;
         const initialStatus = runtime.status();
         if (!initialStatus.available) {
           throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
@@ -28269,13 +28291,8 @@ function createAuthorityGate(runtime, dependencies) {
         if (tool === "proof_capture" && (args.action === "finalize" || args.action === "discard")) {
           const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
           if (envelope.ok === true) {
-            proofCleanupAuthorityVersion = status.authorityVersion;
-            registry2.endOperation(operation);
+            registry2.endOperationWithBindings(operation, { proof: null });
             operation = null;
-            registry2.updateBindings(available.session, {
-              bindings: { proof: null },
-              expectedAuthorityVersion: status.authorityVersion
-            });
           }
         }
         if (!resultIsCanonicalSuccess(result)) {
@@ -28303,29 +28320,20 @@ function createAuthorityGate(runtime, dependencies) {
             if (!resultIsCanonicalSuccess(rollback)) {
               throw new Error("PROOF_AUTHORITY_MISMATCH: finalized proof rollback was rejected");
             }
-            if (!registry2 || !authoritySession) {
+            if (!registry2 || !operation) {
               throw new Error("PROOF_AUTHORITY_MISMATCH: proof registry was lost");
             }
-            if (operation) {
-              proofCleanupAuthorityVersion = operation.authorityVersion;
-              registry2.verifyOperation(operation);
-              registry2.endOperation(operation);
-              operation = null;
-            }
-            if (proofCleanupAuthorityVersion === null) {
-              throw new Error("PROOF_AUTHORITY_MISMATCH: proof cleanup version was lost");
-            }
-            registry2.updateBindings(authoritySession, {
-              bindings: { proof: null },
-              expectedAuthorityVersion: proofCleanupAuthorityVersion
-            });
+            registry2.verifyOperation(operation);
+            registry2.endOperationWithBindings(operation, { proof: null });
+            operation = null;
           } catch (rollbackError) {
+            retainProofCleanupFence = operation !== null;
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
           }
         }
         return authorityFailure(error2);
       } finally {
-        if (registry2 && operation) {
+        if (registry2 && operation && !retainProofCleanupFence) {
           try {
             registry2.endOperation(operation);
           } catch {
@@ -30298,6 +30306,7 @@ function createDeviceSnapshotHandler(deps = {}) {
     const nodes = parseSnapshotNodes(result);
     if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
       const session = getActiveSession();
+      markSnapshotDirty(session?.platform);
       const recovery = await recoverFromRunnerLeak({
         platform: session?.platform,
         appId: session?.appId,
@@ -30651,6 +30660,7 @@ async function fetchSnapshotNodes(allowCache = false) {
     return { ok: true, nodes: initialNodes };
   }
   const session = getActiveSession();
+  markSnapshotDirty(session?.platform);
   const recovery = await recoverFromRunnerLeak({
     platform: session?.platform,
     appId: session?.appId,
@@ -68091,6 +68101,8 @@ var SNAPSHOT_CACHE_READS = /* @__PURE__ */ new Set([
 function toolInvalidatesSnapshotCache(tool, args) {
   if (tool === "device_find")
     return args?.action === "click";
+  if (tool === "device_snapshot")
+    return args?.action === "open";
   if (tool === "rn_session")
     return args?.action === "pin_dev_client";
   return !SNAPSHOT_CACHE_READS.has(tool);
@@ -71507,6 +71519,11 @@ var MAX_STRICT_PROOF_FILES = 4096;
 var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
 var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
+var UNVERIFIABLE_DEPENDENCY_PATHS = [
+  ":(top,glob)**/node_modules/**",
+  ":(top,glob)**/.yarn/cache/**",
+  ":(top,glob)**/.yarn/unplugged/**"
+];
 var IGNORED_RUNTIME_INPUT_PATHS = [
   ":(top,glob)**",
   ":(top,exclude,glob)**/node_modules/**",
@@ -71626,6 +71643,19 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   }
   const git = dependencies.git ?? defaultGit;
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
+  const unverifiableDependencies = git(identity2.contentRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+    "--",
+    ...UNVERIFIABLE_DEPENDENCY_PATHS
+  ]).split("\0").filter(Boolean);
+  if (unverifiableDependencies.length > 0) {
+    throw new Error(`STRICT_PROOF_UNVERIFIED_DEPENDENCY_STORE: ${unverifiableDependencies[0]} is not authenticated by Git`);
+  }
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
   const ignored = git(identity2.contentRoot, [
@@ -72457,7 +72487,8 @@ function trackedTool(name, desc, schema, handler) {
       return failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
     }
     const args = a[0];
-    const snapshotPlatform = getActiveSession()?.platform;
+    const requestedSnapshotPlatform = name === "device_snapshot" && args?.action === "open" ? args.platform === "android" ? "android" : "ios" : void 0;
+    const snapshotPlatform = getActiveSession()?.platform ?? requestedSnapshotPlatform;
     let result;
     try {
       result = await base(...a);

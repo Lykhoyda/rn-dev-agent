@@ -634,6 +634,31 @@ test('runtime target replacement advances the binding and operation fence atomic
   );
 });
 
+test('operation completion clears proof authority before releasing its fence', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: { proof: { runId: 'proof-a' } },
+  });
+  const operation = registry.beginOperation(owner, {
+    operationId: 'proof-finalize',
+    tool: 'proof_capture',
+    profile: 'CSIMBDRP',
+  });
+
+  registry.endOperationWithBindings(operation, { proof: null });
+
+  assert.equal(registry.getSessionStatus('a').bindings.proof, null);
+  assert.doesNotThrow(() =>
+    registry.beginOperation(owner, {
+      operationId: 'next-operation',
+      tool: 'cdp_status',
+      profile: 'CS',
+    }),
+  );
+});
+
 test('binding replacement clears a stale target claim in the same transaction', () => {
   const { registry, create } = fixture();
   const owner = create('a');

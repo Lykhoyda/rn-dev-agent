@@ -64,6 +64,11 @@ function fixture() {
       status.bindings = { ...status.bindings, ...input.bindings };
       status.authorityVersion += 1;
     },
+    endOperationWithBindings: (_operation, bindings) => {
+      calls.push('end-with-bindings');
+      status.bindings = { ...status.bindings, ...bindings };
+      status.authorityVersion += 1;
+    },
     refreshOperation: (operation) => {
       calls.push('refresh-operation');
       return { ...operation, authorityVersion: status.authorityVersion };
@@ -147,15 +152,15 @@ test('finalized proof is discarded when postflight authority changes', async () 
   assert.equal(status.bindings.proof, null);
 });
 
-test('finalized proof cleanup retries after its operation fence has ended', async () => {
+test('finalized proof cleanup retries before releasing its operation fence', async () => {
   const { runtime, registry, status } = fixture();
   const actions = [];
-  const updateBindings = registry.updateBindings;
+  const endOperationWithBindings = registry.endOperationWithBindings;
   let clearAttempts = 0;
-  registry.updateBindings = (session, input) => {
+  registry.endOperationWithBindings = (operation, bindings) => {
     clearAttempts += 1;
     if (clearAttempts === 1) throw new Error('transient registry write failure');
-    updateBindings(session, input);
+    endOperationWithBindings(operation, bindings);
   };
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
@@ -169,6 +174,26 @@ test('finalized proof cleanup retries after its operation fence has ended', asyn
   assert.deepEqual(actions, ['finalize', 'discard']);
   assert.equal(clearAttempts, 2);
   assert.equal(status.bindings.proof, null);
+});
+
+test('failed finalized proof cleanup retains its operation fence', async () => {
+  const { calls, runtime, registry } = fixture();
+  const actions = [];
+  registry.endOperationWithBindings = () => {
+    throw new Error('persistent registry write failure');
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  const result = await gate.wrap('proof_capture', async (args) => {
+    actions.push(args.action);
+    return okResult(args.action === 'discard' ? { discarded: true } : { stage: 'accepted' });
+  })({ action: 'finalize', evidenceReview: {} });
+
+  assert.equal(JSON.parse(result.content[0].text).ok, false);
+  assert.deepEqual(actions, ['finalize', 'discard']);
+  assert.equal(calls.includes('end'), false);
+  assert.equal(calls.includes('cancel'), false);
 });
 
 test('authoritative source paths cannot escape the bound app root', async () => {

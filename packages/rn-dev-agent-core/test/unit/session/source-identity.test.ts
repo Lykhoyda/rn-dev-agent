@@ -183,6 +183,7 @@ test('strict proof includes ignored runtime inputs', () => {
     if (args[0] === 'rev-parse') return 'abc123';
     if (args[0] === 'diff') return '';
     if (args.includes('--stage')) return '';
+    if (args.includes('--directory')) return '';
     if (args.includes('--ignored')) {
       ignoredQueries.push(args);
       return 'ios/.xcode.env.local\0';
@@ -199,6 +200,30 @@ test('strict proof includes ignored runtime inputs', () => {
   assert.ok(ignoredQueries.every((args) => args.includes(':(top,glob)**')));
   assert.ok(ignoredQueries.every((args) => args.includes(':(top,exclude,glob)**/node_modules/**')));
   assert.ok(ignoredQueries.every((args) => !args.some((arg) => arg.includes('.xcode.env'))));
+});
+
+test('strict proof rejects ignored dependency stores', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-dependencies-'));
+  roots.push(root);
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args.includes('--directory')) return 'node_modules/\0';
+    throw new Error('unexpected git command');
+  };
+
+  assert.throws(
+    () => strictProofSourceIdentity(identity, { git }),
+    /STRICT_PROOF_UNVERIFIED_DEPENDENCY_STORE/,
+  );
 });
 
 test('strict proof rejects oversized untracked runtime inputs before buffering them', () => {

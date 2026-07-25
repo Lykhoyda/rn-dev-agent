@@ -522,7 +522,12 @@ function trackedTool(name, desc, schema, handler) {
             return failResult('Tool calls are disabled in the read-only MCP contract probe.', 'DIAGNOSTIC_MODE_READ_ONLY');
         }
         const args = a[0];
-        const snapshotPlatform = getActiveSession()?.platform;
+        const requestedSnapshotPlatform = name === 'device_snapshot' && args?.action === 'open'
+            ? args.platform === 'android'
+                ? 'android'
+                : 'ios'
+            : undefined;
+        const snapshotPlatform = getActiveSession()?.platform ?? requestedSnapshotPlatform;
         let result;
         try {
             result = await base(...a);

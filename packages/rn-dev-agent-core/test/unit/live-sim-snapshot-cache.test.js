@@ -316,6 +316,12 @@ test('cache invalidation: device_find is a read unless it taps (action=click)', 
   assert.equal(toolInvalidatesSnapshotCache('device_find', { action: 'click' }), true);
 });
 
+test('cache invalidation: snapshot open invalidates while capture and close preserve', () => {
+  assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'open' }), true);
+  assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'snapshot' }), false);
+  assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'close' }), false);
+});
+
 test('cache invalidation: session switching preserves evidence but app launch invalidates it', () => {
   assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'bind_device' }), false);
   assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'release' }), false);
@@ -365,4 +371,15 @@ test('source guard: the central trackedTool boundary wires fail-safe cache inval
     /markSnapshotDirty\(/,
     'trackedTool must invalidate the cache for mutating tools',
   );
+});
+
+test('source guard: snapshot recovery invalidates before relaunching', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, join } = await import('node:path');
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  for (const file of ['device-session.js', 'device-interact.js']) {
+    const src = readFileSync(join(__dirname, `../../dist/tools/${file}`), 'utf-8');
+    assert.match(src, /markSnapshotDirty\(session\?\.platform\)/);
+  }
 });

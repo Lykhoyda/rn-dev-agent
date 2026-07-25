@@ -473,6 +473,42 @@ export class SessionRegistry {
             return { ...operation, authorityVersion: nextAuthorityVersion };
         });
     }
+    endOperationWithBindings(operation, bindings) {
+        const now = this.#now();
+        this.#transaction(() => {
+            const current = asSession(this.#database
+                .prepare(`SELECT state, claim_epoch, authority_version, bindings_json
+             FROM sessions WHERE session_id = ?`)
+                .get(operation.sessionId));
+            const active = this.#database
+                .prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`)
+                .get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+            if (!current ||
+                !isOperationalState(current.state) ||
+                current.claim_epoch !== operation.claimEpoch ||
+                current.authority_version !== operation.authorityVersion ||
+                !active) {
+                throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'operation fence no longer matches current authority');
+            }
+            const nextBindings = {
+                ...JSON.parse(current.bindings_json),
+                ...bindings,
+            };
+            this.#database
+                .prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`)
+                .run(JSON.stringify(nextBindings), now, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+            this.#database
+                .prepare(`DELETE FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`)
+                .run(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+        this.#pendingPlatformReceipts.delete(operation.operationId);
+    }
     getSessionStatus(sessionId) {
         const row = asSession(this.#database
             .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
