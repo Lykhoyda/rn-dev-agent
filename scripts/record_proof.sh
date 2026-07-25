@@ -201,7 +201,7 @@ start_supervised_recorder() {
   (umask 077; printf '%s\n' "$token" > "$(control_token_file "$scope")")
   rm -f "$request_path" "$response_path" "$state_path" "$child_path"
 
-  python3 - "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$@" <<'PY' &
+  python3 - "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$@" > "$recorder_log" 2>&1 <<'PY' &
 import os
 import signal
 import subprocess
@@ -217,51 +217,58 @@ def write_atomic(path, value):
         handle.write(value)
     os.replace(temporary, path)
 
-with open(log_path, "ab", buffering=0) as log:
-    child = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-    )
-    write_atomic(child_path, f"{child.pid}\n")
-    write_atomic(state_path, "running\n")
-    wait_flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
-    last_nonce = None
+child = None
+terminal_state_written = False
+try:
+    with open(log_path, "ab", buffering=0) as log:
+        child = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        write_atomic(child_path, f"{child.pid}\n")
+        write_atomic(state_path, "running\n")
+        last_nonce = None
 
-    def child_exited():
-        try:
-            return os.waitid(os.P_PID, child.pid, wait_flags) is not None
-        except ChildProcessError:
-            return True
+        while True:
+            try:
+                with open(request_path, encoding="utf-8") as handle:
+                    parts = handle.read().split()
+            except FileNotFoundError:
+                parts = []
 
-    while True:
-        try:
-            with open(request_path, encoding="utf-8") as handle:
-                parts = handle.read().split()
-        except FileNotFoundError:
-            parts = []
-
-        if len(parts) == 3 and parts[0] == token and parts[1] != last_nonce:
-            nonce, action = parts[1], parts[2]
-            last_nonce = nonce
-            if action not in {"INT", "KILL"}:
-                result = "rejected"
-            elif child_exited():
-                result = "gone"
-            else:
-                try:
-                    os.kill(child.pid, signal.SIGINT if action == "INT" else signal.SIGKILL)
-                    result = "signaled"
-                except ProcessLookupError:
+            if len(parts) == 3 and parts[0] == token and parts[1] != last_nonce:
+                nonce, action = parts[1], parts[2]
+                last_nonce = nonce
+                if action not in {"INT", "KILL"}:
+                    result = "rejected"
+                elif child.poll() is not None:
                     result = "gone"
-            write_atomic(response_path, f"{nonce} {result}\n")
+                else:
+                    try:
+                        os.kill(child.pid, signal.SIGINT if action == "INT" else signal.SIGKILL)
+                        result = "signaled"
+                    except ProcessLookupError:
+                        result = "gone"
+                write_atomic(response_path, f"{nonce} {result}\n")
 
-        if child_exited():
-            child.wait()
-            write_atomic(state_path, f"exited {child.returncode}\n")
-            break
-        time.sleep(0.05)
+            return_code = child.poll()
+            if return_code is not None:
+                write_atomic(state_path, f"exited {return_code}\n")
+                terminal_state_written = True
+                break
+            time.sleep(0.05)
+finally:
+    if child is not None:
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+    if not terminal_state_written:
+        try:
+            write_atomic(state_path, "failed\n")
+        except OSError:
+            pass
 PY
   SUPERVISOR_PID=$!
 
@@ -320,9 +327,17 @@ request_supervisor_signal() {
         return 0
       fi
     fi
-    if [[ -s "$state_path" && "$(cat "$state_path")" == exited\ * ]]; then
-      SUPERVISOR_RESPONSE="gone"
-      return 0
+    if [[ -s "$state_path" ]]; then
+      local supervisor_state
+      supervisor_state="$(cat "$state_path")"
+      if [[ "$supervisor_state" == exited\ * ]]; then
+        SUPERVISOR_RESPONSE="gone"
+        return 0
+      fi
+      if [[ "$supervisor_state" == "failed" ]]; then
+        echo "Error: recorder supervisor failed while handling $action request" >&2
+        return 1
+      fi
     fi
     sleep 0.05
     waited=$((waited + 1))
