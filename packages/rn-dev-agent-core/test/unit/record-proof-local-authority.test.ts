@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -80,6 +81,74 @@ done
   assert.ok(parsed);
   recorderPid = parsed.pid;
   assert.equal(readFileSync(`${prefix}-${scope}.birth`, 'utf8').trim(), parsed.processBirth);
+  const observed = probeProcessBirth(parsed.pid);
+  assert.equal(observed.status, 'present');
+  if (observed.status === 'present') {
+    assert.equal(observed.birth.token, parsed.processBirth);
+  }
+});
+
+test('recording stop retains authority when the authenticated process ignores SIGINT', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'record-proof-local-stop-'));
+  const prefix = join(root, 'record');
+  const script = join(root, 'record_proof.sh');
+  const xcrun = join(root, 'xcrun');
+  const output = join(root, 'proof.mp4');
+  let recorderPid = 0;
+  t.after(() => {
+    if (recorderPid > 0) {
+      try {
+        process.kill(recorderPid, 'SIGKILL');
+      } catch {
+        recorderPid = 0;
+      }
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const source = readFileSync(sourceScript, 'utf8')
+    .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
+    .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
+  writeFileSync(script, source);
+  writeFileSync(
+    xcrun,
+    `#!/usr/bin/env bash
+if [[ "$*" == "simctl list devices booted" ]]; then
+  echo "Test Device (Booted)"
+  exit 0
+fi
+trap '' INT
+while true; do
+  sleep 1
+done
+`,
+  );
+  chmodSync(script, 0o755);
+  chmodSync(xcrun, 0o755);
+
+  const env = {
+    ...process.env,
+    PATH: `${root}:${process.env.PATH}`,
+    RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+  };
+  const start = spawnSync(
+    'bash',
+    [script, 'start', 'ios', output, '--scope', scope, '--udid', 'test-device'],
+    { encoding: 'utf8', timeout: 5_000, env },
+  );
+  assert.equal(start.status, 0, start.stderr);
+  const parsed = parseStartOutput(start.stdout);
+  assert.ok(parsed);
+  recorderPid = parsed.pid;
+
+  const stop = spawnSync(
+    'bash',
+    [script, 'stop', scope, String(parsed.pid), parsed.processBirth],
+    { encoding: 'utf8', timeout: 10_000, env },
+  );
+  assert.notEqual(stop.status, 0);
+  assert.match(stop.stderr, /authenticated recorder process did not stop/);
+  assert.equal(existsSync(`${prefix}-${scope}.pid`), true);
   const observed = probeProcessBirth(parsed.pid);
   assert.equal(observed.status, 'present');
   if (observed.status === 'present') {

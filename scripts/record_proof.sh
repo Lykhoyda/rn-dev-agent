@@ -58,12 +58,14 @@ hash_process_identity() {
 
 LOCAL_PROCESS_STATE="unknown"
 LOCAL_PROCESS_BIRTH=""
+LOCAL_PROCESS_MARKER_MATCH="false"
 
 probe_local_process() {
   local pid="$1"
   local marker="$2"
   LOCAL_PROCESS_STATE="unknown"
   LOCAL_PROCESS_BIRTH=""
+  LOCAL_PROCESS_MARKER_MATCH="false"
   if ! is_alive "$pid"; then
     LOCAL_PROCESS_STATE="absent"
     return 0
@@ -78,10 +80,7 @@ probe_local_process() {
     echo "Error: recorder command identity is unavailable" >&2
     return 1
   }
-  [[ "$command" == *"$marker"* ]] || {
-    echo "Error: recorder command identity does not match its output" >&2
-    return 1
-  }
+  [[ "$command" == *"$marker"* ]] && LOCAL_PROCESS_MARKER_MATCH="true"
 
   local platform
   platform="$(uname -s)"
@@ -170,10 +169,7 @@ probe_local_process() {
     echo "Error: recorder command changed during identity capture" >&2
     return 1
   }
-  [[ "$command_after" == *"$marker"* ]] || {
-    echo "Error: recorder command identity changed" >&2
-    return 1
-  }
+  [[ "$command_after" == *"$marker"* ]] || LOCAL_PROCESS_MARKER_MATCH="false"
   [[ "$LOCAL_PROCESS_BIRTH" =~ ^[a-f0-9]{64}$ ]] || {
     echo "Error: recorder process birth token is invalid" >&2
     return 1
@@ -393,7 +389,7 @@ cmd_start() {
   local process_marker="$raw_file"
   [[ "$platform" == "android" ]] && process_marker="$device_path"
   probe_local_process "$rec_pid" "$process_marker"
-  [[ "$LOCAL_PROCESS_STATE" == "present" ]] || {
+  [[ "$LOCAL_PROCESS_STATE" == "present" && "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
     echo "Error: Recording process died before identity capture" >&2
     exit 1
   }
@@ -401,7 +397,11 @@ cmd_start() {
   echo "$rec_birth" > "$(birth_file "$scope")"
   sleep 0.5
   probe_local_process "$rec_pid" "$process_marker"
-  if [[ "$LOCAL_PROCESS_STATE" != "present" || "$LOCAL_PROCESS_BIRTH" != "$rec_birth" ]]; then
+  if [[
+    "$LOCAL_PROCESS_STATE" != "present" ||
+      "$LOCAL_PROCESS_BIRTH" != "$rec_birth" ||
+      "$LOCAL_PROCESS_MARKER_MATCH" != "true"
+  ]]; then
     echo "Error: Recording process died immediately" >&2
     [[ -s "$recorder_log" ]] && sed -n '1,20p' "$recorder_log" >&2
     exit 1
@@ -556,20 +556,37 @@ cmd_stop() {
       process_marker="$(cat "${PID_PREFIX}-${scope}.device-path")"
     fi
     probe_local_process "$pid" "$process_marker"
-    [[ "$LOCAL_PROCESS_STATE" == "present" && "$LOCAL_PROCESS_BIRTH" == "$expected_birth" ]] || {
+    [[
+      "$LOCAL_PROCESS_STATE" == "present" &&
+        "$LOCAL_PROCESS_BIRTH" == "$expected_birth" &&
+        "$LOCAL_PROCESS_MARKER_MATCH" == "true"
+    ]] || {
       echo "Error: recorder process identity changed before stop" >&2
       exit 1
     }
     kill -INT "$pid"
     local waited=0
-    while is_alive "$pid" && [[ $waited -lt 10 ]]; do
+    local recorder_stopped="false"
+    while [[ $waited -lt 10 ]]; do
       sleep 0.5
+      probe_local_process "$pid" "$process_marker"
+      if [[
+        "$LOCAL_PROCESS_STATE" == "absent" ||
+          "$LOCAL_PROCESS_BIRTH" != "$expected_birth"
+      ]]; then
+        recorder_stopped="true"
+        break
+      fi
+      [[ "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
+        echo "Error: recorder command identity changed during stop" >&2
+        exit 1
+      }
       waited=$((waited + 1))
     done
-    if is_alive "$pid"; then
-      kill -9 "$pid"
-      sleep 3
-    fi
+    [[ "$recorder_stopped" == "true" ]] || {
+      echo "Error: authenticated recorder process did not stop" >&2
+      exit 1
+    }
   fi
   sleep 1
 
