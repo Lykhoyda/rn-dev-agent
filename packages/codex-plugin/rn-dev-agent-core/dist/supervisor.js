@@ -72611,6 +72611,18 @@ function recordLoaderViolation(value) {
   loaderEpoch += 1;
   persistLoaderObservation('violation', value);
 }
+const rejectNativeAddonLoad = () => {
+  recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');
+  const error = new Error('RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON');
+  error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+  throw error;
+};
+Object.defineProperty(process, 'dlopen', {
+  configurable: false,
+  enumerable: true,
+  value: rejectNativeAddonLoad,
+  writable: false,
+});
 function digestRuntimeFile(file) {
   const descriptor = fs.openSync(file, 'r');
   try {

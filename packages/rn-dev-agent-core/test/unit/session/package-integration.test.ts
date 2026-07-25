@@ -569,6 +569,47 @@ test('Metro preload rejects native addons from strict proof', () => {
   }
 });
 
+test('Metro preload fences direct native addon loading', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-direct-native-addon-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const addonPath = join(root, 'fixture.node');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(addonPath, 'fixture native addon bytes');
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({}); const guardedDlopen = process.dlopen; let error; try { process.dlopen({}, ${JSON.stringify(addonPath)}); } catch (caught) { error = caught; } if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON') process.exit(1); try { process.dlopen = () => {}; } catch {} if (process.dlopen !== guardedDlopen || require('node:process').dlopen !== guardedDlopen) process.exit(2);`,
+      ],
+      {
+        cwd: root,
+        env: metroPolicyEnvironment(adapterPath),
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const observations = readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.ok(
+      observations.some(
+        (entry) =>
+          entry.kind === 'violation' &&
+          entry.value.includes('native addons are unsupported for strict proof'),
+      ),
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro preload rejects later module hook registration', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-late-hook-'));
   try {
