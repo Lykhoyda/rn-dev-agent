@@ -86,9 +86,24 @@ done
   if (observed.status === 'present') {
     assert.equal(observed.birth.token, parsed.processBirth);
   }
+  const stop = spawnSync(
+    'bash',
+    [script, 'stop', scope, String(parsed.pid), parsed.processBirth],
+    {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        PATH: `${root}:${process.env.PATH}`,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+      },
+    },
+  );
+  assert.equal(stop.status, 0, stop.stderr);
+  recorderPid = 0;
 });
 
-test('recording stop force-stops the same authenticated process after SIGINT is ignored', (t) => {
+test('recording supervisor force-stops its unreaped child after SIGINT is ignored', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'record-proof-local-stop-'));
   const prefix = join(root, 'record');
   const script = join(root, 'record_proof.sh');
@@ -152,4 +167,11 @@ done
   const observedBirth = observed.status === 'present' ? observed.birth.token : null;
   assert.notEqual(observedBirth, parsed.processBirth);
   if (observedBirth !== parsed.processBirth) recorderPid = 0;
+});
+
+test('recording stop delegates signals to the authenticated supervisor', () => {
+  const source = readFileSync(sourceScript, 'utf8');
+  assert.match(source, /request_supervisor_signal "\$scope" "INT"/);
+  assert.match(source, /request_supervisor_signal "\$scope" "KILL"/);
+  assert.doesNotMatch(source, /kill -(?:INT|9) "\$pid"/);
 });

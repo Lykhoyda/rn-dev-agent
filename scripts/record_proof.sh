@@ -32,6 +32,11 @@ birth_file() { echo "${PID_PREFIX}-${1}.birth"; }
 remote_birth_file() { echo "${PID_PREFIX}-${1}.remote-birth"; }
 remote_command_file() { echo "${PID_PREFIX}-${1}.remote-command"; }
 remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
+control_token_file() { echo "${PID_PREFIX}-${1}.control-token"; }
+control_request_file() { echo "${PID_PREFIX}-${1}.control-request"; }
+control_response_file() { echo "${PID_PREFIX}-${1}.control-response"; }
+supervisor_state_file() { echo "${PID_PREFIX}-${1}.supervisor-state"; }
+child_pid_file() { echo "${PID_PREFIX}-${1}.child-pid"; }
 
 is_alive() {
   local pid="$1"
@@ -175,6 +180,155 @@ probe_local_process() {
     return 1
   }
   LOCAL_PROCESS_STATE="present"
+}
+
+SUPERVISOR_PID=""
+
+start_supervised_recorder() {
+  local scope="$1"
+  local recorder_log="$2"
+  shift 2
+  local token
+  token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  local request_path
+  local response_path
+  local state_path
+  local child_path
+  request_path="$(control_request_file "$scope")"
+  response_path="$(control_response_file "$scope")"
+  state_path="$(supervisor_state_file "$scope")"
+  child_path="$(child_pid_file "$scope")"
+  (umask 077; printf '%s\n' "$token" > "$(control_token_file "$scope")")
+  rm -f "$request_path" "$response_path" "$state_path" "$child_path"
+
+  python3 - "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$@" <<'PY' &
+import os
+import signal
+import subprocess
+import sys
+import time
+
+token, request_path, response_path, state_path, child_path, log_path, *command = sys.argv[1:]
+os.umask(0o077)
+
+def write_atomic(path, value):
+    temporary = f"{path}.{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(value)
+    os.replace(temporary, path)
+
+with open(log_path, "ab", buffering=0) as log:
+    child = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    write_atomic(child_path, f"{child.pid}\n")
+    write_atomic(state_path, "running\n")
+    wait_flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    last_nonce = None
+
+    def child_exited():
+        try:
+            return os.waitid(os.P_PID, child.pid, wait_flags) is not None
+        except ChildProcessError:
+            return True
+
+    while True:
+        try:
+            with open(request_path, encoding="utf-8") as handle:
+                parts = handle.read().split()
+        except FileNotFoundError:
+            parts = []
+
+        if len(parts) == 3 and parts[0] == token and parts[1] != last_nonce:
+            nonce, action = parts[1], parts[2]
+            last_nonce = nonce
+            if action not in {"INT", "KILL"}:
+                result = "rejected"
+            elif child_exited():
+                result = "gone"
+            else:
+                try:
+                    os.kill(child.pid, signal.SIGINT if action == "INT" else signal.SIGKILL)
+                    result = "signaled"
+                except ProcessLookupError:
+                    result = "gone"
+            write_atomic(response_path, f"{nonce} {result}\n")
+
+        if child_exited():
+            child.wait()
+            write_atomic(state_path, f"exited {child.returncode}\n")
+            break
+        time.sleep(0.05)
+PY
+  SUPERVISOR_PID=$!
+
+  local waited=0
+  while [[ $waited -lt 40 ]]; do
+    if [[ -s "$child_path" && -s "$state_path" ]] && [[ "$(cat "$state_path")" == "running" ]]; then
+      return 0
+    fi
+    is_alive "$SUPERVISOR_PID" || break
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  echo "Error: recorder supervisor failed to start" >&2
+  [[ -s "$recorder_log" ]] && sed -n '1,20p' "$recorder_log" >&2
+  return 1
+}
+
+SUPERVISOR_RESPONSE=""
+
+request_supervisor_signal() {
+  local scope="$1"
+  local action="$2"
+  local token_path
+  local request_path
+  local response_path
+  local state_path
+  token_path="$(control_token_file "$scope")"
+  request_path="$(control_request_file "$scope")"
+  response_path="$(control_response_file "$scope")"
+  state_path="$(supervisor_state_file "$scope")"
+  [[ -s "$token_path" ]] || {
+    echo "Error: recorder supervisor capability is unavailable" >&2
+    return 1
+  }
+  local token
+  local nonce
+  local request_tmp
+  token="$(cat "$token_path")"
+  nonce="$$-${RANDOM}-${RANDOM}"
+  request_tmp="${request_path}.$$"
+  (umask 077; printf '%s %s %s\n' "$token" "$nonce" "$action" > "$request_tmp")
+  mv "$request_tmp" "$request_path"
+
+  local waited=0
+  while [[ $waited -lt 100 ]]; do
+    if [[ -s "$response_path" ]]; then
+      local response_nonce
+      local response_result
+      read -r response_nonce response_result < "$response_path"
+      if [[ "$response_nonce" == "$nonce" ]]; then
+        [[ "$response_result" == "signaled" || "$response_result" == "gone" ]] || {
+          echo "Error: recorder supervisor rejected $action request" >&2
+          return 1
+        }
+        SUPERVISOR_RESPONSE="$response_result"
+        return 0
+      fi
+    fi
+    if [[ -s "$state_path" && "$(cat "$state_path")" == exited\ * ]]; then
+      SUPERVISOR_RESPONSE="gone"
+      return 0
+    fi
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  echo "Error: recorder supervisor did not acknowledge $action request" >&2
+  return 1
 }
 
 android_adb() {
@@ -344,6 +498,7 @@ cmd_start() {
   local raw_file="${RAW_PREFIX}-${platform}-$$.mov"
   local recorder_log="${PID_PREFIX}-${scope}.log"
   local rec_pid
+  local -a recorder_command=()
 
   if [[ "$platform" == "ios" ]]; then
     if ! xcrun simctl list devices booted 2>/dev/null | grep -q "Booted"; then
@@ -354,8 +509,7 @@ cmd_start() {
     echo "$platform" > "$(platform_file "$scope")"
     echo "$output_path" > "$(path_file "$scope")"
     echo "$raw_file" > "${PID_PREFIX}-${scope}.raw-path"
-    xcrun simctl io "$ios_target" recordVideo --force "$raw_file" > "$recorder_log" 2>&1 &
-    rec_pid=$!
+    recorder_command=(xcrun simctl io "$ios_target" recordVideo --force "$raw_file")
   else
     raw_file="${RAW_PREFIX}-${platform}-$$.mp4"
     if ! adb devices 2>/dev/null | grep -q "device$"; then
@@ -378,13 +532,14 @@ cmd_start() {
       rm -f "${PID_PREFIX}-${scope}.serial"
     fi
     if [[ -n "$target_id" ]]; then
-      adb -s "$target_id" shell screenrecord "$device_path" > "$recorder_log" 2>&1 &
+      recorder_command=(adb -s "$target_id" shell screenrecord "$device_path")
     else
-      adb shell screenrecord "$device_path" > "$recorder_log" 2>&1 &
+      recorder_command=(adb shell screenrecord "$device_path")
     fi
-    rec_pid=$!
   fi
 
+  start_supervised_recorder "$scope" "$recorder_log" "${recorder_command[@]}"
+  rec_pid="$SUPERVISOR_PID"
   echo "$rec_pid" > "$pf"
   local process_marker="$raw_file"
   [[ "$platform" == "android" ]] && process_marker="$device_path"
@@ -507,6 +662,10 @@ cmd_abort() {
       exit 1
     fi
   fi
+  if [[ -s "$(supervisor_state_file "$scope")" ]] && [[ "$(cat "$(supervisor_state_file "$scope")")" == "running" ]]; then
+    echo "Error: refusing cleanup without authenticated recorder supervisor" >&2
+    exit 1
+  fi
   if [[ -f "$(platform_file "$scope")" ]] && [[ "$(cat "$(platform_file "$scope")")" == "android" ]]; then
     stop_android_recorder "$scope"
     local -a adb_args=()
@@ -518,7 +677,7 @@ cmd_abort() {
   if [[ -f "${PID_PREFIX}-${scope}.raw-path" ]]; then
     rm -f "$(cat "${PID_PREFIX}-${scope}.raw-path")"
   fi
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,control-token,control-request,control-response,supervisor-state,child-pid}
 }
 
 cmd_stop() {
@@ -549,6 +708,8 @@ cmd_stop() {
   local raw_pathf="${PID_PREFIX}-${scope}.raw-path"
   local raw_file=""
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
+  local supervisor_state=""
+  [[ -s "$(supervisor_state_file "$scope")" ]] && supervisor_state="$(cat "$(supervisor_state_file "$scope")")"
 
   if is_alive "$pid"; then
     local process_marker="$raw_file"
@@ -564,7 +725,7 @@ cmd_stop() {
       echo "Error: recorder process identity changed before stop" >&2
       exit 1
     }
-    kill -INT "$pid"
+    request_supervisor_signal "$scope" "INT"
     local waited=0
     local recorder_stopped="false"
     while [[ $waited -lt 10 ]]; do
@@ -595,7 +756,7 @@ cmd_stop() {
           echo "Error: recorder command identity changed before force stop" >&2
           exit 1
         }
-        kill -9 "$pid" 2>/dev/null || true
+        request_supervisor_signal "$scope" "KILL"
         local force_waited=0
         while [[ $force_waited -lt 6 ]]; do
           probe_local_process "$pid" "$process_marker"
@@ -619,6 +780,9 @@ cmd_stop() {
       echo "Error: authenticated recorder process termination is unproven" >&2
       exit 1
     }
+  elif [[ "$supervisor_state" == "running" ]]; then
+    echo "Error: authenticated recorder supervisor disappeared before termination proof" >&2
+    exit 1
   fi
   sleep 1
 
@@ -658,7 +822,7 @@ cmd_stop() {
     rm -f "$raw_file"
   fi
 
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,control-token,control-request,control-response,supervisor-state,child-pid}
   if [[ -n "$output_path" && -f "$output_path" ]]; then
     local size
     size="$(wc -c < "$output_path" | tr -d ' ')"
