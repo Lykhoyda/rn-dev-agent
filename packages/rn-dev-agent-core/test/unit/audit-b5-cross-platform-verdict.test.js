@@ -48,3 +48,21 @@ test('cross_platform_verify refuses PASS when retained live authority is unavail
   assert.notEqual(env.data?.verdict, 'PASS');
   assert.equal(env.meta?.authoritative, undefined);
 });
+
+test('cross_platform_verify validates each platform evidence once', async () => {
+  const reads = new Map();
+  const handler = createCrossPlatformVerifyHandler({
+    getEvidence: (platform) => {
+      reads.set(platform, (reads.get(platform) ?? 0) + 1);
+      return {
+        capturedAt: `${platform}-time`,
+        nodes: [{ ref: '@1', identifier: 'shared' }],
+      };
+    },
+  });
+
+  const result = await handler({ elements: ['shared'], matchBy: 'testID' });
+
+  assert.equal(parse(result).ok, true);
+  assert.deepEqual(Object.fromEntries(reads), { ios: 1, android: 1 });
+});

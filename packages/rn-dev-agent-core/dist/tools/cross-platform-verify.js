@@ -77,14 +77,16 @@ export function createCrossPlatformVerifyHandler(dependencies = {}) {
             return failResult('Provide elements[] or scanDir to discover testIDs from source.');
         }
         const matchBy = args.matchBy ?? 'any';
-        const validateAuthority = dependencies.validateAuthority ??
-            ((platform) => Boolean(getCachedSnapshotEvidence(platform)));
-        const [iosValid, androidValid] = await Promise.all([
-            validateAuthority('ios'),
-            validateAuthority('android'),
-        ]);
-        const iosSnap = iosValid ? getCachedSnapshotEvidence('ios') : undefined;
-        const androidSnap = androidValid ? getCachedSnapshotEvidence('android') : undefined;
+        const getEvidence = dependencies.getEvidence ?? getCachedSnapshotEvidence;
+        const evidenceFor = async (platform) => {
+            const evidence = getEvidence(platform);
+            if (!evidence)
+                return undefined;
+            return !dependencies.validateAuthority || (await dependencies.validateAuthority(platform))
+                ? evidence
+                : undefined;
+        };
+        const [iosSnap, androidSnap] = await Promise.all([evidenceFor('ios'), evidenceFor('android')]);
         if (!iosSnap && !androidSnap) {
             return failResult('No cached snapshots for either platform. Run device_snapshot on iOS and Android first, ' +
                 'then call this tool to compare.', {

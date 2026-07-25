@@ -33,13 +33,13 @@ test('snapshot cache: a freshly cached snapshot is valid', () => {
 test('snapshot cache: a mutating verb invalidates the cache (content staleness)', () => {
   cacheSnapshot('ios', NODES);
   assert.equal(isSnapshotCacheValid('ios'), true);
-  markSnapshotDirty();
+  markSnapshotDirty('ios');
   assert.equal(isSnapshotCacheValid('ios'), false, 'a tap/press must invalidate the cache');
 });
 
 test('snapshot cache: re-caching after a mutation makes it valid (clean) again', () => {
   cacheSnapshot('ios', NODES);
-  markSnapshotDirty();
+  markSnapshotDirty('ios');
   assert.equal(isSnapshotCacheValid('ios'), false);
   cacheSnapshot('ios', NODES); // a fresh snapshot taken after the screen settled
   assert.equal(isSnapshotCacheValid('ios'), true);
@@ -57,13 +57,24 @@ test('snapshot cache: an over-age cache is invalid even when clean (TTL)', () =>
   assert.equal(isSnapshotCacheValid('ios', -1), false);
 });
 
-test('snapshot cache: dirty flag is global but validity is keyed per platform read', () => {
-  // markSnapshotDirty invalidates the active device's cache; a subsequent fresh
-  // cache for that platform clears it. (The bridge drives one device at a time.)
+test('snapshot cache invalidation is scoped to the mutated platform', () => {
+  cacheSnapshot('ios', NODES);
   cacheSnapshot('android', NODES);
+  markSnapshotDirty('ios');
+
+  assert.equal(isSnapshotCacheValid('ios'), false);
   assert.equal(isSnapshotCacheValid('android'), true);
-  markSnapshotDirty();
-  assert.equal(isSnapshotCacheValid('android'), false);
+  assert.equal(getCachedSnapshotEvidence('ios'), undefined);
+  assert.deepEqual(getCachedSnapshotEvidence('android')?.nodes, NODES);
+});
+
+test('capturing another platform cannot clean stale evidence', () => {
+  cacheSnapshot('ios', NODES);
+  markSnapshotDirty('ios');
+  cacheSnapshot('android', NODES);
+
+  assert.equal(getCachedSnapshotEvidence('ios'), undefined);
+  assert.deepEqual(getCachedSnapshotEvidence('android')?.nodes, NODES);
 });
 
 test('snapshot cache preserves exact per-platform receipts within one source generation', () => {
@@ -305,6 +316,12 @@ test('cache invalidation: device_find is a read unless it taps (action=click)', 
   assert.equal(toolInvalidatesSnapshotCache('device_find', { action: 'click' }), true);
 });
 
+test('cache invalidation: session switching preserves evidence but app launch invalidates it', () => {
+  assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'bind_device' }), false);
+  assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'release' }), false);
+  assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'pin_dev_client' }), true);
+});
+
 test('cache invalidation: fail-safe — an unknown/new tool invalidates by default', () => {
   assert.equal(toolInvalidatesSnapshotCache('some_future_tool_we_have_not_classified'), true);
 });
@@ -345,7 +362,7 @@ test('source guard: the central trackedTool boundary wires fail-safe cache inval
   );
   assert.match(
     src,
-    /markSnapshotDirty\(\)/,
+    /markSnapshotDirty\(/,
     'trackedTool must invalidate the cache for mutating tools',
   );
 });

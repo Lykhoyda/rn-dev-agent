@@ -15,19 +15,19 @@ const MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
 const STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
 const IGNORED_RUNTIME_INPUT_PATHS = [
-    ':(glob)**/.env',
-    ':(glob)**/.env.*',
-    ':(glob)**/app.json',
-    ':(glob)**/app.config.*',
-    ':(glob)**/eas.json',
-    ':(glob)**/google-services.json',
-    ':(glob)**/GoogleService-Info.plist',
-    ':(glob)**/metro.config.*',
-    ':(glob)**/babel.config.*',
-    ':(glob)**/react-native.config.*',
-    ':(glob)**/*.xcconfig',
-    ':(glob)**/gradle.properties',
-    ':(glob)**/local.properties',
+    ':(top,glob)**',
+    ':(top,exclude,glob)**/node_modules/**',
+    ':(top,exclude,glob)**/.yarn/cache/**',
+    ':(top,exclude,glob)**/.yarn/unplugged/**',
+    ':(top,exclude,glob)**/.gradle/**',
+    ':(top,exclude,glob)**/.expo/**',
+    ':(top,exclude,glob)**/.cache/**',
+    ':(top,exclude,glob)**/ios/Pods/**',
+    ':(top,exclude,glob)**/ios/build/**',
+    ':(top,exclude,glob)**/ios/DerivedData/**',
+    ':(top,exclude,glob)**/android/build/**',
+    ':(top,exclude,glob)**/android/app/build/**',
+    ':(top,exclude,glob)**/android/app/.cxx/**',
 ];
 function updateFramed(hash, part) {
     const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);

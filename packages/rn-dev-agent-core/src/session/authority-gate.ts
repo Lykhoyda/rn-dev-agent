@@ -742,10 +742,13 @@ export function createAuthorityGate(
 
         let operation: OperationRef | null = null;
         let registry: SessionRegistry | null = null;
+        let authoritySession: SessionRef | null = null;
+        let proofCleanupAuthorityVersion: number | null = null;
         let publishedProofFinalize = false;
         try {
           const available = runtime.requireAvailable();
           registry = available.registry;
+          authoritySession = available.session;
           const initialStatus = runtime.status();
           if (!initialStatus.available) {
             throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
@@ -1169,6 +1172,7 @@ export function createAuthorityGate(
               ok?: boolean;
             };
             if (envelope.ok === true) {
+              proofCleanupAuthorityVersion = status.authorityVersion;
               registry.endOperation(operation);
               operation = null;
               registry.updateBindings(available.session, {
@@ -1207,20 +1211,21 @@ export function createAuthorityGate(
               if (!resultIsCanonicalSuccess(rollback)) {
                 throw new Error('PROOF_AUTHORITY_MISMATCH: finalized proof rollback was rejected');
               }
-              if (!registry || !operation) {
-                throw new Error('PROOF_AUTHORITY_MISMATCH: proof operation fence was lost');
+              if (!registry || !authoritySession) {
+                throw new Error('PROOF_AUTHORITY_MISMATCH: proof registry was lost');
               }
-              const current = runtime.requireAvailable();
-              const rollbackStatus = runtime.status();
-              if (!rollbackStatus.available) {
-                throw new SessionAuthorityError(rollbackStatus.code, rollbackStatus.reason);
+              if (operation) {
+                proofCleanupAuthorityVersion = operation.authorityVersion;
+                registry.verifyOperation(operation);
+                registry.endOperation(operation);
+                operation = null;
               }
-              registry.verifyOperation(operation);
-              registry.endOperation(operation);
-              operation = null;
-              current.registry.updateBindings(current.session, {
+              if (proofCleanupAuthorityVersion === null) {
+                throw new Error('PROOF_AUTHORITY_MISMATCH: proof cleanup version was lost');
+              }
+              registry.updateBindings(authoritySession, {
                 bindings: { proof: null },
-                expectedAuthorityVersion: rollbackStatus.authorityVersion,
+                expectedAuthorityVersion: proofCleanupAuthorityVersion,
               });
             } catch (rollbackError) {
               return authorityFailure(

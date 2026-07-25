@@ -522,6 +522,7 @@ function trackedTool(name, desc, schema, handler) {
             return failResult('Tool calls are disabled in the read-only MCP contract probe.', 'DIAGNOSTIC_MODE_READ_ONLY');
         }
         const args = a[0];
+        const snapshotPlatform = getActiveSession()?.platform;
         let result;
         try {
             result = await base(...a);
@@ -535,7 +536,7 @@ function trackedTool(name, desc, schema, handler) {
             // toolInvalidatesRetryBaseline's doc comment for why native device verbs
             // are excluded (they manage it themselves via settle).
             if (toolInvalidatesSnapshotCache(name, args))
-                markSnapshotDirty();
+                markSnapshotDirty(snapshotPlatform);
             if (toolInvalidatesRetryBaseline(name, args))
                 invalidateLastSnapshotHash();
         }

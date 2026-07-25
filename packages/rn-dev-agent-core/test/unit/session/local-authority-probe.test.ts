@@ -88,9 +88,68 @@ test('bundle probe normalizes CDP transport failure to optional bundle unavailab
   );
 });
 
-test('install authority rejects changed bytes even when install metadata is unchanged', async () => {
+test('ordinary install authority probes use the cached generation without rereading bytes', async () => {
+  let artifactCaptures = 0;
   const probe = createLocalAuthorityProbe(
     dependencies({
+      captureInstallGeneration: () => 'same-generation',
+      captureInstalled: () => {
+        artifactCaptures += 1;
+        throw new Error('artifact bytes should not be read');
+      },
+    }),
+  );
+
+  await probe({
+    axis: 'I',
+    tool: 'device_snapshot',
+    phase: 'preflight',
+    status: statusWith({
+      install: {
+        platform: 'ios',
+        deviceId: 'SIM-A',
+        appId: 'dev.example',
+        artifactDigest: 'expected-bytes',
+        installGeneration: 'same-generation',
+      },
+    }),
+  });
+
+  assert.equal(artifactCaptures, 0);
+});
+
+test('ordinary install authority rejects a changed cached generation', async () => {
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      captureInstallGeneration: () => 'changed-generation',
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      probe({
+        axis: 'I',
+        tool: 'device_snapshot',
+        phase: 'preflight',
+        status: statusWith({
+          install: {
+            platform: 'ios',
+            deviceId: 'SIM-A',
+            appId: 'dev.example',
+            artifactDigest: 'expected-bytes',
+            installGeneration: 'expected-generation',
+          },
+        }),
+      }),
+    (error) =>
+      error instanceof SessionAuthorityError && error.code === 'APP_INSTALL_IDENTITY_CHANGED',
+  );
+});
+
+test('strict proof install authority rejects changed bytes with unchanged metadata', async () => {
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      captureInstallGeneration: () => 'same-generation',
       captureInstalled: () => ({
         platform: 'ios',
         deviceId: 'SIM-A',
@@ -105,6 +164,9 @@ test('install authority rejects changed bytes even when install metadata is unch
     () =>
       probe({
         axis: 'I',
+        tool: 'proof_capture',
+        phase: 'postflight',
+        args: { action: 'finalize' },
         status: statusWith({
           install: {
             platform: 'ios',

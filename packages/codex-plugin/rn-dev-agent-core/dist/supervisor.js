@@ -994,19 +994,19 @@ var init_source_identity = __esm({
     MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
     STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
     IGNORED_RUNTIME_INPUT_PATHS = [
-      ":(glob)**/.env",
-      ":(glob)**/.env.*",
-      ":(glob)**/app.json",
-      ":(glob)**/app.config.*",
-      ":(glob)**/eas.json",
-      ":(glob)**/google-services.json",
-      ":(glob)**/GoogleService-Info.plist",
-      ":(glob)**/metro.config.*",
-      ":(glob)**/babel.config.*",
-      ":(glob)**/react-native.config.*",
-      ":(glob)**/*.xcconfig",
-      ":(glob)**/gradle.properties",
-      ":(glob)**/local.properties"
+      ":(top,glob)**",
+      ":(top,exclude,glob)**/node_modules/**",
+      ":(top,exclude,glob)**/.yarn/cache/**",
+      ":(top,exclude,glob)**/.yarn/unplugged/**",
+      ":(top,exclude,glob)**/.gradle/**",
+      ":(top,exclude,glob)**/.expo/**",
+      ":(top,exclude,glob)**/.cache/**",
+      ":(top,exclude,glob)**/ios/Pods/**",
+      ":(top,exclude,glob)**/ios/build/**",
+      ":(top,exclude,glob)**/ios/DerivedData/**",
+      ":(top,exclude,glob)**/android/build/**",
+      ":(top,exclude,glob)**/android/app/build/**",
+      ":(top,exclude,glob)**/android/app/.cxx/**"
     ];
   }
 });
@@ -11670,7 +11670,7 @@ function hasActiveSession() {
 function setSnapshotAuthorityProvider(provider) {
   snapshotAuthorityProvider = provider;
   snapshotCache.clear();
-  snapshotCacheDirty = true;
+  dirtySnapshotPlatforms.clear();
 }
 function currentSnapshotAuthority(platform) {
   const authority = snapshotAuthorityProvider?.current();
@@ -11710,7 +11710,7 @@ function snapshotEvidenceAuthorityIsValid(receipt2, platform) {
 }
 function getCachedSnapshotEvidence(platform) {
   const snapshot = snapshotCache.get(platform);
-  return snapshot && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
+  return snapshot && !dirtySnapshotPlatforms.has(platform) && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
 }
 function cacheSnapshot(platform, nodes) {
   const authorityReceipt = currentSnapshotAuthority(platform);
@@ -11723,17 +11723,25 @@ function cacheSnapshot(platform, nodes) {
     capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
     capturedAtMs: Date.now()
   });
-  snapshotCacheDirty = false;
+  dirtySnapshotPlatforms.delete(platform);
 }
 function getCachedSnapshot(platform) {
   const snapshot = snapshotCache.get(platform);
-  return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
+  return snapshot && !dirtySnapshotPlatforms.has(platform) && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
 }
-function markSnapshotDirty() {
-  snapshotCacheDirty = true;
+function markSnapshotDirty(platform) {
+  const authorityPlatform = snapshotAuthorityProvider?.current()?.platform;
+  const currentPlatform = platform ?? (typeof authorityPlatform === "string" ? authorityPlatform : activeSession?.platform);
+  if (currentPlatform) {
+    dirtySnapshotPlatforms.add(currentPlatform);
+    return;
+  }
+  for (const cachedPlatform of snapshotCache.keys()) {
+    dirtySnapshotPlatforms.add(cachedPlatform);
+  }
 }
 function isSnapshotCacheValid(platform, maxAgeMs = MAX_REF_MAP_AGE_MS) {
-  if (snapshotCacheDirty)
+  if (dirtySnapshotPlatforms.has(platform))
     return false;
   const entry = snapshotCache.get(platform);
   if (!entry)
@@ -12500,7 +12508,7 @@ async function runNative(cliArgs, opts = {}) {
   }
   return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, "NO_NATIVE_ROUTE");
 }
-var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, snapshotAuthorityProvider, snapshotCacheDirty, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
+var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
 var init_agent_device_wrapper = __esm({
   "packages/rn-dev-agent-core/dist/agent-device-wrapper.js"() {
     "use strict";
@@ -12527,8 +12535,8 @@ var init_agent_device_wrapper = __esm({
       }
     }
     snapshotCache = /* @__PURE__ */ new Map();
+    dirtySnapshotPlatforms = /* @__PURE__ */ new Set();
     snapshotAuthorityProvider = null;
-    snapshotCacheDirty = true;
     RN_FAST_RUNNER_COMMANDS = /* @__PURE__ */ new Set([
       "snapshot",
       "tap",
@@ -16349,10 +16357,13 @@ function createAuthorityGate(runtime, dependencies) {
       }
       let operation = null;
       let registry2 = null;
+      let authoritySession = null;
+      let proofCleanupAuthorityVersion = null;
       let publishedProofFinalize = false;
       try {
         const available = runtime.requireAvailable();
         registry2 = available.registry;
+        authoritySession = available.session;
         const initialStatus = runtime.status();
         if (!initialStatus.available) {
           throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
@@ -16696,6 +16707,7 @@ function createAuthorityGate(runtime, dependencies) {
         if (tool === "proof_capture" && (args.action === "finalize" || args.action === "discard")) {
           const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
           if (envelope.ok === true) {
+            proofCleanupAuthorityVersion = status.authorityVersion;
             registry2.endOperation(operation);
             operation = null;
             registry2.updateBindings(available.session, {
@@ -16729,20 +16741,21 @@ function createAuthorityGate(runtime, dependencies) {
             if (!resultIsCanonicalSuccess(rollback)) {
               throw new Error("PROOF_AUTHORITY_MISMATCH: finalized proof rollback was rejected");
             }
-            if (!registry2 || !operation) {
-              throw new Error("PROOF_AUTHORITY_MISMATCH: proof operation fence was lost");
+            if (!registry2 || !authoritySession) {
+              throw new Error("PROOF_AUTHORITY_MISMATCH: proof registry was lost");
             }
-            const current = runtime.requireAvailable();
-            const rollbackStatus = runtime.status();
-            if (!rollbackStatus.available) {
-              throw new SessionAuthorityError(rollbackStatus.code, rollbackStatus.reason);
+            if (operation) {
+              proofCleanupAuthorityVersion = operation.authorityVersion;
+              registry2.verifyOperation(operation);
+              registry2.endOperation(operation);
+              operation = null;
             }
-            registry2.verifyOperation(operation);
-            registry2.endOperation(operation);
-            operation = null;
-            current.registry.updateBindings(current.session, {
+            if (proofCleanupAuthorityVersion === null) {
+              throw new Error("PROOF_AUTHORITY_MISMATCH: proof cleanup version was lost");
+            }
+            registry2.updateBindings(authoritySession, {
               bindings: { proof: null },
-              expectedAuthorityVersion: rollbackStatus.authorityVersion
+              expectedAuthorityVersion: proofCleanupAuthorityVersion
             });
           } catch (rollbackError) {
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
@@ -17683,13 +17696,7 @@ function pidForPort(port, exec = defaultExec, platform = process.platform) {
 function parseWindowsMetroRoot(commandLine) {
   const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
   const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
-  if (explicit)
-    return explicit;
-  const scriptPath = /"([A-Za-z]:[\\/][^"]*[\\/]node_modules[\\/][^"]+)"/i.exec(commandLine)?.[1] ?? /'([A-Za-z]:[\\/][^']*[\\/]node_modules[\\/][^']+)'/i.exec(commandLine)?.[1] ?? /(?:^|\s)([A-Za-z]:[\\/]\S*[\\/]node_modules[\\/]\S+)/i.exec(commandLine)?.[1];
-  if (!scriptPath)
-    return null;
-  const marker = scriptPath.toLowerCase().lastIndexOf(`${scriptPath.includes("\\") ? "\\" : "/"}node_modules`);
-  return marker > 2 ? scriptPath.slice(0, marker) : null;
+  return explicit ?? null;
 }
 function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync2) {
   try {
@@ -69370,13 +69377,14 @@ function createCrossPlatformVerifyHandler(dependencies = {}) {
       return failResult("Provide elements[] or scanDir to discover testIDs from source.");
     }
     const matchBy = args.matchBy ?? "any";
-    const validateAuthority = dependencies.validateAuthority ?? ((platform) => Boolean(getCachedSnapshotEvidence(platform)));
-    const [iosValid, androidValid] = await Promise.all([
-      validateAuthority("ios"),
-      validateAuthority("android")
-    ]);
-    const iosSnap = iosValid ? getCachedSnapshotEvidence("ios") : void 0;
-    const androidSnap = androidValid ? getCachedSnapshotEvidence("android") : void 0;
+    const getEvidence = dependencies.getEvidence ?? getCachedSnapshotEvidence;
+    const evidenceFor = async (platform) => {
+      const evidence = getEvidence(platform);
+      if (!evidence)
+        return void 0;
+      return !dependencies.validateAuthority || await dependencies.validateAuthority(platform) ? evidence : void 0;
+    };
+    const [iosSnap, androidSnap] = await Promise.all([evidenceFor("ios"), evidenceFor("android")]);
     if (!iosSnap && !androidSnap) {
       return failResult("No cached snapshots for either platform. Run device_snapshot on iOS and Android first, then call this tool to compare.", {
         hint: "Workflow: open iOS session \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify"
@@ -69880,6 +69888,8 @@ function isStateMutating(tool, args) {
 function toolInvalidatesSnapshotCache(tool, args) {
   if (tool === "device_find")
     return args?.action === "click";
+  if (tool === "rn_session")
+    return args?.action === "pin_dev_client";
   return !SNAPSHOT_CACHE_READS.has(tool);
 }
 function toolInvalidatesRetryBaseline(tool, args) {
@@ -73564,6 +73574,7 @@ function createLocalAuthorityProbe(dependencies) {
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
+  const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;
   return async ({ axis, phase, status, tool, args }) => {
     if (axis === "C") {
       const { registry: registry2, session } = dependencies.runtime.requireAvailable();
@@ -73598,12 +73609,15 @@ function createLocalAuthorityProbe(dependencies) {
     }
     if (axis === "I") {
       const expected = objectBinding(status, "install");
-      let observed;
+      const exactArtifactBoundary = tool === "proof_capture" && (args?.action === "begin_rehearsal" || args?.action === "finalize");
       try {
-        observed = captureInstalled(expected);
-        verifyInstalledArtifact(expected, observed);
+        if (exactArtifactBoundary) {
+          verifyInstalledArtifact(expected, captureInstalled(expected));
+        } else if (captureGeneration(expected) !== expected.installGeneration) {
+          throw new Error("install generation changed");
+        }
       } catch {
-        throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact bytes no longer match the session build");
+        throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact identity no longer matches the session build");
       }
       return {
         axis,
@@ -73611,8 +73625,8 @@ function createLocalAuthorityProbe(dependencies) {
           platform: expected.platform,
           deviceId: expected.deviceId,
           appId: expected.appId,
-          artifactDigest: observed.artifactDigest,
-          installGeneration: observed.installGeneration
+          artifactDigest: expected.artifactDigest,
+          installGeneration: expected.installGeneration
         })
       };
     }
@@ -73909,12 +73923,13 @@ function trackedTool(name, desc, schema, handler) {
       return failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
     }
     const args = a[0];
+    const snapshotPlatform = getActiveSession()?.platform;
     let result;
     try {
       result = await base(...a);
     } finally {
       if (toolInvalidatesSnapshotCache(name, args))
-        markSnapshotDirty();
+        markSnapshotDirty(snapshotPlatform);
       if (toolInvalidatesRetryBaseline(name, args))
         invalidateLastSnapshotHash();
     }

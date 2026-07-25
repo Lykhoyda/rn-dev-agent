@@ -73,6 +73,7 @@ export function discoverTestIDs(dir: string): string[] {
 export function createCrossPlatformVerifyHandler(
   dependencies: {
     validateAuthority?: (platform: string) => Promise<boolean> | boolean;
+    getEvidence?: typeof getCachedSnapshotEvidence;
   } = {},
 ): (args: VerifyArgs) => Promise<ToolResult> {
   return async (args) => {
@@ -104,15 +105,15 @@ export function createCrossPlatformVerifyHandler(
     }
 
     const matchBy = args.matchBy ?? 'any';
-    const validateAuthority =
-      dependencies.validateAuthority ??
-      ((platform: string) => Boolean(getCachedSnapshotEvidence(platform)));
-    const [iosValid, androidValid] = await Promise.all([
-      validateAuthority('ios'),
-      validateAuthority('android'),
-    ]);
-    const iosSnap = iosValid ? getCachedSnapshotEvidence('ios') : undefined;
-    const androidSnap = androidValid ? getCachedSnapshotEvidence('android') : undefined;
+    const getEvidence = dependencies.getEvidence ?? getCachedSnapshotEvidence;
+    const evidenceFor = async (platform: string) => {
+      const evidence = getEvidence(platform);
+      if (!evidence) return undefined;
+      return !dependencies.validateAuthority || (await dependencies.validateAuthority(platform))
+        ? evidence
+        : undefined;
+    };
+    const [iosSnap, androidSnap] = await Promise.all([evidenceFor('ios'), evidenceFor('android')]);
 
     if (!iosSnap && !androidSnap) {
       return failResult(

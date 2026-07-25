@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
-import { captureInstalledArtifact, verifyInstalledArtifact } from './install-authority.js';
+import { captureInstalledArtifact, captureInstallGeneration, verifyInstalledArtifact, } from './install-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
@@ -93,6 +93,7 @@ export function createLocalAuthorityProbe(dependencies) {
     const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
     const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
     const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
+    const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;
     return async ({ axis, phase, status, tool, args }) => {
         if (axis === 'C') {
             const { registry, session } = dependencies.runtime.requireAvailable();
@@ -134,13 +135,18 @@ export function createLocalAuthorityProbe(dependencies) {
         }
         if (axis === 'I') {
             const expected = objectBinding(status, 'install');
-            let observed;
+            const exactArtifactBoundary = tool === 'proof_capture' &&
+                (args?.action === 'begin_rehearsal' || args?.action === 'finalize');
             try {
-                observed = captureInstalled(expected);
-                verifyInstalledArtifact(expected, observed);
+                if (exactArtifactBoundary) {
+                    verifyInstalledArtifact(expected, captureInstalled(expected));
+                }
+                else if (captureGeneration(expected) !== expected.installGeneration) {
+                    throw new Error('install generation changed');
+                }
             }
             catch {
-                throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact bytes no longer match the session build');
+                throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact identity no longer matches the session build');
             }
             return {
                 axis,
@@ -148,8 +154,8 @@ export function createLocalAuthorityProbe(dependencies) {
                     platform: expected.platform,
                     deviceId: expected.deviceId,
                     appId: expected.appId,
-                    artifactDigest: observed.artifactDigest,
-                    installGeneration: observed.installGeneration,
+                    artifactDigest: expected.artifactDigest,
+                    installGeneration: expected.installGeneration,
                 }),
             };
         }

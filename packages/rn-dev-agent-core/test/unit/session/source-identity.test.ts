@@ -166,8 +166,9 @@ test('strict proof rejects an untracked symlink that escapes the content root', 
 test('strict proof includes ignored runtime inputs', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-ignored-'));
   roots.push(root);
-  const ignoredFile = join(root, '.env');
-  writeFileSync(ignoredFile, 'API_URL=first');
+  const ignoredFile = join(root, 'ios', '.xcode.env.local');
+  mkdirSync(join(root, 'ios'), { recursive: true });
+  writeFileSync(ignoredFile, 'NODE_BINARY=first');
   const identity = {
     kind: 'git' as const,
     contentRoot: root,
@@ -184,19 +185,20 @@ test('strict proof includes ignored runtime inputs', () => {
     if (args.includes('--stage')) return '';
     if (args.includes('--ignored')) {
       ignoredQueries.push(args);
-      return '.env\0';
+      return 'ios/.xcode.env.local\0';
     }
     if (args[0] === 'ls-files') return '';
     throw new Error('unexpected git command');
   };
 
   const first = strictProofSourceIdentity(identity, { git });
-  writeFileSync(ignoredFile, 'API_URL=second');
+  writeFileSync(ignoredFile, 'NODE_BINARY=second');
   const second = strictProofSourceIdentity(identity, { git });
 
   assert.notEqual(first.dirtyDigest, second.dirtyDigest);
-  assert.ok(ignoredQueries.every((args) => args.includes(':(glob)**/.env')));
-  assert.ok(ignoredQueries.every((args) => !args.includes(':(glob)**/node_modules/**')));
+  assert.ok(ignoredQueries.every((args) => args.includes(':(top,glob)**')));
+  assert.ok(ignoredQueries.every((args) => args.includes(':(top,exclude,glob)**/node_modules/**')));
+  assert.ok(ignoredQueries.every((args) => !args.some((arg) => arg.includes('.xcode.env'))));
 });
 
 test('strict proof rejects oversized untracked runtime inputs before buffering them', () => {

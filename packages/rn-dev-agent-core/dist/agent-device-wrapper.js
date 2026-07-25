@@ -100,11 +100,12 @@ export function hasActiveSession() {
     return activeSession !== null;
 }
 const snapshotCache = new Map();
+const dirtySnapshotPlatforms = new Set();
 let snapshotAuthorityProvider = null;
 export function setSnapshotAuthorityProvider(provider) {
     snapshotAuthorityProvider = provider;
     snapshotCache.clear();
-    snapshotCacheDirty = true;
+    dirtySnapshotPlatforms.clear();
 }
 function currentSnapshotAuthority(platform) {
     const authority = snapshotAuthorityProvider?.current();
@@ -181,7 +182,9 @@ export async function validateCachedSnapshotAuthority(platform) {
 }
 export function getCachedSnapshotEvidence(platform) {
     const snapshot = snapshotCache.get(platform);
-    return snapshot && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
+    return snapshot &&
+        !dirtySnapshotPlatforms.has(platform) &&
+        snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
         ? snapshot
         : undefined;
 }
@@ -192,7 +195,6 @@ export function getCachedSnapshotEvidence(platform) {
 // AND within the TTL (coordinate-drift guard, mirrors MAX_REF_MAP_AGE_MS). The
 // dirty flag is the load-bearing correctness piece: a fresh-by-time but
 // stale-by-content cache would drive a wrong-element tap.
-let snapshotCacheDirty = true;
 export function cacheSnapshot(platform, nodes) {
     const authorityReceipt = currentSnapshotAuthority(platform);
     if (authorityReceipt.sessionId !== null)
@@ -204,24 +206,34 @@ export function cacheSnapshot(platform, nodes) {
         capturedAt: new Date().toISOString(),
         capturedAtMs: Date.now(),
     });
-    // A fresh snapshot is, by definition, a clean picture of the current screen.
-    snapshotCacheDirty = false;
+    dirtySnapshotPlatforms.delete(platform);
 }
 export function getCachedSnapshot(platform) {
     const snapshot = snapshotCache.get(platform);
-    return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
+    return snapshot &&
+        !dirtySnapshotPlatforms.has(platform) &&
+        snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
         ? snapshot
         : undefined;
 }
 // Called at the runNative dispatch choke point on any screen-mutating verb
 // (tap/press/fill/type/swipe/scroll/back/longpress/pinch/keyboard/drag).
-export function markSnapshotDirty() {
-    snapshotCacheDirty = true;
+export function markSnapshotDirty(platform) {
+    const authorityPlatform = snapshotAuthorityProvider?.current()?.platform;
+    const currentPlatform = platform ??
+        (typeof authorityPlatform === 'string' ? authorityPlatform : activeSession?.platform);
+    if (currentPlatform) {
+        dirtySnapshotPlatforms.add(currentPlatform);
+        return;
+    }
+    for (const cachedPlatform of snapshotCache.keys()) {
+        dirtySnapshotPlatforms.add(cachedPlatform);
+    }
 }
 // True only when the cached snapshot is safe to reuse for targeting: present,
 // not invalidated by a mutating verb, and within the freshness budget.
 export function isSnapshotCacheValid(platform, maxAgeMs = MAX_REF_MAP_AGE_MS) {
-    if (snapshotCacheDirty)
+    if (dirtySnapshotPlatforms.has(platform))
         return false;
     const entry = snapshotCache.get(platform);
     if (!entry)

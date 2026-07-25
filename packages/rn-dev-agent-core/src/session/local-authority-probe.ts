@@ -4,7 +4,11 @@ import type { CDPClient } from '../cdp-client.js';
 import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import type { HermesTarget } from '../types.js';
-import { captureInstalledArtifact, verifyInstalledArtifact } from './install-authority.js';
+import {
+  captureInstalledArtifact,
+  captureInstallGeneration,
+  verifyInstalledArtifact,
+} from './install-authority.js';
 import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
 import { metroListenerPid } from './metro-binding.js';
@@ -32,6 +36,7 @@ interface LocalAuthorityProbeDependencies {
   proofActive?: (runId: string) => boolean;
   inspectOwner?: typeof inspectSessionOwner;
   captureInstalled?: typeof captureInstalledArtifact;
+  captureInstallGeneration?: typeof captureInstallGeneration;
 }
 
 function identity(value: unknown): string {
@@ -144,6 +149,7 @@ export function createLocalAuthorityProbe(
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
+  const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;
 
   return async ({ axis, phase, status, tool, args }) => {
     if (axis === 'C') {
@@ -204,14 +210,19 @@ export function createLocalAuthorityProbe(
         artifactDigest: string;
         installGeneration: string;
       };
-      let observed: ReturnType<typeof captureInstalledArtifact>;
+      const exactArtifactBoundary =
+        tool === 'proof_capture' &&
+        (args?.action === 'begin_rehearsal' || args?.action === 'finalize');
       try {
-        observed = captureInstalled(expected);
-        verifyInstalledArtifact(expected, observed);
+        if (exactArtifactBoundary) {
+          verifyInstalledArtifact(expected, captureInstalled(expected));
+        } else if (captureGeneration(expected) !== expected.installGeneration) {
+          throw new Error('install generation changed');
+        }
       } catch {
         throw new SessionAuthorityError(
           'APP_INSTALL_IDENTITY_CHANGED',
-          'installed artifact bytes no longer match the session build',
+          'installed artifact identity no longer matches the session build',
         );
       }
       return {
@@ -220,8 +231,8 @@ export function createLocalAuthorityProbe(
           platform: expected.platform,
           deviceId: expected.deviceId,
           appId: expected.appId,
-          artifactDigest: observed.artifactDigest,
-          installGeneration: observed.installGeneration,
+          artifactDigest: expected.artifactDigest,
+          installGeneration: expected.installGeneration,
         }),
       };
     }

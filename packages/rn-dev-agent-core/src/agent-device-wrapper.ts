@@ -174,6 +174,7 @@ interface CachedSnapshot {
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
+const dirtySnapshotPlatforms = new Set<string>();
 let snapshotAuthorityProvider: {
   current: () => Record<string, unknown> | null;
   record: (receipt: SnapshotAuthorityReceipt) => void;
@@ -214,7 +215,7 @@ export function setSnapshotAuthorityProvider(
 ): void {
   snapshotAuthorityProvider = provider;
   snapshotCache.clear();
-  snapshotCacheDirty = true;
+  dirtySnapshotPlatforms.clear();
 }
 
 function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
@@ -302,7 +303,9 @@ export async function validateCachedSnapshotAuthority(platform: string): Promise
 
 export function getCachedSnapshotEvidence(platform: string): CachedSnapshot | undefined {
   const snapshot = snapshotCache.get(platform);
-  return snapshot && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
+  return snapshot &&
+    !dirtySnapshotPlatforms.has(platform) &&
+    snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
     ? snapshot
     : undefined;
 }
@@ -314,8 +317,6 @@ export function getCachedSnapshotEvidence(platform: string): CachedSnapshot | un
 // AND within the TTL (coordinate-drift guard, mirrors MAX_REF_MAP_AGE_MS). The
 // dirty flag is the load-bearing correctness piece: a fresh-by-time but
 // stale-by-content cache would drive a wrong-element tap.
-let snapshotCacheDirty = true;
-
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
   const authorityReceipt = currentSnapshotAuthority(platform);
   if (authorityReceipt.sessionId !== null) snapshotAuthorityProvider?.record(authorityReceipt);
@@ -326,21 +327,32 @@ export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']):
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),
   });
-  // A fresh snapshot is, by definition, a clean picture of the current screen.
-  snapshotCacheDirty = false;
+  dirtySnapshotPlatforms.delete(platform);
 }
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {
   const snapshot = snapshotCache.get(platform);
-  return snapshot && snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
+  return snapshot &&
+    !dirtySnapshotPlatforms.has(platform) &&
+    snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
     ? snapshot
     : undefined;
 }
 
 // Called at the runNative dispatch choke point on any screen-mutating verb
 // (tap/press/fill/type/swipe/scroll/back/longpress/pinch/keyboard/drag).
-export function markSnapshotDirty(): void {
-  snapshotCacheDirty = true;
+export function markSnapshotDirty(platform?: string): void {
+  const authorityPlatform = snapshotAuthorityProvider?.current()?.platform;
+  const currentPlatform =
+    platform ??
+    (typeof authorityPlatform === 'string' ? authorityPlatform : activeSession?.platform);
+  if (currentPlatform) {
+    dirtySnapshotPlatforms.add(currentPlatform);
+    return;
+  }
+  for (const cachedPlatform of snapshotCache.keys()) {
+    dirtySnapshotPlatforms.add(cachedPlatform);
+  }
 }
 
 // True only when the cached snapshot is safe to reuse for targeting: present,
@@ -349,7 +361,7 @@ export function isSnapshotCacheValid(
   platform: string,
   maxAgeMs: number = MAX_REF_MAP_AGE_MS,
 ): boolean {
-  if (snapshotCacheDirty) return false;
+  if (dirtySnapshotPlatforms.has(platform)) return false;
   const entry = snapshotCache.get(platform);
   if (!entry) return false;
   if (!snapshotAuthorityIsValid(entry.authorityReceipt, platform)) return false;

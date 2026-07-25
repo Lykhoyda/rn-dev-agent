@@ -64,16 +64,7 @@ export function parseWindowsMetroRoot(commandLine: string): string | null {
       commandLine,
     );
   const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
-  if (explicit) return explicit;
-  const scriptPath =
-    /"([A-Za-z]:[\\/][^"]*[\\/]node_modules[\\/][^"]+)"/i.exec(commandLine)?.[1] ??
-    /'([A-Za-z]:[\\/][^']*[\\/]node_modules[\\/][^']+)'/i.exec(commandLine)?.[1] ??
-    /(?:^|\s)([A-Za-z]:[\\/]\S*[\\/]node_modules[\\/]\S+)/i.exec(commandLine)?.[1];
-  if (!scriptPath) return null;
-  const marker = scriptPath
-    .toLowerCase()
-    .lastIndexOf(`${scriptPath.includes('\\') ? '\\' : '/'}node_modules`);
-  return marker > 2 ? scriptPath.slice(0, marker) : null;
+  return explicit ?? null;
 }
 
 export function cwdForProcess(

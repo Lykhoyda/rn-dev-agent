@@ -147,6 +147,30 @@ test('finalized proof is discarded when postflight authority changes', async () 
   assert.equal(status.bindings.proof, null);
 });
 
+test('finalized proof cleanup retries after its operation fence has ended', async () => {
+  const { runtime, registry, status } = fixture();
+  const actions = [];
+  const updateBindings = registry.updateBindings;
+  let clearAttempts = 0;
+  registry.updateBindings = (session, input) => {
+    clearAttempts += 1;
+    if (clearAttempts === 1) throw new Error('transient registry write failure');
+    updateBindings(session, input);
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  const result = await gate.wrap('proof_capture', async (args) => {
+    actions.push(args.action);
+    return okResult(args.action === 'discard' ? { discarded: true } : { stage: 'accepted' });
+  })({ action: 'finalize', evidenceReview: {} });
+
+  assert.equal(JSON.parse(result.content[0].text).ok, false);
+  assert.deepEqual(actions, ['finalize', 'discard']);
+  assert.equal(clearAttempts, 2);
+  assert.equal(status.bindings.proof, null);
+});
+
 test('authoritative source paths cannot escape the bound app root', async () => {
   const { runtime } = fixture();
   let dispatched = false;
