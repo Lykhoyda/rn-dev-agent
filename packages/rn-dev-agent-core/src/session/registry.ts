@@ -59,6 +59,7 @@ export interface HandoffCapability {
 }
 
 export interface HandoffCleanupPlan {
+  recovery?: true;
   metro?: Record<string, unknown>;
   observe?: Record<string, unknown>;
   runner?: Record<string, unknown>;
@@ -2080,14 +2081,62 @@ export class SessionRegistry {
           'stale session does not belong to this exact source worktree',
         );
       }
-      if (prior.state === 'handoff_cleanup') {
+      const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
+      const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
+      const priorCleanup =
+        priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === 'object'
+          ? (priorBindings.handoffCleanup as Record<string, unknown>)
+          : null;
+      const resumesRecoveryCleanup =
+        prior.state === 'handoff_cleanup' && priorCleanup?.recovery === true;
+      if (prior.state === 'handoff_cleanup' && !resumesRecoveryCleanup) {
         throw new SessionAuthorityError(
           'HANDOFF_NOT_AUTHORIZED',
           'stale adoption cannot discard an incomplete handoff cleanup plan',
         );
       }
-      const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
-      const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
+      if (resumesRecoveryCleanup) {
+        this.#database
+          .prepare(
+            `UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+             WHERE session_id = ? AND claim_epoch = ?`,
+          )
+          .run(
+            target.sessionId,
+            target.claimEpoch,
+            now + this.#leaseMs,
+            prior.session_id,
+            prior.claim_epoch,
+          );
+        this.#database
+          .prepare(
+            `UPDATE sessions
+             SET state = 'handoff_cleanup', bindings_json = ?,
+                 authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`,
+          )
+          .run(
+            JSON.stringify({
+              ...targetBindings,
+              adoptionRequired: null,
+              recoveryHandles: targetBindings.recoveryHandles,
+              metro: null,
+              metroCleanup: null,
+              device: priorBindings.device ?? null,
+              install: priorBindings.install ?? null,
+              bundle: null,
+              runner: null,
+              observe: null,
+              proof: null,
+              handoffCleanup: priorCleanup,
+            }),
+            now,
+            target.sessionId,
+            target.claimEpoch,
+          );
+        this.#fenceSession(prior.session_id, now);
+        return;
+      }
       const activeOperation = this.#database
         .prepare(
           `SELECT profile FROM operations
@@ -2204,6 +2253,7 @@ export class SessionRegistry {
             proof: null,
             handoffCleanup: cleanupRequired
               ? {
+                  recovery: true,
                   metro: metroCleanup
                     ? {
                         ...metroCleanup,

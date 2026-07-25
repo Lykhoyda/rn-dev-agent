@@ -9218,11 +9218,36 @@ var SessionRegistry = class {
       if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
         throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
       }
-      if (prior.state === "handoff_cleanup") {
-        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption cannot discard an incomplete handoff cleanup plan");
-      }
       const priorBindings = JSON.parse(prior.bindings_json);
       const targetBindings = JSON.parse(targetRow.bindings_json);
+      const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
+      const resumesRecoveryCleanup = prior.state === "handoff_cleanup" && priorCleanup?.recovery === true;
+      if (prior.state === "handoff_cleanup" && !resumesRecoveryCleanup) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption cannot discard an incomplete handoff cleanup plan");
+      }
+      if (resumesRecoveryCleanup) {
+        this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+             WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+        this.#database.prepare(`UPDATE sessions
+             SET state = 'handoff_cleanup', bindings_json = ?,
+                 authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(JSON.stringify({
+          ...targetBindings,
+          adoptionRequired: null,
+          recoveryHandles: targetBindings.recoveryHandles,
+          metro: null,
+          metroCleanup: null,
+          device: priorBindings.device ?? null,
+          install: priorBindings.install ?? null,
+          bundle: null,
+          runner: null,
+          observe: null,
+          proof: null,
+          handoffCleanup: priorCleanup
+        }), now, target.sessionId, target.claimEpoch);
+        this.#fenceSession(prior.session_id, now);
+        return;
+      }
       const activeOperation = this.#database.prepare(`SELECT profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(prior.session_id, prior.claim_epoch);
       const priorMetro = priorBindings.metro && typeof priorBindings.metro === "object" ? priorBindings.metro : null;
@@ -9272,6 +9297,7 @@ var SessionRegistry = class {
         observe: null,
         proof: null,
         handoffCleanup: cleanupRequired ? {
+          recovery: true,
           metro: metroCleanup ? {
             ...metroCleanup,
             sourceSessionId: prior.session_id,

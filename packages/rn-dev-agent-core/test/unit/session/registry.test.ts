@@ -1143,6 +1143,82 @@ test('stale adoption cannot discard another contender handoff cleanup plan', () 
   assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, cleanupOwner.sessionId);
 });
 
+test('stale adoption transfers an interrupted recovery cleanup plan unchanged', () => {
+  const { registry, create, ownerStates } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const firstRecovery = create('b', 'shared-worktree');
+  const secondRecovery = create('c', 'shared-worktree');
+  registry.claimResources(owner, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'observe-port', key: '7333' },
+    { type: 'runner', key: 'ios:device-a:9100' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      observePort: 7333,
+      runner: {
+        platform: 'ios',
+        deviceId: 'device-a',
+        port: 9100,
+        instanceId: 'runner-a',
+        capability: 'runner-capability-a',
+      },
+      observe: {
+        port: 7333,
+        instanceId: 'observe-a',
+        cleanupCapability: 'observe-capability-a',
+      },
+    },
+  });
+  registry.bindWorker(firstRecovery, {
+    instanceId: 'worker-first',
+    pid: 202,
+    token: 'birth-worker-first',
+  });
+  registry.updateBindings(firstRecovery, {
+    state: 'blocked',
+    bindings: {
+      observePort: 7333,
+      recoveryCapabilityHash: 'recovery-first',
+      recoveryHandles: { adoptStale: { token: 'first' } },
+    },
+  });
+  registry.bindWorker(secondRecovery, {
+    instanceId: 'worker-second',
+    pid: 303,
+    token: 'birth-worker-second',
+  });
+  registry.updateBindings(secondRecovery, {
+    state: 'blocked',
+    bindings: {
+      observePort: 7333,
+      recoveryCapabilityHash: 'recovery-second',
+      recoveryHandles: { adoptStale: { token: 'second' } },
+    },
+  });
+  ownerStates.set(owner.sessionId, 'mismatch');
+  registry.adoptStaleIntoBlocked(firstRecovery, owner.sessionId, 'worker-first');
+  registry.beginHandoffCleanupResource(firstRecovery, 'worker-first', 'runner');
+  registry.completeHandoffCleanupResource(firstRecovery, 'worker-first', 'runner');
+  registry.beginHandoffCleanupResource(firstRecovery, 'worker-first', 'observe');
+  const interruptedPlan = registry.getSessionStatus(firstRecovery.sessionId)?.bindings
+    .handoffCleanup;
+  ownerStates.set(firstRecovery.sessionId, 'mismatch');
+
+  registry.adoptStaleIntoBlocked(secondRecovery, firstRecovery.sessionId, 'worker-second');
+
+  const resumed = registry.getSessionStatus(secondRecovery.sessionId);
+  assert.equal(resumed?.state, 'handoff_cleanup');
+  assert.deepEqual(resumed?.bindings.handoffCleanup, interruptedPlan);
+  assert.equal(registry.getClaim('source', 'shared-worktree')?.sessionId, secondRecovery.sessionId);
+  assert.equal(registry.getClaim('observe-port', '7333')?.sessionId, secondRecovery.sessionId);
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100'), null);
+  registry.completeHandoffCleanupResource(secondRecovery, 'worker-second', 'observe');
+  registry.finishHandoffCleanup(secondRecovery, 'worker-second');
+  assert.equal(registry.getSessionStatus(secondRecovery.sessionId)?.state, 'source_bound');
+});
+
 test('binding commits reject stale authority versions without replacing newer state', () => {
   const { registry, create } = fixture();
   const session = create('a', 'worktree-a');
