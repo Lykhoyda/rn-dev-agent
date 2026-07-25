@@ -583,8 +583,40 @@ cmd_stop() {
       }
       waited=$((waited + 1))
     done
+    if [[ "$recorder_stopped" != "true" ]]; then
+      probe_local_process "$pid" "$process_marker"
+      if [[
+        "$LOCAL_PROCESS_STATE" == "absent" ||
+          "$LOCAL_PROCESS_BIRTH" != "$expected_birth"
+      ]]; then
+        recorder_stopped="true"
+      else
+        [[ "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
+          echo "Error: recorder command identity changed before force stop" >&2
+          exit 1
+        }
+        kill -9 "$pid" 2>/dev/null || true
+        local force_waited=0
+        while [[ $force_waited -lt 6 ]]; do
+          probe_local_process "$pid" "$process_marker"
+          if [[
+            "$LOCAL_PROCESS_STATE" == "absent" ||
+              "$LOCAL_PROCESS_BIRTH" != "$expected_birth"
+          ]]; then
+            recorder_stopped="true"
+            break
+          fi
+          [[ "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
+            echo "Error: recorder command identity changed after force stop" >&2
+            exit 1
+          }
+          sleep 0.5
+          force_waited=$((force_waited + 1))
+        done
+      fi
+    fi
     [[ "$recorder_stopped" == "true" ]] || {
-      echo "Error: authenticated recorder process did not stop" >&2
+      echo "Error: authenticated recorder process termination is unproven" >&2
       exit 1
     }
   fi

@@ -88,7 +88,7 @@ done
   }
 });
 
-test('recording stop retains authority when the authenticated process ignores SIGINT', (t) => {
+test('recording stop force-stops the same authenticated process after SIGINT is ignored', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'record-proof-local-stop-'));
   const prefix = join(root, 'record');
   const script = join(root, 'record_proof.sh');
@@ -146,12 +146,10 @@ done
     [script, 'stop', scope, String(parsed.pid), parsed.processBirth],
     { encoding: 'utf8', timeout: 10_000, env },
   );
-  assert.notEqual(stop.status, 0);
-  assert.match(stop.stderr, /authenticated recorder process did not stop/);
-  assert.equal(existsSync(`${prefix}-${scope}.pid`), true);
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.equal(existsSync(`${prefix}-${scope}.pid`), false);
   const observed = probeProcessBirth(parsed.pid);
-  assert.equal(observed.status, 'present');
-  if (observed.status === 'present') {
-    assert.equal(observed.birth.token, parsed.processBirth);
-  }
+  const observedBirth = observed.status === 'present' ? observed.birth.token : null;
+  assert.notEqual(observedBirth, parsed.processBirth);
+  if (observedBirth !== parsed.processBirth) recorderPid = 0;
 });
