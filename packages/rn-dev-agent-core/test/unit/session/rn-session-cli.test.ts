@@ -228,7 +228,7 @@ test('package-local CLI retains claims when managed Metro cleanup is unproven', 
   assert.equal(status?.state, 'source_bound');
 });
 
-test('package-local CLI reserves build and release operations before runner cleanup', async () => {
+test('package-local CLI reserves Metro, build, and release operations before cleanup', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-operation-'));
   const appRoot = join(root, 'app');
   const stateHome = join(root, 'state');
@@ -247,6 +247,11 @@ test('package-local CLI reserves build and release operations before runner clea
     writeFileSync(join(appRoot, 'package.json'), '{}\n');
     execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
     execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+    mkdirSync(join(appRoot, '.rn-agent', 'integration'), { recursive: true });
+    writeFileSync(
+      join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json'),
+      '{"version":1}\n',
+    );
 
     const runnerPid = runner.pid;
     const runnerBirth = runnerPid === undefined ? null : readProcessBirth(runnerPid);
@@ -294,6 +299,7 @@ test('package-local CLI reserves build and release operations before runner clea
 
     for (const args of [
       ['prepare-build', 'ios'],
+      ['ensure-metro'],
       ['release'],
     ]) {
       const result = spawnSync(process.execPath, [cliPath, ...args], {

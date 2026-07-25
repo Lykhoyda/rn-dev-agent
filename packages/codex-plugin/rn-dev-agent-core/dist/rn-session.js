@@ -11775,55 +11775,95 @@ async function ensureManagedMetro(status) {
   if (device?.platform !== "ios" && device?.platform !== "android" || typeof device.appId !== "string") {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "an exact device/app binding is required before managed Metro starts");
   }
+  const platform = device.platform;
+  const appId = device.appId;
   if (!inspectAuthorityMigration(status).packageIntegration.installed) {
     throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "session package and Metro integration must be applied before managed Metro starts");
   }
-  const existing = status.bindings.metro;
-  if (typeof existing?.pid === "number" && typeof existing.port === "number" && typeof existing.instanceId === "string" && typeof existing.buildGeneration === "number") {
-    try {
-      await captureMetroBinding({
-        port: existing.port,
-        pid: existing.pid,
-        instanceId: existing.instanceId,
-        sourceRoot: String(status.source.contentRoot),
-        buildGeneration: existing.buildGeneration
-      });
-      return;
-    } catch {
-      const signer = readSigner(status);
-      if (!await stopManagedMetro(existing, {
-        sessionId: status.sessionId,
-        signerCapability: signer
-      })) {
-        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "existing external Metro binding is stale and cannot be replaced automatically");
-      }
-      status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { bindings: { metro: null, bundle: null } });
-    }
-  }
   const signerCapability = readSigner(status);
-  const instanceId = randomUUID3();
-  const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
-  writeMarker(status, {
-    platform: device.platform,
-    appId: device.appId,
-    metroInstanceId: instanceId,
-    buildGeneration,
-    signerCapability
-  });
-  const binding = await startManagedMetro({
-    appRoot: String(status.source.appRoot),
-    runtimeRoot: sessionRuntimeDirectory(status.layout, status.sessionId),
-    sourceRoot: String(status.source.contentRoot),
-    sessionId: status.sessionId,
-    port: Number(status.bindings.metroPort),
-    instanceId,
-    buildGeneration,
-    signerCapability
-  });
-  status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, {
-    state: "device_claimed",
-    bindings: { metro: binding, bundle: null }
-  });
+  const existing = status.bindings.metro;
+  const operation = beginCliOperation(status, "rn-session ensure-metro", "transition:ensure-metro");
+  let currentOperation = operation;
+  let startedBinding = null;
+  let bindingCommitted = false;
+  try {
+    await status.registry.runWithOperation(operation, async () => {
+      if (typeof existing?.pid === "number" && typeof existing.port === "number" && typeof existing.instanceId === "string" && typeof existing.buildGeneration === "number") {
+        let isCurrent = false;
+        try {
+          await captureMetroBinding({
+            port: existing.port,
+            pid: existing.pid,
+            instanceId: existing.instanceId,
+            sourceRoot: String(status.source.contentRoot),
+            buildGeneration: existing.buildGeneration
+          });
+          isCurrent = true;
+        } catch {
+        }
+        if (isCurrent) {
+          status.registry.verifyOperation(currentOperation);
+          return;
+        }
+        if (!await stopManagedMetro(existing, {
+          sessionId: status.sessionId,
+          signerCapability
+        })) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "existing external Metro binding is stale and cannot be replaced automatically");
+        }
+        status.registry.verifyOperation(currentOperation);
+        currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+          bindings: { metro: null, bundle: null }
+        });
+      }
+      const instanceId = randomUUID3();
+      const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
+      writeMarker(status, {
+        platform,
+        appId,
+        metroInstanceId: instanceId,
+        buildGeneration,
+        signerCapability
+      });
+      status.registry.verifyOperation(currentOperation);
+      startedBinding = await startManagedMetro({
+        appRoot: String(status.source.appRoot),
+        runtimeRoot: sessionRuntimeDirectory(status.layout, status.sessionId),
+        sourceRoot: String(status.source.contentRoot),
+        sessionId: status.sessionId,
+        port: Number(status.bindings.metroPort),
+        instanceId,
+        buildGeneration,
+        signerCapability
+      });
+      status.registry.verifyOperation(currentOperation);
+      currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+        state: "device_claimed",
+        bindings: { metro: startedBinding, bundle: null }
+      });
+      bindingCommitted = true;
+    });
+    status.registry.endOperation(currentOperation);
+  } catch (error) {
+    let failure = error;
+    if (startedBinding && !bindingCommitted) {
+      try {
+        if (!await stopManagedMetro(startedBinding, {
+          sessionId: status.sessionId,
+          signerCapability
+        })) {
+          failure = new AggregateError([
+            failure,
+            new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "uncommitted managed Metro replacement cleanup could not be proven")
+          ]);
+        }
+      } catch (cleanupError) {
+        failure = new AggregateError([failure, cleanupError]);
+      }
+    }
+    status.registry.cancelOperation(currentOperation);
+    throw failure;
+  }
 }
 async function main() {
   const command = process.argv[2] ?? "status";
