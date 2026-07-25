@@ -1619,6 +1619,12 @@ export class SessionRegistry {
         );
       const bindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
       const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
+      const managedMetro =
+        bindings.metro &&
+        typeof bindings.metro === 'object' &&
+        (bindings.metro as Record<string, unknown>).mode === 'managed'
+          ? (bindings.metro as Record<string, unknown>)
+          : null;
       this.#database
         .prepare(
           `UPDATE sessions
@@ -1629,6 +1635,7 @@ export class SessionRegistry {
         .run(
           JSON.stringify({
             ...bindings,
+            metro: managedMetro ? null : bindings.metro,
             bundle: null,
             runner: null,
             observe: null,
@@ -1636,6 +1643,14 @@ export class SessionRegistry {
             pendingBuild: null,
             recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
             handoffCleanup: {
+              metro: managedMetro
+                ? {
+                    ...managedMetro,
+                    sourceSessionId: prior.session_id,
+                    stopRequestedAt: null,
+                    completedAt: null,
+                  }
+                : null,
               observe:
                 bindings.observe && typeof bindings.observe === 'object'
                   ? {

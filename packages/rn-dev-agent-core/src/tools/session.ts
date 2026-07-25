@@ -448,7 +448,11 @@ export function createSessionHandler(
           );
         }
         let cleanup = status.bindings.handoffCleanup as
-          | { observe?: Record<string, unknown>; runner?: Record<string, unknown> }
+          | {
+              metro?: Record<string, unknown>;
+              observe?: Record<string, unknown>;
+              runner?: Record<string, unknown>;
+            }
           | undefined;
         const priorSessionId = registry.getHandoffOwner(handoffId);
         const priorStatus = priorSessionId ? registry.getSessionStatus(priorSessionId) : null;
@@ -537,6 +541,39 @@ export function createSessionHandler(
             );
           }
           registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'observe');
+        }
+        const afterObserve = registry.getSessionStatus(session.sessionId);
+        cleanup = afterObserve?.bindings.handoffCleanup as typeof cleanup;
+        if (cleanup?.metro && typeof cleanup.metro.completedAt !== 'number') {
+          const metroCleanup = registry.beginHandoffCleanupResource(
+            session,
+            status.worker.instanceId,
+            'metro',
+          );
+          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== 'string') {
+            throw new SessionAuthorityError(
+              'METRO_AUTHORITY_MISMATCH',
+              'managed Metro cleanup binding disappeared while fenced',
+            );
+          }
+          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
+          if (!signerCapability) {
+            throw new SessionAuthorityError(
+              'SESSION_AUTHORITY_REQUIRED',
+              'managed Metro handoff cleanup requires the source session signer capability',
+            );
+          }
+          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
+            sessionId: metroCleanup.sourceSessionId,
+            signerCapability,
+          });
+          if (!stopped) {
+            throw new SessionAuthorityError(
+              'METRO_AUTHORITY_MISMATCH',
+              'managed Metro could not be stopped with its source session authority',
+            );
+          }
+          registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'metro');
         }
         registry.finishHandoffCleanup(session, status.worker.instanceId);
         return okResult({

@@ -928,6 +928,11 @@ export class SessionRegistry {
                 .run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
             const bindings = JSON.parse(prior.bindings_json);
             const targetBindings = JSON.parse(targetRow.bindings_json);
+            const managedMetro = bindings.metro &&
+                typeof bindings.metro === 'object' &&
+                bindings.metro.mode === 'managed'
+                ? bindings.metro
+                : null;
             this.#database
                 .prepare(`UPDATE sessions
            SET state = 'handoff_cleanup', bindings_json = ?,
@@ -935,6 +940,7 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ?`)
                 .run(JSON.stringify({
                 ...bindings,
+                metro: managedMetro ? null : bindings.metro,
                 bundle: null,
                 runner: null,
                 observe: null,
@@ -942,6 +948,14 @@ export class SessionRegistry {
                 pendingBuild: null,
                 recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
                 handoffCleanup: {
+                    metro: managedMetro
+                        ? {
+                            ...managedMetro,
+                            sourceSessionId: prior.session_id,
+                            stopRequestedAt: null,
+                            completedAt: null,
+                        }
+                        : null,
                     observe: bindings.observe && typeof bindings.observe === 'object'
                         ? {
                             ...bindings.observe,

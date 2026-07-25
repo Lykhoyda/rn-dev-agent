@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 
-function cleanupRuntime(finish: () => void, includeObserve = true, includeRunner = true) {
+function cleanupRuntime(
+  finish: () => void,
+  includeObserve = true,
+  includeRunner = true,
+  includeMetro = false,
+) {
   const status = {
     sessionId: 'target',
     sourceKey: 'source',
@@ -18,6 +23,15 @@ function cleanupRuntime(finish: () => void, includeObserve = true, includeRunner
     source: { kind: 'git' },
     bindings: {
       handoffCleanup: {
+        metro: includeMetro
+          ? {
+              mode: 'managed',
+              port: 8081,
+              sourceSessionId: 'source-session',
+              stopRequestedAt: null,
+              completedAt: null,
+            }
+          : null,
         runner: includeRunner
           ? {
               platform: 'ios',
@@ -96,16 +110,28 @@ test('handoff cleanup remains fenced when exact shutdown is not proven', async (
   assert.equal(result.isError, true);
 });
 
-test('handoff cleanup unblocks only after runner and Observe shutdown complete', async () => {
+test('handoff cleanup unblocks only after every managed process stops', async () => {
   const calls: string[] = [];
   const handler = createSessionHandler(
-    cleanupRuntime(() => calls.push('finish')),
+    cleanupRuntime(() => calls.push('finish'), true, true, true),
     {
       stopHandoffRunner: async () => {
         calls.push('runner');
       },
       stopHandoffObserve: async () => {
         calls.push('observe');
+      },
+      getSignerCapability: (sessionId) => {
+        assert.equal(sessionId, 'source-session');
+        return 'source-signer';
+      },
+      stopManagedMetro: async (_binding, authority) => {
+        assert.deepEqual(authority, {
+          sessionId: 'source-session',
+          signerCapability: 'source-signer',
+        });
+        calls.push('metro');
+        return true;
       },
     },
   );
@@ -117,7 +143,7 @@ test('handoff cleanup unblocks only after runner and Observe shutdown complete',
   });
 
   assert.equal(result.isError, undefined);
-  assert.deepEqual(calls, ['runner', 'observe', 'finish']);
+  assert.deepEqual(calls, ['runner', 'observe', 'metro', 'finish']);
 });
 
 test('handoff cleanup signals only the persisted exact runner PID', async () => {

@@ -1145,6 +1145,21 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
     ...handoff,
     targetInstance: 'worker-cleanup',
   });
+  const accepted = registry.getSessionStatus(cleanupOwner.sessionId);
+  assert.equal(accepted?.bindings.metro, null);
+  assert.deepEqual(
+    (
+      accepted?.bindings.handoffCleanup as {
+        metro?: Record<string, unknown>;
+      }
+    ).metro,
+    {
+      ...metro,
+      sourceSessionId: owner.sessionId,
+      stopRequestedAt: null,
+      completedAt: null,
+    },
+  );
   registry.beginHandoffCleanupResource(cleanupOwner, 'worker-cleanup', 'runner');
   const interruptedPlan = registry.getSessionStatus(cleanupOwner.sessionId)?.bindings
     .handoffCleanup;
@@ -1155,14 +1170,16 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
   const resumed = registry.getSessionStatus(contender.sessionId);
   assert.equal(resumed?.state, 'handoff_cleanup');
   assert.deepEqual(resumed?.bindings.handoffCleanup, interruptedPlan);
-  assert.deepEqual(resumed?.bindings.metro, metro);
+  assert.equal(resumed?.bindings.metro, null);
   assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, contender.sessionId);
   assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, contender.sessionId);
   registry.completeHandoffCleanupResource(contender, 'worker-contender', 'runner');
+  registry.beginHandoffCleanupResource(contender, 'worker-contender', 'metro');
+  registry.completeHandoffCleanupResource(contender, 'worker-contender', 'metro');
   registry.finishHandoffCleanup(contender, 'worker-contender');
   const completed = registry.getSessionStatus(contender.sessionId);
   assert.equal(completed?.state, 'source_bound');
-  assert.deepEqual(completed?.bindings.metro, metro);
+  assert.equal(completed?.bindings.metro, null);
 });
 
 test('stale adoption transfers an interrupted recovery cleanup plan unchanged', () => {

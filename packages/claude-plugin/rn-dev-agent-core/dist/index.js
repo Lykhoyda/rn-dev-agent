@@ -56855,11 +56855,13 @@ var SessionRegistry = class {
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
       const bindings = JSON.parse(prior.bindings_json);
       const targetBindings = JSON.parse(targetRow.bindings_json);
+      const managedMetro = bindings.metro && typeof bindings.metro === "object" && bindings.metro.mode === "managed" ? bindings.metro : null;
       this.#database.prepare(`UPDATE sessions
            SET state = 'handoff_cleanup', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
         ...bindings,
+        metro: managedMetro ? null : bindings.metro,
         bundle: null,
         runner: null,
         observe: null,
@@ -56867,6 +56869,12 @@ var SessionRegistry = class {
         pendingBuild: null,
         recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
         handoffCleanup: {
+          metro: managedMetro ? {
+            ...managedMetro,
+            sourceSessionId: prior.session_id,
+            stopRequestedAt: null,
+            completedAt: null
+          } : null,
           observe: bindings.observe && typeof bindings.observe === "object" ? {
             ...bindings.observe,
             stopRequestedAt: null,
@@ -69168,6 +69176,26 @@ function createSessionHandler(runtime, dependencies = {}) {
             await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
           }
           registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "observe");
+        }
+        const afterObserve = registry2.getSessionStatus(session.sessionId);
+        cleanup = afterObserve?.bindings.handoffCleanup;
+        if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
+          const metroCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "metro");
+          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro cleanup binding disappeared while fenced");
+          }
+          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
+          if (!signerCapability) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff cleanup requires the source session signer capability");
+          }
+          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
+            sessionId: metroCleanup.sourceSessionId,
+            signerCapability
+          });
+          if (!stopped) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with its source session authority");
+          }
+          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "metro");
         }
         registry2.finishHandoffCleanup(session, status2.worker.instanceId);
         return okResult({
