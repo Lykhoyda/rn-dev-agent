@@ -55,9 +55,12 @@ interface ManagedMetroProcessIdentity {
 
 const METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
+const { writeFileSync } = require('node:fs');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
-if (!executable) process.exit(1);
+const runtimeLoads = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
+if (!executable || !runtimeLoads) process.exit(1);
+writeFileSync(runtimeLoads, '', { mode: 0o600 });
 const child = spawn(executable, args, {
   cwd: process.cwd(),
   env: process.env,
@@ -229,11 +232,20 @@ export async function startManagedMetro(
   dependencies: ManagedMetroDependencies = {},
 ): Promise<ManagedMetroBinding> {
   const command = resolveManagedMetroCommand(input.appRoot, dependencies);
-  const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
   const instanceId = input.instanceId;
   const runtimePolicyCapability = createHmac('sha256', input.signerCapability)
     .update('metro-runtime-policy')
     .digest('base64url');
+  const baseNodeOptions = (process.env.NODE_OPTIONS ?? '').trim();
+  if (/(?:^|\s)(?:--(?:require|import|loader|experimental-loader)\b|-r\b)/.test(baseNodeOptions)) {
+    throw new Error('METRO_START_UNAVAILABLE: NODE_OPTIONS loaders are unsupported');
+  }
+  const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
+  const runtimeLoads = join(input.appRoot, '.rn-agent', 'integration', 'metro-runtime-loads.jsonl');
+  const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`]
+    .filter(Boolean)
+    .join(' ');
+  const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
   const child = (dependencies.spawnProcess ?? spawn)(
     process.execPath,
     ['-e', METRO_LAUNCHER_SOURCE],
@@ -247,6 +259,10 @@ export async function startManagedMetro(
         RN_DEV_AGENT_SESSION_ID: input.sessionId,
         RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
         RN_DEV_AGENT_METRO_POLICY_CAPABILITY: runtimePolicyCapability,
+        RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
+        RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
+        RN_DEV_AGENT_METRO_RUNTIME_LOADS: runtimeLoads,
+        NODE_OPTIONS: authorityNodeOptions,
       },
       detached: true,
       stdio: ['ignore', log, log],

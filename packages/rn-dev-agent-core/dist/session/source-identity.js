@@ -47,6 +47,7 @@ const METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
 module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
 ${METRO_INTEGRATION_END}`;
 const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
+const METRO_RUNTIME_LOADS = '.rn-agent/integration/metro-runtime-loads.jsonl';
 function updateFramed(hash, part) {
     const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
     hash.update(`${bytes.byteLength}:`);
@@ -199,7 +200,61 @@ function metroRuntimeInputs(identity, authority) {
     if (receipt.violations.length > 0) {
         throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt.violations[0]}`);
     }
-    return [...new Set(receipt.runtimeInputs)].flatMap((entry) => {
+    const runtimeInputs = new Set(receipt.runtimeInputs);
+    const runtimeLoadsPath = join(identity.appRoot, METRO_RUNTIME_LOADS);
+    let runtimeLoadsRaw;
+    try {
+        const runtimeLoadsStat = lstatSync(runtimeLoadsPath);
+        if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+            throw new Error('runtime load evidence is not a bounded regular file');
+        }
+        runtimeLoadsRaw = readFileSync(runtimeLoadsPath, 'utf8');
+    }
+    catch (error) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid', {
+            cause: error,
+        });
+    }
+    const runtimeLoads = runtimeLoadsRaw.split('\n').filter(Boolean);
+    if (runtimeLoads.length > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
+    }
+    for (const rawLoad of runtimeLoads) {
+        let load;
+        try {
+            load = JSON.parse(rawLoad);
+        }
+        catch (error) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid', {
+                cause: error,
+            });
+        }
+        const loadPayload = {
+            version: load.version,
+            sessionId: load.sessionId,
+            metroInstanceId: load.metroInstanceId,
+            kind: load.kind,
+            value: load.value,
+        };
+        const expectedLoad = createHmac('sha256', authority.capability)
+            .update(JSON.stringify(loadPayload))
+            .digest();
+        const observedLoad = typeof load.signature === 'string' ? Buffer.from(load.signature, 'hex') : Buffer.alloc(0);
+        if (load.version !== 1 ||
+            load.sessionId !== authority.sessionId ||
+            load.metroInstanceId !== authority.metroInstanceId ||
+            (load.kind !== 'input' && load.kind !== 'violation') ||
+            typeof load.value !== 'string' ||
+            observedLoad.length !== expectedLoad.length ||
+            !timingSafeEqual(observedLoad, expectedLoad)) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
+        }
+        if (load.kind === 'violation') {
+            throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
+        }
+        runtimeInputs.add(load.value);
+    }
+    return [...runtimeInputs].sort().flatMap((entry) => {
         const candidate = realpathSync(entry);
         return !isContained(identity.contentRoot, candidate) ||
             isExcludedRuntimePath(identity.contentRoot, candidate)
@@ -238,9 +293,7 @@ function dependencyStoreRoots(identity, git, pathExists) {
             break;
         pnpRoot = parent;
     }
-    const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => ['.pnp.js', '.pnp.cjs', '.pnp.loader.mjs']
-        .map((entry) => join(root, entry))
-        .filter(pathExists));
+    const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => ['.pnp.js', '.pnp.cjs', '.pnp.loader.mjs'].map((entry) => join(root, entry)).filter(pathExists));
     if (pnpLoaders.length > 0) {
         throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug’n’Play dependency resolution is unsupported');
     }
@@ -453,6 +506,10 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
             continue;
         }
         throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink');
+    }
+    const runtimeInputsAfter = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy);
+    if (JSON.stringify(runtimeInputsAfter) !== JSON.stringify(runtimeInputs)) {
+        throw new Error('STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing');
     }
     return {
         kind: 'git-strict-proof',

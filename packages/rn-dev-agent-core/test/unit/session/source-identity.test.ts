@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import {
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -371,7 +364,7 @@ test('strict proof requires one exact terminal Metro integration block', () => {
     join(root, 'metro.config.js'),
     integrated.replace(
       '// rn-dev-agent session integration: end',
-      "module.exports.watchFolders = [];\n// rn-dev-agent session integration: end",
+      'module.exports.watchFolders = [];\n// rn-dev-agent session integration: end',
     ),
   );
   const identity = {
@@ -384,10 +377,7 @@ test('strict proof requires one exact terminal Metro integration block', () => {
     head: 'abc123',
   };
 
-  assert.throws(
-    () => strictProofSourceIdentity(identity),
-    /STRICT_PROOF_UNVERIFIED_METRO_CONFIG/,
-  );
+  assert.throws(() => strictProofSourceIdentity(identity), /STRICT_PROOF_UNVERIFIED_METRO_CONFIG/);
 });
 
 test('strict proof authenticates signed external Metro runtime inputs', () => {
@@ -401,10 +391,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   const integration = join(root, '.rn-agent', 'integration');
   mkdirSync(integration, { recursive: true });
   writeFileSync(runtimeFile, 'module.exports = "first";');
-  writeFileSync(
-    join(root, 'metro.config.js'),
-    previewMetroIntegration('module.exports = {};\n'),
-  );
+  writeFileSync(join(root, 'metro.config.js'), previewMetroIntegration('module.exports = {};\n'));
   const capability = 'policy-capability';
   const payload = {
     version: 1,
@@ -412,15 +399,29 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     metroInstanceId: 'metro',
     contentRoot: root,
     appRoot: root,
-    runtimeInputs: [runtimeFile],
+    runtimeInputs: [],
     violations: [],
   };
   writeFileSync(
     join(integration, 'metro-runtime-policy.json'),
     `${JSON.stringify({
       ...payload,
+      signature: createHmac('sha256', capability).update(JSON.stringify(payload)).digest('hex'),
+    })}\n`,
+  );
+  const runtimeLoadPayload = {
+    version: 1,
+    sessionId: 'session',
+    metroInstanceId: 'metro',
+    kind: 'input',
+    value: runtimeFile,
+  };
+  writeFileSync(
+    join(integration, 'metro-runtime-loads.jsonl'),
+    `${JSON.stringify({
+      ...runtimeLoadPayload,
       signature: createHmac('sha256', capability)
-        .update(JSON.stringify(payload))
+        .update(JSON.stringify(runtimeLoadPayload))
         .digest('hex'),
     })}\n`,
   );
@@ -451,6 +452,14 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   const second = strictProofSourceIdentity(identity, { git, metroRuntimePolicy });
 
   assert.notEqual(first.dirtyDigest, second.dirtyDigest);
+  writeFileSync(
+    join(integration, 'metro-runtime-loads.jsonl'),
+    `${JSON.stringify({ ...runtimeLoadPayload, signature: '00'.repeat(32) })}\n`,
+  );
+  assert.throws(
+    () => strictProofSourceIdentity(identity, { git, metroRuntimePolicy }),
+    /STRICT_PROOF_UNVERIFIED_METRO_POLICY/,
+  );
 });
 
 test('strict proof rejects oversized untracked runtime inputs before buffering them', () => {

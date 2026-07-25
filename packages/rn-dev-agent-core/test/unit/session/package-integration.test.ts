@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { test } from 'node:test';
@@ -49,6 +49,21 @@ const packageJson = {
     test: 'jest',
   },
 };
+
+function metroPolicyEnvironment(adapterPath: string): NodeJS.ProcessEnv {
+  const runtimeLoads = join(dirname(adapterPath), 'metro-runtime-loads.jsonl');
+  writeFileSync(runtimeLoads, '');
+  return {
+    ...process.env,
+    NODE_OPTIONS: `--require=${JSON.stringify(adapterPath)}`,
+    RN_DEV_AGENT_SESSION_ID: 'session',
+    RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
+    RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
+    RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: adapterPath,
+    RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: '',
+    RN_DEV_AGENT_METRO_RUNTIME_LOADS: runtimeLoads,
+  };
+}
 
 test('integration preview is reversible and preserves unrelated scripts', () => {
   const preview = previewPackageIntegration(packageJson);
@@ -154,12 +169,7 @@ test('Metro integration records external and custom resolver inputs', () => {
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -176,7 +186,7 @@ test('Metro integration records external and custom resolver inputs', () => {
   }
 });
 
-test('Metro integration rejects unbounded executable module closures', () => {
+test('Metro integration rejects external executable modules', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-executable-'));
   const external = mkdtempSync(join(tmpdir(), 'rn-session-metro-external-module-'));
   try {
@@ -197,12 +207,7 @@ test('Metro integration rejects unbounded executable module closures', () => {
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -219,7 +224,8 @@ test('Metro integration rejects unbounded executable module closures', () => {
     assert.ok(
       receipt.violations.some(
         (entry: string) =>
-          entry.includes('transformerPath') && entry.includes('executable closure'),
+          entry.includes('babelTransformerPath') &&
+          entry.includes('must resolve to Git-authenticated source'),
       ),
     );
   } finally {
@@ -228,7 +234,7 @@ test('Metro integration rejects unbounded executable module closures', () => {
   }
 });
 
-test('Metro integration accepts supported Metro executable modules', () => {
+test('Metro integration accepts React Native and Expo executable modules', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-local-worker-'));
   try {
     execFileSync('git', ['init', '-q', root]);
@@ -237,7 +243,12 @@ test('Metro integration accepts supported Metro executable modules', () => {
     const adapterPath = join(integration, 'rn-session-metro.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     const modulePaths = Object.fromEntries(
-      ['metro-transform-worker', 'metro-babel-transformer', 'metro-minify-terser'].map((name) => {
+      [
+        'metro-transform-worker',
+        '@react-native/metro-babel-transformer',
+        '@expo/metro-transform-worker',
+        '@expo/metro-babel-transformer',
+      ].map((name) => {
         const moduleRoot = join(root, 'node_modules', name);
         const modulePath = join(moduleRoot, 'index.cjs');
         mkdirSync(moduleRoot, { recursive: true });
@@ -253,16 +264,11 @@ test('Metro integration accepts supported Metro executable modules', () => {
       process.execPath,
       [
         '-e',
-        `const compose = require(${JSON.stringify(adapterPath)}); compose({ transformerPath: ${JSON.stringify(modulePaths['metro-transform-worker'])}, transformer: { babelTransformerPath: ${JSON.stringify(modulePaths['metro-babel-transformer'])}, minifierPath: ${JSON.stringify(modulePaths['metro-minify-terser'])} } });`,
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ transformerPath: ${JSON.stringify(modulePaths['metro-transform-worker'])}, transformer: { babelTransformerPath: ${JSON.stringify(modulePaths['@react-native/metro-babel-transformer'])} } }); compose({ transformerPath: ${JSON.stringify(modulePaths['@expo/metro-transform-worker'])}, transformer: { babelTransformerPath: ${JSON.stringify(modulePaths['@expo/metro-babel-transformer'])} } });`,
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -271,10 +277,7 @@ test('Metro integration accepts supported Metro executable modules', () => {
     const receipt = JSON.parse(
       readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
     );
-    assert.equal(
-      receipt.violations.some((entry: string) => entry.includes('executable closure')),
-      false,
-    );
+    assert.deepEqual(receipt.violations, []);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -302,12 +305,7 @@ test('Metro integration preserves standard null defaults and authenticates bundl
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -330,7 +328,7 @@ test('Metro integration preserves standard null defaults and authenticates bundl
   }
 });
 
-test('Metro integration rejects custom dependency-store executable closures', () => {
+test('Metro integration accepts observable custom executable closures', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-custom-worker-'));
   try {
     execFileSync('git', ['init', '-q', root]);
@@ -350,12 +348,7 @@ test('Metro integration rejects custom dependency-store executable closures', ()
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -364,14 +357,60 @@ test('Metro integration rejects custom dependency-store executable closures', ()
     const receipt = JSON.parse(
       readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
     );
+    assert.equal(
+      receipt.violations.some((entry: string) => entry.includes('transformerPath')),
+      false,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro preload records child-process and worker-thread module loads', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-worker-preload-'));
+  const external = mkdtempSync(join(tmpdir(), 'rn-session-metro-worker-inputs-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const childModule = join(external, 'child.cjs');
+    const threadModule = join(external, 'thread.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(childModule, 'module.exports = {};\n');
+    writeFileSync(threadModule, 'module.exports = {};\n');
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const { spawnSync } = require('node:child_process'); const child = spawnSync(process.execPath, ['-e', ${JSON.stringify(`require(${JSON.stringify(childModule)})`)}], { env: process.env }); if (child.status !== 0) process.exit(child.status || 1); const { Worker } = require('node:worker_threads'); const worker = new Worker(${JSON.stringify(`require(${JSON.stringify(threadModule)})`)}, { eval: true }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
+      ],
+      {
+        cwd: root,
+        env: metroPolicyEnvironment(adapterPath),
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const observations = readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
     assert.ok(
-      receipt.violations.some(
-        (entry: string) =>
-          entry.includes('transformerPath') && entry.includes('custom executable closure'),
+      observations.some(
+        (entry) => entry.kind === 'input' && entry.value === realpathSync(childModule),
+      ),
+    );
+    assert.ok(
+      observations.some(
+        (entry) => entry.kind === 'input' && entry.value === realpathSync(threadModule),
       ),
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
+    rmSync(external, { force: true, recursive: true });
   }
 });
 
@@ -394,12 +433,7 @@ test('Metro integration refreshes policy after executable callbacks', () => {
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -434,12 +468,7 @@ test('Metro integration records ESM loader evidence when a callback rejects', ()
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -479,12 +508,7 @@ test('Metro integration accumulates callback evidence monotonically', () => {
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );
@@ -526,12 +550,7 @@ test('Metro integration refreshes every supported serializer callback', () => {
       ],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          RN_DEV_AGENT_SESSION_ID: 'session',
-          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
-          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
-        },
+        env: metroPolicyEnvironment(adapterPath),
         encoding: 'utf8',
       },
     );

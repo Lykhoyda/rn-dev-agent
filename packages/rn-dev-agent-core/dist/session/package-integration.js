@@ -6,6 +6,7 @@ const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
 const AUTHORITY_MODULE = '.rn-agent/integration/authority-marker.js';
 const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
+const METRO_RUNTIME_LOADS = '.rn-agent/integration/metro-runtime-loads.jsonl';
 const METRO_START = '// rn-dev-agent session integration: begin';
 const METRO_END = '// rn-dev-agent session integration: end';
 const SENTINELS = {
@@ -28,10 +29,25 @@ let sourceRootResolved = false;
 let lastPolicyPayload;
 let initialCacheCaptured = false;
 let loaderEpoch = 0;
+function persistLoaderObservation(kind, value) {
+  const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+  const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
+  if (!capability || !sessionId || !metroInstanceId || !loadsPath) return;
+  const payload = { version: 1, sessionId, metroInstanceId, kind, value };
+  const serializedPayload = JSON.stringify(payload);
+  const receipt = {
+    ...payload,
+    signature: createHmac('sha256', capability).update(serializedPayload).digest('hex'),
+  };
+  fs.appendFileSync(loadsPath, JSON.stringify(receipt) + '\\n', { encoding: 'utf8', mode: 0o600 });
+}
 function recordLoaderViolation(value) {
   if (accumulatedViolations.has(value)) return;
   accumulatedViolations.add(value);
   loaderEpoch += 1;
+  persistLoaderObservation('violation', value);
 }
 function recordLoaderUrl(url) {
   if (url.startsWith('node:') || observedLoaderUrls.has(url)) return;
@@ -45,6 +61,7 @@ function recordLoaderUrl(url) {
     if (accumulatedRuntimeInputs.has(resolved)) return;
     accumulatedRuntimeInputs.add(resolved);
     loaderEpoch += 1;
+    persistLoaderObservation('input', resolved);
   } catch {
     recordLoaderViolation('Metro runtime module cannot be resolved');
   }
@@ -156,26 +173,6 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       return null;
     }
   }
-  function addSupportedExecutableModule(value, field, supportedModules) {
-    if (value == null) return;
-    const resolved = addModule(value, field);
-    if (!resolved) return;
-    const supported = supportedModules.flatMap((moduleName) => {
-      try {
-        return [fs.realpathSync(require.resolve(moduleName, { paths: [process.cwd()] }))];
-      } catch {
-        return [];
-      }
-    });
-    if (!supported.includes(resolved)) {
-      violations.push(field + ' custom executable closure is unsupported');
-    }
-  }
-  function addUnsupportedExecutableModule(value, field) {
-    if (value == null) return;
-    addModule(value, field);
-    violations.push(field + ' custom executable closure is unsupported');
-  }
   addPath(config.projectRoot, 'projectRoot');
   addPaths(config.watchFolders, 'watchFolders');
   addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
@@ -194,23 +191,19 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   if (serializer.customSerializer != null) {
     violations.push('custom Metro serializers are unsupported');
   }
-  addSupportedExecutableModule(config.transformerPath, 'transformerPath', ['metro-transform-worker']);
-  addUnsupportedExecutableModule(resolver.dependencyExtractor, 'dependencyExtractor');
-  addUnsupportedExecutableModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
+  addModule(config.transformerPath, 'transformerPath');
+  addModule(resolver.dependencyExtractor, 'dependencyExtractor');
+  addModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
   addModule(resolver.emptyModulePath, 'emptyModulePath');
   addModule(transformer.asyncRequireModulePath, 'asyncRequireModulePath');
   addModule(transformer.assetRegistryPath, 'assetRegistryPath');
-  addSupportedExecutableModule(
-    transformer.babelTransformerPath,
-    'babelTransformerPath',
-    ['metro-babel-transformer'],
-  );
-  addSupportedExecutableModule(transformer.minifierPath, 'minifierPath', ['metro-minify-terser']);
+  addModule(transformer.babelTransformerPath, 'babelTransformerPath');
+  addModule(transformer.minifierPath, 'minifierPath');
   if (transformer.assetPlugins != null) {
     if (!Array.isArray(transformer.assetPlugins)) {
       violations.push('assetPlugins must identify modules');
     } else {
-      transformer.assetPlugins.forEach((value) => addUnsupportedExecutableModule(value, 'assetPlugins'));
+      transformer.assetPlugins.forEach((value) => addModule(value, 'assetPlugins'));
     }
   }
   if (serializer.polyfillModuleNames != null) {
@@ -220,7 +213,24 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       serializer.polyfillModuleNames.forEach((value) => addModule(value, 'polyfillModuleNames'));
     }
   }
-  if (/(?:^|\\s)(?:--(?:require|import|loader|experimental-loader)\\b|-r\\b)/.test(process.env.NODE_OPTIONS || '')) {
+  const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD || '';
+  const baseNodeOptions = process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '';
+  const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + JSON.stringify(authorityPreload)]
+    .filter(Boolean)
+    .join(' ');
+  let authorityPreloadMatches = false;
+  try {
+    authorityPreloadMatches =
+      fs.realpathSync(authorityPreload) === fs.realpathSync(__filename) &&
+      fs.realpathSync(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS) ===
+        fs.realpathSync(path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_LOADS)}));
+  } catch {}
+  if (
+    !authorityPreload ||
+    !authorityPreloadMatches ||
+    process.env.NODE_OPTIONS !== expectedNodeOptions ||
+    /(?:^|\\s)(?:--(?:require|import|loader|experimental-loader)\\b|-r\\b)/.test(baseNodeOptions)
+  ) {
     violations.push('NODE_OPTIONS loaders are unsupported');
   }
   if (!initialCacheCaptured) {
@@ -766,6 +776,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
         'rn-session-metro.cjs',
         'authority-marker.js',
         'metro-runtime-policy.json',
+        basename(METRO_RUNTIME_LOADS),
     ];
     const applied = [];
     let primaryError;
@@ -887,6 +898,7 @@ export function restorePackageIntegrationFiles(input, dependencies = {}) {
         'rn-session-metro.cjs',
         'authority-marker.js',
         'metro-runtime-policy.json',
+        basename(METRO_RUNTIME_LOADS),
     ];
     const applied = [];
     let primaryError;
