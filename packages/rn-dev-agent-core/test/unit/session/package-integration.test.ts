@@ -519,6 +519,51 @@ test('Metro preload ignores caught optional module misses', () => {
   }
 });
 
+test('Metro preload authenticates native addon bytes when source is null', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-native-addon-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const addonPath = join(root, 'fixture.node');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(addonPath, 'fixture native addon bytes');
+    const env = metroPolicyEnvironment(adapterPath);
+    env.NODE_OPTIONS = '';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--experimental-addon-modules',
+        '-e',
+        `const moduleApi = require('node:module'); const addonUrl = ${JSON.stringify(pathToFileURL(addonPath).href)}; moduleApi.registerHooks({ load(url, context, nextLoad) { if (url === addonUrl) return { format: 'addon', source: null, shortCircuit: true }; return nextLoad(url, context); } }); const compose = require(${JSON.stringify(adapterPath)}); compose({}); import(addonUrl).catch(() => {});`,
+      ],
+      {
+        cwd: root,
+        env,
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const observations = readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.ok(
+      observations.some(
+        (entry) =>
+          entry.kind === 'input' &&
+          entry.value === realpathSync(addonPath) &&
+          entry.digest === createHash('sha256').update(readFileSync(addonPath)).digest('hex'),
+      ),
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro preload rejects later module hook registration', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-late-hook-'));
   try {

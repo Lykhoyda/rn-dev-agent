@@ -28,20 +28,20 @@ export function parseNodeOptions(value) {
     let token = '';
     let quoted = false;
     for (let index = 0; index < value.length; index += 1) {
-        const character = value[index];
-        if (character === '"') {
-            quoted = !quoted;
-            continue;
+        let character = value[index];
+        if (character === '\\' && quoted) {
+            if (index + 1 === value.length)
+                return tokens;
+            character = value[(index += 1)];
         }
-        if (character === '\\' && quoted && value[index + 1] === '"') {
-            token += '"';
-            index += 1;
-            continue;
-        }
-        if (/\s/.test(character) && !quoted) {
+        else if (character === ' ' && !quoted) {
             if (token)
                 tokens.push(token);
             token = '';
+            continue;
+        }
+        else if (character === '"') {
+            quoted = !quoted;
             continue;
         }
         token += character;

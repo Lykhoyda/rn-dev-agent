@@ -138,7 +138,12 @@ function recordLoaderResult(url, result) {
   }
   try {
     const resolved = fs.realpathSync(fileURLToPath(url));
-    const digest = digestRuntimeSource(result && result.source);
+    const digest =
+      result && result.source != null
+        ? digestRuntimeSource(result.source)
+        : result && result.format === 'addon'
+          ? digestRuntimeFile(resolved)
+          : digestRuntimeSource(null);
     if (observedLoaderDigests.get(resolved) === digest) return;
     observedLoaderDigests.set(resolved, digest);
     accumulatedRuntimeInputs.add(resolved);

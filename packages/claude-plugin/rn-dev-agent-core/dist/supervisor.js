@@ -22641,20 +22641,18 @@ function parseNodeOptions(value) {
   let token2 = "";
   let quoted = false;
   for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (character === "\\" && quoted && value[index + 1] === '"') {
-      token2 += '"';
-      index += 1;
-      continue;
-    }
-    if (/\s/.test(character) && !quoted) {
+    let character = value[index];
+    if (character === "\\" && quoted) {
+      if (index + 1 === value.length)
+        return tokens;
+      character = value[index += 1];
+    } else if (character === " " && !quoted) {
       if (token2)
         tokens.push(token2);
       token2 = "";
+      continue;
+    } else if (character === '"') {
+      quoted = !quoted;
       continue;
     }
     token2 += character;
@@ -72657,7 +72655,12 @@ function recordLoaderResult(url, result) {
   }
   try {
     const resolved = fs.realpathSync(fileURLToPath(url));
-    const digest = digestRuntimeSource(result && result.source);
+    const digest =
+      result && result.source != null
+        ? digestRuntimeSource(result.source)
+        : result && result.format === 'addon'
+          ? digestRuntimeFile(resolved)
+          : digestRuntimeSource(null);
     if (observedLoaderDigests.get(resolved) === digest) return;
     observedLoaderDigests.set(resolved, digest);
     accumulatedRuntimeInputs.add(resolved);
