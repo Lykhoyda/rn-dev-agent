@@ -71323,6 +71323,17 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
     runtimeTargetChanged
   };
 }
+function invalidateRuntimeBundle(registry2, operation, status) {
+  const priorBundle = status.bindings.bundle;
+  const metro = status.bindings.metro;
+  const oldTargetId = priorBundle?.targetId;
+  const metroPort = metro?.port;
+  return registry2.replaceBindingsDuringOperation(operation, {
+    state: "device_bound",
+    bindings: { bundle: null },
+    releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
+  });
+}
 function createAuthorityGate(runtime, dependencies) {
   return {
     wrap: (tool, handler) => async (...handlerArgs) => {
@@ -71406,6 +71417,15 @@ function createAuthorityGate(runtime, dependencies) {
           registry3.verifyOperation(operation2);
           const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
           if (!resultSucceeded(result)) {
+            if (tool === "cdp_restart" && args.hardReset === true) {
+              registry3.verifyOperation(operation2);
+              operation2 = invalidateRuntimeBundle(registry3, operation2, status);
+              return addMeta2(result, {
+                authoritative: false,
+                authorityInvalidated: true,
+                nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
+              });
+            }
             return addMeta2(result, { authoritative: false });
           }
           if (tool === "rn_session" && args.action === "release") {
@@ -71434,13 +71454,7 @@ function createAuthorityGate(runtime, dependencies) {
             try {
               bundle = await dependencies.refreshRuntimeBinding(status);
             } catch (error2) {
-              const oldTargetId = priorBundle?.targetId;
-              const metroPort = metro?.port;
-              operation2 = registry3.replaceBindingsDuringOperation(operation2, {
-                state: "device_bound",
-                bindings: { bundle: null },
-                releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
-              });
+              operation2 = invalidateRuntimeBundle(registry3, operation2, status);
               throw error2;
             }
             const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry3, operation2, status, priorBundle, metro, bundle);
@@ -71629,15 +71643,7 @@ function createAuthorityGate(runtime, dependencies) {
         const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
         let authorityInvalidated = false;
         if (directRuntimeReset && !resultSucceeded(result)) {
-          const priorBundle = status.bindings.bundle;
-          const metro = status.bindings.metro;
-          const oldTargetId = priorBundle?.targetId;
-          const metroPort = metro?.port;
-          operation = registry2.replaceBindingsDuringOperation(operation, {
-            state: "device_bound",
-            bindings: { bundle: null },
-            releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
-          });
+          operation = invalidateRuntimeBundle(registry2, operation, status);
           return addMeta2(result, {
             authorityInvalidated: true,
             nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
@@ -71657,13 +71663,7 @@ function createAuthorityGate(runtime, dependencies) {
             }
             bundle = await dependencies.refreshRuntimeBinding(status);
           } catch (error2) {
-            const oldTargetId = priorBundle?.targetId;
-            const metroPort = metro?.port;
-            operation = registry2.replaceBindingsDuringOperation(operation, {
-              state: "device_bound",
-              bindings: { bundle: null },
-              releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
-            });
+            operation = invalidateRuntimeBundle(registry2, operation, status);
             const refreshedStatus = runtime.status();
             if (!refreshedStatus.available) {
               throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);

@@ -808,6 +808,54 @@ test('iOS hard reset resolves its runner transition after session argument bindi
   assert.equal(calls.includes('replace-binding'), true);
 });
 
+test('failed iOS hard reset invalidates stale bundle authority', async () => {
+  const { runtime, registry, calls, status } = fixture();
+  status.bindings.metro.port = 8193;
+  status.bindings.bundle.targetId = 'old-target';
+  const replacements = [];
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push('replace-binding');
+    replacements.push(input);
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_restart', async () => {
+    status.bindings.runner = null;
+    status.authorityVersion += 1;
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: false,
+            code: 'APP_NOT_INSTALLED',
+            error: 'app is not installed',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  })({ hardReset: true });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'APP_NOT_INSTALLED');
+  assert.equal(envelope.meta.authorityInvalidated, true);
+  assert.equal(status.bindings.bundle, null);
+  assert.deepEqual(replacements[0].releaseResources, [
+    { type: 'target', key: '8193:old-target' },
+  ]);
+  assert.equal(calls.some((call) => call.startsWith('postflight:')), false);
+});
+
 test('iOS hard reset returns a typed failure for conflicting session arguments', async () => {
   const { runtime } = fixture();
   const gate = createAuthorityGate(runtime, {
