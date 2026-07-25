@@ -722,9 +722,38 @@ export function consumePendingAndroidUpgradeNote(): string | undefined {
 // helper, which stops our runner then force-stops BOTH owned packages.
 // Dynamic import because release-android-slot.ts statically imports this
 // module — a static back-import would be a cycle.
-async function reapMismatchedAndroidRunner(deviceId?: string): Promise<void> {
-  const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
-  await releaseAndroidInteractionSlot(deviceId ? { deviceId } : {});
+export async function reapMismatchedAndroidRunner(
+  state: { deviceId?: string } | null,
+  release?: (opts: { deviceId: string }) => Promise<{
+    stoppedOwnRunner: boolean;
+    forceStoppedPackages: string[];
+  }>,
+): Promise<void> {
+  const deviceId = state?.deviceId;
+  if (!deviceId) {
+    throw new Error(
+      'RUNNER_CLEANUP_UNCONFIRMED: stale Android runner has no recorded device identity',
+    );
+  }
+  const releaseSlot =
+    release ??
+    (async (opts: { deviceId: string }) => {
+      const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
+      return releaseAndroidInteractionSlot(opts);
+    });
+  const receipt = await releaseSlot({ deviceId });
+  const requiredPackages = [
+    'dev.lykhoyda.rndevagent.androidrunner.test',
+    'dev.lykhoyda.rndevagent.androidrunner',
+  ];
+  const missingPackages = requiredPackages.filter(
+    (pkg) => !receipt.forceStoppedPackages.includes(pkg),
+  );
+  if (!receipt.stoppedOwnRunner || missingPackages.length > 0) {
+    throw new Error(
+      `RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`,
+    );
+  }
 }
 
 function classifyAndroidHealth(info: AndroidHealthInfo) {
@@ -814,7 +843,7 @@ export async function startAndroidRunner(
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-      await reapMismatchedAndroidRunner(deviceId);
+      await reapMismatchedAndroidRunner(runnerState);
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
       });
@@ -825,7 +854,7 @@ export async function startAndroidRunner(
       // Killing the local adb child does NOT free the device-side
       // UiAutomation slot (#237) — reap through the slot-release path so the
       // rebuilt instrumentation can bind.
-      await reapMismatchedAndroidRunner(deviceId);
+      await reapMismatchedAndroidRunner(runnerState);
       invalidateAndroidRunnerApks();
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
@@ -857,10 +886,11 @@ async function startAndroidRunnerAttempt(
   adoptPersistedAndroidState(serial);
   let forceReinstall = opts._forceReinstall === true;
   if (shouldReapAndroidRunnerBeforeStart(runnerState, serial, isAndroidRunnerAvailable())) {
-    await reapMismatchedAndroidRunner(serial);
+    await reapMismatchedAndroidRunner(runnerState);
     forceReinstall = true;
   }
   if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, serial)) {
+    const reusableState = runnerState!;
     const info = await probeAndroidRunnerHealthInfo(runnerState!.hostPort);
     if (info.reachable && info.ok) {
       if (
@@ -872,7 +902,7 @@ async function startAndroidRunnerAttempt(
           appId: runnerState!.bundleId,
         })
       ) {
-        await reapMismatchedAndroidRunner(deviceId);
+        await reapMismatchedAndroidRunner(reusableState);
         forceReinstall = true;
       } else {
         const compat = classifyAndroidHealth(info);
@@ -889,10 +919,12 @@ async function startAndroidRunnerAttempt(
         // state clear) and force-reinstalled so the fresh APK supersedes it.
         pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
         forceReinstall = true;
-        await reapMismatchedAndroidRunner(deviceId);
+        await reapMismatchedAndroidRunner(reusableState);
       }
+    } else {
+      await reapMismatchedAndroidRunner(reusableState);
+      forceReinstall = true;
     }
-    // unreachable/unhealthy: fall through — the fresh start below supersedes it.
   }
 
   // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)

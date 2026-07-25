@@ -187,7 +187,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 ? handlerArgs[0]
                 : {};
             const baseProfile = authorityProfileFor(tool, args);
-            const profile = tool === 'rn_session' &&
+            let profile = tool === 'rn_session' &&
                 (args.action === 'status' ||
                     args.action === 'preview_integration' ||
                     args.action === 'accept_handoff' ||
@@ -234,6 +234,10 @@ export function createAuthorityGate(runtime, dependencies) {
             const runtimeStatus = runtime.status();
             if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
                 return authorityFailure(new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'blocked contender exposes only accept_handoff and adopt_stale recovery'));
+            }
+            if (runtimeStatus.available && tool === 'cdp_restart' && args.hardReset === true) {
+                bindSessionArguments(runtimeStatus, profile, args);
+                profile = authorityProfileFor(tool, args);
             }
             if (profile.kind === 'transition') {
                 let operation = null;

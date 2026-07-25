@@ -41,6 +41,10 @@ test('strict proof accepts only the exact GitHub repository remote', () => {
     'https://evilgithub.com/Lykhoyda/rn-dev-agent.git',
     'git@evilgithub.com:Lykhoyda/rn-dev-agent.git',
     'https://github.com/other/rn-dev-agent.git',
+    'file://github.com/Lykhoyda/rn-dev-agent',
+    'http://github.com/Lykhoyda/rn-dev-agent.git',
+    'git://github.com/Lykhoyda/rn-dev-agent.git',
+    'ssh://other@github.com/Lykhoyda/rn-dev-agent.git',
   ]) {
     assert.equal(isOfficialProofCandidateRemote(remote), false);
   }

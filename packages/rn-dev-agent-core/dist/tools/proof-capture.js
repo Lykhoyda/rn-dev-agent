@@ -348,15 +348,23 @@ export function readProofCandidateRuntime(candidateRoot) {
     });
 }
 export function isOfficialProofCandidateRemote(remote) {
-    const scp = remote.match(/^(?:[^@/]+@)?([^/:]+):(.+)$/);
-    if (scp && !remote.includes('://')) {
-        return (scp[1]?.toLowerCase() === 'github.com' &&
-            scp[2]?.replace(/^\/+|\/+$/g, '').replace(/\.git$/, '') === 'Lykhoyda/rn-dev-agent');
+    if (!remote.includes('://')) {
+        return /^git@github\.com:Lykhoyda\/rn-dev-agent(?:\.git)?$/i.test(remote);
     }
     try {
         const url = new URL(remote);
-        return (url.hostname.toLowerCase() === 'github.com' &&
-            url.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/, '') === 'Lykhoyda/rn-dev-agent');
+        const pathMatches = url.pathname === '/Lykhoyda/rn-dev-agent' || url.pathname === '/Lykhoyda/rn-dev-agent.git';
+        const transportMatches = (url.protocol === 'https:' && !url.username && !url.password) ||
+            (url.protocol === 'ssh:' && url.username === 'git' && !url.password);
+        const portMatches = !url.port ||
+            (url.protocol === 'https:' && url.port === '443') ||
+            (url.protocol === 'ssh:' && url.port === '22');
+        return (transportMatches &&
+            portMatches &&
+            url.hostname.toLowerCase() === 'github.com' &&
+            !url.search &&
+            !url.hash &&
+            pathMatches);
     }
     catch {
         return false;

@@ -276,7 +276,7 @@ export function createAuthorityGate(
             ? (handlerArgs[0] as Record<string, unknown>)
             : {};
         const baseProfile = authorityProfileFor(tool, args);
-        const profile =
+        let profile =
           tool === 'rn_session' &&
           (args.action === 'status' ||
             args.action === 'preview_integration' ||
@@ -331,6 +331,10 @@ export function createAuthorityGate(
               'blocked contender exposes only accept_handoff and adopt_stale recovery',
             ),
           );
+        }
+        if (runtimeStatus.available && tool === 'cdp_restart' && args.hardReset === true) {
+          bindSessionArguments(runtimeStatus, profile, args);
+          profile = authorityProfileFor(tool, args);
         }
         if (profile.kind === 'transition') {
           let operation: OperationRef | null = null;

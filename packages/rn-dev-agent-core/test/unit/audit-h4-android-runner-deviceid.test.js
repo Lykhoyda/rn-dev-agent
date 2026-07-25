@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  reapMismatchedAndroidRunner,
   shouldReapAndroidRunnerBeforeStart,
   shouldReuseAndroidRunner,
 } from '../../dist/runners/rn-android-runner-client.js';
@@ -62,5 +63,30 @@ test('a live non-reusable runner is reaped before replacement', () => {
   assert.equal(
     shouldReapAndroidRunnerBeforeStart(stateFor('emulator-5554'), 'emulator-5554', true),
     false,
+  );
+});
+
+test('runner replacement targets recorded device and requires decisive cleanup', async () => {
+  let target;
+  const state = stateFor('emulator-5554');
+  await reapMismatchedAndroidRunner(state, async (opts) => {
+    target = opts.deviceId;
+    return {
+      stoppedOwnRunner: true,
+      forceStoppedPackages: [
+        'dev.lykhoyda.rndevagent.androidrunner.test',
+        'dev.lykhoyda.rndevagent.androidrunner',
+      ],
+    };
+  });
+  assert.equal(target, 'emulator-5554');
+
+  await assert.rejects(
+    () =>
+      reapMismatchedAndroidRunner(state, async () => ({
+        stoppedOwnRunner: true,
+        forceStoppedPackages: ['dev.lykhoyda.rndevagent.androidrunner.test'],
+      })),
+    /RUNNER_CLEANUP_UNCONFIRMED/,
   );
 });

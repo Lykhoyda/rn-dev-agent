@@ -22317,6 +22317,7 @@ __export(rn_android_runner_client_exports, {
   parseLegacyAndroidState: () => parseLegacyAndroidState,
   parsePersistedAndroidState: () => parsePersistedAndroidState,
   probeAndroidRunnerHealthInfo: () => probeAndroidRunnerHealthInfo,
+  reapMismatchedAndroidRunner: () => reapMismatchedAndroidRunner,
   resolveAndroidInstallAction: () => resolveAndroidInstallAction,
   resolveAndroidSerial: () => resolveAndroidSerial,
   runAndroid: () => runAndroid,
@@ -22665,9 +22666,24 @@ function consumePendingAndroidUpgradeNote() {
   pendingUpgradeNote = void 0;
   return note;
 }
-async function reapMismatchedAndroidRunner(deviceId) {
-  const { releaseAndroidInteractionSlot: releaseAndroidInteractionSlot2 } = await Promise.resolve().then(() => (init_release_android_slot(), release_android_slot_exports));
-  await releaseAndroidInteractionSlot2(deviceId ? { deviceId } : {});
+async function reapMismatchedAndroidRunner(state, release) {
+  const deviceId = state?.deviceId;
+  if (!deviceId) {
+    throw new Error("RUNNER_CLEANUP_UNCONFIRMED: stale Android runner has no recorded device identity");
+  }
+  const releaseSlot = release ?? (async (opts) => {
+    const { releaseAndroidInteractionSlot: releaseAndroidInteractionSlot2 } = await Promise.resolve().then(() => (init_release_android_slot(), release_android_slot_exports));
+    return releaseAndroidInteractionSlot2(opts);
+  });
+  const receipt2 = await releaseSlot({ deviceId });
+  const requiredPackages = [
+    "dev.lykhoyda.rndevagent.androidrunner.test",
+    "dev.lykhoyda.rndevagent.androidrunner"
+  ];
+  const missingPackages = requiredPackages.filter((pkg) => !receipt2.forceStoppedPackages.includes(pkg));
+  if (!receipt2.stoppedOwnRunner || missingPackages.length > 0) {
+    throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
+  }
 }
 function classifyAndroidHealth(info) {
   return classifyRunnerCompatibility({
@@ -22695,7 +22711,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-      await reapMismatchedAndroidRunner(deviceId);
+      await reapMismatchedAndroidRunner(runnerState2);
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true
       });
@@ -22703,7 +22719,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
       return state;
     }
     if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
-      await reapMismatchedAndroidRunner(deviceId);
+      await reapMismatchedAndroidRunner(runnerState2);
       invalidateAndroidRunnerApks();
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
@@ -22724,10 +22740,11 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
   adoptPersistedAndroidState(serial);
   let forceReinstall = opts._forceReinstall === true;
   if (shouldReapAndroidRunnerBeforeStart(runnerState2, serial, isAndroidRunnerAvailable())) {
-    await reapMismatchedAndroidRunner(serial);
+    await reapMismatchedAndroidRunner(runnerState2);
     forceReinstall = true;
   }
   if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState2, serial)) {
+    const reusableState = runnerState2;
     const info = await probeAndroidRunnerHealthInfo(runnerState2.hostPort);
     if (info.reachable && info.ok) {
       if (!androidHealthMatchesAuthority(info, {
@@ -22737,7 +22754,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         deviceId: runnerState2.deviceId,
         appId: runnerState2.bundleId
       })) {
-        await reapMismatchedAndroidRunner(deviceId);
+        await reapMismatchedAndroidRunner(reusableState);
         forceReinstall = true;
       } else {
         const compat = classifyAndroidHealth(info);
@@ -22748,8 +22765,11 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
         pendingUpgradeNote = "runner upgraded (protocol/version mismatch)";
         forceReinstall = true;
-        await reapMismatchedAndroidRunner(deviceId);
+        await reapMismatchedAndroidRunner(reusableState);
       }
+    } else {
+      await reapMismatchedAndroidRunner(reusableState);
+      forceReinstall = true;
     }
   }
   const provenance = await ensureAndroidRunnerInstalled(deviceId, {
@@ -61350,13 +61370,15 @@ function readProofCandidateRuntime(candidateRoot) {
   });
 }
 function isOfficialProofCandidateRemote(remote) {
-  const scp = remote.match(/^(?:[^@/]+@)?([^/:]+):(.+)$/);
-  if (scp && !remote.includes("://")) {
-    return scp[1]?.toLowerCase() === "github.com" && scp[2]?.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "") === "Lykhoyda/rn-dev-agent";
+  if (!remote.includes("://")) {
+    return /^git@github\.com:Lykhoyda\/rn-dev-agent(?:\.git)?$/i.test(remote);
   }
   try {
     const url = new URL(remote);
-    return url.hostname.toLowerCase() === "github.com" && url.pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "") === "Lykhoyda/rn-dev-agent";
+    const pathMatches = url.pathname === "/Lykhoyda/rn-dev-agent" || url.pathname === "/Lykhoyda/rn-dev-agent.git";
+    const transportMatches = url.protocol === "https:" && !url.username && !url.password || url.protocol === "ssh:" && url.username === "git" && !url.password;
+    const portMatches = !url.port || url.protocol === "https:" && url.port === "443" || url.protocol === "ssh:" && url.port === "22";
+    return transportMatches && portMatches && url.hostname.toLowerCase() === "github.com" && !url.search && !url.hash && pathMatches;
   } catch {
     return false;
   }
@@ -69418,7 +69440,7 @@ function createAuthorityGate(runtime, dependencies) {
     wrap: (tool, handler) => async (...handlerArgs) => {
       const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
       const baseProfile = authorityProfileFor(tool, args);
-      const profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
+      let profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
         kind: "diagnostic",
         axes: [],
         mutation: false,
@@ -69445,6 +69467,10 @@ function createAuthorityGate(runtime, dependencies) {
       const runtimeStatus = runtime.status();
       if (runtimeStatus.available && runtimeStatus.state === "blocked") {
         return authorityFailure2(new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery"));
+      }
+      if (runtimeStatus.available && tool === "cdp_restart" && args.hardReset === true) {
+        bindSessionArguments(runtimeStatus, profile, args);
+        profile = authorityProfileFor(tool, args);
       }
       if (profile.kind === "transition") {
         let operation2 = null;

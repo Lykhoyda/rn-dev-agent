@@ -762,3 +762,24 @@ test('runner and Observe lifecycle transitions probe complete before and after a
   assert.ok(calls.includes('preflight:R'));
   assert.ok(calls.includes('postflight:O'));
 });
+
+test('iOS hard reset resolves its runner transition after session argument binding', async () => {
+  const { runtime, calls, status } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+  const input: Record<string, unknown> = { hardReset: true };
+
+  await gate.wrap('cdp_restart', async () => {
+    status.bindings.runner = null;
+    status.authorityVersion += 1;
+    return okResult({ restarted: true });
+  })(input);
+
+  assert.equal(input.platform, 'ios');
+  assert.equal(calls.includes('preflight:R'), true);
+  assert.equal(calls.includes('postflight:R'), false);
+});
