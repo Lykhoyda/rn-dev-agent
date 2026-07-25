@@ -235,6 +235,10 @@ export function parseStopOutput(stdout: string): SavedRecording[] {
   return saved;
 }
 
+export function parseRecorderFailure(stdout: string): string | null {
+  return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
+}
+
 export interface ActiveRecording {
   platform: string;
   pid: number;
@@ -500,6 +504,12 @@ async function runStop(
       bindings: { recorder: null },
       releaseResources: claimKey ? [{ type: 'recorder', key: claimKey }] : [],
     });
+    const recorderFailure = parseRecorderFailure(stopOutput);
+    if (recorderFailure) {
+      return failResult(`Recording failed before it could be saved: ${recorderFailure}`, {
+        code: 'RECORDING_FAILED',
+      });
+    }
   } catch (e: unknown) {
     const err = e as { stderr?: string; message?: string };
     const detail = (err.stderr || '').trim() || (err.message || '').trim() || String(e);

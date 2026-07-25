@@ -62314,27 +62314,26 @@ async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runR
       if (active) {
         const provisionalPid = Number(active[1]);
         const reportedBirth = active[2];
-        const current2 = processProbe(provisionalPid);
-        if (current2.status === "unknown") {
-          throw new Error("provisional recorder process identity is unavailable");
-        }
-        if (current2.status === "present") {
-          if (reportedBirth === "unbound") {
-            throw new Error("provisional recorder process identity was never bound");
-          }
-          if (reportedBirth !== current2.birth.token) {
-            throw new Error("provisional recorder PID was reused before cleanup");
-          }
-          output = (await runRecorder(script, [
-            "stop",
-            scope,
-            String(provisionalPid),
-            reportedBirth
-          ])).stdout;
-        } else if (reportedBirth === "unbound") {
+        if (reportedBirth === "unbound") {
           await runRecorder(script, ["abort", scope]);
         } else {
-          output = (await runRecorder(script, ["stop", scope, String(provisionalPid), reportedBirth])).stdout;
+          const current2 = processProbe(provisionalPid);
+          if (current2.status === "unknown") {
+            throw new Error("provisional recorder process identity is unavailable");
+          }
+          if (current2.status === "present") {
+            if (reportedBirth !== current2.birth.token) {
+              throw new Error("provisional recorder PID was reused before cleanup");
+            }
+            output = (await runRecorder(script, [
+              "stop",
+              scope,
+              String(provisionalPid),
+              reportedBirth
+            ])).stdout;
+          } else {
+            output = (await runRecorder(script, ["stop", scope, String(provisionalPid), reportedBirth])).stdout;
+          }
         }
       } else if (/^No active recordings/m.test(initialStatus.stdout)) {
         await runRecorder(script, ["abort", scope]);
@@ -62498,6 +62497,9 @@ function parseStopOutput(stdout) {
     saved.push({ path: m[1].trim(), sizeBytes: Number(m[2]) });
   }
   return saved;
+}
+function parseRecorderFailure(stdout) {
+  return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
 }
 function parseStatusOutput(stdout) {
   if (/^No active recordings/m.test(stdout))
@@ -62700,6 +62702,12 @@ async function runStop(args, runtime) {
       bindings: { recorder: null },
       releaseResources: claimKey ? [{ type: "recorder", key: claimKey }] : []
     });
+    const recorderFailure = parseRecorderFailure(stopOutput);
+    if (recorderFailure) {
+      return failResult(`Recording failed before it could be saved: ${recorderFailure}`, {
+        code: "RECORDING_FAILED"
+      });
+    }
   } catch (e) {
     const err = e;
     const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);

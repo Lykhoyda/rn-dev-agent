@@ -246,31 +246,30 @@ export async function stopBoundRecorder(
       if (active) {
         const provisionalPid = Number(active[1]);
         const reportedBirth = active[2];
-        const current = processProbe(provisionalPid);
-        if (current.status === 'unknown') {
-          throw new Error('provisional recorder process identity is unavailable');
-        }
-        if (current.status === 'present') {
-          if (reportedBirth === 'unbound') {
-            throw new Error('provisional recorder process identity was never bound');
-          }
-          if (reportedBirth !== current.birth.token) {
-            throw new Error('provisional recorder PID was reused before cleanup');
-          }
-          output = (
-            await runRecorder(script, [
-              'stop',
-              scope,
-              String(provisionalPid),
-              reportedBirth,
-            ])
-          ).stdout;
-        } else if (reportedBirth === 'unbound') {
+        if (reportedBirth === 'unbound') {
           await runRecorder(script, ['abort', scope]);
         } else {
-          output = (
-            await runRecorder(script, ['stop', scope, String(provisionalPid), reportedBirth])
-          ).stdout;
+          const current = processProbe(provisionalPid);
+          if (current.status === 'unknown') {
+            throw new Error('provisional recorder process identity is unavailable');
+          }
+          if (current.status === 'present') {
+            if (reportedBirth !== current.birth.token) {
+              throw new Error('provisional recorder PID was reused before cleanup');
+            }
+            output = (
+              await runRecorder(script, [
+                'stop',
+                scope,
+                String(provisionalPid),
+                reportedBirth,
+              ])
+            ).stdout;
+          } else {
+            output = (
+              await runRecorder(script, ['stop', scope, String(provisionalPid), reportedBirth])
+            ).stdout;
+          }
         }
       } else if (/^No active recordings/m.test(initialStatus.stdout)) {
         await runRecorder(script, ['abort', scope]);

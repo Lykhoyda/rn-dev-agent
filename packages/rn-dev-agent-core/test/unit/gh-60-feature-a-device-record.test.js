@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   candidateRecordScripts,
+  parseRecorderFailure,
   parseStartOutput,
   parseStopOutput,
   parseStatusOutput,
@@ -14,6 +15,14 @@ import {
 } from '../../dist/tools/device-record.js';
 
 const processBirth = 'a'.repeat(64);
+
+test('parseRecorderFailure: extracts terminal supervisor failures', () => {
+  assert.equal(
+    parseRecorderFailure('Recorder failed: supervisor terminated unexpectedly\n'),
+    'supervisor terminated unexpectedly',
+  );
+  assert.equal(parseRecorderFailure('Saved: proof.mp4 (42 bytes)\n'), null);
+});
 
 // ── parseStartOutput ────────────────────────────────────────────────────
 

@@ -53,31 +53,39 @@ test('an exited recorder remains safely finalizable', async () => {
   assert.deepEqual(calls.map((args) => args[0]), ['stop', 'status']);
 });
 
-test('provisional recorder cleanup refuses a live process without bound birth identity', async () => {
+test('provisional recorder cleanup capability-aborts an unbound live process', async () => {
   const calls: string[][] = [];
-  await assert.rejects(
-    stopBoundRecorder(
-      {
-        phase: 'starting',
-        script: '/workspace/record_proof.sh',
-        scope: 'b'.repeat(64),
-      },
-      () => ({
-        status: 'present',
-        birth: { pid: 654, source: 'darwin-libproc', token: 'exact-birth' },
-      }),
-      async (_script, args) => {
-        calls.push(args);
+  let statusReads = 0;
+  const output = await stopBoundRecorder(
+    {
+      phase: 'starting',
+      script: '/workspace/record_proof.sh',
+      scope: 'b'.repeat(64),
+    },
+    () => {
+      throw new Error('unbound capability cleanup must not adopt process identity');
+    },
+    async (_script, args) => {
+      calls.push(args);
+      if (args[0] === 'status') {
+        statusReads += 1;
         return {
-          stdout: 'ios: pid=654 birth=unbound status=active output=proof.mp4\n',
+          stdout:
+            statusReads === 1
+              ? 'ios: pid=654 birth=unbound status=active output=proof.mp4\n'
+              : 'No active recordings\n',
           stderr: '',
         };
-      },
-    ),
-    /process identity was never bound/,
+      }
+      return { stdout: '', stderr: '' };
+    },
   );
 
-  assert.deepEqual(calls, [['status', 'b'.repeat(64)]]);
+  assert.equal(output, '');
+  assert.deepEqual(
+    calls.map((args) => args[0]),
+    ['status', 'abort', 'status'],
+  );
 });
 
 test('synthetic staged deadlines classify as timeouts', () => {

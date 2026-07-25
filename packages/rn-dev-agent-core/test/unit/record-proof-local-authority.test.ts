@@ -81,15 +81,24 @@ done
   const parsed = parseStartOutput(result.stdout);
   assert.ok(parsed);
   recorderPid = parsed.pid;
+  const token = readFileSync(`${prefix}-${scope}.control-token`, 'utf8').trim();
+  const processRow = spawnSync('ps', ['-ww', '-p', String(parsed.pid), '-o', 'command='], {
+    encoding: 'utf8',
+  });
+  assert.equal(processRow.status, 0, processRow.stderr);
+  assert.equal(processRow.stdout.includes(token), false);
+  assert.equal(processRow.stdout.includes(`${prefix}-${scope}.control-request`), false);
   assert.equal(readFileSync(`${prefix}-${scope}.birth`, 'utf8').trim(), parsed.processBirth);
   const observed = probeProcessBirth(parsed.pid);
   assert.equal(observed.status, 'present');
   if (observed.status === 'present') {
     assert.equal(observed.birth.token, parsed.processBirth);
   }
-  const stop = spawnSync(
+  rmSync(`${prefix}-${scope}.pid`);
+  rmSync(`${prefix}-${scope}.birth`);
+  const abort = spawnSync(
     'bash',
-    [script, 'stop', scope, String(parsed.pid), parsed.processBirth],
+    [script, 'abort', scope],
     {
       encoding: 'utf8',
       timeout: 10_000,
@@ -100,7 +109,11 @@ done
       },
     },
   );
-  assert.equal(stop.status, 0, stop.stderr);
+  assert.equal(abort.status, 0, abort.stderr);
+  assert.equal(existsSync(`${prefix}-${scope}.control-token`), false);
+  const afterAbort = probeProcessBirth(parsed.pid);
+  const afterAbortBirth = afterAbort.status === 'present' ? afterAbort.birth.token : null;
+  assert.notEqual(afterAbortBirth, parsed.processBirth);
   recorderPid = 0;
 });
 
@@ -240,6 +253,15 @@ done
     childBirth,
     childBefore.status === 'present' ? childBefore.birth.token : null,
   );
+  const cleanup = spawnSync(
+    'bash',
+    [script, 'stop', scope, String(parsed.pid), parsed.processBirth],
+    { encoding: 'utf8', timeout: 10_000, env },
+  );
+  assert.equal(cleanup.status, 0, cleanup.stderr);
+  assert.match(cleanup.stdout, /^Recorder failed: supervisor terminated unexpectedly$/m);
+  assert.doesNotMatch(cleanup.stdout, /^Saved:/m);
+  assert.equal(existsSync(`${prefix}-${scope}.pid`), false);
   supervisorPid = 0;
   childPid = 0;
 });
@@ -249,6 +271,8 @@ test('recording stop delegates signals to the authenticated supervisor', () => {
   assert.match(source, /request_supervisor_signal "\$scope" "INT"/);
   assert.match(source, /request_supervisor_signal "\$scope" "KILL"/);
   assert.match(source, /child\.poll\(\)/);
+  assert.match(source, /with os\.fdopen\(3, "rb"\)/);
+  assert.match(source, /request_supervisor_signal "\$scope" "ABORT"/);
   assert.doesNotMatch(source, /os\.waitid/);
   assert.doesNotMatch(source, /kill -(?:INT|9) "\$pid"/);
 });

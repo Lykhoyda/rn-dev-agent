@@ -194,21 +194,32 @@ start_supervised_recorder() {
   local response_path
   local state_path
   local child_path
+  local token_path
   request_path="$(control_request_file "$scope")"
   response_path="$(control_response_file "$scope")"
   state_path="$(supervisor_state_file "$scope")"
   child_path="$(child_pid_file "$scope")"
-  (umask 077; printf '%s\n' "$token" > "$(control_token_file "$scope")")
+  token_path="$(control_token_file "$scope")"
+  (umask 077; printf '%s\n' "$token" > "$token_path")
   rm -f "$request_path" "$response_path" "$state_path" "$child_path"
 
-  python3 - "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$@" > "$recorder_log" 2>&1 <<'PY' &
+  python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log") > "$recorder_log" 2>&1 <<'PY' &
 import os
 import signal
 import subprocess
 import sys
 import time
 
-token, request_path, response_path, state_path, child_path, log_path, *command = sys.argv[1:]
+with os.fdopen(3, "rb") as config_file:
+    config = config_file.read().split(b"\0")
+if config[-1] == b"":
+    config.pop()
+if len(config) != 6:
+    raise RuntimeError("invalid recorder supervisor configuration")
+token, request_path, response_path, state_path, child_path, log_path = (
+    value.decode("utf-8") for value in config
+)
+command = sys.argv[1:]
 os.umask(0o077)
 
 def write_atomic(path, value):
@@ -241,17 +252,25 @@ try:
             if len(parts) == 3 and parts[0] == token and parts[1] != last_nonce:
                 nonce, action = parts[1], parts[2]
                 last_nonce = nonce
-                if action not in {"INT", "KILL"}:
+                if action not in {"INT", "KILL", "ABORT"}:
                     result = "rejected"
                 elif child.poll() is not None:
                     result = "gone"
                 else:
                     try:
-                        os.kill(child.pid, signal.SIGINT if action == "INT" else signal.SIGKILL)
+                        os.kill(
+                            child.pid,
+                            signal.SIGINT if action == "INT" else signal.SIGKILL,
+                        )
                         result = "signaled"
                     except ProcessLookupError:
                         result = "gone"
                 write_atomic(response_path, f"{nonce} {result}\n")
+                if action == "ABORT":
+                    return_code = child.wait()
+                    write_atomic(state_path, f"exited {return_code}\n")
+                    terminal_state_written = True
+                    break
 
             return_code = child.poll()
             if return_code is not None:
@@ -283,6 +302,29 @@ PY
   done
   echo "Error: recorder supervisor failed to start" >&2
   [[ -s "$recorder_log" ]] && sed -n '1,20p' "$recorder_log" >&2
+  return 1
+}
+
+SUPERVISOR_TERMINAL_STATE=""
+
+wait_for_supervisor_terminal() {
+  local scope="$1"
+  local state_path
+  state_path="$(supervisor_state_file "$scope")"
+  local waited=0
+  while [[ $waited -lt 100 ]]; do
+    if [[ -s "$state_path" ]]; then
+      local state
+      state="$(cat "$state_path")"
+      if [[ "$state" == exited\ * || "$state" == "failed" ]]; then
+        SUPERVISOR_TERMINAL_STATE="$state"
+        return 0
+      fi
+    fi
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  echo "Error: recorder supervisor termination is unproven" >&2
   return 1
 }
 
@@ -668,18 +710,31 @@ cmd_abort() {
   local scope="${1:-}"
   [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
   local pf
+  local tokenf
+  local statef
   pf="$(pid_file "$scope")"
-  if [[ -f "$pf" ]]; then
+  tokenf="$(control_token_file "$scope")"
+  statef="$(supervisor_state_file "$scope")"
+  local supervisor_state=""
+  [[ -s "$statef" ]] && supervisor_state="$(cat "$statef")"
+  if [[ -s "$tokenf" && ( -z "$supervisor_state" || "$supervisor_state" == "running" ) ]]; then
+    local abort_failed="false"
+    request_supervisor_signal "$scope" "ABORT" || abort_failed="true"
+    wait_for_supervisor_terminal "$scope"
+    if [[ "$abort_failed" == "true" && "$SUPERVISOR_TERMINAL_STATE" != "failed" ]]; then
+      echo "Error: recorder supervisor rejected authenticated abort" >&2
+      exit 1
+    fi
+  elif [[ "$supervisor_state" == "running" ]]; then
+    echo "Error: recorder supervisor capability is unavailable" >&2
+    exit 1
+  elif [[ -z "$supervisor_state" && -f "$pf" ]]; then
     local pid
     pid="$(cat "$pf")"
     if [[ "$pid" =~ ^[0-9]+$ ]] && is_alive "$pid"; then
       echo "Error: refusing unauthenticated abort of live recorder PID $pid" >&2
       exit 1
     fi
-  fi
-  if [[ -s "$(supervisor_state_file "$scope")" ]] && [[ "$(cat "$(supervisor_state_file "$scope")")" == "running" ]]; then
-    echo "Error: refusing cleanup without authenticated recorder supervisor" >&2
-    exit 1
   fi
   if [[ -f "$(platform_file "$scope")" ]] && [[ "$(cat "$(platform_file "$scope")")" == "android" ]]; then
     stop_android_recorder "$scope"
@@ -725,6 +780,8 @@ cmd_stop() {
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
   local supervisor_state=""
   [[ -s "$(supervisor_state_file "$scope")" ]] && supervisor_state="$(cat "$(supervisor_state_file "$scope")")"
+  local supervisor_failed="false"
+  [[ "$supervisor_state" == "failed" ]] && supervisor_failed="true"
 
   if is_alive "$pid"; then
     local process_marker="$raw_file"
@@ -810,10 +867,19 @@ cmd_stop() {
     if [[ -f "$device_pathf" ]]; then
       local device_path
       device_path="$(cat "$device_pathf")"
-      sleep 2
-      adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
+      if [[ "$supervisor_failed" != "true" ]]; then
+        sleep 2
+        adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
+      fi
       adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
     fi
+  fi
+
+  if [[ "$supervisor_failed" == "true" ]]; then
+    [[ -n "$raw_file" ]] && rm -f "$raw_file"
+    rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,control-token,control-request,control-response,supervisor-state,child-pid}
+    echo "Recorder failed: supervisor terminated unexpectedly"
+    return 0
   fi
 
   output_path="${output_path%.*}.mp4"

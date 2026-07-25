@@ -162,6 +162,9 @@ export function parseStopOutput(stdout) {
     }
     return saved;
 }
+export function parseRecorderFailure(stdout) {
+    return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
+}
 export function parseStatusOutput(stdout) {
     if (/^No active recordings/m.test(stdout))
         return [];
@@ -386,6 +389,12 @@ async function runStop(args, runtime) {
             bindings: { recorder: null },
             releaseResources: claimKey ? [{ type: 'recorder', key: claimKey }] : [],
         });
+        const recorderFailure = parseRecorderFailure(stopOutput);
+        if (recorderFailure) {
+            return failResult(`Recording failed before it could be saved: ${recorderFailure}`, {
+                code: 'RECORDING_FAILED',
+            });
+        }
     }
     catch (e) {
         const err = e;
