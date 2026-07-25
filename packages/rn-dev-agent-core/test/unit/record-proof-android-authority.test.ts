@@ -79,6 +79,13 @@ elif [[ "$args" == pull\\ * || "$args" == *" pull "* ]]; then
   [[ -f "$destination" && ! -L "$destination" ]] || exit 42
   printf '%s\\n' "$destination" > "\${FAKE_PULL_MARKER}"
   printf recording > "$destination"
+  if [[ -n "\${FAKE_PRIOR_RAW_PATH:-}" ]]; then
+    mkdir "\${FAKE_PRIOR_RAW_PATH}"
+  fi
+  if [[ "\${FAKE_TERMINATE_PULL_PARENT:-0}" == "1" ]]; then
+    kill -TERM "$PPID"
+    sleep 0.2
+  fi
 fi
 `,
   );
@@ -280,6 +287,71 @@ test('Android legacy stop pulls into an exclusive private-runtime file', () => {
     const pullDestination = readFileSync(state.pullMarker, 'utf8').trim();
     assert.equal(pullDestination.startsWith(`${state.runtimeDirectory}/tmp/`), true);
     assert.equal(existsSync(legacyRaw), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android pull removes its private partial file when stop is terminated', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.path`, output);
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
+          FAKE_STAT: '',
+          FAKE_TERMINATE_PULL_PARENT: '1',
+        },
+      },
+    );
+
+    assert.notEqual(result.status, 0);
+    const pullDestination = readFileSync(state.pullMarker, 'utf8').trim();
+    assert.equal(existsSync(pullDestination), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android legacy finalization ignores a foreign replacement raw entry', () => {
+  const state = fixture();
+  try {
+    const legacyRaw = join(state.root, 'raw-android-456.mp4');
+    const output = join(state.root, 'proof.mp4');
+    seedLocalBinding(state.legacyPrefix);
+    writeFileSync(`${state.legacyPrefix}-${scope}.path`, output);
+    writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, legacyRaw);
+    writeFileSync(`${state.legacyPrefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
+          FAKE_STAT: '',
+          FAKE_PRIOR_RAW_PATH: legacyRaw,
+        },
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(`${output.slice(0, -4)}.mov`), true);
   } finally {
     state.cleanup();
   }

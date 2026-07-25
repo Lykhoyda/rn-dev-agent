@@ -4,10 +4,13 @@ set -euo pipefail
 PID_PREFIX="/tmp/rn-dev-agent-record"
 RAW_PREFIX="/tmp/rn-dev-agent-raw"
 LEGACY_PID_PREFIX="$PID_PREFIX"
+PRIOR_RUNTIME_DIR="${LEGACY_PID_PREFIX}.private-$(id -u)"
+PRIOR_PID_PREFIX="${PRIOR_RUNTIME_DIR}/record"
 RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"
 RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"
 PID_PREFIX="${RUNTIME_DIR}/record"
 SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
+PENDING_PULL_FILE=""
 
 usage() {
   cat <<'EOF'
@@ -40,23 +43,69 @@ remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
 incarnation_file() { echo "${PID_PREFIX}-${1}.incarnation"; }
 
 ensure_sidecar_temp_dir() {
-  python3 - "$RUNTIME_ROOT" "$RUNTIME_DIR" "$SIDECAR_TEMP_DIR" <<'PY'
+  if ! python3 - "$RUNTIME_ROOT" <<'PY'
 import os
 import stat
 import sys
 
 runtime_root = sys.argv[1]
-if not runtime_root:
-    raise RuntimeError("recorder runtime root is unavailable")
-root_metadata = os.lstat(runtime_root)
+if not runtime_root or not os.path.isabs(runtime_root):
+    raise SystemExit(1)
+try:
+    root_metadata = os.lstat(runtime_root)
+except OSError:
+    raise SystemExit(1)
 if (
     not stat.S_ISDIR(root_metadata.st_mode)
     or root_metadata.st_uid != os.getuid()
     or root_metadata.st_mode & 0o022
 ):
-    raise RuntimeError("recorder runtime root is not private")
+    raise SystemExit(1)
+PY
+  then
+    local candidate
+    RUNTIME_ROOT=""
+    for candidate in "${XDG_RUNTIME_DIR:-}" "${TMPDIR:-}" "${HOME:-}"; do
+      [[ -n "$candidate" ]] || continue
+      if python3 - "$candidate" <<'PY'
+import os
+import stat
+import sys
 
-for index, path in enumerate(sys.argv[2:]):
+path = sys.argv[1]
+if not os.path.isabs(path):
+    raise SystemExit(1)
+try:
+    metadata = os.lstat(path)
+except OSError:
+    raise SystemExit(1)
+if (
+    not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.getuid()
+    or metadata.st_mode & 0o022
+):
+    raise SystemExit(1)
+PY
+      then
+        RUNTIME_ROOT="$candidate"
+        RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"
+        PID_PREFIX="${RUNTIME_DIR}/record"
+        SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
+        break
+      fi
+    done
+    [[ -n "$RUNTIME_ROOT" ]] || {
+      echo "Error: recorder runtime root is unavailable" >&2
+      return 1
+    }
+  fi
+
+  python3 - "$RUNTIME_DIR" "$SIDECAR_TEMP_DIR" <<'PY'
+import os
+import stat
+import sys
+
+for index, path in enumerate(sys.argv[1:]):
     try:
         os.mkdir(path, 0o700)
     except FileExistsError:
@@ -101,6 +150,13 @@ create_private_capture_file() {
   printf '%s' "$capture"
 }
 
+cleanup_pending_pull() {
+  if [[ -n "$PENDING_PULL_FILE" ]]; then
+    rm -f "$PENDING_PULL_FILE"
+    PENDING_PULL_FILE=""
+  fi
+}
+
 legacy_sidecar_file() {
   local scope="$1"
   local suffix="$2"
@@ -141,9 +197,70 @@ scope_has_private_sidecars() {
   return 1
 }
 
+scope_has_sidecars_at_prefix() {
+  local prefix="$1"
+  local scope="$2"
+  local suffix
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+    sidecar_exists "${prefix}-${scope}.${suffix}" && return 0
+  done
+  return 1
+}
+
+private_directory_is_owned() {
+  python3 - "$1" <<'PY'
+import os
+import stat
+import sys
+
+try:
+    metadata = os.lstat(sys.argv[1])
+except OSError:
+    raise SystemExit(1)
+if (
+    not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.getuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+):
+    raise SystemExit(1)
+PY
+}
+
+validate_private_scope() {
+  local prefix="$1"
+  local scope="$2"
+  local suffix
+  local path
+  local incarnation=""
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+    path="${prefix}-${scope}.${suffix}"
+    if sidecar_exists "$path"; then
+      validate_legacy_sidecar "$path"
+    fi
+  done
+  path="${prefix}-${scope}.incarnation"
+  if [[ -s "$path" ]]; then
+    incarnation="$(cat "$path")"
+    [[ "$incarnation" =~ ^[a-f0-9]{32}$ ]] || {
+      echo "Error: prior recorder supervisor incarnation is invalid" >&2
+      return 1
+    }
+  fi
+  for suffix in control-token control-request control-response supervisor-state child-pid; do
+    if [[ -n "$incarnation" ]]; then
+      path="${prefix}-${scope}-${incarnation}.${suffix}"
+    else
+      path="${prefix}-${scope}.${suffix}"
+    fi
+    sidecar_exists "$path" && validate_legacy_sidecar "$path"
+  done
+  return 0
+}
+
 LEGACY_INCARNATION=""
 LEGACY_SCOPE_PRESENT="false"
 USING_LEGACY_SCOPE="false"
+USING_PRIOR_SCOPE="false"
 
 validate_legacy_scope() {
   local scope="$1"
@@ -187,6 +304,14 @@ select_scope_state() {
   local scope="$1"
   ensure_sidecar_temp_dir
   scope_has_private_sidecars "$scope" && return 0
+  if private_directory_is_owned "$PRIOR_RUNTIME_DIR" &&
+    scope_has_sidecars_at_prefix "$PRIOR_PID_PREFIX" "$scope"; then
+    validate_private_scope "$PRIOR_PID_PREFIX" "$scope"
+    PID_PREFIX="$PRIOR_PID_PREFIX"
+    SIDECAR_TEMP_DIR="${PRIOR_RUNTIME_DIR}/tmp"
+    USING_PRIOR_SCOPE="true"
+    return 0
+  fi
   validate_legacy_scope "$scope"
   if [[ "$LEGACY_SCOPE_PRESENT" == "true" ]]; then
     PID_PREFIX="$LEGACY_PID_PREFIX"
@@ -205,6 +330,10 @@ validate_raw_capture_path() {
   if [[ "$raw_path" == "$RUNTIME_DIR/"* && "$private_tail" =~ ^raw-(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
     return 0
   fi
+  private_tail="${raw_path#"$PRIOR_RUNTIME_DIR"/}"
+  if [[ "$raw_path" == "$PRIOR_RUNTIME_DIR/"* && "$private_tail" =~ ^(tmp/)?raw-(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
+    return 0
+  fi
   local legacy_tail="${raw_path#"$RAW_PREFIX"-}"
   if [[ "$raw_path" == "$RAW_PREFIX"-* && "$legacy_tail" =~ ^(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
     if sidecar_exists "$raw_path"; then
@@ -217,6 +346,10 @@ validate_raw_capture_path() {
 }
 
 current_incarnation() {
+  if [[ "$USING_LEGACY_SCOPE" == "true" ]]; then
+    printf '%s' "$LEGACY_INCARNATION"
+    return
+  fi
   local file
   file="$(incarnation_file "$1")"
   [[ -s "$file" ]] || return 0
@@ -256,22 +389,56 @@ assert_current_incarnation() {
   }
 }
 
+supervisor_state_is_authenticated() {
+  [[ "$USING_LEGACY_SCOPE" != "true" || -n "$LEGACY_INCARNATION" ]]
+}
+
+remove_owned_state_path() {
+  local path="$1"
+  if [[ "$USING_LEGACY_SCOPE" != "true" ]]; then
+    rm -f "$path"
+    return
+  fi
+  python3 - "$path" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+try:
+    metadata = os.lstat(path)
+except FileNotFoundError:
+    raise SystemExit(0)
+if (
+    stat.S_ISREG(metadata.st_mode)
+    and metadata.st_uid == os.getuid()
+    and not metadata.st_mode & 0o022
+):
+    os.unlink(path)
+PY
+}
+
 remove_recording_sidecars() {
   local scope="$1"
   local incarnation="${2:-}"
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}
-  rm -f \
+  local path
+  for path in "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}; do
+    remove_owned_state_path "$path"
+  done
+  for path in \
     "$(control_token_file "$scope" "$incarnation")" \
     "$(control_request_file "$scope" "$incarnation")" \
     "$(control_response_file "$scope" "$incarnation")" \
     "$(supervisor_state_file "$scope" "$incarnation")" \
-    "$(child_pid_file "$scope" "$incarnation")"
+    "$(child_pid_file "$scope" "$incarnation")"; do
+    remove_owned_state_path "$path"
+  done
   local incarnation_path
   incarnation_path="$(incarnation_file "$scope")"
   if [[ -n "$incarnation" && -s "$incarnation_path" ]] && [[ "$(cat "$incarnation_path")" == "$incarnation" ]]; then
-    rm -f "$incarnation_path"
+    remove_owned_state_path "$incarnation_path"
   elif [[ -z "$incarnation" ]]; then
-    rm -f "$incarnation_path"
+    remove_owned_state_path "$incarnation_path"
   fi
 }
 
@@ -1024,7 +1191,9 @@ cmd_abort() {
   tokenf="$(control_token_file "$scope" "$incarnation")"
   statef="$(supervisor_state_file "$scope" "$incarnation")"
   local supervisor_state=""
-  [[ -s "$statef" ]] && supervisor_state="$(cat "$statef")"
+  if supervisor_state_is_authenticated && [[ -s "$statef" ]]; then
+    supervisor_state="$(cat "$statef")"
+  fi
   if [[ -s "$tokenf" && ( "$supervisor_state" == "starting" || "$supervisor_state" == "running" ) ]]; then
     local abort_failed="false"
     request_supervisor_signal "$scope" "ABORT" "$incarnation" || abort_failed="true"
@@ -1058,7 +1227,7 @@ cmd_abort() {
     local raw_path
     raw_path="$(cat "${PID_PREFIX}-${scope}.raw-path")"
     validate_raw_capture_path "$raw_path"
-    rm -f "$raw_path"
+    remove_owned_state_path "$raw_path"
   fi
   remove_recording_sidecars "$scope" "$incarnation"
 }
@@ -1096,7 +1265,9 @@ cmd_stop() {
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
   validate_raw_capture_path "$raw_file"
   local supervisor_state=""
-  [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]] && supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
+  if supervisor_state_is_authenticated && [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
+    supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
+  fi
   local supervisor_failed="false"
   [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
   local supervisor_terminal="false"
@@ -1179,7 +1350,7 @@ cmd_stop() {
   fi
   sleep 1
 
-  if [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
+  if supervisor_state_is_authenticated && [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
     supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
     supervisor_failed="false"
     [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
@@ -1199,14 +1370,18 @@ cmd_stop() {
         local prior_raw_file="$raw_file"
         local pull_file
         pull_file="$(create_private_capture_file)"
+        PENDING_PULL_FILE="$pull_file"
         if adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$pull_file" >/dev/null 2>&1; then
           raw_file="$pull_file"
         else
           rm -f "$pull_file"
+          PENDING_PULL_FILE=""
           raw_file=""
           echo "Warning: Failed to pull recording from device" >&2
         fi
-        [[ -n "$prior_raw_file" && "$prior_raw_file" != "$raw_file" ]] && rm -f "$prior_raw_file"
+        if [[ -n "$prior_raw_file" && "$prior_raw_file" != "$raw_file" ]]; then
+          remove_owned_state_path "$prior_raw_file"
+        fi
       fi
       adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
     fi
@@ -1214,6 +1389,7 @@ cmd_stop() {
 
   if [[ "$supervisor_failed" == "true" ]]; then
     [[ -n "$raw_file" ]] && rm -f "$raw_file"
+    PENDING_PULL_FILE=""
     remove_recording_sidecars "$scope" "$incarnation"
     echo "Recorder failed: supervisor terminated unexpectedly"
     return 0
@@ -1238,6 +1414,7 @@ cmd_stop() {
       mv "$raw_file" "$output_path"
     fi
     rm -f "$raw_file"
+    PENDING_PULL_FILE=""
   fi
 
   remove_recording_sidecars "$scope" "$incarnation"
@@ -1429,6 +1606,8 @@ PYEOF
   size="$(wc -c < "$output" | tr -d ' ')"
   echo "Labeled video: $output ($size bytes)"
 }
+
+trap cleanup_pending_pull EXIT
 
 case "${1:-}" in
   start)       shift; cmd_start "$@" ;;

@@ -32,7 +32,9 @@ function probeProcessPresence(pid: number): 'present' | 'absent' | 'unknown' {
   const processState = spawnSync('ps', ['-p', String(pid), '-o', 'state='], {
     encoding: 'utf8',
   });
-  if (processState.status === 0) return 'present';
+  if (processState.status === 0) {
+    return /^Z/.test(processState.stdout.trim()) ? 'absent' : 'present';
+  }
   return processState.status === 1 && processState.stdout.trim() === '' ? 'absent' : 'unknown';
 }
 
@@ -41,8 +43,11 @@ async function waitForDifferentBirth(
   expectedBirth: string,
   observe = probeProcessBirth,
   delay = () => new Promise((resolve) => setTimeout(resolve, 50)),
+  observePresence = probeProcessPresence,
 ): Promise<string | null> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
+    const presence = observePresence(pid);
+    if (presence === 'absent') return null;
     const observed = observe(pid);
     if (observed.status === 'absent') return null;
     if (observed.status === 'present' && observed.birth.token !== expectedBirth) {
@@ -50,6 +55,8 @@ async function waitForDifferentBirth(
     }
     await delay();
   }
+  const presence = observePresence(pid);
+  if (presence === 'absent') return null;
   const observed = observe(pid);
   if (observed.status === 'absent') return null;
   return observed.status === 'present' ? observed.birth.token : expectedBirth;
@@ -66,6 +73,7 @@ test('unknown process birth does not prove recorder termination', async () => {
       return { status: 'unknown' };
     },
     async () => {},
+    () => 'present',
   );
 
   assert.equal(observed, expectedBirth);
@@ -172,7 +180,7 @@ done
   recorderPid = 0;
 });
 
-test('recording supervisor force-stops its unreaped child after SIGINT is ignored', (t) => {
+test('recording supervisor force-stops its unreaped child after SIGINT is ignored', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'record-proof-local-stop-'));
   const prefix = join(root, 'record');
   const script = join(root, 'record_proof.sh');
@@ -238,10 +246,13 @@ done
   );
   assert.equal(stop.status, 0, stop.stderr);
   assert.equal(existsSync(`${prefix}-${scope}.pid`), false);
-  const observed = probeProcessBirth(parsed.pid);
-  const observedBirth = observed.status === 'present' ? observed.birth.token : null;
+  const observedBirth = await waitForDifferentBirth(parsed.pid, parsed.processBirth);
   assert.notEqual(observedBirth, parsed.processBirth);
-  if (observedBirth !== parsed.processBirth) recorderPid = 0;
+  assert.equal(
+    observedBirth !== parsed.processBirth || probeProcessPresence(parsed.pid) === 'absent',
+    true,
+  );
+  recorderPid = 0;
 });
 
 test('recording supervisor terminates its child when request handling fails', async (t) => {

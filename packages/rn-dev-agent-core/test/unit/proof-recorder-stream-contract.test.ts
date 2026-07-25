@@ -52,7 +52,7 @@ test('the recorder supervisor releases start streams and owns child output', asy
   assert.match(script, /if \[\[ "\$supervisor_terminal" == "true" \]\]; then\n\s+:/);
   assert.match(
     script,
-    /sleep 1\n\n\s+if \[\[ -s "\$\(supervisor_state_file "\$scope" "\$incarnation"\)" \]\]; then/,
+    /sleep 1\n\n\s+if supervisor_state_is_authenticated && \[\[ -s "\$\(supervisor_state_file "\$scope" "\$incarnation"\)" \]\]; then/,
   );
   const directLaunches = script
     .split('\n')
@@ -107,6 +107,7 @@ fi
     legacyPrefix,
     root,
     prefix,
+    priorRuntimeDirectory: `${legacyPrefix}.private-${process.getuid?.()}`,
     runtimeDirectory,
     script,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
@@ -226,6 +227,91 @@ test('unincarnated legacy supervisor state cannot authorize cleanup through a sy
     assert.equal(existsSync(`${state.legacyPrefix}-${scope}.pid`), true);
   } finally {
     replacement.kill('SIGKILL');
+    state.cleanup();
+  }
+});
+
+test('unincarnated legacy terminal state cannot bypass live-process authentication', () => {
+  const state = fixture();
+  const scope = '8'.repeat(64);
+  const replacement = spawn('sleep', ['30'], { stdio: 'ignore' });
+  try {
+    assert.ok(replacement.pid);
+    const birth = 'a'.repeat(64);
+    const output = join(state.root, 'capture.mp4');
+    const raw = `${join(state.root, 'raw')}-ios-123.mov`;
+    writeFileSync(`${state.legacyPrefix}-${scope}.pid`, `${replacement.pid}\n`);
+    writeFileSync(`${state.legacyPrefix}-${scope}.birth`, `${birth}\n`);
+    writeFileSync(`${state.legacyPrefix}-${scope}.platform`, 'ios\n');
+    writeFileSync(`${state.legacyPrefix}-${scope}.path`, `${output}\n`);
+    writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, `${raw}\n`);
+    writeFileSync(`${state.legacyPrefix}-${scope}.supervisor-state`, 'exited 0\n');
+    writeFileSync(raw, 'recording');
+
+    const stopped = spawnSync('bash', [state.script, 'stop', scope, `${replacement.pid}`, birth], {
+      encoding: 'utf8',
+    });
+
+    assert.notEqual(stopped.status, 0);
+    const replacementState = spawnSync('ps', ['-p', `${replacement.pid}`, '-o', 'stat='], {
+      encoding: 'utf8',
+    });
+    assert.equal(replacementState.status, 0);
+    assert.doesNotMatch(replacementState.stdout.trim(), /^Z/);
+    assert.equal(existsSync(`${state.legacyPrefix}-${scope}.pid`), true);
+  } finally {
+    replacement.kill('SIGKILL');
+    state.cleanup();
+  }
+});
+
+test('status adopts authenticated state from the previous private runtime', () => {
+  const state = fixture();
+  const scope = '7'.repeat(64);
+  try {
+    const priorPrefix = join(state.priorRuntimeDirectory, 'record');
+    mkdirSync(state.priorRuntimeDirectory, { mode: 0o700 });
+    writeFileSync(`${priorPrefix}-${scope}.pid`, '999999\n', { mode: 0o600 });
+    writeFileSync(`${priorPrefix}-${scope}.birth`, `${'b'.repeat(64)}\n`, { mode: 0o600 });
+    writeFileSync(`${priorPrefix}-${scope}.platform`, 'android\n', { mode: 0o600 });
+    writeFileSync(`${priorPrefix}-${scope}.path`, `${join(state.root, 'capture.mp4')}\n`, {
+      mode: 0o600,
+    });
+
+    const status = spawnSync('bash', [state.script, 'status', scope], {
+      encoding: 'utf8',
+    });
+
+    assert.equal(status.status, 0, status.stderr);
+    assert.match(status.stdout, /android: pid=999999/);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('runtime selection falls back from a shared temporary directory', () => {
+  const state = fixture();
+  const scope = '6'.repeat(64);
+  try {
+    const source = readFileSync(sourceScript, 'utf8')
+      .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${state.legacyPrefix}"`)
+      .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(state.root, 'raw')}"`);
+    writeFileSync(state.script, source);
+
+    const status = spawnSync('bash', [state.script, 'status', scope], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        XDG_RUNTIME_DIR: '',
+        TMPDIR: '/tmp',
+        HOME: state.root,
+      },
+    });
+
+    assert.equal(status.status, 0, status.stderr);
+    assert.match(status.stdout, /No active recordings/);
+    assert.equal(existsSync(join(state.root, 'rn-dev-agent-record')), true);
+  } finally {
     state.cleanup();
   }
 });
