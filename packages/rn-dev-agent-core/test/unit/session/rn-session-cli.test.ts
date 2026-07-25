@@ -297,11 +297,7 @@ test('package-local CLI reserves Metro, build, and release operations before cle
       recoveryCapability: 'recovery',
     });
 
-    for (const args of [
-      ['prepare-build', 'ios'],
-      ['ensure-metro'],
-      ['release'],
-    ]) {
+    for (const args of [['prepare-build', 'ios'], ['ensure-metro'], ['release']]) {
       const result = spawnSync(process.execPath, [cliPath, ...args], {
         cwd: appRoot,
         env: {

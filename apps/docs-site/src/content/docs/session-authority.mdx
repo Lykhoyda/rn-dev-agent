@@ -35,8 +35,10 @@ Use `rn_session` for staged transitions:
 4. `bind_device` claims one exact platform, UUID/serial, and app ID.
 5. Literal `pnpm ios` or `pnpm android` starts or validates package-local Metro on the allocated port, injects the exact device and port, and records the installed artifact receipt.
 6. `pin_dev_client` launches the exact Expo URL or bare RN app and accepts only the target carrying the signed initial-bundle marker.
-7. `prepare_handoff` / `accept_handoff` transfer a live owner explicitly. `adopt_stale` accepts only a conservatively proven dead owner.
-8. `release` cancels any interrupted fenced operation, then releases claims. A managed Metro must first stop with its HMAC-authenticated management proof and exact launcher, listener, and port identities; failed cleanup leaves the session claimed.
+7. `prepare_handoff` / `accept_handoff` transfer ownership explicitly, but never adopt a live runner, Observe server, or managed Metro. Acceptance durably records and proves each source-resource shutdown before completing; interrupted cleanup remains resumable by the accepting worker or a later conservatively authorized stale adoption.
+8. `release` proves the authority-bound runner, Observe server, and managed Metro stopped before releasing claims. Managed Metro cleanup uses its HMAC-authenticated management proof plus exact launcher, listener, and port identities; any unproven cleanup leaves the session claimed.
+
+Supervisor shutdown follows the same fail-closed resource cleanup. It first reserves the session for closing and cancels active operations, then releases claims only after runner, Observe, and managed Metro teardown succeeds.
 
 Session initialization is transactional: if port allocation, resource claiming, shared-knowledge preparation, or receipt creation fails, partial claims are released before startup reports the failure.
 

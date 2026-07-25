@@ -456,8 +456,9 @@ test('stale adoption transfers managed Metro cleanup before fencing the prior ow
   registry.adoptStaleIntoBlocked(target, prior.sessionId, 'recovery-worker');
 
   const status = registry.getSessionStatus(target.sessionId);
-  assert.equal(status?.state, 'handoff_cleanup');
-  assert.deepEqual((status?.bindings.handoffCleanup as { metro?: Record<string, unknown> }).metro, {
+  assert.ok(status);
+  assert.equal(status.state, 'handoff_cleanup');
+  assert.deepEqual((status.bindings.handoffCleanup as { metro?: Record<string, unknown> }).metro, {
     ...metroCleanup,
     sourceSessionId: prior.sessionId,
     stopRequestedAt: null,
@@ -1146,10 +1147,11 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
     targetInstance: 'worker-cleanup',
   });
   const accepted = registry.getSessionStatus(cleanupOwner.sessionId);
-  assert.equal(accepted?.bindings.metro, null);
+  assert.ok(accepted);
+  assert.equal(accepted.bindings.metro, null);
   assert.deepEqual(
     (
-      accepted?.bindings.handoffCleanup as {
+      accepted.bindings.handoffCleanup as {
         metro?: Record<string, unknown>;
       }
     ).metro,
