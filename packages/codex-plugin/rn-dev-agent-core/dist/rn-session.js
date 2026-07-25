@@ -11611,6 +11611,87 @@ function projectPublicAuthorityStatus(status) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/session/process-cleanup.js
+async function waitForExactStopped(probe, timeoutMs, code, message) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const status = probe();
+    if (status === "stopped")
+      return;
+    if (status === "unknown") {
+      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
+    }
+    if (Date.now() >= deadline) {
+      throw new SessionAuthorityError(code, message);
+    }
+    await new Promise((resolve3) => setTimeout(resolve3, 25));
+  }
+}
+async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3) {
+  const port = Number(binding.port);
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.cleanupCapability ?? "");
+  if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup authority is incomplete");
+  }
+  const currentListener = listenerProbe(port);
+  if (currentListener.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener lookup is inconclusive");
+  }
+  if (currentListener.status === "absent" || currentListener.pid !== pid)
+    return;
+  const currentBirth = processProbe(pid);
+  if (currentBirth.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe process identity is unavailable");
+  }
+  if (currentBirth.status === "absent") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener identity is internally inconsistent");
+  }
+  if (currentBirth.birth.token !== expectedBirth) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener PID was reused before cleanup completed");
+  }
+  const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${capability}`,
+      "x-rn-observe-instance": instanceId
+    }
+  });
+  if (!response.ok) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe server refused fenced cleanup");
+  }
+  await waitForExactStopped(() => {
+    const observed = listenerProbe(port);
+    if (observed.status === "unknown")
+      return "unknown";
+    return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
+  }, timeoutMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
+}
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.capability ?? "");
+  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
+  }
+  const current = processProbe(pid);
+  if (current.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
+  }
+  if (current.status === "absent" || current.birth.token !== expectedBirth)
+    return;
+  signalProcess(pid, "SIGTERM");
+  await waitForExactStopped(() => {
+    const observed = processProbe(pid);
+    if (observed.status === "unknown")
+      return "unknown";
+    return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
+  }, timeoutMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+}
+
 // packages/rn-dev-agent-core/dist/rn-session.js
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -11777,6 +11858,16 @@ async function main() {
       const signerCapability = readSigner(status);
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
       const buildToken = randomUUID3();
+      const runner = status.bindings.runner;
+      const releaseResources = [];
+      if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
+        if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
+        }
+        await stopBoundRunner(runner);
+        releaseResources.push({ type: "runner", key: claimKey });
+      }
       writeMarker(status, {
         platform,
         appId: device.appId,
@@ -11785,6 +11876,8 @@ async function main() {
         signerCapability
       });
       status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, {
+        expectedAuthorityVersion: status.authorityVersion,
+        releaseResources,
         bindings: {
           metro: { ...metro, buildGeneration },
           pendingBuild: { buildToken, platform, buildGeneration },
@@ -11836,6 +11929,7 @@ async function main() {
       }, signerCapability);
       status.registry.claimResources({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, [{ type: "device", key: `${platform}:${device.deviceId}` }]);
       status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, {
+        expectedAuthorityVersion: status.authorityVersion + 1,
         state: "device_bound",
         bindings: { install: receipt.payload, pendingBuild: null }
       });
@@ -11849,6 +11943,22 @@ async function main() {
         throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "release requires the exact session ID and claim epoch in the environment");
       }
       const signerCapability = readSigner(status);
+      const runner = status.bindings.runner;
+      if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
+        if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
+        }
+        await stopBoundRunner(runner);
+      }
+      const observe = status.bindings.observe;
+      if (observe) {
+        const port = String(observe.port);
+        if (status.bindings.observePort !== observe.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
+          throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
+        }
+        await stopBoundObserve(observe);
+      }
       const metro = status.bindings.metro;
       if (metro?.mode === "managed" && !await stopManagedMetro(metro, {
         sessionId: status.sessionId,

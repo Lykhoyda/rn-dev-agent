@@ -511,6 +511,132 @@ test('session release stops its managed Metro before releasing claims', async ()
   assert.deepEqual(calls, ['stop-metro', 'release']);
 });
 
+test('session release tears down its runner and Observe server before Metro and claims', async () => {
+  const calls: string[] = [];
+  const status = {
+    sessionId: 'session-a',
+    bindings: {
+      observePort: 7333,
+      runner: {
+        platform: 'ios',
+        deviceId: 'SIM-1',
+        port: 9100,
+        pid: 123,
+        processBirth: 'runner-birth',
+        instanceId: 'runner-a',
+        capability: 'runner-capability',
+      },
+      observe: {
+        port: 7333,
+        pid: 456,
+        processBirth: 'observe-birth',
+        instanceId: 'observe-a',
+        cleanupCapability: 'observe-capability',
+      },
+      metro: { mode: 'managed' },
+    },
+    claims: [
+      {
+        type: 'runner',
+        key: 'ios:SIM-1:9100',
+        sessionId: 'session-a',
+        claimEpoch: 1,
+      },
+      {
+        type: 'observe-port',
+        key: '7333',
+        sessionId: 'session-a',
+        claimEpoch: 1,
+      },
+    ],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => calls.push('release'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      getSignerCapability: () => 'signer',
+      stopHandoffRunner: async () => {
+        calls.push('stop-runner');
+      },
+      stopHandoffObserve: async () => {
+        calls.push('stop-observe');
+      },
+      stopManagedMetro: async () => {
+        calls.push('stop-metro');
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'release' });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls, ['stop-runner', 'stop-observe', 'stop-metro', 'release']);
+});
+
+test('session release retains every claim when bound process cleanup is unproven', async () => {
+  let released = false;
+  const status = {
+    sessionId: 'session-a',
+    bindings: {
+      observePort: 7333,
+      runner: {
+        platform: 'ios',
+        deviceId: 'SIM-1',
+        port: 9100,
+      },
+      observe: { port: 7333 },
+    },
+    claims: [
+      {
+        type: 'runner',
+        key: 'ios:SIM-1:9100',
+        sessionId: 'session-a',
+        claimEpoch: 1,
+      },
+      {
+        type: 'observe-port',
+        key: '7333',
+        sessionId: 'session-a',
+        claimEpoch: 1,
+      },
+    ],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => {
+            released = true;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      stopHandoffRunner: async () => {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: still running');
+      },
+    },
+  );
+
+  const result = await handler({ action: 'release' });
+
+  assert.equal(result.isError, true);
+  assert.equal(released, false);
+  assert.match(result.content[0].text, /RUNNER_ADOPTION_REQUIRED/);
+});
+
 test('session release retains claims when managed Metro shutdown is not proven', async () => {
   let released = false;
   const status = {

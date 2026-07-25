@@ -24,12 +24,12 @@ import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
-  probeManagedMetroListener,
   stopManagedMetro,
   type ManagedMetroBinding,
   type ManagedMetroListenerProbe,
 } from '../session/managed-metro.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
+import { stopBoundObserve, stopBoundRunner } from '../session/process-cleanup.js';
 
 export interface SessionToolInput {
   action:
@@ -109,102 +109,20 @@ function sameMetroAuthority(
   );
 }
 
-async function waitForExactStopped(
-  probe: () => 'running' | 'stopped' | 'unknown',
-  timeoutMs: number,
-  message: string,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const status = probe();
-    if (status === 'stopped') return;
-    if (status === 'unknown') {
-      throw new SessionAuthorityError(
-        'HANDOFF_NOT_AUTHORIZED',
-        `${message}; shutdown identity is unknown`,
-      );
-    }
-    if (Date.now() >= deadline) {
-      throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', message);
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
-  }
-}
-
 async function stopHandoffObserve(
   binding: Record<string, unknown>,
-  listenerProbe: (port: number) => ManagedMetroListenerProbe = probeManagedMetroListener,
-  processProbe: (pid: number) => ProcessBirthProbe = probeProcessBirth,
+  listenerProbe?: Parameters<typeof stopBoundObserve>[1],
+  processProbe?: Parameters<typeof stopBoundObserve>[2],
   timeoutMs = 2_000,
 ): Promise<void> {
-  const port = Number(binding.port);
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? '');
-  const instanceId = String(binding.instanceId ?? '');
-  const capability = String(binding.cleanupCapability ?? '');
   const stopRequestedAt = Number(binding.stopRequestedAt);
-  if (
-    !Number.isSafeInteger(port) ||
-    !Number.isSafeInteger(pid) ||
-    !expectedBirth ||
-    !instanceId ||
-    !capability ||
-    !Number.isFinite(stopRequestedAt)
-  ) {
+  if (!Number.isFinite(stopRequestedAt)) {
     throw new SessionAuthorityError(
       'OBSERVE_AUTHORITY_MISMATCH',
       'source Observe cleanup authority is incomplete',
     );
   }
-  const currentListener = listenerProbe(port);
-  if (currentListener.status === 'unknown') {
-    throw new SessionAuthorityError(
-      'OBSERVE_AUTHORITY_MISMATCH',
-      'source Observe listener lookup is inconclusive',
-    );
-  }
-  if (currentListener.status === 'absent' || currentListener.pid !== pid) return;
-  const currentBirth = processProbe(pid);
-  if (currentBirth.status === 'unknown') {
-    throw new SessionAuthorityError(
-      'OBSERVE_AUTHORITY_MISMATCH',
-      'source Observe process identity is unavailable',
-    );
-  }
-  if (currentBirth.status === 'absent') {
-    throw new SessionAuthorityError(
-      'OBSERVE_AUTHORITY_MISMATCH',
-      'source Observe listener identity is internally inconsistent',
-    );
-  }
-  if (currentBirth.birth.token !== expectedBirth) {
-    throw new SessionAuthorityError(
-      'OBSERVE_AUTHORITY_MISMATCH',
-      'source Observe listener PID was reused before cleanup completed',
-    );
-  }
-  const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${capability}`,
-      'x-rn-observe-instance': instanceId,
-    },
-  });
-  if (!response.ok) {
-    throw new SessionAuthorityError(
-      'OBSERVE_AUTHORITY_MISMATCH',
-      'source Observe server refused fenced handoff cleanup',
-    );
-  }
-  await waitForExactStopped(
-    () => {
-      const observed = listenerProbe(port);
-      if (observed.status === 'unknown') return 'unknown';
-      return observed.status === 'listening' && observed.pid === pid ? 'running' : 'stopped';
-    },
-    timeoutMs,
-    'source Observe listener did not stop before the cleanup deadline',
-  );
+  await stopBoundObserve(binding, listenerProbe, processProbe, timeoutMs);
 }
 
 async function stopHandoffRunner(
@@ -213,45 +131,15 @@ async function stopHandoffRunner(
   signalProcess: (pid: number, signal: NodeJS.Signals) => void = process.kill,
   timeoutMs = 2_000,
 ): Promise<void> {
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? '');
-  const instanceId = String(binding.instanceId ?? '');
-  const capability = String(binding.capability ?? '');
   const claimKey = String(binding.claimKey ?? '');
   const stopRequestedAt = Number(binding.stopRequestedAt);
-  if (
-    !Number.isSafeInteger(pid) ||
-    !expectedBirth ||
-    !instanceId ||
-    !capability ||
-    !claimKey ||
-    !Number.isFinite(stopRequestedAt)
-  ) {
+  if (!claimKey || !Number.isFinite(stopRequestedAt)) {
     throw new SessionAuthorityError(
       'RUNNER_ADOPTION_REQUIRED',
       'source runner cleanup identity is incomplete',
     );
   }
-  const current = processProbe(pid);
-  if (current.status === 'unknown') {
-    throw new SessionAuthorityError(
-      'RUNNER_ADOPTION_REQUIRED',
-      'source runner process identity is unavailable',
-    );
-  }
-  if (current.status === 'absent' || current.birth.token !== expectedBirth) return;
-  signalProcess(pid, 'SIGTERM');
-  await waitForExactStopped(
-    () => {
-      const observed = processProbe(pid);
-      if (observed.status === 'unknown') return 'unknown';
-      return observed.status === 'present' && observed.birth.token === expectedBirth
-        ? 'running'
-        : 'stopped';
-    },
-    timeoutMs,
-    'source runner process did not stop before the cleanup deadline',
-  );
+  await stopBoundRunner(binding, processProbe, signalProcess, timeoutMs);
 }
 
 function authorityFailure(error: unknown): ToolResult {
@@ -682,7 +570,74 @@ export function createSessionHandler(
       }
 
       const status = registry.getSessionStatus(session.sessionId);
-      const metro = status?.bindings.metro as Partial<ManagedMetroBinding> | null | undefined;
+      if (!status) {
+        throw new SessionAuthorityError(
+          'SESSION_AUTHORITY_REQUIRED',
+          'session disappeared before release cleanup',
+        );
+      }
+      const metro = status.bindings.metro as Partial<ManagedMetroBinding> | null | undefined;
+      const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
+      if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(
+          runner.port,
+        )}`;
+        if (
+          !status.claims.some(
+            (claim) =>
+              claim.type === 'runner' &&
+              claim.key === claimKey &&
+              claim.sessionId === session.sessionId &&
+              claim.claimEpoch === session.claimEpoch,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'RUNNER_OWNERSHIP_MISMATCH',
+            'runner cleanup claim no longer matches the authenticated binding',
+          );
+        }
+        const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
+        if (dependencies.stopHandoffRunner) {
+          await dependencies.stopHandoffRunner(cleanup);
+        } else {
+          await stopBoundRunner(
+            cleanup,
+            dependencies.probeProcessBirth,
+            dependencies.signalProcess,
+            dependencies.cleanupTimeoutMs,
+          );
+        }
+      }
+      const observe = status.bindings.observe as Record<string, unknown> | null | undefined;
+      if (observe) {
+        const port = String(observe.port);
+        if (
+          status.bindings.observePort !== observe.port ||
+          !status.claims.some(
+            (claim) =>
+              claim.type === 'observe-port' &&
+              claim.key === port &&
+              claim.sessionId === session.sessionId &&
+              claim.claimEpoch === session.claimEpoch,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'OBSERVE_AUTHORITY_MISMATCH',
+            'Observe cleanup claim no longer matches the authenticated binding',
+          );
+        }
+        const cleanup = { ...observe, stopRequestedAt: Date.now() };
+        if (dependencies.stopHandoffObserve) {
+          await dependencies.stopHandoffObserve(cleanup);
+        } else {
+          await stopBoundObserve(
+            cleanup,
+            dependencies.probeListener,
+            dependencies.probeProcessBirth,
+            dependencies.cleanupTimeoutMs,
+          );
+        }
+      }
       if (metro?.mode === 'managed') {
         const signerCapability = dependencies.getSignerCapability?.();
         if (!signerCapability) {

@@ -17,6 +17,7 @@ import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
+import { stopBoundObserve, stopBoundRunner } from './session/process-cleanup.js';
 import {
   closeBoundDirectories,
   type BoundDirectory,
@@ -308,6 +309,29 @@ async function main(): Promise<void> {
           ),
         ) + 1;
       const buildToken = randomUUID();
+      const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
+      const releaseResources: Array<{ type: string; key: string }> = [];
+      if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(
+          runner.port,
+        )}`;
+        if (
+          !status.claims.some(
+            (claim) =>
+              claim.type === 'runner' &&
+              claim.key === claimKey &&
+              claim.sessionId === status.sessionId &&
+              claim.claimEpoch === status.claimEpoch,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'RUNNER_OWNERSHIP_MISMATCH',
+            'runner cleanup claim no longer matches the authenticated binding',
+          );
+        }
+        await stopBoundRunner(runner);
+        releaseResources.push({ type: 'runner', key: claimKey });
+      }
       writeMarker(status, {
         platform,
         appId: device.appId,
@@ -318,6 +342,8 @@ async function main(): Promise<void> {
       status.registry.updateBindings(
         { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
         {
+          expectedAuthorityVersion: status.authorityVersion,
+          releaseResources,
           bindings: {
             metro: { ...metro, buildGeneration },
             pendingBuild: { buildToken, platform, buildGeneration },
@@ -404,6 +430,7 @@ async function main(): Promise<void> {
       status.registry.updateBindings(
         { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
         {
+          expectedAuthorityVersion: status.authorityVersion + 1,
           state: 'device_bound',
           bindings: { install: receipt.payload, pendingBuild: null },
         },
@@ -420,6 +447,47 @@ async function main(): Promise<void> {
         );
       }
       const signerCapability = readSigner(status);
+      const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
+      if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(
+          runner.port,
+        )}`;
+        if (
+          !status.claims.some(
+            (claim) =>
+              claim.type === 'runner' &&
+              claim.key === claimKey &&
+              claim.sessionId === status.sessionId &&
+              claim.claimEpoch === status.claimEpoch,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'RUNNER_OWNERSHIP_MISMATCH',
+            'runner cleanup claim no longer matches the authenticated binding',
+          );
+        }
+        await stopBoundRunner(runner);
+      }
+      const observe = status.bindings.observe as Record<string, unknown> | null | undefined;
+      if (observe) {
+        const port = String(observe.port);
+        if (
+          status.bindings.observePort !== observe.port ||
+          !status.claims.some(
+            (claim) =>
+              claim.type === 'observe-port' &&
+              claim.key === port &&
+              claim.sessionId === status.sessionId &&
+              claim.claimEpoch === status.claimEpoch,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'OBSERVE_AUTHORITY_MISMATCH',
+            'Observe cleanup claim no longer matches the authenticated binding',
+          );
+        }
+        await stopBoundObserve(observe);
+      }
       const metro = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
       if (
         metro?.mode === 'managed' &&

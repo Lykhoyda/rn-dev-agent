@@ -1622,28 +1622,38 @@ test(
   },
 );
 
-test('confirmed integration can be transactionally restored through its public file surface', () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-'));
-  try {
-    writeFileSync(join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
-    const metroBefore = 'module.exports = { serializer: {} };\n';
-    writeFileSync(join(root, 'metro.config.js'), metroBefore);
-    const sessionCli = join(root, 'rn-session.js');
-    writeFileSync(sessionCli, '');
+test(
+  'confirmed integration and restoration preserve private input modes',
+  { skip: process.platform === 'win32' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-'));
+    try {
+      const packagePath = join(root, 'package.json');
+      const metroPath = join(root, 'metro.config.js');
+      writeFileSync(packagePath, `${JSON.stringify(packageJson)}\n`, { mode: 0o600 });
+      const metroBefore = 'module.exports = { serializer: {} };\n';
+      writeFileSync(metroPath, metroBefore, { mode: 0o600 });
+      const sessionCli = join(root, 'rn-session.js');
+      writeFileSync(sessionCli, '');
 
-    applyPackageIntegration({ appRoot: root, sessionCli });
-    restorePackageIntegrationFiles({ appRoot: root });
+      applyPackageIntegration({ appRoot: root, sessionCli });
+      assert.equal(statSync(packagePath).mode & 0o777, 0o600);
+      assert.equal(statSync(metroPath).mode & 0o777, 0o600);
+      restorePackageIntegrationFiles({ appRoot: root });
 
-    assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')), packageJson);
-    assert.equal(readFileSync(join(root, 'metro.config.js'), 'utf8'), metroBefore);
-    assert.throws(
-      () => readFileSync(join(root, '.rn-agent/integration/rn-session-integration.json')),
-      /ENOENT/,
-    );
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
+      assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), packageJson);
+      assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
+      assert.equal(statSync(packagePath).mode & 0o777, 0o600);
+      assert.equal(statSync(metroPath).mode & 0o777, 0o600);
+      assert.throws(
+        () => readFileSync(join(root, '.rn-agent/integration/rn-session-integration.json')),
+        /ENOENT/,
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  },
+);
 
 test('restoration refuses package scripts edited after integration', () => {
   const preview = previewPackageIntegration(packageJson);

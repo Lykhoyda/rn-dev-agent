@@ -958,3 +958,30 @@ test('stale adoption cannot discard another contender handoff cleanup plan', () 
   assert.equal(registry.getSessionStatus(cleanupOwner.sessionId)?.state, 'handoff_cleanup');
   assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, cleanupOwner.sessionId);
 });
+
+test('binding commits reject stale authority versions without replacing newer state', () => {
+  const { registry, create } = fixture();
+  const session = create('a', 'worktree-a');
+  const before = registry.getSessionStatus(session.sessionId);
+  assert.ok(before);
+  registry.updateBindings(session, {
+    bindings: { pendingBuild: { buildToken: 'newer', buildGeneration: 2 } },
+  });
+
+  assert.throws(
+    () =>
+      registry.updateBindings(session, {
+        expectedAuthorityVersion: before.authorityVersion,
+        bindings: {
+          pendingBuild: null,
+          install: { buildGeneration: 1 },
+        },
+      }),
+    /authority version changed before binding commit/,
+  );
+  assert.deepEqual(registry.getSessionStatus(session.sessionId)?.bindings.pendingBuild, {
+    buildToken: 'newer',
+    buildGeneration: 2,
+  });
+  assert.equal(registry.getSessionStatus(session.sessionId)?.bindings.install, undefined);
+});

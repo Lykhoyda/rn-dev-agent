@@ -537,13 +537,13 @@ export function applyPackageIntegration(input, dependencies = {}) {
                 snapshot: metroSnapshot,
                 expected: metroSnapshot.contents,
                 replacement: metroOutput,
-                mode: 0o644,
+                mode: metroSnapshot.mode,
             },
         ]);
         applied.push({
             snapshot: metroSnapshot,
             written: metroOutput,
-            writtenMode: 0o644,
+            writtenMode: metroSnapshot.mode,
             directory: directories.app,
         });
         dependencies.afterWrite?.(metroConfigPath);
@@ -554,13 +554,13 @@ export function applyPackageIntegration(input, dependencies = {}) {
                 snapshot: packageSnapshot,
                 expected: packageSnapshot.contents,
                 replacement: packageOutput,
-                mode: 0o644,
+                mode: packageSnapshot.mode,
             },
         ]);
         applied.push({
             snapshot: packageSnapshot,
             written: packageOutput,
-            writtenMode: 0o644,
+            writtenMode: packageSnapshot.mode,
             directory: directories.app,
         });
         dependencies.afterWrite?.(packagePath);
@@ -618,13 +618,13 @@ export function restorePackageIntegrationFiles(input, dependencies = {}) {
                 snapshot: packageSnapshot,
                 expected: packageSnapshot.contents,
                 replacement: packageOutput,
-                mode: 0o644,
+                mode: packageSnapshot.mode,
             },
         ]);
         applied.push({
             snapshot: packageSnapshot,
             written: packageOutput,
-            writtenMode: 0o644,
+            writtenMode: packageSnapshot.mode,
             directory: directories.app,
         });
         dependencies.afterWrite?.(packagePath);
@@ -635,13 +635,13 @@ export function restorePackageIntegrationFiles(input, dependencies = {}) {
                 snapshot: metroSnapshot,
                 expected: metroSnapshot.contents,
                 replacement: metroOutput,
-                mode: 0o644,
+                mode: metroSnapshot.mode,
             },
         ]);
         applied.push({
             snapshot: metroSnapshot,
             written: metroOutput,
-            writtenMode: 0o644,
+            writtenMode: metroSnapshot.mode,
             directory: directories.app,
         });
         dependencies.afterWrite?.(metroConfigPath);

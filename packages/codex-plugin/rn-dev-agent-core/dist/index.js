@@ -68383,13 +68383,13 @@ function applyPackageIntegration(input, dependencies = {}) {
         snapshot: metroSnapshot,
         expected: metroSnapshot.contents,
         replacement: metroOutput,
-        mode: 420
+        mode: metroSnapshot.mode
       }
     ]);
     applied.push({
       snapshot: metroSnapshot,
       written: metroOutput,
-      writtenMode: 420,
+      writtenMode: metroSnapshot.mode,
       directory: directories.app
     });
     dependencies.afterWrite?.(metroConfigPath);
@@ -68401,13 +68401,13 @@ function applyPackageIntegration(input, dependencies = {}) {
         snapshot: packageSnapshot,
         expected: packageSnapshot.contents,
         replacement: packageOutput,
-        mode: 420
+        mode: packageSnapshot.mode
       }
     ]);
     applied.push({
       snapshot: packageSnapshot,
       written: packageOutput,
-      writtenMode: 420,
+      writtenMode: packageSnapshot.mode,
       directory: directories.app
     });
     dependencies.afterWrite?.(packagePath);
@@ -68463,13 +68463,13 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
         snapshot: packageSnapshot,
         expected: packageSnapshot.contents,
         replacement: packageOutput,
-        mode: 420
+        mode: packageSnapshot.mode
       }
     ]);
     applied.push({
       snapshot: packageSnapshot,
       written: packageOutput,
-      writtenMode: 420,
+      writtenMode: packageSnapshot.mode,
       directory: directories.app
     });
     dependencies.afterWrite?.(packagePath);
@@ -68480,13 +68480,13 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
         snapshot: metroSnapshot,
         expected: metroSnapshot.contents,
         replacement: metroOutput,
-        mode: 420
+        mode: metroSnapshot.mode
       }
     ]);
     applied.push({
       snapshot: metroSnapshot,
       written: metroOutput,
-      writtenMode: 420,
+      writtenMode: metroSnapshot.mode,
       directory: directories.app
     });
     dependencies.afterWrite?.(metroConfigPath);
@@ -68649,49 +68649,48 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
 
 // packages/rn-dev-agent-core/dist/tools/session.js
 init_device_arbiter();
-function sameMetroAuthority(current, next) {
-  return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
-}
-async function waitForExactStopped(probe, timeoutMs, message) {
+
+// packages/rn-dev-agent-core/dist/session/process-cleanup.js
+init_process_birth();
+async function waitForExactStopped(probe, timeoutMs, code, message) {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const status = probe();
     if (status === "stopped")
       return;
     if (status === "unknown") {
-      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${message}; shutdown identity is unknown`);
+      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
     }
     if (Date.now() >= deadline) {
-      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", message);
+      throw new SessionAuthorityError(code, message);
     }
     await new Promise((resolve8) => setTimeout(resolve8, 25));
   }
 }
-async function stopHandoffObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3) {
+async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3) {
   const port = Number(binding.port);
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
   const instanceId = String(binding.instanceId ?? "");
   const capability = String(binding.cleanupCapability ?? "");
-  const stopRequestedAt = Number(binding.stopRequestedAt);
-  if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability || !Number.isFinite(stopRequestedAt)) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
+  if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup authority is incomplete");
   }
   const currentListener = listenerProbe(port);
   if (currentListener.status === "unknown") {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener lookup is inconclusive");
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener lookup is inconclusive");
   }
   if (currentListener.status === "absent" || currentListener.pid !== pid)
     return;
   const currentBirth = processProbe(pid);
   if (currentBirth.status === "unknown") {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe process identity is unavailable");
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe process identity is unavailable");
   }
   if (currentBirth.status === "absent") {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener identity is internally inconsistent");
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener identity is internally inconsistent");
   }
   if (currentBirth.birth.token !== expectedBirth) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe listener PID was reused before cleanup completed");
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener PID was reused before cleanup completed");
   }
   const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
     method: "POST",
@@ -68701,28 +68700,26 @@ async function stopHandoffObserve(binding, listenerProbe = probeManagedMetroList
     }
   });
   if (!response.ok) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe server refused fenced handoff cleanup");
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe server refused fenced cleanup");
   }
   await waitForExactStopped(() => {
     const observed = listenerProbe(port);
     if (observed.status === "unknown")
       return "unknown";
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
-  }, timeoutMs, "source Observe listener did not stop before the cleanup deadline");
+  }, timeoutMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopHandoffRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
   const instanceId = String(binding.instanceId ?? "");
   const capability = String(binding.capability ?? "");
-  const claimKey = String(binding.claimKey ?? "");
-  const stopRequestedAt = Number(binding.stopRequestedAt);
-  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability || !claimKey || !Number.isFinite(stopRequestedAt)) {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner cleanup identity is incomplete");
+  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
   }
   const current = processProbe(pid);
   if (current.status === "unknown") {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner process identity is unavailable");
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
   }
   if (current.status === "absent" || current.birth.token !== expectedBirth)
     return;
@@ -68732,7 +68729,27 @@ async function stopHandoffRunner(binding, processProbe = probeProcessBirth, sign
     if (observed.status === "unknown")
       return "unknown";
     return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
-  }, timeoutMs, "source runner process did not stop before the cleanup deadline");
+  }, timeoutMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+function sameMetroAuthority(current, next) {
+  return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
+}
+async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2e3) {
+  const stopRequestedAt = Number(binding.stopRequestedAt);
+  if (!Number.isFinite(stopRequestedAt)) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
+  }
+  await stopBoundObserve(binding, listenerProbe, processProbe, timeoutMs);
+}
+async function stopHandoffRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+  const claimKey = String(binding.claimKey ?? "");
+  const stopRequestedAt = Number(binding.stopRequestedAt);
+  if (!claimKey || !Number.isFinite(stopRequestedAt)) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner cleanup identity is incomplete");
+  }
+  await stopBoundRunner(binding, processProbe, signalProcess, timeoutMs);
 }
 function authorityFailure(error2) {
   if (error2 instanceof SessionAuthorityError) {
@@ -69034,7 +69051,36 @@ function createSessionHandler(runtime, dependencies = {}) {
         });
       }
       const status = registry2.getSessionStatus(session.sessionId);
-      const metro = status?.bindings.metro;
+      if (!status) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before release cleanup");
+      }
+      const metro = status.bindings.metro;
+      const runner = status.bindings.runner;
+      if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
+        if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
+        }
+        const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
+        if (dependencies.stopHandoffRunner) {
+          await dependencies.stopHandoffRunner(cleanup);
+        } else {
+          await stopBoundRunner(cleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+        }
+      }
+      const observe2 = status.bindings.observe;
+      if (observe2) {
+        const port = String(observe2.port);
+        if (status.bindings.observePort !== observe2.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+          throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
+        }
+        const cleanup = { ...observe2, stopRequestedAt: Date.now() };
+        if (dependencies.stopHandoffObserve) {
+          await dependencies.stopHandoffObserve(cleanup);
+        } else {
+          await stopBoundObserve(cleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
+        }
+      }
       if (metro?.mode === "managed") {
         const signerCapability = dependencies.getSignerCapability?.();
         if (!signerCapability) {
