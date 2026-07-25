@@ -47,14 +47,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHmac } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const accumulatedRuntimeInputs = new Set();
+const accumulatedViolations = new Set();
+let cachedSourceRoot;
+let sourceRootResolved = false;
+let lastPolicyPayload;
 function sourceRoot() {
+  if (sourceRootResolved) return cachedSourceRoot;
   try {
-    return fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
+    cachedSourceRoot = fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim());
+    sourceRootResolved = true;
+    return cachedSourceRoot;
   } catch (error) {
-    if (String(error && error.stderr || '').toLowerCase().includes('not a git repository')) return null;
+    if (String(error && error.stderr || '').toLowerCase().includes('not a git repository')) {
+      sourceRootResolved = true;
+      cachedSourceRoot = null;
+      return cachedSourceRoot;
+    }
     throw error;
   }
 }
@@ -93,6 +105,19 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       entry.includes('/' + excluded + '/')
     );
   }
+  function isLocalDependencyStore(candidate) {
+    if (!isContained(candidate)) return false;
+    const entry = path.relative(root, candidate).split(path.sep).join('/');
+    return [
+      'node_modules',
+      '.yarn/cache',
+      '.yarn/unplugged',
+    ].some((dependencyRoot) =>
+      entry === dependencyRoot ||
+      entry.startsWith(dependencyRoot + '/') ||
+      entry.includes('/' + dependencyRoot + '/')
+    );
+  }
   function addPath(value, field) {
     if (value === undefined) return;
     if (typeof value !== 'string') {
@@ -117,7 +142,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     if (value === undefined) return;
     if (typeof value !== 'string') {
       violations.push(field + ' must identify a module');
-      return;
+      return null;
     }
     try {
       const resolved = fs.realpathSync(require.resolve(value, { paths: [process.cwd()] }));
@@ -125,8 +150,17 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       if (!isContained(resolved) || isExcluded(resolved)) {
         violations.push(field + ' must resolve to Git-authenticated source or a local dependency store');
       }
+      return resolved;
     } catch {
       violations.push(field + ' cannot be resolved as an authenticated module');
+      return null;
+    }
+  }
+  function addExecutableModule(value, field) {
+    if (value === undefined) return;
+    const resolved = addModule(value, field);
+    if (resolved && !isLocalDependencyStore(resolved)) {
+      violations.push(field + ' executable closure must resolve inside a local dependency store');
     }
   }
   addPath(config.projectRoot, 'projectRoot');
@@ -147,50 +181,69 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   if (serializer.customSerializer !== undefined || serializer.experimentalSerializerHook !== undefined) {
     violations.push('custom Metro serializers are unsupported');
   }
-  addModule(resolver.dependencyExtractor, 'dependencyExtractor');
-  addModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
+  addExecutableModule(config.transformerPath, 'transformerPath');
+  addExecutableModule(resolver.dependencyExtractor, 'dependencyExtractor');
+  addExecutableModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
   addModule(resolver.emptyModulePath, 'emptyModulePath');
   addModule(transformer.asyncRequireModulePath, 'asyncRequireModulePath');
-  addModule(transformer.babelTransformerPath, 'babelTransformerPath');
-  addModule(transformer.minifierPath, 'minifierPath');
+  addExecutableModule(transformer.babelTransformerPath, 'babelTransformerPath');
+  addExecutableModule(transformer.minifierPath, 'minifierPath');
   if (transformer.assetPlugins !== undefined) {
     if (!Array.isArray(transformer.assetPlugins)) {
       violations.push('assetPlugins must identify modules');
     } else {
-      transformer.assetPlugins.forEach((value) => addModule(value, 'assetPlugins'));
+      transformer.assetPlugins.forEach((value) => addExecutableModule(value, 'assetPlugins'));
     }
   }
   if (/(?:^|\\s)(?:--(?:require|import|loader|experimental-loader)\\b|-r\\b)/.test(process.env.NODE_OPTIONS || '')) {
     violations.push('NODE_OPTIONS loaders are unsupported');
   }
   Object.keys(require.cache).forEach((value) => addPath(value, 'loaded Metro config module'));
+  runtimeInputs.forEach((value) => accumulatedRuntimeInputs.add(value));
+  violations.forEach((value) => accumulatedViolations.add(value));
   const payload = {
     version: 1,
     sessionId,
     metroInstanceId,
     contentRoot: root,
     appRoot: fs.realpathSync(process.cwd()),
-    runtimeInputs: [...runtimeInputs].sort(),
-    violations: [...new Set(violations)].sort(),
+    runtimeInputs: [...accumulatedRuntimeInputs].sort(),
+    violations: [...accumulatedViolations].sort(),
   };
+  const serializedPayload = JSON.stringify(payload);
+  if (serializedPayload === lastPolicyPayload) return;
   const receipt = {
     ...payload,
-    signature: createHmac('sha256', capability).update(JSON.stringify(payload)).digest('hex'),
+    signature: createHmac('sha256', capability).update(serializedPayload).digest('hex'),
   };
   const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY)});
   const temporary = policyPath + '.' + process.pid + '.tmp';
   fs.writeFileSync(temporary, JSON.stringify(receipt) + '\\n', { mode: 0o600 });
   fs.renameSync(temporary, policyPath);
+  lastPolicyPayload = serializedPayload;
 }
 function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
   return function (...args) {
+    const cacheEntriesBefore = Object.keys(require.cache).length;
     const finish = (value) => {
-      runtimePolicy(getConfig(), includeReturnedPaths && Array.isArray(value) ? value : []);
-      return value;
+      const returnedPaths = includeReturnedPaths && Array.isArray(value) ? value : [];
+      if (returnedPaths.length > 0 || Object.keys(require.cache).length !== cacheEntriesBefore) {
+        runtimePolicy(getConfig(), returnedPaths);
+      }
+      return typeof value === 'function'
+        ? withPolicyRefresh(value, getConfig, false)
+        : value;
     };
     const result = callback.apply(this, args);
     return result && typeof result.then === 'function' ? result.then(finish) : finish(result);
   };
+}
+function withPolicyCallbacks(config, names, getConfig) {
+  return Object.fromEntries(names.flatMap((name) =>
+    typeof config[name] === 'function'
+      ? [[name, withPolicyRefresh(config[name], getConfig, false)]]
+      : []
+  ));
 }
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
@@ -222,6 +275,16 @@ module.exports = function withRnDevAgentAuthority(config) {
     },
     serializer: {
       ...serializer,
+      ...withPolicyCallbacks(
+        serializer,
+        [
+          'createModuleIdFactory',
+          'processModuleFilter',
+          'getRunModuleStatement',
+          'isThirdPartyModule',
+        ],
+        () => finalConfig,
+      ),
       ...(typeof serializer.getPolyfills === 'function'
         ? { getPolyfills: withPolicyRefresh(serializer.getPolyfills, () => finalConfig, true) }
         : {}),
