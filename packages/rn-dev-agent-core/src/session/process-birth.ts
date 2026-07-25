@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 export interface ProcessBirth {
   pid: number;
-  source: 'darwin-vmmap' | 'linux-proc' | 'windows-powershell';
+  source: 'darwin-libproc' | 'linux-proc' | 'windows-powershell';
   token: string;
 }
 
@@ -23,13 +23,27 @@ function defaultRun(command: string, args: readonly string[]): string {
   return execFileSync(command, [...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 2_000,
+    timeout: command === '/usr/bin/swift' ? 10_000 : 2_000,
   });
 }
 
 function token(parts: readonly string[]): string {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
+
+const DARWIN_PROCESS_BIRTH_PROBE = `import Darwin
+guard CommandLine.arguments.count == 2,
+      let pid = Int32(CommandLine.arguments[1]) else {
+  exit(2)
+}
+var info = proc_bsdinfo()
+let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+let observedSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, expectedSize)
+guard observedSize == expectedSize, info.pbi_pid == pid else {
+  exit(3)
+}
+print("\\(info.pbi_pid):\\(info.pbi_start_tvsec):\\(info.pbi_start_tvusec)")
+`;
 
 export function readProcessBirth(
   pid: number,
@@ -54,22 +68,13 @@ export function probeProcessBirth(
       const observedPid = run('/bin/ps', ['-p', String(pid), '-o', 'pid=']).trim();
       if (observedPid.length === 0) return { status: 'absent' };
       if (Number(observedPid) !== pid) return { status: 'unknown' };
-      const processInfo = run('/usr/bin/vmmap', ['-summary', String(pid)]);
-      const processMatch = /^Process:\s+.+\[(\d+)\]$/m.exec(processInfo);
-      const launchMatch =
-        /^Launch Time:\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4})$/m.exec(
-          processInfo,
-        );
-      if (!processMatch || Number(processMatch[1]) !== pid || !launchMatch) {
-        return { status: 'unknown' };
-      }
-      const launchTime = Date.parse(
-        launchMatch[1].replace(
-          /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) ([+-]\d{4})$/,
-          '$1T$2$3',
-        ),
-      );
-      if (!Number.isSafeInteger(launchTime)) return { status: 'unknown' };
+      const processInfo = run('/usr/bin/swift', [
+        '-e',
+        DARWIN_PROCESS_BIRTH_PROBE,
+        String(pid),
+      ]).trim();
+      const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
+      if (!processMatch || Number(processMatch[1]) !== pid) return { status: 'unknown' };
       const bootSession = run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
         return { status: 'unknown' };
@@ -78,8 +83,13 @@ export function probeProcessBirth(
         status: 'present',
         birth: {
           pid,
-          source: 'darwin-vmmap',
-          token: token([platform, bootSession.toLowerCase(), String(launchTime)]),
+          source: 'darwin-libproc',
+          token: token([
+            platform,
+            bootSession.toLowerCase(),
+            processMatch[2],
+            processMatch[3],
+          ]),
         },
       };
     }

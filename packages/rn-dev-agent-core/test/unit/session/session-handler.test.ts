@@ -543,6 +543,40 @@ test('session release retains claims when managed Metro shutdown is not proven',
   assert.match(result.content[0].text, /METRO_AUTHORITY_MISMATCH/);
 });
 
+test('arbiter recovery requires operational session authority and explicit confirmation', async () => {
+  const calls: string[] = [];
+  const status = {
+    sessionId: 'session-a',
+    source: { kind: 'git' },
+    bindings: {},
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => {
+        calls.push('authority');
+        return {
+          registry: {},
+          session: { sessionId: 'session-a', claimEpoch: 1 },
+        };
+      },
+    },
+    {
+      resetArbiter: (reason) => {
+        calls.push(`reset:${reason}`);
+        return { clearedOps: 1, hadFlow: true, reason };
+      },
+    },
+  );
+
+  const refused = await handler({ action: 'recover_arbiter' });
+  const recovered = await handler({ action: 'recover_arbiter', confirmed: true });
+
+  assert.equal(refused.isError, true);
+  assert.equal(recovered.isError, undefined);
+  assert.deepEqual(calls, ['authority', 'authority', 'reset:manual via fenced rn_session']);
+});
+
 test('integration preview rejects a symlinked .rn-agent before reading its manifest', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-preview-symlink-'));
   const external = mkdtempSync(join(tmpdir(), 'rn-session-preview-external-'));

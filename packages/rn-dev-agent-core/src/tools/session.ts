@@ -29,6 +29,7 @@ import {
   type ManagedMetroBinding,
   type ManagedMetroListenerProbe,
 } from '../session/managed-metro.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
 
 export interface SessionToolInput {
   action:
@@ -40,6 +41,7 @@ export interface SessionToolInput {
     | 'cancel_handoff'
     | 'accept_handoff'
     | 'adopt_stale'
+    | 'recover_arbiter'
     | 'preview_integration'
     | 'apply_integration'
     | 'restore_integration'
@@ -84,6 +86,11 @@ interface SessionHandlerDependencies {
   probeListener?: (port: number) => ManagedMetroListenerProbe;
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
   stopManagedMetro?: typeof stopManagedMetro;
+  resetArbiter?: (reason: string) => {
+    clearedOps: number;
+    hadFlow: boolean;
+    reason: string;
+  };
   cleanupTimeoutMs?: number;
 }
 
@@ -284,6 +291,22 @@ export function createSessionHandler(
       const { registry, session } = isRecovery
         ? runtime.requireRecovery()
         : runtime.requireOperational();
+      if (input.action === 'recover_arbiter') {
+        if (input.confirmed !== true) {
+          throw new SessionAuthorityError(
+            'SESSION_AUTHORITY_REQUIRED',
+            'recover_arbiter requires confirmed=true',
+          );
+        }
+        const arbiterReset = (dependencies.resetArbiter ?? ((reason) => arbiter.reset(reason)))(
+          'manual via fenced rn_session',
+        );
+        return okResult({
+          arbiterReset,
+          session: projectPublicAuthorityStatus(runtime.status()),
+        });
+      }
+
       if (input.action === 'bind_device') {
         const platform = required(input.platform, 'platform') as 'ios' | 'android';
         const deviceId = required(input.deviceId, 'deviceId') as string;

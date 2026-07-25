@@ -862,7 +862,7 @@ async function disconnectBoundSession() {
 
 trackedTool(
   'rn_session',
-  'Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, and release actions are fail-closed.',
+  'Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, recovery, and release actions are fail-closed.',
   {
     action: z.enum([
       'status',
@@ -873,6 +873,7 @@ trackedTool(
       'cancel_handoff',
       'accept_handoff',
       'adopt_stale',
+      'recover_arbiter',
       'preview_integration',
       'apply_integration',
       'restore_integration',
@@ -910,12 +911,6 @@ trackedTool(
       .optional()
       .describe(
         'Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups',
-      ),
-    resetArbiter: z
-      .boolean()
-      .optional()
-      .describe(
-        'Clear a wedged in-memory device arbiter (a leaked plane lease refusing all flows). Escape hatch — cdp_status is unarbitrated so it always runs.',
       ),
   },
   createPassiveStatusHandler(getClient, authorityRuntime),

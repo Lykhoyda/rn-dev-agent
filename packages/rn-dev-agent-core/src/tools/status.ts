@@ -5,7 +5,6 @@ import { handleDevClientPicker, isDevClientPickerShowing } from './dev-client-pi
 import { PickerBlockingBundleError } from '../cdp/connect.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
-import { arbiter } from '../lifecycle/device-arbiter.js';
 import { recoverWedge } from '../cdp/recover-wedge.js';
 import { recoverDetached } from '../cdp/recover-detached.js';
 import type { DetachedRecoveryResult, RecoverDetachedDeps } from '../cdp/recover-detached.js';
@@ -70,13 +69,7 @@ export function createPassiveStatusHandler(
   getClient: () => CDPClient,
   authorityRuntime: WorkerAuthorityRuntime,
 ) {
-  return async (args: { metroPort?: number; platform?: string; resetArbiter?: boolean }) => {
-    if (args.resetArbiter) {
-      return failResult(
-        'cdp_status is passive; use an explicit recovery transition to reset the arbiter',
-        'INVALID_ARGUMENT',
-      );
-    }
+  return async (args: { metroPort?: number; platform?: string }) => {
     const client = getClient();
     const target = client.connectedTarget;
     return okResult({
@@ -288,17 +281,7 @@ export function createStatusHandler(
   } = {},
 ) {
   const recoverDetachedFn = deps.recoverDetached ?? recoverDetached;
-  return async (args: { metroPort?: number; platform?: string; resetArbiter?: boolean }) => {
-    if (args?.resetArbiter) {
-      const arbiterReset = arbiter.reset('manual via cdp_status');
-      // Best-effort: still report normal status, annotated with what was cleared.
-      try {
-        const status = await buildStatusResult(getClient());
-        return okResult({ ...status, arbiterReset });
-      } catch {
-        return okResult({ arbiterReset });
-      }
-    }
+  return async (args: { metroPort?: number; platform?: string }) => {
     try {
       let client = getClient();
       const session = getActiveSession();

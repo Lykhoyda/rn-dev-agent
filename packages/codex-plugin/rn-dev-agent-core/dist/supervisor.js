@@ -641,7 +641,7 @@ function defaultRun(command, args) {
   return execFileSync2(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3
+    timeout: command === "/usr/bin/swift" ? 1e4 : 2e3
   });
 }
 function token(parts) {
@@ -664,14 +664,13 @@ function probeProcessBirth(pid, dependencies = {}) {
         return { status: "absent" };
       if (Number(observedPid) !== pid)
         return { status: "unknown" };
-      const processInfo = run("/usr/bin/vmmap", ["-summary", String(pid)]);
-      const processMatch = /^Process:\s+.+\[(\d+)\]$/m.exec(processInfo);
-      const launchMatch = /^Launch Time:\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4})$/m.exec(processInfo);
-      if (!processMatch || Number(processMatch[1]) !== pid || !launchMatch) {
-        return { status: "unknown" };
-      }
-      const launchTime = Date.parse(launchMatch[1].replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) ([+-]\d{4})$/, "$1T$2$3"));
-      if (!Number.isSafeInteger(launchTime))
+      const processInfo = run("/usr/bin/swift", [
+        "-e",
+        DARWIN_PROCESS_BIRTH_PROBE,
+        String(pid)
+      ]).trim();
+      const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
+      if (!processMatch || Number(processMatch[1]) !== pid)
         return { status: "unknown" };
       const bootSession = run("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]).trim();
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(bootSession)) {
@@ -681,8 +680,13 @@ function probeProcessBirth(pid, dependencies = {}) {
         status: "present",
         birth: {
           pid,
-          source: "darwin-vmmap",
-          token: token([platform, bootSession.toLowerCase(), String(launchTime)])
+          source: "darwin-libproc",
+          token: token([
+            platform,
+            bootSession.toLowerCase(),
+            processMatch[2],
+            processMatch[3]
+          ])
         }
       };
     }
@@ -726,9 +730,23 @@ function probeProcessBirth(pid, dependencies = {}) {
   }
   return { status: "unknown" };
 }
+var DARWIN_PROCESS_BIRTH_PROBE;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
+    DARWIN_PROCESS_BIRTH_PROBE = `import Darwin
+guard CommandLine.arguments.count == 2,
+      let pid = Int32(CommandLine.arguments[1]) else {
+  exit(2)
+}
+var info = proc_bsdinfo()
+let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+let observedSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, expectedSize)
+guard observedSize == expectedSize, info.pbi_pid == pid else {
+  exit(3)
+}
+print("\\(info.pbi_pid):\\(info.pbi_start_tvsec):\\(info.pbi_start_tvusec)")
+`;
   }
 });
 
@@ -49410,7 +49428,7 @@ function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
         return await handler(...args);
       }
       const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : "a Maestro flow";
-      return failResult(`Refusing ${name}: blocked by ${who} on this device \u2014 reads and taps can't interleave with a running Maestro flow. Retry after it completes; if it appears stuck, run cdp_status({ resetArbiter: true }).`, res.code, { holder: res.holder, conflict: true });
+      return failResult(`Refusing ${name}: blocked by ${who} on this device \u2014 reads and taps can't interleave with a running Maestro flow. Retry after it completes; if it appears stuck, run rn_session({ action: "recover_arbiter", confirmed: true }).`, res.code, { holder: res.holder, conflict: true });
     }
     try {
       return await handler(...args);
@@ -54962,9 +54980,6 @@ function targetMatchesSession(target, filters) {
 }
 function createPassiveStatusHandler(getClient2, authorityRuntime2) {
   return async (args) => {
-    if (args.resetArbiter) {
-      return failResult("cdp_status is passive; use an explicit recovery transition to reset the arbiter", "INVALID_ARGUMENT");
-    }
     const client2 = getClient2();
     const target = client2.connectedTarget;
     return okResult({
@@ -54995,7 +55010,6 @@ var init_status = __esm({
     init_connect();
     init_reload();
     init_multiplexer();
-    init_device_arbiter();
     init_recover_wedge();
     init_recover_detached();
     init_app_installed_probe();
@@ -70603,6 +70617,16 @@ function createSessionHandler(runtime, dependencies = {}) {
     try {
       const isRecovery = input.action === "accept_handoff" || input.action === "adopt_stale";
       const { registry: registry2, session } = isRecovery ? runtime.requireRecovery() : runtime.requireOperational();
+      if (input.action === "recover_arbiter") {
+        if (input.confirmed !== true) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "recover_arbiter requires confirmed=true");
+        }
+        const arbiterReset = (dependencies.resetArbiter ?? ((reason) => arbiter.reset(reason)))("manual via fenced rn_session");
+        return okResult({
+          arbiterReset,
+          session: projectPublicAuthorityStatus(runtime.status())
+        });
+      }
       if (input.action === "bind_device") {
         const platform = required2(input.platform, "platform");
         const deviceId = required2(input.deviceId, "deviceId");
@@ -70901,6 +70925,7 @@ var init_session = __esm({
     init_public_status();
     init_process_birth();
     init_managed_metro();
+    init_device_arbiter();
   }
 });
 
@@ -72881,7 +72906,7 @@ var init_index = __esm({
       pinDevClient: pinSessionDevClient
     });
     disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
-    trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, and release actions are fail-closed.", {
+    trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, recovery, and release actions are fail-closed.", {
       action: external_exports.enum([
         "status",
         "bind_device",
@@ -72891,6 +72916,7 @@ var init_index = __esm({
         "cancel_handoff",
         "accept_handoff",
         "adopt_stale",
+        "recover_arbiter",
         "preview_integration",
         "apply_integration",
         "restore_integration",
@@ -72914,8 +72940,7 @@ var init_index = __esm({
     }, sessionHandler);
     trackedTool("cdp_status", "Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.", {
       metroPort: external_exports.number().optional().describe("Diagnostic comparison only; cdp_status never changes the active Metro port"),
-      platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
-      resetArbiter: external_exports.boolean().optional().describe("Clear a wedged in-memory device arbiter (a leaked plane lease refusing all flows). Escape hatch \u2014 cdp_status is unarbitrated so it always runs.")
+      platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups')
     }, createPassiveStatusHandler(getClient, authorityRuntime));
     trackedTool("observe", "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.", observeSchema, observeHandler);
     trackedTool("cdp_diagnostic_renderers", 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {

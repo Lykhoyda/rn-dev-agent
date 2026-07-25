@@ -10,6 +10,7 @@ import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
 import { probeManagedMetroListener, stopManagedMetro, } from '../session/managed-metro.js';
+import { arbiter } from '../lifecycle/device-arbiter.js';
 function sameMetroAuthority(current, next) {
     return (current?.port === next.port &&
         current.pid === next.pid &&
@@ -141,6 +142,16 @@ export function createSessionHandler(runtime, dependencies = {}) {
             const { registry, session } = isRecovery
                 ? runtime.requireRecovery()
                 : runtime.requireOperational();
+            if (input.action === 'recover_arbiter') {
+                if (input.confirmed !== true) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'recover_arbiter requires confirmed=true');
+                }
+                const arbiterReset = (dependencies.resetArbiter ?? ((reason) => arbiter.reset(reason)))('manual via fenced rn_session');
+                return okResult({
+                    arbiterReset,
+                    session: projectPublicAuthorityStatus(runtime.status()),
+                });
+            }
             if (input.action === 'bind_device') {
                 const platform = required(input.platform, 'platform');
                 const deviceId = required(input.deviceId, 'deviceId');
