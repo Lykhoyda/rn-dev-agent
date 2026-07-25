@@ -422,10 +422,11 @@ test('Android finalized output retries failed remote deletion without repulling'
     );
 
     assert.notEqual(firstStop.status, 0);
-    const finalizedPath = `${state.prefix}-${scope}.finalized-path`;
-    assert.equal(existsSync(finalizedPath), true);
-    const finalizedOutput = readFileSync(finalizedPath, 'utf8').trim();
-    assert.equal(existsSync(finalizedOutput), true);
+    assert.equal(existsSync(output), false);
+    const pullManifest = `${state.prefix}-${scope}.pull-manifest`;
+    assert.equal(existsSync(pullManifest), true);
+    const pulledCapture = readFileSync(pullManifest, 'utf8').split('\n')[1];
+    assert.equal(existsSync(pulledCapture), true);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
 
     const secondStop = spawnSync(
@@ -448,22 +449,24 @@ test('Android finalized output retries failed remote deletion without repulling'
     assert.equal(secondStop.status, 0, secondStop.stderr);
     assert.equal(existsSync(state.remoteDeleteMarker), true);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
-    assert.equal(existsSync(finalizedPath), false);
+    assert.equal(existsSync(pullManifest), false);
   } finally {
     state.cleanup();
   }
 });
 
-test('Android rejects a replaced finalized output before deleting the device capture', () => {
+test('Android migrates pending path-only finalization through a fresh pull', () => {
   const state = fixture();
   try {
     const output = join(state.root, 'proof.mp4');
-    const replacement = join(state.root, 'replacement.mp4');
+    const legacyFinalized = `${output.slice(0, -4)}.mov`;
     seedLocalBinding(state.prefix);
     writeFileSync(`${state.prefix}-${scope}.path`, output);
     writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+    writeFileSync(`${state.prefix}-${scope}.finalized-path`, legacyFinalized);
+    writeFileSync(legacyFinalized, 'legacy-finalized');
 
-    const firstStop = spawnSync(
+    const result = spawnSync(
       'bash',
       [state.script, 'stop', scope, '999999', 'local-birth'],
       {
@@ -474,20 +477,34 @@ test('Android rejects a replaced finalized output before deleting the device cap
           FAKE_KILL_MARKER: state.killMarker,
           FAKE_PULL_MARKER: state.pullMarker,
           FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
-          FAKE_REMOTE_DELETE_FAIL: '1',
           FAKE_STAT: '',
         },
       },
     );
-    assert.notEqual(firstStop.status, 0);
 
-    const finalizedPath = `${state.prefix}-${scope}.finalized-path`;
-    const finalizedOutput = readFileSync(finalizedPath, 'utf8').trim();
-    rmSync(finalizedOutput);
-    writeFileSync(replacement, 'replacement');
-    symlinkSync(replacement, finalizedOutput);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(state.pullMarker), true);
+    assert.equal(existsSync(state.remoteDeleteMarker), true);
+    assert.equal(readFileSync(legacyFinalized, 'utf8'), 'recording');
+    assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
+  } finally {
+    state.cleanup();
+  }
+});
 
-    const retry = spawnSync(
+test('Android atomically replaces an output symlink without writing its target', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    const publishedOutput = `${output.slice(0, -4)}.mov`;
+    const victim = join(state.root, 'victim.txt');
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.path`, output);
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+    writeFileSync(victim, 'unchanged');
+    symlinkSync(victim, publishedOutput);
+
+    const result = spawnSync(
       'bash',
       [state.script, 'stop', scope, '999999', 'local-birth'],
       {
@@ -497,15 +514,16 @@ test('Android rejects a replaced finalized output before deleting the device cap
           PATH: `${state.root}:${process.env.PATH}`,
           FAKE_KILL_MARKER: state.killMarker,
           FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
           FAKE_STAT: '',
         },
       },
     );
 
-    assert.notEqual(retry.status, 0);
-    assert.match(retry.stderr, /finalized recording output identity changed/);
-    assert.equal(existsSync(state.remoteDeleteMarker), false);
-    assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(victim, 'utf8'), 'unchanged');
+    assert.equal(lstatSync(publishedOutput).isSymbolicLink(), false);
+    assert.equal(readFileSync(publishedOutput, 'utf8'), 'recording');
   } finally {
     state.cleanup();
   }
