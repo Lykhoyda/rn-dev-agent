@@ -70430,14 +70430,13 @@ function recordLoaderResult(url, result) {
     recordLoaderViolation('Metro runtime module URL scheme is unsupported');
     return;
   }
+  if (result && result.format === 'addon') {
+    recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');
+    return;
+  }
   try {
     const resolved = fs.realpathSync(fileURLToPath(url));
-    const digest =
-      result && result.source != null
-        ? digestRuntimeSource(result.source)
-        : result && result.format === 'addon'
-          ? digestRuntimeFile(resolved)
-          : digestRuntimeSource(null);
+    const digest = digestRuntimeSource(result && result.source);
     if (observedLoaderDigests.get(resolved) === digest) return;
     observedLoaderDigests.set(resolved, digest);
     accumulatedRuntimeInputs.add(resolved);

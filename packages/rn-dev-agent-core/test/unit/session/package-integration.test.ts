@@ -519,7 +519,7 @@ test('Metro preload ignores caught optional module misses', () => {
   }
 });
 
-test('Metro preload authenticates native addon bytes when source is null', () => {
+test('Metro preload rejects native addons from strict proof', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-native-addon-'));
   try {
     execFileSync('git', ['init', '-q', root]);
@@ -554,10 +554,15 @@ test('Metro preload authenticates native addon bytes when source is null', () =>
     assert.ok(
       observations.some(
         (entry) =>
-          entry.kind === 'input' &&
-          entry.value === realpathSync(addonPath) &&
-          entry.digest === createHash('sha256').update(readFileSync(addonPath)).digest('hex'),
+          entry.kind === 'violation' &&
+          entry.value.includes('native addons are unsupported for strict proof'),
       ),
+    );
+    assert.equal(
+      observations.some(
+        (entry) => entry.kind === 'input' && entry.value === realpathSync(addonPath),
+      ),
+      false,
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
