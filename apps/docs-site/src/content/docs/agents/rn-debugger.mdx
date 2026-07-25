@@ -33,7 +33,7 @@ Captures the current screen state immediately before anything changes.
 
 ### Step 2: Data Gathering
 
-Connects via `cdp_status`, then gathers evidence in parallel:
+Inspects `rn_session`, connects the exact target when needed, then gathers evidence in parallel:
 
 | Source | Tool |
 |--------|------|
@@ -77,7 +77,9 @@ Reads relevant source files, applies the minimal targeted fix. Fast Refresh appl
 
 ### Step 6: Verify Recovery
 
-Confirms the fix by checking `cdp_status` (no errors, no RedBox), taking a new screenshot, verifying `cdp_error_log` is clear, and re-running the failing action via Maestro.
+Confirms the exact session and target remain connected, takes a new screenshot,
+verifies `cdp_component_tree` and `cdp_error_log` are clear, and re-runs the
+failing action via Maestro.
 
 ## Safety Constraints
 

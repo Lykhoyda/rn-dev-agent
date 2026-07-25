@@ -23,7 +23,6 @@ native device logs, and bash tools.
 | What is in the store? | MCP | `cdp_store_state(path="cart.items")` |
 | What API calls were made? | MCP | `cdp_network_log(limit=10)` |
 | What did console.log output? | MCP | `cdp_console_log(level="all")` |
-| Did the JS engine pause? | MCP | `cdp_status` (reports isPaused) |
 | Is there a RedBox overlay? | MCP | `cdp_component_tree` (auto-detects and warns) |
 | Dismiss RedBox / toggle inspector | MCP | `cdp_dev_settings(action="dismissRedBox")` |
 | Is Metro bundler alive? | MCP | `cdp_status` |
@@ -61,31 +60,24 @@ with the real bundle ID. Find the binary name on the bound simulator:
 
 ## Environment Status Check (Always First)
 
-Before any testing or debugging, call `cdp_status`. It returns:
+Before any testing or debugging, call `rn_session(action="status")`, then
+passive `cdp_status`. The status call reports only authority, Metro-client, and
+CDP-target diagnostics:
 
 ```json
 {
-  "metro": { "running": true, "port": 8081 },
-  "cdp": { "connected": true, "device": "iPhone 16 Pro", "pageId": 3 },
-  "app": {
-    "platform": "ios", "dev": true, "hermes": true,
-    "rnVersion": "0.83.1",
-    "dimensions": { "width": 393, "height": 852 },
-    "hasRedBox": false, "isPaused": false, "errorCount": 0
-  },
-  "capabilities": {
-    "networkDomain": true, "fiberTree": true, "networkFallback": false
-  }
+  "authoritative": false,
+  "authority": { "available": true, "state": "ready", "bundleBound": true },
+  "metro": { "port": 8081, "connected": true },
+  "cdp": { "connected": true, "target": { "platform": "ios", "appBound": true } }
 }
 ```
 
 Decision tree:
-- `metro.running = false` → inspect `rn_session(action="status")`, then use literal `pnpm ios` or `pnpm android` for an integrated session
-- `app.hasRedBox = true` → read `cdp_error_log`, fix the error, then `cdp_reload`
-- `app.isPaused = true` → `cdp_reload` (auto-reconnects after reload)
-- `app.errorCount > 0` → check `cdp_error_log` before continuing
-- `capabilities.networkDomain = false` → network logging uses injected hooks (RN < 0.83)
-- `capabilities.fiberTree = false` → release build or non-Hermes engine
+- session Metro not bound → use literal `pnpm ios` or `pnpm android` for an integrated session
+- `cdp.connected = false` → open the bound app, then call `cdp_connect`
+- `cdp_component_tree` reports RedBox or missing helpers → read `cdp_error_log`, fix the error, then `cdp_reload`
+- `cdp_error_log` contains entries → diagnose them before continuing
 
 ---
 
@@ -101,7 +93,7 @@ Decision tree:
 | `APP_HAS_REDBOX` | Error overlay showing | Read `cdp_error_log`, fix code, `cdp_reload` |
 | "No store found" | Zustand not exposed | Add `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` |
 | All CDP calls fail | Stale authority-bound Hermes target | Reload the bound app and reconnect with `cdp_connect` |
-| `dev: false` in status | Bound runtime lacks development helpers | Restart the session-bound Metro and app, then call `cdp_connect` |
+| Component-tree helper error | Bound runtime lacks development helpers | Restart the session-bound Metro and app, then call `cdp_connect` |
 | fiberTree/navRef missing | Bound runtime lacks the expected development context | Reload the authority-bound app; use `cdp_targets` only to diagnose foreign Hermes contexts |
 
 **Code 1006:** Hermes allows only one CDP client. Close all debugger UIs first.
@@ -218,7 +210,7 @@ If you notice yourself doing any of these, stop and reassess:
 
 ## Verification — Before Declaring a Fix Complete
 
-- [ ] `cdp_status` returns `ok:true` with no errors
+- [ ] `rn_session` is ready, passive `cdp_status` is connected, and `cdp_error_log` has no new errors
 - [ ] Reproduction steps executed AGAIN after the fix → bug no longer reproduces
 - [ ] `cdp_error_log(clear: true)` → `cdp_error_log()` shows zero new errors
 - [ ] If the bug showed symptoms on screen, `device_screenshot` now shows expected state

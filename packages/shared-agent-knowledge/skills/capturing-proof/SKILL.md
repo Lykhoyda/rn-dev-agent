@@ -271,6 +271,6 @@ Show the user:
 ## Prerequisites
 
 - iOS Simulator or Android Emulator running with the app loaded
-- Metro dev server running
+- Ready fenced session with the integrated Metro and signed app target
 - ffmpeg required for GIF conversion and video labeling (`brew install ffmpeg`)
 - Pillow auto-installed in a venv for label rendering (no manual setup needed)

@@ -208,9 +208,9 @@ reliably call other slash commands), but the contract is the same.
 
 ## Failure modes to flag
 
-- **Multi-app session**: if the flow's `appId` doesn't match the connected
-  CDP target, the replay will tap into the wrong app. Always check `appId`
-  against `cdp_status.cdp.bundleId` if a CDP session is active.
+- **Multi-app session**: require the ready fenced session before replay. The
+  action tool compares the flow against the bound app and fails closed on a
+  mismatch; passive `cdp_status` does not expose app identity for selection.
 - **iOS Simulator predictive-keyboard drop**: per
   `feedback_maestro_patterns.md` item 9, Maestro's `inputText` can drop
   characters under load. If a replay fails with a string-mismatch

@@ -107,7 +107,7 @@ If it still fails, give the user these manual instructions:
 4. Fallback: install Maestro CLI instead: `brew install maestro` (slower but compatible)
 5. Verify: `maestro-runner --version` should print a version number
 
-The plugin pins the tested engine version (GH #397; the pin lives in `packages/rn-dev-agent-core/src/domain/engine-pin.ts`, currently `1.0.9`). `cdp_status` → `replayEngine` reports `engine`, `version`, `pin.status` (`pinned-ok` / `unverified` / `drift-newer` / `drift-older` / `checksum-mismatch` / `unknown-version` / `not-installed`), and the engine's known quirks. Report the row as:
+The plugin pins the tested engine version (GH #397; the pin lives in `packages/rn-dev-agent-core/src/domain/engine-pin.ts`, currently `1.0.9`). Compare the installed `maestro-runner --version` with that pin; replay results carry the engine-pin verdict and known quirks. Report the row as:
 - `pinned-ok` → healthy, e.g. `maestro-runner 1.0.9 (pinned, quirks: android-hidekeyboard-noop, requires-adb-on-ios)`
 - drift/checksum states → WARN with the installed vs pinned versions; a drifted install still works but is untested (B223-class behavior changes arrive silently). Reinstall the pin with the command in step 1 above.
 - `unverified` → informational only (no hash shipped for this platform, or hashing failed); not a failure.
@@ -130,16 +130,19 @@ Call `rn_session(action="status")`, then inspect the bound Metro with
 `pnpm ios` or `pnpm android`.
 
 ### 8. CDP connection
-Call `cdp_status` MCP tool. Should return `ok: true` with `cdp.connected: true`.
-If it fails: check Metro is running, app is loaded on simulator, no other debugger connected.
+Call passive `cdp_status`. It should return `cdp.connected: true` for the
+authority-bound target. If disconnected, open the bound app and call
+`cdp_connect`; never select an ambient target.
 
 ### 8b. Injected helpers (`__RN_AGENT`)
-From the same `cdp_status` response, check `capabilities.helpersInjected`. Should be `true` once `cdp.connected: true`.
+Call a narrow `cdp_component_tree` query. A successful response proves helper
+injection; passive status deliberately does not duplicate helper capability
+state.
 
-If `helpersInjected: false`:
-- The bridge's auto-reinject already ran 1-shot during the call. If it's still false, the JS world is hung — Hermes is up but `__RN_AGENT` won't land.
+If it returns `HELPERS_NOT_INJECTED`:
+- The gated call already attempted reinjection. If it still fails, the JS world is hung — Hermes is up but `__RN_AGENT` won't land.
 - Surface this in the table as MISSING with action: "JS-tier tools (`cdp_interact`, `cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`) will fail with HELPERS_NOT_INJECTED. Fall back to `device_*` tools (XCTest path — no helpers required) for UI work, or call `cdp_reload` once to rebuild the JS context. If you also see `app.hasRedBox: true` or `app.errorCount > 0`, fix those first — `cdp_reload` won't help if the bundle itself errors out."
-- Also mention: don't sit in a `cdp_status` retry loop expecting it to flip — the bridge already retried and gave you the authoritative answer.
+- Also mention: don't sit in a status retry loop; use the gated helper result.
 
 ### 9. ffmpeg (optional — for video recording)
 ```bash
@@ -304,7 +307,7 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] `~/.maestro-runner/bin/maestro-runner --version` works (or `command -v maestro-runner`)
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
 - [ ] `rn_session(action="status")` and `cdp_status` report the bound Metro
-- [ ] `cdp_status` returns `ok:true` with `cdp.connected: true` AND `capabilities.helpersInjected: true`
+- [ ] Passive `cdp_status` reports `cdp.connected: true` and a narrow `cdp_component_tree` query succeeds
 - [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
 - [ ] idb row is `OK`, `INSTALLING (background)`, or `MISSING` with the manual command — never blocks setup (mirror falls back to simctl)
 - [ ] Plugin-version row is `OK` (installed = latest) / `OFFLINE` (acceptable) / `AHEAD (dev install)` — if `BEHIND`, surface the `/plugin update rn-dev-agent` instruction; user decides whether to update before continuing

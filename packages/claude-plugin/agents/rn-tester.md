@@ -162,9 +162,9 @@ project's own Maestro subflows instead of unreliable manual taps.
 1. Call `cdp_navigation_state`. Check the current route name.
 2. If the navigation state is **empty or minimal**, the app may still
    be loading (splash screen, token rehydration). Wait 3 seconds and
-   retry `cdp_navigation_state`. Also check if the Dev Client picker
-   is showing (`cdp_status` handles this automatically via GH #9) —
-   do NOT confuse the picker with an auth screen.
+   retry `cdp_navigation_state`. If the route remains unavailable, use a
+   device snapshot to distinguish the Dev Client picker from an auth screen;
+   passive `cdp_status` never dismisses UI.
 3. If the route suggests the user is logged out (common patterns:
    `Login`, `Welcome`, `SignIn`, `Register`, `Onboarding`, `Auth`,
    `Landing`):
@@ -513,11 +513,11 @@ errors exist.
    `device_screenshot(path="/tmp/verify-[feature].png")` — it serves pixels even
    mid-flow (falls back to `simctl`/`adb` internally when the runner can't).
 
-2. **Health check**: `cdp_status`
-   - Pass: Metro connected, no RedBox, errorCount == 0, isPaused == false
-   - Fail: fix the specific issue before continuing
+2. **Authority and connection check**: `rn_session`, then passive `cdp_status`
+   - Pass: the intended session is ready and its exact target is connected
+   - Fail: repair the named authority axis before continuing
 
-3. **Component check**: `cdp_component_tree(filter="<primary testID>", depth=3)`
+3. **Component and error check**: `cdp_component_tree(filter="<primary testID>", depth=3)`, then `cdp_error_log`
    - Pass: component appears in tree, required props present
    - Fail: component missing — check render condition and navigation state
 
@@ -541,7 +541,7 @@ Report results as a table:
 |-------|--------|----------|
 | Navigation | PASS/SKIP | current route |
 | Screenshot | PASS/FAIL | file path |
-| Health (cdp_status) | PASS/FAIL | errorCount, hasRedBox |
+| Authority and connection | PASS/FAIL | `rn_session` bindings + passive `cdp_status` |
 | Component (cdp_component_tree) | PASS/FAIL | component found, props |
 | State (cdp_store_state) | PASS/FAIL/SKIP | state shape |
 | Errors (cdp_error_log) | PASS/FAIL | error count |

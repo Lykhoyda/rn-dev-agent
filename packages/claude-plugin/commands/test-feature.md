@@ -113,7 +113,7 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
 ## Prerequisites
 
 - iOS Simulator or Android Emulator running with the app loaded
-- Metro dev server running (`npx expo start` or `npx react-native start`)
+- Ready fenced session with the integrated Metro and signed app target
 - Maestro or maestro-runner installed
 - For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry
 

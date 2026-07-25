@@ -1,11 +1,14 @@
 ---
 title: "check-env"
-description: "Verify that Metro, CDP, simulator, and the device runner are ready for testing."
+description: "Verify that the fenced session, Metro, CDP target, and device runner are ready for testing."
 sidebar:
   order: 3
 ---
 
-Check that the React Native development environment is ready for testing. Reports status for each subsystem and suggests fixes for any issues found.
+Check that the React Native development environment is ready for testing. The
+workflow reads `rn_session(action="status")` first, then uses passive
+`cdp_status` and `device_list` as diagnostic context. It never creates authority
+from an ambient port or the first available device.
 
 ## Usage
 
@@ -17,23 +20,22 @@ Check that the React Native development environment is ready for testing. Report
 
 | Subsystem | What it checks | Source |
 |-----------|---------------|--------|
-| Metro | Running? Which port? | `cdp_status` |
-| CDP | Connected to Hermes? Which device/page? | `cdp_status` |
-| App | Platform, RN version, Hermes enabled, screen dimensions | `cdp_status` |
-| Capabilities | Network domain available? Fiber tree accessible? | `cdp_status` |
-| Errors | Active error count, RedBox showing, debugger paused? | `cdp_status` |
-| Device runner | Devices available? (iOS: rn-fast-runner / Android: rn-android-runner — both in-tree) | `device_list` |
+| Session | Ready state, worktree, app, platform, device, Metro, and migration readiness | `rn_session(action="status")` |
+| Metro | Allocated and bound port for this session | `rn_session`, then passive `cdp_status` |
+| CDP | Whether the exact authority-bound Hermes target is connected | `rn_session`, then passive `cdp_status` |
+| Device inventory | Available devices for diagnosis only | `device_list` |
 
 ## Common Fixes
 
 | Status | Suggested fix |
 |--------|--------------|
-| Metro not found | `npx expo start` or `npx react-native start` |
-| No Hermes target | Open the app on the simulator |
+| Session missing or not ready | Run setup, review/apply the integration preview, and bind the intended device and app |
+| Metro not found | Use literal `pnpm ios` or `pnpm android` through the confirmed integration |
+| No Hermes target | Open the bound app, then call `cdp_connect` for the exact signed target |
 | CDP code 1006 | Close React Native DevTools, Flipper, or Chrome DevTools |
-| hasRedBox: true | Run `/rn-dev-agent:debug-screen` |
-| isPaused: true | Remove `debugger;` statements or use `cdp_reload` |
-| fiberTree: false | Only works in `__DEV__` builds with Hermes |
+| `cdp_component_tree` reports RedBox | Run `/rn-dev-agent:debug-screen` |
+| Narrow gated CDP read times out | Check for a blocked JS thread, then use `cdp_reload` |
+| `HELPERS_NOT_INJECTED` | Use a `__DEV__` Hermes build; retry through the gated tool after reload |
 | No devices | Boot a simulator: `xcrun simctl boot "iPhone 16"` |
 
 ## When to Use

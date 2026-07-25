@@ -251,24 +251,14 @@ device_screenshot(path="/tmp/rn-feature-verify.jpg")
 
 ### Step 2: Health Check
 
-Call `cdp_status`. Gate on:
-- `metro.running` = true
-- `cdp.connected` = true
-- `app.dev` = true (not false)
-- `app.hasRedBox` = false
-- `app.isPaused` = false
-- `app.errorCount` = 0
+Call `rn_session(action="status")`, then passive `cdp_status`. Gate on the
+session being ready with bound Metro and bundle, and on `cdp.connected = true`.
+Then use `cdp_component_tree` for helper/render health and `cdp_error_log` for
+the error baseline; passive status deliberately does not duplicate those
+tool-owned facts.
 
-If `app.dev` is false: the authority-bound runtime lacks the required
-development helpers. Call `cdp_reload(full=true)` to reload that exact app and
-re-prove its signed target. If it is still false, ask the user to restart the
-session-bound Metro and app.
-
-If `isPaused` is true: call `cdp_reload(full=true)` to recover, then
-restart Phase 5.5 from Step 0.
-
-If RedBox is showing: read `cdp_error_log`, fix the error in source,
-save, wait for Fast Refresh, then restart Phase 5.5 from Step 0.
+If the component-tree call reports missing helpers or a RedBox, reload the
+authority-bound app, fix any reported error, and restart Phase 5.5 from Step 0.
 
 ### Step 3: Component Verification
 
@@ -331,7 +321,7 @@ Present results as a table (use the actual screenshot path for the platform):
 |-------|--------|----------|
 | Navigation (cdp_navigation_state) | PASS/SKIP | current route |
 | Screenshot | PASS/FAIL | actual file path |
-| Health (cdp_status) | PASS/FAIL | errorCount, hasRedBox, isPaused |
+| Authority and connection | PASS/FAIL | `rn_session` bindings + passive `cdp_status` |
 | Component (cdp_component_tree) | PASS/FAIL | component found, props summary |
 | Interaction (device_find/device_press) | PASS/FAIL/SKIP | action + side effect verified |
 | State (cdp_store_state) | PASS/FAIL/SKIP | state shape summary |
@@ -473,7 +463,7 @@ completing. Mark all todos complete.
 ## Prerequisites
 
 - iOS Simulator or Android Emulator running with the app loaded
-- Metro dev server running (`npx expo start` or `npx react-native start`)
+- Ready fenced session with the integrated Metro and signed app target
 - For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry
 
 ## Safety Constraints (GH #5)

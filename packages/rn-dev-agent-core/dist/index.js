@@ -916,7 +916,7 @@ trackedTool('cdp_wait_for_network', 'Block until a network request matching url_
     device: z.string().optional().describe('Device key OR "all". Defaults to the active device.'),
 }, createWaitForNetworkHandler(getClient));
 trackedTool('cdp_heap_usage', 'Get current JS heap memory usage. Single fast CDP call — useful before/after operations to detect memory leaks. Returns used/total in bytes and MB.', {}, createHeapUsageHandler(getClient));
-trackedTool('cdp_cpu_profile', 'Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count. Requires Profiler domain (check cdp_status domains.profiler).', {
+trackedTool('cdp_cpu_profile', 'Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count and reports when the Profiler domain is unavailable.', {
     durationMs: z
         .number()
         .int()

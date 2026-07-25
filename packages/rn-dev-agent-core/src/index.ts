@@ -1223,7 +1223,7 @@ trackedTool(
 
 trackedTool(
   'cdp_cpu_profile',
-  'Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count. Requires Profiler domain (check cdp_status domains.profiler).',
+  'Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count and reports when the Profiler domain is unavailable.',
   {
     durationMs: z
       .number()

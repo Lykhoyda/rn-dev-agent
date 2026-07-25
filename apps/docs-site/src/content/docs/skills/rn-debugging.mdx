@@ -24,7 +24,6 @@ Activates when Claude encounters crashes, blank screens, connection issues, erro
 | Store state | MCP | `cdp_store_state(path="...")` |
 | API calls | MCP | `cdp_network_log` |
 | Console output | MCP | `cdp_console_log(level="all")` |
-| Debugger paused? | MCP | `cdp_status` (reports isPaused) |
 | RedBox overlay? | MCP | `cdp_component_tree` (auto-detects) |
 | Metro alive? | MCP | `cdp_status` |
 | UI element tree | MCP | `device_snapshot` |
@@ -45,15 +44,14 @@ If `cdp_error_log` is empty but the app is broken, the problem is native.
 | Native crash (Android) | `collect_logs(sources=["native_android"])` |
 | Network failure | `cdp_network_log` (status=0) |
 
-### Environment Status (`cdp_status`)
+### Environment authority and health
 
-Always called first. Decision tree:
-- `metro.running = false` means inspect `rn_session`, then run the integrated package script
-- `app.hasRedBox = true` means read `cdp_error_log`, fix, reload
-- `app.isPaused = true` means `cdp_reload`
-- `app.errorCount > 0` means check `cdp_error_log`
-- `capabilities.networkDomain = false` means network logging uses injected hooks (RN < 0.83)
-- `capabilities.fiberTree = false` means release build or non-Hermes engine
+Call `rn_session(action="status")` first, then passive `cdp_status`.
+
+- Missing Metro or bundle binding means repair the session through the integrated package script.
+- A disconnected exact target means open the bound app and call `cdp_connect`.
+- Use `cdp_component_tree` for helper and RedBox health.
+- Use `cdp_error_log` for active JavaScript errors.
 
 ### Connection Troubleshooting
 

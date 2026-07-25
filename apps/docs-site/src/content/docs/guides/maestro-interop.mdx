@@ -32,7 +32,7 @@ A `maestro_run` / `maestro_test_all` flow (rn-dev-agent's own L3) takes the devi
 
 ## Why there's no shared "WDA session" to ride (#210)
 
-A natural question: since maestro drives the device fine via WebDriverAgent, can `device_*` "ride" that WDA session instead of rn-fast-runner? No — maestro-runner spawns WDA **per flow** and tears it down when the flow exits, so there's no persistent session to attach to, and a WDA client would add a *second* XCUITest backend (the opposite of unifying). The coherent model is: **rn-fast-runner is the `device_*` backend** (it auto-spawns when prebuilt — `cdp_status.deviceSession` shows its `alive`/`stale`/`dead` state), **maestro/WDA is the flow engine**, and they're serialized. Mid-flow, use simctl for pixels and CDP reads for state/tree.
+A natural question: since maestro drives the device fine via WebDriverAgent, can `device_*` "ride" that WDA session instead of rn-fast-runner? No — maestro-runner spawns WDA **per flow** and tears it down when the flow exits, so there's no persistent session to attach to, and a WDA client would add a *second* XCUITest backend (the opposite of unifying). The coherent model is: **rn-fast-runner is the `device_*` backend** (it auto-spawns when prebuilt, and device calls report runner failures directly), **maestro/WDA is the flow engine**, and they're serialized. Mid-flow, use simctl for pixels and CDP reads for state/tree.
 
 ## Using rn-dev-agent with React Native DevTools
 

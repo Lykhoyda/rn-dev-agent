@@ -15,7 +15,8 @@ Invoke a workflow as `$rn-dev-agent:<workflow> [request text]`.
 
 ### Mandatory preflight before app/device interaction
 
-1. Inspect the active MCP inventory and call `cdp_status` before app work.
+1. Inspect the active MCP inventory, call `rn_session(action="status")`, then
+   passive `cdp_status` before app work.
 2. Run `$rn-dev-agent:list-learned-actions [feature keyword]` before composing
    any `device_*` sequence.
 3. If a saved action covers all or part of the requested setup, replay it with
@@ -90,8 +91,8 @@ reclassified as accepted evidence.
 - If skills/tools are absent, use the documented external read-only health
   command. If tools are present but calls say `Transport closed`, relaunch the
   owning Codex process; do not kill a process owned by another host.
-- A callable `cdp_status` reporting no app is an app/setup problem, not missing
-  plugin discovery.
+- A callable `cdp_status` reporting no bound target is an app/session setup
+  problem, not missing plugin discovery.
 - Recovery diagnosis is read-only. It recommends commands but never installs,
   updates, removes, rewrites configuration, attaches to a device, controls
   Observe, or kills/restarts processes.

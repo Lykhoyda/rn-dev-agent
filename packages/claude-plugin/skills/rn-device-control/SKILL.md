@@ -402,8 +402,8 @@ Before reaching for `device_screenshot`, ask what question you're answering:
   files will be cleaned by the OS and are unsafe for PR artifacts.
 
 **WHEN — pre-conditions:**
-- `cdp_status` returned `ok:true` (otherwise you may capture a black screen
-  or the wrong app)
+- `rn_session` is ready and passive `cdp_status` reports the exact bound target
+  connected (otherwise you may capture a black screen or the wrong app)
 - `cdp_navigation_state` returned a real route name — NOT `"DevClientLauncher"`,
   NOT `"ServerPicker"`, NOT empty/null. A screenshot of the dev-loader is
   noise; dismiss the picker first.

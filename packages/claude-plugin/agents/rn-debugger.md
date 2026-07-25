@@ -140,7 +140,8 @@ is diagnostic state and never disambiguates the authoritative target.
 
 ### Step 2: Data Gathering
 First, inspect environment health:
-- `cdp_status` -- passive Metro/CDP/app state, error count, and RedBox status
+- `rn_session(action="status")` -- authority state and exact bindings
+- `cdp_status` -- passive Metro-client and CDP-target state
 - `cdp_connect` -- pin the exact signed session target when it is not connected
 
 Then, once connected, gather evidence in parallel:
@@ -205,9 +206,9 @@ xcrun simctl spawn booted log show --last 5m \
 2. Compare against expected route from the feature implementation
 
 **If the app is frozen/unresponsive:**
-1. `cdp_status` -- is the debugger paused? (`isPaused: true`)
-2. If paused: `cdp_reload` to recover
-3. `cdp_evaluate` with a simple expression -- if it times out, JS thread is blocked
+1. Inspect passive `cdp_status` to confirm the bound target is still connected
+2. Run `cdp_evaluate` with a simple expression; a timeout means the JS thread is blocked
+3. Use `cdp_reload` to recover the authority-bound runtime
 
 ### Step 5: Apply Fix
 
@@ -226,10 +227,10 @@ round-trip, ~1,450 ms; a screenshot spends image tokens). Cheap signals first:
 `cdp_navigation_state`/`cdp_error_log`, then a screenshot for the visual record.
 
 After the fix:
-1. `cdp_status` -- confirm no errors, RedBox gone
+1. `rn_session(action="status")`, then passive `cdp_status` -- confirm the exact target remains bound and connected
 2. Confirm the fixed state cheaply (`expect_*` / `cdp_store_state`); take a
    screenshot to compare with Step 1 when a visual record is needed
-3. `cdp_error_log` -- confirm the error is cleared
+3. `cdp_component_tree` and `cdp_error_log` -- confirm the RedBox and error are cleared
 4. Re-run the failing user action with Maestro to confirm it works.
    Substitute placeholders with actual values from Step 0:
    ```bash

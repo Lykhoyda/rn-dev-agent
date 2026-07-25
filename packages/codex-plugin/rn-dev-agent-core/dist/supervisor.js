@@ -73316,7 +73316,7 @@ var init_index = __esm({
       device: external_exports.string().optional().describe('Device key OR "all". Defaults to the active device.')
     }, createWaitForNetworkHandler(getClient));
     trackedTool("cdp_heap_usage", "Get current JS heap memory usage. Single fast CDP call \u2014 useful before/after operations to detect memory leaks. Returns used/total in bytes and MB.", {}, createHeapUsageHandler(getClient));
-    trackedTool("cdp_cpu_profile", "Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count. Requires Profiler domain (check cdp_status domains.profiler).", {
+    trackedTool("cdp_cpu_profile", "Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count and reports when the Profiler domain is unavailable.", {
       durationMs: external_exports.number().int().min(500).max(3e4).default(3e3).optional().describe("Profile duration in ms (default 3000, max 30000)")
     }, createCpuProfileHandler(getClient));
     trackedTool("cdp_object_inspect", "Inspect a JS object by property path without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.", {
