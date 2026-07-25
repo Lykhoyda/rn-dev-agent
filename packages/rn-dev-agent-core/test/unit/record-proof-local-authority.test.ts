@@ -28,16 +28,49 @@ const processBirthHelper = join(
 const scope = 'd'.repeat(64);
 const execFileAsync = promisify(execFile);
 
-async function waitForDifferentBirth(pid: number, expectedBirth: string): Promise<string | null> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const observed = probeProcessBirth(pid);
-    const birth = observed.status === 'present' ? observed.birth.token : null;
-    if (birth !== expectedBirth) return birth;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const observed = probeProcessBirth(pid);
-  return observed.status === 'present' ? observed.birth.token : null;
+function probeProcessPresence(pid: number): 'present' | 'absent' | 'unknown' {
+  const processState = spawnSync('ps', ['-p', String(pid), '-o', 'state='], {
+    encoding: 'utf8',
+  });
+  if (processState.status === 0) return 'present';
+  return processState.status === 1 && processState.stdout.trim() === '' ? 'absent' : 'unknown';
 }
+
+async function waitForDifferentBirth(
+  pid: number,
+  expectedBirth: string,
+  observe = probeProcessBirth,
+  delay = () => new Promise((resolve) => setTimeout(resolve, 50)),
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const observed = observe(pid);
+    if (observed.status === 'absent') return null;
+    if (observed.status === 'present' && observed.birth.token !== expectedBirth) {
+      return observed.birth.token;
+    }
+    await delay();
+  }
+  const observed = observe(pid);
+  if (observed.status === 'absent') return null;
+  return observed.status === 'present' ? observed.birth.token : expectedBirth;
+}
+
+test('unknown process birth does not prove recorder termination', async () => {
+  const expectedBirth = 'a'.repeat(64);
+  let attempts = 0;
+  const observed = await waitForDifferentBirth(
+    123,
+    expectedBirth,
+    () => {
+      attempts += 1;
+      return { status: 'unknown' };
+    },
+    async () => {},
+  );
+
+  assert.equal(observed, expectedBirth);
+  assert.equal(attempts, 41);
+});
 
 test('recording start returns while its authenticated supervisor remains active', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'record-proof-local-authority-'));
@@ -60,6 +93,11 @@ test('recording start returns while its authenticated supervisor remains active'
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
     .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
+    .replace(
+      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
+      `RUNTIME_ROOT="${root}"`,
+    )
+    .replace('RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -127,7 +165,10 @@ done
   assert.equal(abort.status, 0, abort.stderr);
   assert.equal(existsSync(tokenPath), false);
   const afterAbortBirth = await waitForDifferentBirth(parsed.pid, parsed.processBirth);
-  assert.notEqual(afterAbortBirth, parsed.processBirth);
+  assert.equal(
+    afterAbortBirth !== parsed.processBirth || probeProcessPresence(parsed.pid) === 'absent',
+    true,
+  );
   recorderPid = 0;
 });
 
@@ -152,6 +193,11 @@ test('recording supervisor force-stops its unreaped child after SIGINT is ignore
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
     .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
+    .replace(
+      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
+      `RUNTIME_ROOT="${root}"`,
+    )
+    .replace('RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -219,6 +265,11 @@ test('recording supervisor terminates its child when request handling fails', as
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
     .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
+    .replace(
+      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
+      `RUNTIME_ROOT="${root}"`,
+    )
+    .replace('RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -268,10 +319,16 @@ done
     childPid,
     childBefore.status === 'present' ? childBefore.birth.token : '',
   );
-  assert.notEqual(supervisorBirth, parsed.processBirth);
-  assert.notEqual(
-    childBirth,
-    childBefore.status === 'present' ? childBefore.birth.token : null,
+  assert.equal(
+    supervisorBirth !== parsed.processBirth ||
+      probeProcessPresence(supervisorPid) === 'absent',
+    true,
+  );
+  const expectedChildBirth =
+    childBefore.status === 'present' ? childBefore.birth.token : null;
+  assert.equal(
+    childBirth !== expectedChildBirth || probeProcessPresence(childPid) === 'absent',
+    true,
   );
   const cleanup = spawnSync(
     'bash',

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -27,13 +28,27 @@ const bootId = '12345678-1234-1234-1234-123456789abc';
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'record-proof-authority-'));
-  const prefix = join(root, 'record');
+  const legacyPrefix = join(root, 'legacy-record');
+  const runtimeDirectory = join(root, 'runtime');
+  const prefix = join(runtimeDirectory, 'record');
   const script = join(root, 'record_proof.sh');
   const adb = join(root, 'adb');
   const killMarker = join(root, 'kill-marker');
+  const pullMarker = join(root, 'pull-marker');
   const source = readFileSync(sourceScript, 'utf8')
-    .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
-    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
+    .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${legacyPrefix}"`)
+    .replace(
+      'RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"',
+      `RUNTIME_DIR="${runtimeDirectory}"`,
+    )
+    .replace(
+      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
+      `RUNTIME_ROOT="${root}"`,
+    )
+    .replace(
+      'RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"',
+      `RUNTIME_DIR="${runtimeDirectory}"`,
+    )
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -59,15 +74,24 @@ elif [[ "$args" == *"kill -2 777"* ]]; then
   touch "\${FAKE_KILL_MARKER}"
 elif [[ "$args" == *"test ! -e /proc/777"* ]]; then
   [[ "\${FAKE_PROC_PRESENT:-1}" == "0" ]]
+elif [[ "$args" == pull\\ * || "$args" == *" pull "* ]]; then
+  destination="\${@: -1}"
+  [[ -f "$destination" && ! -L "$destination" ]] || exit 42
+  printf '%s\\n' "$destination" > "\${FAKE_PULL_MARKER}"
+  printf recording > "$destination"
 fi
 `,
   );
   chmodSync(adb, 0o755);
+  mkdirSync(runtimeDirectory, { mode: 0o700 });
   return {
     root,
+    legacyPrefix,
+    runtimeDirectory,
     prefix,
     script,
     killMarker,
+    pullMarker,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -222,6 +246,40 @@ test('Android stop refuses a same-birth recorder with different output arguments
     assert.match(result.stderr, /command identity changed/);
     assert.equal(existsSync(state.killMarker), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android legacy stop pulls into an exclusive private-runtime file', () => {
+  const state = fixture();
+  try {
+    const legacyRaw = join(state.root, `raw-android-123.mp4`);
+    const output = join(state.root, 'proof.mp4');
+    seedLocalBinding(state.legacyPrefix);
+    writeFileSync(`${state.legacyPrefix}-${scope}.path`, output);
+    writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, legacyRaw);
+    writeFileSync(`${state.legacyPrefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
+          FAKE_STAT: '',
+        },
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const pullDestination = readFileSync(state.pullMarker, 'utf8').trim();
+    assert.equal(pullDestination.startsWith(`${state.runtimeDirectory}/tmp/`), true);
+    assert.equal(existsSync(legacyRaw), false);
   } finally {
     state.cleanup();
   }

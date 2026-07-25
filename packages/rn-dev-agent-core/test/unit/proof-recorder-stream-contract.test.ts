@@ -67,12 +67,24 @@ test('the recorder supervisor releases start streams and owns child output', asy
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'proof-recorder-supervisor-'));
   const legacyPrefix = join(root, 'record');
-  const runtimeDirectory = `${legacyPrefix}.private-${process.getuid?.()}`;
+  const runtimeDirectory = join(root, 'runtime');
   const prefix = join(runtimeDirectory, 'record');
   const script = join(root, 'record_proof.sh');
   const xcrun = join(root, 'xcrun');
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${legacyPrefix}"`)
+    .replace(
+      'RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"',
+      `RUNTIME_DIR="${runtimeDirectory}"`,
+    )
+    .replace(
+      'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
+      `RUNTIME_ROOT="${root}"`,
+    )
+    .replace(
+      'RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"',
+      `RUNTIME_DIR="${runtimeDirectory}"`,
+    )
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -180,6 +192,44 @@ test('legacy raw metadata cannot authorize arbitrary file deletion', () => {
   }
 });
 
+test('unincarnated legacy supervisor state cannot authorize cleanup through a symlink', () => {
+  const state = fixture();
+  const scope = 'a'.repeat(64);
+  const replacement = spawn('sleep', ['30'], { stdio: 'ignore' });
+  try {
+    assert.ok(replacement.pid);
+    const attackerState = join(state.root, 'attacker-supervisor-state');
+    const raw = join(state.root, 'raw-ios-123.mov');
+    const output = join(state.root, 'capture.mp4');
+    writeFileSync(attackerState, 'exited 0\n');
+    writeFileSync(`${state.legacyPrefix}-${scope}.pid`, `${replacement.pid}\n`);
+    writeFileSync(`${state.legacyPrefix}-${scope}.birth`, `${'a'.repeat(64)}\n`);
+    writeFileSync(`${state.legacyPrefix}-${scope}.platform`, 'ios\n');
+    writeFileSync(`${state.legacyPrefix}-${scope}.path`, `${output}\n`);
+    writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, `${raw}\n`);
+    writeFileSync(raw, 'recording');
+    symlinkSync(attackerState, `${state.legacyPrefix}-${scope}.supervisor-state`);
+
+    const stopped = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, `${replacement.pid}`, 'a'.repeat(64)],
+      { encoding: 'utf8' },
+    );
+
+    assert.notEqual(stopped.status, 0);
+    assert.match(stopped.stderr, /legacy recorder sidecar is not owned regular state/);
+    const replacementState = spawnSync('ps', ['-p', `${replacement.pid}`, '-o', 'stat='], {
+      encoding: 'utf8',
+    });
+    assert.equal(replacementState.status, 0);
+    assert.doesNotMatch(replacementState.stdout.trim(), /^Z/);
+    assert.equal(existsSync(`${state.legacyPrefix}-${scope}.pid`), true);
+  } finally {
+    replacement.kill('SIGKILL');
+    state.cleanup();
+  }
+});
+
 test('rollback ignores public sidecars when the private runtime is hostile', () => {
   const state = fixture();
   const scope = 'c'.repeat(64);
@@ -208,6 +258,56 @@ test('rollback ignores public sidecars when the private runtime is hostile', () 
     assert.equal(readFileSync(victim, 'utf8'), 'preserve-me');
     assert.match(started.stderr, /recorder runtime directory is not private/);
     assert.match(aborted.stderr, /recorder runtime directory is not private/);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('a hostile legacy runtime path cannot disable the private recorder runtime', () => {
+  const state = fixture();
+  const scope = '9'.repeat(64);
+  try {
+    const attackerDirectory = join(state.root, 'attacker-directory');
+    const legacyRuntime = `${state.legacyPrefix}.private-${process.getuid?.()}`;
+    const output = join(state.root, 'capture.mp4');
+    const source = readFileSync(sourceScript, 'utf8')
+      .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${state.legacyPrefix}"`)
+      .replace(
+        'RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"',
+        `RUNTIME_ROOT="${state.root}"`,
+      )
+      .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(state.root, 'raw')}"`);
+    writeFileSync(state.script, source);
+    mkdirSync(attackerDirectory);
+    symlinkSync(attackerDirectory, legacyRuntime);
+
+    const started = spawnSync('bash', [state.script, 'start', 'ios', output, '--scope', scope], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: resolve(
+          import.meta.dirname,
+          '../../dist/native/darwin-process-birth',
+        ),
+      },
+    });
+
+    assert.equal(started.status, 0, started.stderr);
+    const identity = /pid=(\d+) birth=([a-f0-9]{64})/.exec(started.stdout);
+    assert.ok(identity);
+    const aborted = spawnSync('bash', [state.script, 'abort', scope], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: resolve(
+          import.meta.dirname,
+          '../../dist/native/darwin-process-birth',
+        ),
+      },
+    });
+    assert.equal(aborted.status, 0, aborted.stderr);
   } finally {
     state.cleanup();
   }

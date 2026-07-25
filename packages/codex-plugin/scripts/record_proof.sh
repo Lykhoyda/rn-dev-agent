@@ -4,7 +4,8 @@ set -euo pipefail
 PID_PREFIX="/tmp/rn-dev-agent-record"
 RAW_PREFIX="/tmp/rn-dev-agent-raw"
 LEGACY_PID_PREFIX="$PID_PREFIX"
-RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"
+RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"
+RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"
 PID_PREFIX="${RUNTIME_DIR}/record"
 SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
 
@@ -39,12 +40,23 @@ remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
 incarnation_file() { echo "${PID_PREFIX}-${1}.incarnation"; }
 
 ensure_sidecar_temp_dir() {
-  python3 - "$RUNTIME_DIR" "$SIDECAR_TEMP_DIR" <<'PY'
+  python3 - "$RUNTIME_ROOT" "$RUNTIME_DIR" "$SIDECAR_TEMP_DIR" <<'PY'
 import os
 import stat
 import sys
 
-for index, path in enumerate(sys.argv[1:]):
+runtime_root = sys.argv[1]
+if not runtime_root:
+    raise RuntimeError("recorder runtime root is unavailable")
+root_metadata = os.lstat(runtime_root)
+if (
+    not stat.S_ISDIR(root_metadata.st_mode)
+    or root_metadata.st_uid != os.getuid()
+    or root_metadata.st_mode & 0o022
+):
+    raise RuntimeError("recorder runtime root is not private")
+
+for index, path in enumerate(sys.argv[2:]):
     try:
         os.mkdir(path, 0o700)
     except FileExistsError:
@@ -79,6 +91,14 @@ secure_publish() {
 
 secure_write_sidecar() {
   secure_publish "$1" "${2}"$'\n'
+}
+
+create_private_capture_file() {
+  ensure_sidecar_temp_dir
+  local capture
+  capture="$(mktemp "${SIDECAR_TEMP_DIR}/raw-android-pull.XXXXXX")"
+  chmod 600 "$capture"
+  printf '%s' "$capture"
 }
 
 legacy_sidecar_file() {
@@ -147,6 +167,14 @@ validate_legacy_scope() {
     }
     for suffix in control-token control-request control-response supervisor-state child-pid; do
       legacy_path="$(legacy_sidecar_file "$scope" "$suffix" "$LEGACY_INCARNATION")"
+      if sidecar_exists "$legacy_path"; then
+        LEGACY_SCOPE_PRESENT="true"
+        validate_legacy_sidecar "$legacy_path"
+      fi
+    done
+  else
+    for suffix in control-token control-request control-response supervisor-state child-pid; do
+      legacy_path="$(legacy_sidecar_file "$scope" "$suffix")"
       if sidecar_exists "$legacy_path"; then
         LEGACY_SCOPE_PRESENT="true"
         validate_legacy_sidecar "$legacy_path"
@@ -1168,7 +1196,17 @@ cmd_stop() {
       device_path="$(cat "$device_pathf")"
       if [[ "$supervisor_failed" != "true" ]]; then
         sleep 2
-        adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$raw_file" >/dev/null 2>&1 || echo "Warning: Failed to pull recording from device" >&2
+        local prior_raw_file="$raw_file"
+        local pull_file
+        pull_file="$(create_private_capture_file)"
+        if adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$pull_file" >/dev/null 2>&1; then
+          raw_file="$pull_file"
+        else
+          rm -f "$pull_file"
+          raw_file=""
+          echo "Warning: Failed to pull recording from device" >&2
+        fi
+        [[ -n "$prior_raw_file" && "$prior_raw_file" != "$raw_file" ]] && rm -f "$prior_raw_file"
       fi
       adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
     fi
