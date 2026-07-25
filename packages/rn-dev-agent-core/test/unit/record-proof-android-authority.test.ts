@@ -845,6 +845,56 @@ test('Android cleanup receipt restores output and removes its private artifact',
   }
 });
 
+test('Android cleanup preserves recovery for an unsafe output directory', () => {
+  const state = fixture();
+  try {
+    const sharedDirectory = join(state.root, 'shared');
+    const output = join(sharedDirectory, 'proof.mp4');
+    const raw = join(state.runtimeDirectory, 'raw-android-pull.abc123');
+    mkdirSync(sharedDirectory);
+    chmodSync(sharedDirectory, 0o777);
+    seedLocalBinding(state.prefix);
+    writeFileSync(output, 'original-output');
+    const outputIdentity = captureIdentity(output);
+    writeFileSync(raw, 'recovery-output');
+    const rawIdentity = captureIdentity(raw);
+    writeFileSync(
+      `${state.prefix}-${scope}.cleanup-pending`,
+      [
+        'v2',
+        '999999',
+        'local-birth',
+        output,
+        outputIdentity,
+        String(Buffer.byteLength('original-output')),
+        '1',
+        raw,
+        rawIdentity,
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(output, 'replacement');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: process.env,
+      },
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /recording output directory is unsafe/);
+    assert.equal(readFileSync(output, 'utf8'), 'replacement');
+    assert.equal(existsSync(raw), true);
+    assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
+    assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), true);
+  } finally {
+    state.cleanup();
+  }
+});
+
 test('Android v1 cleanup receipt adopts authenticated raw recovery state', () => {
   const state = fixture();
   try {

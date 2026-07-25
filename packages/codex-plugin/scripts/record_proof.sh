@@ -430,14 +430,76 @@ publish_capture_copy() {
   local destination="$2"
   python3 - "$source" "$destination" <<'PY'
 import os
+import secrets
 import stat
 import sys
 
 source, destination = sys.argv[1:]
+trusted_uids = {0, os.getuid()}
+
+def validate_directory(metadata):
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid not in trusted_uids
+        or metadata.st_mode & 0o022 and not metadata.st_mode & stat.S_ISVTX
+    ):
+        raise RuntimeError("recording output directory is unsafe")
+
+def validate_directory_path(directory, allow_symlinks):
+    current = os.sep
+    validate_directory(os.stat(current))
+    for component in directory.split(os.sep)[1:]:
+        if not component:
+            continue
+        parent = os.stat(current)
+        validate_directory(parent)
+        candidate = os.path.join(current, component)
+        entry = os.lstat(candidate)
+        if (
+            entry.st_uid not in trusted_uids
+            or not (
+                stat.S_ISDIR(entry.st_mode)
+                or allow_symlinks and stat.S_ISLNK(entry.st_mode)
+            )
+        ):
+            raise RuntimeError("recording output directory is unsafe")
+        current = candidate
+    validate_directory(os.stat(current))
+
+def open_destination_directory(path):
+    if not os.path.isabs(path):
+        raise RuntimeError("recording output path is not absolute")
+    directory = os.path.dirname(os.path.normpath(path))
+    validate_directory_path(directory, True)
+    resolved = os.path.realpath(directory)
+    validate_directory_path(resolved, False)
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    descriptor = os.open(resolved, directory_flags)
+    validate_directory(os.fstat(descriptor))
+    destination_name = os.path.basename(path)
+    try:
+        existing = os.stat(
+            destination_name,
+            dir_fd=descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        if existing.st_uid != os.getuid():
+            os.close(descriptor)
+            raise RuntimeError("recording output path is unsafe")
+    return descriptor, destination_name
+
 source_flags = os.O_RDONLY
 if hasattr(os, "O_NOFOLLOW"):
     source_flags |= os.O_NOFOLLOW
 source_descriptor = os.open(source, source_flags)
+destination_descriptor = -1
 temporary_descriptor = -1
 temporary_path = ""
 try:
@@ -449,11 +511,24 @@ try:
         or source_before.st_size <= 0
     ):
         raise RuntimeError("recording source is unsafe")
-    destination_directory = os.path.dirname(destination)
-    temporary_descriptor, temporary_path = __import__("tempfile").mkstemp(
-        prefix=".rn-dev-agent-record.",
-        dir=destination_directory,
-    )
+    destination_descriptor, destination_name = open_destination_directory(destination)
+    temporary_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        temporary_flags |= os.O_NOFOLLOW
+    for _ in range(128):
+        temporary_path = f".rn-dev-agent-record.{secrets.token_hex(16)}"
+        try:
+            temporary_descriptor = os.open(
+                temporary_path,
+                temporary_flags,
+                0o600,
+                dir_fd=destination_descriptor,
+            )
+            break
+        except FileExistsError:
+            continue
+    if temporary_descriptor < 0:
+        raise RuntimeError("recording publication temporary is unavailable")
     os.fchmod(temporary_descriptor, 0o600)
     while True:
         chunk = os.read(source_descriptor, 1024 * 1024)
@@ -474,15 +549,28 @@ try:
     ):
         raise RuntimeError("recording source changed during publication")
     temporary_before = os.fstat(temporary_descriptor)
-    temporary_path_before = os.lstat(temporary_path)
+    temporary_path_before = os.stat(
+        temporary_path,
+        dir_fd=destination_descriptor,
+        follow_symlinks=False,
+    )
     if (
         temporary_path_before.st_dev != temporary_before.st_dev
         or temporary_path_before.st_ino != temporary_before.st_ino
     ):
         raise RuntimeError("recording publication temporary changed")
-    os.replace(temporary_path, destination)
+    os.replace(
+        temporary_path,
+        destination_name,
+        src_dir_fd=destination_descriptor,
+        dst_dir_fd=destination_descriptor,
+    )
     temporary_path = ""
-    destination_after = os.lstat(destination)
+    destination_after = os.stat(
+        destination_name,
+        dir_fd=destination_descriptor,
+        follow_symlinks=False,
+    )
     if (
         destination_after.st_dev != temporary_before.st_dev
         or destination_after.st_ino != temporary_before.st_ino
@@ -494,11 +582,13 @@ finally:
     os.close(source_descriptor)
     if temporary_descriptor >= 0:
         os.close(temporary_descriptor)
-    if temporary_path:
+    if temporary_path and destination_descriptor >= 0:
         try:
-            os.unlink(temporary_path)
+            os.unlink(temporary_path, dir_fd=destination_descriptor)
         except FileNotFoundError:
             pass
+    if destination_descriptor >= 0:
+        os.close(destination_descriptor)
 PY
 }
 
