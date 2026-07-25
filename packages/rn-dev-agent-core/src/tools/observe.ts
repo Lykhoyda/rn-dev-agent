@@ -50,7 +50,7 @@ export function setObserveMirror(m: MirrorManager): void {
   mirrorManager = m;
 }
 
-export function setObserveAuthorityDeps(deps: NonNullable<typeof authorityDeps>): void {
+export function setObserveAuthorityDeps(deps: typeof authorityDeps): void {
   authorityDeps = deps;
 }
 
@@ -79,10 +79,38 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
       );
     }
     const port = resolved?.port ?? resolveObservePort().port;
-    const res = await server.start(port);
-    if (resolved) authorityDeps?.bind({ port: res.port, authority: resolved.authority });
-    writeObserveState(res.url, res.port);
-    return res;
+    try {
+      const res = await server.start(port);
+      if (resolved) authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+      writeObserveState(res.url, res.port);
+      return res;
+    } catch (error) {
+      const failedServer = server;
+      server = null;
+      const cleanupErrors: unknown[] = [];
+      try {
+        await failedServer?.stop();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      try {
+        authorityDeps?.unbind();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      try {
+        removeObserveState();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          `OBSERVE_START_ROLLBACK_FAILED: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      throw error;
+    }
   })();
   try {
     return await starting;

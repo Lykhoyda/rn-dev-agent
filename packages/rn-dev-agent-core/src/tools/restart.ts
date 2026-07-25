@@ -19,7 +19,7 @@ export interface RestartHandlerDeps {
     args: string[],
     opts?: { timeout?: number },
   ) => Promise<{ stdout: string; stderr: string }>;
-  stopFastRunner?: (deviceId?: string) => void;
+  stopFastRunner?: (deviceId?: string) => void | Promise<void>;
   unbindRunner?: () => void;
   sleep?: (ms: number) => Promise<void>;
   probeAppInstalled?: (udid: string, appId: string) => Promise<boolean | null>;
@@ -98,12 +98,18 @@ export function createRestartHandler(
 
         if (bundleId && targetPlatform === 'ios') {
           try {
-            stopFastRunner(args.deviceId);
+            await stopFastRunner(args.deviceId);
             hardResetSteps.push('stopFastRunner:ok');
-          } catch (err) {
-            hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
-          } finally {
             unbindRunner();
+            hardResetSteps.push('unbindRunner:ok');
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            hardResetSteps.push(`stopFastRunner:err(${message})`);
+            return failResult(
+              `cdp_restart retained runner authority because exact shutdown was not proven: ${message}`,
+              'RUNNER_ADOPTION_REQUIRED',
+              { hardResetSteps },
+            );
           }
           const targetUdid = safeSimctlTarget(args.deviceId);
           if (!targetUdid) {

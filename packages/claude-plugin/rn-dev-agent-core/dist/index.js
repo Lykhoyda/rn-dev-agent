@@ -61395,6 +61395,32 @@ var readinessSchema = external_exports.object({
 function hashBytes(bytes) {
   return createHash8("sha256").update(bytes).digest("hex");
 }
+function captureProofWorkerStartup(argv = process.argv, loadedModuleUrl = import.meta.url) {
+  let executedEntrypointPath = null;
+  let loadedCoreBundlePath = null;
+  let coreBundleSha256 = null;
+  try {
+    if (typeof argv[1] === "string" && isAbsolute3(argv[1])) {
+      executedEntrypointPath = realpathSync4(argv[1]);
+    }
+  } catch {
+    executedEntrypointPath = null;
+  }
+  try {
+    loadedCoreBundlePath = realpathSync4(fileURLToPath3(loadedModuleUrl));
+    coreBundleSha256 = hashBytes(readFileSync23(loadedCoreBundlePath));
+  } catch {
+    loadedCoreBundlePath = null;
+    coreBundleSha256 = null;
+  }
+  return Object.freeze({
+    argv: Object.freeze([...argv]),
+    executedEntrypointPath,
+    loadedCoreBundlePath,
+    coreBundleSha256
+  });
+}
+var proofWorkerStartup = captureProofWorkerStartup();
 function realpathOrSelf(path) {
   try {
     return realpathSync4(path);
@@ -61409,51 +61435,53 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   } catch {
     return null;
   }
-  for (const authorityArg of argv.slice(1, 3)) {
-    if (typeof authorityArg !== "string" || !isAbsolute3(authorityArg))
-      continue;
-    let arg;
-    try {
-      arg = realpathSync4(authorityArg);
-    } catch {
-      continue;
+  const authorityArg = argv[1];
+  if (typeof authorityArg !== "string" || !isAbsolute3(authorityArg))
+    return null;
+  let arg;
+  try {
+    arg = realpathSync4(authorityArg);
+  } catch {
+    return null;
+  }
+  for (const host of ["claude-plugin", "codex-plugin"]) {
+    const hostRoot = join34(root, "packages", host);
+    const coreIndex = realpathOrSelf(join34(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+    const coreSupervisor = realpathOrSelf(join34(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+    if (arg === coreIndex) {
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: "core-index"
+      };
     }
-    for (const host of ["claude-plugin", "codex-plugin"]) {
-      const hostRoot = join34(root, "packages", host);
-      const coreIndex = realpathOrSelf(join34(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-      const coreSupervisor = realpathOrSelf(join34(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
-      if (arg === coreIndex) {
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: "core-index"
-        };
-      }
-      if (arg === coreSupervisor) {
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: "core-supervisor"
-        };
-      }
-      if (host === "codex-plugin" && arg === realpathOrSelf(join34(hostRoot, "bin", "cdp-supervisor.js"))) {
-        if (!existsSync27(coreIndex) || !existsSync27(coreSupervisor))
-          return null;
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: "codex-launcher"
-        };
-      }
+    if (arg === coreSupervisor) {
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: "core-supervisor"
+      };
+    }
+    if (host === "codex-plugin" && arg === realpathOrSelf(join34(hostRoot, "bin", "cdp-supervisor.js"))) {
+      if (!existsSync27(coreIndex) || !existsSync27(coreSupervisor))
+        return null;
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: "codex-launcher"
+      };
     }
   }
   return null;
+}
+function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256) {
+  return startup.executedEntrypointPath === realpathOrSelf(entrypoint.authorityArg) && startup.loadedCoreBundlePath === entrypoint.coreBundle && startup.coreBundleSha256 === headCoreBundleSha256;
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
@@ -61514,7 +61542,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
     return null;
   }
 }
-function readProofCandidateRuntime(candidateRoot) {
+function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
   const root = realpathSync4(resolve4(candidateRoot));
   const sha = execFileSync7("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
@@ -61525,7 +61553,7 @@ function readProofCandidateRuntime(candidateRoot) {
   if (!isOfficialProofCandidateRemote(remote)) {
     throw new Error("CANDIDATE_REPOSITORY_MISMATCH");
   }
-  const argv = [...process.argv];
+  const argv = [...startup.argv];
   const entrypoint = resolveProofCandidateEntrypoint(root, argv);
   if (!entrypoint || !proofCandidateEntrypointEnvironmentMatches(entrypoint, process.env)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
@@ -61536,6 +61564,10 @@ function readProofCandidateRuntime(candidateRoot) {
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
   }
+  const headCoreBundleSha256 = hashBytes(artifacts[0]);
+  if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
+    throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
+  }
   const confirmedSha = execFileSync7("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -61544,7 +61576,7 @@ function readProofCandidateRuntime(candidateRoot) {
   return proofCandidateRuntimeSchema.parse({
     repo: "Lykhoyda/rn-dev-agent",
     sha,
-    coreBundleSha256: hashBytes(artifacts[0]),
+    coreBundleSha256: headCoreBundleSha256,
     runnerManifestSha256: hashBytes(artifacts[1]),
     mcp: { pid: process.pid, argv, cwd: process.cwd() }
   });
@@ -64414,12 +64446,14 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
         }
         if (bundleId && targetPlatform === "ios") {
           try {
-            stopFastRunner2(args.deviceId);
+            await stopFastRunner2(args.deviceId);
             hardResetSteps.push("stopFastRunner:ok");
-          } catch (err) {
-            hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
-          } finally {
             unbindRunner();
+            hardResetSteps.push("unbindRunner:ok");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            hardResetSteps.push(`stopFastRunner:err(${message})`);
+            return failResult(`cdp_restart retained runner authority because exact shutdown was not proven: ${message}`, "RUNNER_ADOPTION_REQUIRED", { hardResetSteps });
           }
           const targetUdid = safeSimctlTarget(args.deviceId);
           if (!targetUdid) {
@@ -65791,6 +65825,7 @@ function isPostAllowed(req, token2) {
 }
 
 // packages/rn-dev-agent-core/dist/observability/server.js
+init_logger();
 var HOST = "127.0.0.1";
 var __dir = dirname17(fileURLToPath4(import.meta.url));
 var ObservabilityServer = class {
@@ -65800,16 +65835,18 @@ var ObservabilityServer = class {
   state;
   authority;
   stopOwner;
+  reportStopFailure;
   server = null;
   port = 0;
   streams = /* @__PURE__ */ new Set();
-  constructor(recorder2, e2e, mirror, state, authority, stopOwner) {
+  constructor(recorder2, e2e, mirror, state, authority, stopOwner, reportStopFailure = (error2) => logger.error("Observe", `shutdown failed: ${error2 instanceof Error ? error2.message : String(error2)}`)) {
     this.recorder = recorder2;
     this.e2e = e2e;
     this.mirror = mirror;
     this.state = state;
     this.authority = authority;
     this.stopOwner = stopOwner;
+    this.reportStopFailure = reportStopFailure;
   }
   async start(preferredPort) {
     if (this.server)
@@ -65871,7 +65908,7 @@ var ObservabilityServer = class {
       res.writeHead(202, { "content-type": "application/json" });
       res.end('{"stopping":true}');
       queueMicrotask(() => {
-        void (this.stopOwner?.() ?? this.stop());
+        void Promise.resolve().then(() => this.stopOwner?.() ?? this.stop()).catch((error2) => this.reportStopFailure(error2));
       });
       return;
     }
@@ -66271,11 +66308,36 @@ async function startObserveServer() {
       server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority, stopObserveServer);
     }
     const port = resolved?.port ?? resolveObservePort().port;
-    const res = await server.start(port);
-    if (resolved)
-      authorityDeps?.bind({ port: res.port, authority: resolved.authority });
-    writeObserveState(res.url, res.port);
-    return res;
+    try {
+      const res = await server.start(port);
+      if (resolved)
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+      writeObserveState(res.url, res.port);
+      return res;
+    } catch (error2) {
+      const failedServer = server;
+      server = null;
+      const cleanupErrors = [];
+      try {
+        await failedServer?.stop();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      try {
+        authorityDeps?.unbind();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      try {
+        removeObserveState();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError([error2, ...cleanupErrors], `OBSERVE_START_ROLLBACK_FAILED: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      }
+      throw error2;
+    }
   })();
   try {
     return await starting;
@@ -71931,6 +71993,14 @@ trackedTool("cdp_restart", "Reset and reconnect the authority-bound Hermes clien
   hardReset: external_exports.boolean().optional().describe("Relaunch the exact session app on its claimed iOS or Android device before reconnecting."),
   bundleId: external_exports.string().optional().describe("Compatibility alias for the authority-bound appId; conflicting values are refused.")
 }, createRestartHandler(getClient, setClient, createClient, {
+  stopFastRunner: async (deviceId) => {
+    const { registry: registry2, session } = authorityRuntime.requireAvailable();
+    const status = registry2.getSessionStatus(session.sessionId);
+    const runner = status?.bindings.runner;
+    if (runner)
+      await stopBoundRunner(runner);
+    stopFastRunner(deviceId);
+  },
   unbindRunner: () => unbindNativeRunner(authorityRuntime)
 }));
 trackedTool("cross_platform_verify", "Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.", {

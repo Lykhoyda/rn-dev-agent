@@ -313,6 +313,44 @@ function hashBytes(bytes: string | Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+export interface ProofWorkerStartup {
+  argv: readonly string[];
+  executedEntrypointPath: string | null;
+  loadedCoreBundlePath: string | null;
+  coreBundleSha256: string | null;
+}
+
+export function captureProofWorkerStartup(
+  argv: readonly string[] = process.argv,
+  loadedModuleUrl: string = import.meta.url,
+): ProofWorkerStartup {
+  let executedEntrypointPath: string | null = null;
+  let loadedCoreBundlePath: string | null = null;
+  let coreBundleSha256: string | null = null;
+  try {
+    if (typeof argv[1] === 'string' && isAbsolute(argv[1])) {
+      executedEntrypointPath = realpathSync(argv[1]);
+    }
+  } catch {
+    executedEntrypointPath = null;
+  }
+  try {
+    loadedCoreBundlePath = realpathSync(fileURLToPath(loadedModuleUrl));
+    coreBundleSha256 = hashBytes(readFileSync(loadedCoreBundlePath));
+  } catch {
+    loadedCoreBundlePath = null;
+    coreBundleSha256 = null;
+  }
+  return Object.freeze({
+    argv: Object.freeze([...argv]),
+    executedEntrypointPath,
+    loadedCoreBundlePath,
+    coreBundleSha256,
+  });
+}
+
+const proofWorkerStartup = captureProofWorkerStartup();
+
 export interface ProofCandidateEntrypoint {
   host: 'claude-plugin' | 'codex-plugin';
   coreBundle: string;
@@ -347,61 +385,65 @@ export function resolveProofCandidateEntrypoint(
   } catch {
     return null;
   }
-  // Only the executed script carries process authority. argv[1] is the entry
-  // module; argv[2] additionally covers the codex launcher, which execs the
-  // packaged core worker as its first argument. Scanning the full argv would
-  // let any unrelated process that merely PASSES the bundle path as an argument
-  // claim to be the plugin.
-  for (const authorityArg of argv.slice(1, 3)) {
-    if (typeof authorityArg !== 'string' || !isAbsolute(authorityArg)) continue;
-    let arg: string;
-    try {
-      arg = realpathSync(authorityArg);
-    } catch {
-      continue;
+  const authorityArg = argv[1];
+  if (typeof authorityArg !== 'string' || !isAbsolute(authorityArg)) return null;
+  let arg: string;
+  try {
+    arg = realpathSync(authorityArg);
+  } catch {
+    return null;
+  }
+  for (const host of ['claude-plugin', 'codex-plugin'] as const) {
+    const hostRoot = join(root, 'packages', host);
+    const coreIndex = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js'));
+    const coreSupervisor = realpathOrSelf(
+      join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'),
+    );
+    if (arg === coreIndex) {
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: 'core-index',
+      };
     }
-    for (const host of ['claude-plugin', 'codex-plugin'] as const) {
-      const hostRoot = join(root, 'packages', host);
-      // Both sides are realpath-normalized: a symlinked dist/ must not read as
-      // a foreign process.
-      const coreIndex = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js'));
-      const coreSupervisor = realpathOrSelf(
-        join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'),
-      );
-      if (arg === coreIndex) {
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: 'core-index',
-        };
-      }
-      if (arg === coreSupervisor) {
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: 'core-supervisor',
-        };
-      }
-      if (
-        host === 'codex-plugin' &&
-        arg === realpathOrSelf(join(hostRoot, 'bin', 'cdp-supervisor.js'))
-      ) {
-        if (!existsSync(coreIndex) || !existsSync(coreSupervisor)) return null;
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: 'codex-launcher',
-        };
-      }
+    if (arg === coreSupervisor) {
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: 'core-supervisor',
+      };
+    }
+    if (
+      host === 'codex-plugin' &&
+      arg === realpathOrSelf(join(hostRoot, 'bin', 'cdp-supervisor.js'))
+    ) {
+      if (!existsSync(coreIndex) || !existsSync(coreSupervisor)) return null;
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: 'codex-launcher',
+      };
     }
   }
   return null;
+}
+
+export function proofCandidateStartupMatches(
+  entrypoint: ProofCandidateEntrypoint,
+  startup: ProofWorkerStartup,
+  headCoreBundleSha256: string,
+): boolean {
+  return (
+    startup.executedEntrypointPath === realpathOrSelf(entrypoint.authorityArg) &&
+    startup.loadedCoreBundlePath === entrypoint.coreBundle &&
+    startup.coreBundleSha256 === headCoreBundleSha256
+  );
 }
 
 export function proofCandidateEntrypointEnvironmentMatches(
@@ -485,7 +527,10 @@ export function readProofCandidateHeadArtifacts(
  * block is caller-authored prose: Git, package digests, and the live MCP
  * process identity are captured at the strict-proof boundary.
  */
-export function readProofCandidateRuntime(candidateRoot: string): ProofCandidateRuntime {
+export function readProofCandidateRuntime(
+  candidateRoot: string,
+  startup: ProofWorkerStartup = proofWorkerStartup,
+): ProofCandidateRuntime {
   const root = realpathSync(resolve(candidateRoot));
   const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
     encoding: 'utf8',
@@ -497,7 +542,7 @@ export function readProofCandidateRuntime(candidateRoot: string): ProofCandidate
     throw new Error('CANDIDATE_REPOSITORY_MISMATCH');
   }
 
-  const argv = [...process.argv];
+  const argv = [...startup.argv];
   const entrypoint = resolveProofCandidateEntrypoint(root, argv);
   if (!entrypoint || !proofCandidateEntrypointEnvironmentMatches(entrypoint, process.env)) {
     throw new Error('CANDIDATE_MCP_PROCESS_MISMATCH');
@@ -508,6 +553,10 @@ export function readProofCandidateRuntime(candidateRoot: string): ProofCandidate
   if (!artifacts) {
     throw new Error('CANDIDATE_CHECKOUT_NOT_CLEAN');
   }
+  const headCoreBundleSha256 = hashBytes(artifacts[0]!);
+  if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
+    throw new Error('CANDIDATE_MCP_PROCESS_MISMATCH');
+  }
   const confirmedSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
     encoding: 'utf8',
   }).trim();
@@ -516,7 +565,7 @@ export function readProofCandidateRuntime(candidateRoot: string): ProofCandidate
   return proofCandidateRuntimeSchema.parse({
     repo: 'Lykhoyda/rn-dev-agent',
     sha,
-    coreBundleSha256: hashBytes(artifacts[0]!),
+    coreBundleSha256: headCoreBundleSha256,
     runnerManifestSha256: hashBytes(artifacts[1]!),
     mcp: { pid: process.pid, argv, cwd: process.cwd() },
   });

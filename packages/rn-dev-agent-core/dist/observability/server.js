@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { isPostAllowed } from './e2e-csrf.js';
+import { logger } from '../logger.js';
 const HOST = '127.0.0.1';
 const __dir = dirname(fileURLToPath(import.meta.url));
 export class ObservabilityServer {
@@ -12,16 +13,18 @@ export class ObservabilityServer {
     state;
     authority;
     stopOwner;
+    reportStopFailure;
     server = null;
     port = 0;
     streams = new Set();
-    constructor(recorder, e2e, mirror, state, authority, stopOwner) {
+    constructor(recorder, e2e, mirror, state, authority, stopOwner, reportStopFailure = (error) => logger.error('Observe', `shutdown failed: ${error instanceof Error ? error.message : String(error)}`)) {
         this.recorder = recorder;
         this.e2e = e2e;
         this.mirror = mirror;
         this.state = state;
         this.authority = authority;
         this.stopOwner = stopOwner;
+        this.reportStopFailure = reportStopFailure;
     }
     async start(preferredPort) {
         if (this.server)
@@ -94,7 +97,9 @@ export class ObservabilityServer {
             res.writeHead(202, { 'content-type': 'application/json' });
             res.end('{"stopping":true}');
             queueMicrotask(() => {
-                void (this.stopOwner?.() ?? this.stop());
+                void Promise.resolve()
+                    .then(() => this.stopOwner?.() ?? this.stop())
+                    .catch((error) => this.reportStopFailure(error));
             });
             return;
         }

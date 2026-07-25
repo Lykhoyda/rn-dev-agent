@@ -115,6 +115,7 @@ import { boundConnectConflict, pinExactDevClient } from './session/dev-client-au
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
 import { proveTargetDeviceAssociation } from './session/target-device-authority.js';
 import { strictProofSourceIdentity } from './session/source-identity.js';
+import { stopBoundRunner } from './session/process-cleanup.js';
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 // M3 / Phase 90: single-instance lock. Must run BEFORE telemetry prune / CDPClient creation
@@ -2125,6 +2126,14 @@ trackedTool('cdp_restart', 'Reset and reconnect the authority-bound Hermes clien
         .optional()
         .describe('Compatibility alias for the authority-bound appId; conflicting values are refused.'),
 }, createRestartHandler(getClient, setClient, createClient, {
+    stopFastRunner: async (deviceId) => {
+        const { registry, session } = authorityRuntime.requireAvailable();
+        const status = registry.getSessionStatus(session.sessionId);
+        const runner = status?.bindings.runner;
+        if (runner)
+            await stopBoundRunner(runner);
+        stopFastRunner(deviceId);
+    },
     unbindRunner: () => unbindNativeRunner(authorityRuntime),
 }));
 trackedTool('cross_platform_verify', 'Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS → device_snapshot → switch to Android → device_snapshot → cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.', {

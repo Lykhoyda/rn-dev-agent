@@ -14,10 +14,13 @@ import {
   type FinalProofReceipt,
 } from '../../dist/domain/proof-receipt.js';
 import {
+  captureProofWorkerStartup,
   createProofCaptureHandler,
   isOfficialProofCandidateRemote,
   proofCaptureInputSchema,
   proofCapturePublishedInputSchema,
+  proofCandidateStartupMatches,
+  resolveProofCandidateEntrypoint,
   writeProofReceiptAtomic,
   type ProofCaptureArgs,
   type ProofCaptureDeps,
@@ -48,6 +51,58 @@ test('strict proof accepts only the exact GitHub repository remote', () => {
   ]) {
     assert.equal(isOfficialProofCandidateRemote(remote), false);
   }
+});
+
+test('strict proof rejects a candidate path passed by a foreign wrapper', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'proof-entrypoint-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const coreBundle = join(
+    root,
+    'packages',
+    'codex-plugin',
+    'rn-dev-agent-core',
+    'dist',
+    'index.js',
+  );
+  await mkdir(dirname(coreBundle), { recursive: true });
+  await writeFile(coreBundle, 'export {};\n');
+
+  assert.equal(
+    resolveProofCandidateEntrypoint(root, [
+      process.execPath,
+      '/foreign/wrapper.js',
+      coreBundle,
+    ]),
+    null,
+  );
+  assert.equal(
+    resolveProofCandidateEntrypoint(root, [process.execPath, coreBundle])?.kind,
+    'core-index',
+  );
+});
+
+test('strict proof rejects restored disk bytes that differ from the startup bundle', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'proof-startup-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const coreBundle = join(
+    root,
+    'packages',
+    'codex-plugin',
+    'rn-dev-agent-core',
+    'dist',
+    'index.js',
+  );
+  await mkdir(dirname(coreBundle), { recursive: true });
+  await writeFile(coreBundle, 'tampered startup bytes\n');
+  const startup = captureProofWorkerStartup(
+    [process.execPath, coreBundle],
+    pathToFileURL(coreBundle).href,
+  );
+  await writeFile(coreBundle, 'clean head bytes\n');
+  const entrypoint = resolveProofCandidateEntrypoint(root, [process.execPath, coreBundle]);
+
+  assert.ok(entrypoint);
+  assert.equal(proofCandidateStartupMatches(entrypoint, startup, HASH('clean head bytes\n')), false);
 });
 
 const CORE_ROOT = resolve(import.meta.dirname, '../..');

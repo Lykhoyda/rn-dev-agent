@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { observeHandler, startObserveServer } from '../../dist/tools/observe.js';
+import {
+  observeHandler,
+  setObserveAuthorityDeps,
+  startObserveServer,
+} from '../../dist/tools/observe.js';
 import { recorder } from '../../dist/observability/recorder.js';
 
 // Pin a unique port for this file so parallel test files can't collide on the
@@ -84,4 +88,36 @@ test('stop racing a pending start closes the server instead of orphaning it', as
   );
   const status = parse(await observeHandler({ action: 'status' }));
   assert.equal(status.data.running, false);
+});
+
+test('authority publication failure rolls back the listening server', async (t) => {
+  const port = 51734;
+  let unbound = 0;
+  setObserveAuthorityDeps({
+    resolve: () => ({
+      port,
+      authority: {
+        sessionId: 'session-test',
+        claimEpoch: 1,
+        instanceId: 'observe-test',
+        capability: 'capability-test',
+      },
+    }),
+    bind: () => {
+      throw new Error('binding failed');
+    },
+    unbind: () => {
+      unbound += 1;
+    },
+  });
+  t.after(async () => {
+    await observeHandler({ action: 'stop' });
+    setObserveAuthorityDeps(undefined);
+  });
+
+  await assert.rejects(startObserveServer(), /binding failed/);
+  assert.equal(unbound, 1);
+  await assert.rejects(
+    fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) }),
+  );
 });

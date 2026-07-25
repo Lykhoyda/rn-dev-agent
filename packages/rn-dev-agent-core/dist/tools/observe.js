@@ -48,11 +48,40 @@ export async function startObserveServer() {
             server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority, stopObserveServer);
         }
         const port = resolved?.port ?? resolveObservePort().port;
-        const res = await server.start(port);
-        if (resolved)
-            authorityDeps?.bind({ port: res.port, authority: resolved.authority });
-        writeObserveState(res.url, res.port);
-        return res;
+        try {
+            const res = await server.start(port);
+            if (resolved)
+                authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+            writeObserveState(res.url, res.port);
+            return res;
+        }
+        catch (error) {
+            const failedServer = server;
+            server = null;
+            const cleanupErrors = [];
+            try {
+                await failedServer?.stop();
+            }
+            catch (cleanupError) {
+                cleanupErrors.push(cleanupError);
+            }
+            try {
+                authorityDeps?.unbind();
+            }
+            catch (cleanupError) {
+                cleanupErrors.push(cleanupError);
+            }
+            try {
+                removeObserveState();
+            }
+            catch (cleanupError) {
+                cleanupErrors.push(cleanupError);
+            }
+            if (cleanupErrors.length > 0) {
+                throw new AggregateError([error, ...cleanupErrors], `OBSERVE_START_ROLLBACK_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            throw error;
+        }
     })();
     try {
         return await starting;

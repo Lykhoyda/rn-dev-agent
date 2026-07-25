@@ -115,6 +115,32 @@ test('iOS hard reset addresses only the exact simulator and app', async () => {
   ]);
 });
 
+test('iOS hard reset retains runner authority when exact shutdown is unproven', async () => {
+  const calls = [];
+  const h = harness();
+  const result = await createRestartHandler(h.getClient, h.setClient, h.createClient, {
+    execFile: async (command, args) => {
+      calls.push([command, ...args]);
+      return { stdout: '', stderr: '' };
+    },
+    stopFastRunner: async () => {
+      throw new Error('runner process did not stop');
+    },
+    unbindRunner: () => calls.push(['unbindRunner']),
+    sleep: async () => {},
+  })({
+    hardReset: true,
+    metroPort: 8193,
+    platform: 'ios',
+    deviceId: 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
+    appId: 'com.example.app',
+  });
+
+  assert.equal(envelope(result).ok, false);
+  assert.equal(envelope(result).code, 'RUNNER_ADOPTION_REQUIRED');
+  assert.deepEqual(calls, []);
+});
+
 test('Android hard reset uses adb -s for force-stop and launch', async () => {
   const calls = [];
   let unbound = false;

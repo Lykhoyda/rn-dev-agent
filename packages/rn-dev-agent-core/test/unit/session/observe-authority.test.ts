@@ -85,3 +85,33 @@ test('Observe retains fragment authority across browser refreshes', async () => 
   assert.doesNotMatch(source, /history\\.replaceState/);
   assert.doesNotMatch(bundle, /history\\.replaceState/);
 });
+
+test('HTTP stop reports cleanup rejection without an unhandled promise', async () => {
+  const reported: unknown[] = [];
+  const server = new ObservabilityServer(
+    new Recorder(),
+    undefined,
+    undefined,
+    undefined,
+    authority,
+    async () => {
+      throw new Error('cleanup failed');
+    },
+    (error) => {
+      reported.push(error);
+    },
+  );
+  const { url } = await server.start();
+  try {
+    const response = await fetch(`${new URL(url).origin}/api/stop`, {
+      method: 'POST',
+      headers: headers(),
+    });
+    assert.equal(response.status, 202);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reported.length, 1);
+    assert.match(String(reported[0]), /cleanup failed/);
+  } finally {
+    await server.stop();
+  }
+});

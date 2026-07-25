@@ -6,6 +6,7 @@ import type { Recorder } from './recorder.js';
 import type { MirrorManager } from './mirror/manager.js';
 import { isPostAllowed } from './e2e-csrf.js';
 import type { ActionRunResult } from './wire-types.js';
+import { logger } from '../logger.js';
 
 const HOST = '127.0.0.1';
 
@@ -42,6 +43,11 @@ export class ObservabilityServer {
     private readonly state?: StateServerDeps,
     private readonly authority?: ObserveAuthority,
     private readonly stopOwner?: () => Promise<void>,
+    private readonly reportStopFailure: (error: unknown) => void = (error) =>
+      logger.error(
+        'Observe',
+        `shutdown failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
   ) {}
 
   async start(preferredPort?: number): Promise<{ url: string; port: number }> {
@@ -115,7 +121,9 @@ export class ObservabilityServer {
       res.writeHead(202, { 'content-type': 'application/json' });
       res.end('{"stopping":true}');
       queueMicrotask(() => {
-        void (this.stopOwner?.() ?? this.stop());
+        void Promise.resolve()
+          .then(() => this.stopOwner?.() ?? this.stop())
+          .catch((error) => this.reportStopFailure(error));
       });
       return;
     }

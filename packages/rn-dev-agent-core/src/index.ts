@@ -191,6 +191,7 @@ import {
 import { proveTargetDeviceAssociation } from './session/target-device-authority.js';
 import type { SessionStatus } from './session/registry.js';
 import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
+import { stopBoundRunner } from './session/process-cleanup.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
@@ -2860,6 +2861,13 @@ trackedTool(
       ),
   },
   createRestartHandler(getClient, setClient, createClient, {
+    stopFastRunner: async (deviceId) => {
+      const { registry, session } = authorityRuntime.requireAvailable();
+      const status = registry.getSessionStatus(session.sessionId);
+      const runner = status?.bindings.runner as Record<string, unknown> | undefined;
+      if (runner) await stopBoundRunner(runner);
+      stopFastRunner(deviceId);
+    },
     unbindRunner: () => unbindNativeRunner(authorityRuntime),
   }),
 );
