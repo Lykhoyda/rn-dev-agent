@@ -106,49 +106,86 @@ function runCodesign(arguments_) {
   });
 }
 
-function hasExpectedCodeSignature(path) {
-  const verification = runCodesign(['--verify', '--strict', path]);
-  if (verification.error || verification.status !== 0) return false;
+function detailValue(details, name) {
+  const line = details
+    .split('\n')
+    .find((candidate) => candidate.startsWith(`${name}=`) || candidate.startsWith(`${name} `));
+  return line?.slice(name.length).replace(/^(?:=|\s+)/, '').trim() ?? null;
+}
 
-  const details = runCodesign(['--display', '--verbose=4', path]);
+function assignments(value) {
+  return Object.fromEntries(
+    [...value.matchAll(/([a-z][a-z0-9_-]*)=([^\s]+)/gi)].map((match) => [match[1], match[2]]),
+  );
+}
+
+function hasExpectedArchitectureSignature(path, architecture) {
+  const details = runCodesign(['--display', '--verbose=4', '--arch', architecture, path]);
   if (details.error || details.status !== 0) return false;
-  const detailLines = new Set(details.stderr.trim().split('\n'));
-  const codeDirectory = [...detailLines].find((line) => line.startsWith('CodeDirectory '));
+  const codeDirectory = assignments(detailValue(details.stderr, 'CodeDirectory') ?? '');
+  const hashType = detailValue(details.stderr, 'Hash type') ?? '';
+  const hashTypeFields = assignments(hashType);
+  const requirementsMetadata = assignments(
+    detailValue(details.stderr, 'Internal requirements') ?? '',
+  );
   if (
-    !detailLines.has('Identifier=dev.rn-dev-agent.process-birth') ||
-    !detailLines.has('Format=Mach-O universal (x86_64 arm64)') ||
-    !/^CodeDirectory v=20400 size=\d+ flags=0x2\(adhoc\) hashes=\d+\+\d+ location=embedded$/.test(
-      codeDirectory ?? '',
-    ) ||
-    !detailLines.has('Hash type=sha256 size=32') ||
-    !detailLines.has('Hash choices=sha256') ||
-    !detailLines.has('CMSDigestType=2') ||
-    !detailLines.has('Executable Segment flags=0x1') ||
-    !detailLines.has('Signature=adhoc') ||
-    !detailLines.has('Info.plist=not bound') ||
-    !detailLines.has('TeamIdentifier=not set') ||
-    !detailLines.has('Sealed Resources=none') ||
-    !detailLines.has('Internal requirements count=0 size=12')
+    detailValue(details.stderr, 'Identifier') !== 'dev.rn-dev-agent.process-birth' ||
+    codeDirectory.v !== '20400' ||
+    codeDirectory.flags !== '0x2(adhoc)' ||
+    codeDirectory.location !== 'embedded' ||
+    hashType.split(/\s+/, 1)[0] !== 'sha256' ||
+    hashTypeFields.size !== '32' ||
+    detailValue(details.stderr, 'Hash choices') !== 'sha256' ||
+    detailValue(details.stderr, 'CMSDigestType') !== '2' ||
+    detailValue(details.stderr, 'Executable Segment flags') !== '0x1' ||
+    detailValue(details.stderr, 'Signature') !== 'adhoc' ||
+    detailValue(details.stderr, 'Info.plist') !== 'not bound' ||
+    detailValue(details.stderr, 'TeamIdentifier') !== 'not set' ||
+    detailValue(details.stderr, 'Sealed Resources') !== 'none' ||
+    requirementsMetadata.count !== '0'
   ) {
     return false;
   }
 
-  const requirements = runCodesign(['--display', '--requirements', '-', path]);
+  const requirements = runCodesign([
+    '--display',
+    '--arch',
+    architecture,
+    '--requirements',
+    '-',
+    path,
+  ]);
   if (
     requirements.error ||
     requirements.status !== 0 ||
-    !/^# designated => cdhash H"[0-9a-f]{40}" or cdhash H"[0-9a-f]{40}"\n$/i.test(
-      requirements.stdout,
-    )
+    !/^#\s*designated\s*=>\s*cdhash\s+H"[0-9a-f]{40}"$/i.test(requirements.stdout.trim())
   ) {
     return false;
   }
 
-  const entitlements = runCodesign(['--display', '--entitlements', '-', path]);
+  const entitlements = runCodesign([
+    '--display',
+    '--arch',
+    architecture,
+    '--entitlements',
+    '-',
+    path,
+  ]);
   return (
     !entitlements.error &&
     entitlements.status === 0 &&
-    entitlements.stdout.length === 0
+    entitlements.stdout.trim().length === 0
+  );
+}
+
+function hasExpectedCodeSignature(path) {
+  const verification = runCodesign(['--verify', '--strict', path]);
+  return (
+    !verification.error &&
+    verification.status === 0 &&
+    ['arm64', 'x86_64'].every((architecture) =>
+      hasExpectedArchitectureSignature(path, architecture),
+    )
   );
 }
 
