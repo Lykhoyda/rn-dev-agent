@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ProcessBirth } from './process-birth.js';
+import { stopBoundObserve, stopBoundRunner } from './process-cleanup.js';
 import type { OwnerStatus, SessionRef, SessionRegistry } from './registry.js';
 import { openSessionRegistry } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
@@ -47,6 +48,8 @@ export function createSupervisorAuthority(
   },
   dependencies: {
     stopManagedMetro?: typeof stopManagedMetro;
+    stopBoundRunner?: typeof stopBoundRunner;
+    stopBoundObserve?: typeof stopBoundObserve;
   } = {},
 ): SupervisorAuthority {
   if (!input.supervisorBirth) {
@@ -220,6 +223,45 @@ export function createSupervisorAuthority(
           status = registry.beginSessionClose(session);
         }
         if (status) {
+          const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
+          if (runner) {
+            const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(
+              runner.port,
+            )}`;
+            if (
+              !status.claims.some(
+                (claim) =>
+                  claim.type === 'runner' &&
+                  claim.key === claimKey &&
+                  claim.sessionId === session.sessionId &&
+                  claim.claimEpoch === session.claimEpoch,
+              )
+            ) {
+              throw new Error(
+                'RUNNER_OWNERSHIP_MISMATCH: runner cleanup claim no longer matches the closing binding',
+              );
+            }
+            await (dependencies.stopBoundRunner ?? stopBoundRunner)(runner);
+          }
+          const observe = status.bindings.observe as Record<string, unknown> | null | undefined;
+          if (observe) {
+            const port = String(observe.port);
+            if (
+              status.bindings.observePort !== observe.port ||
+              !status.claims.some(
+                (claim) =>
+                  claim.type === 'observe-port' &&
+                  claim.key === port &&
+                  claim.sessionId === session.sessionId &&
+                  claim.claimEpoch === session.claimEpoch,
+              )
+            ) {
+              throw new Error(
+                'OBSERVE_AUTHORITY_MISMATCH: Observe cleanup claim no longer matches the closing binding',
+              );
+            }
+            await (dependencies.stopBoundObserve ?? stopBoundObserve)(observe);
+          }
           const metro = (status.bindings.metroCleanup ?? status.bindings.metro) as
             | Partial<ManagedMetroBinding>
             | undefined;

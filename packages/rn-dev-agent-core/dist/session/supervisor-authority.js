@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { stopBoundObserve, stopBoundRunner } from './process-cleanup.js';
 import { openSessionRegistry } from './registry.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro } from './managed-metro.js';
@@ -168,6 +169,29 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                     status = registry.beginSessionClose(session);
                 }
                 if (status) {
+                    const runner = status.bindings.runner;
+                    if (runner) {
+                        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
+                        if (!status.claims.some((claim) => claim.type === 'runner' &&
+                            claim.key === claimKey &&
+                            claim.sessionId === session.sessionId &&
+                            claim.claimEpoch === session.claimEpoch)) {
+                            throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner cleanup claim no longer matches the closing binding');
+                        }
+                        await (dependencies.stopBoundRunner ?? stopBoundRunner)(runner);
+                    }
+                    const observe = status.bindings.observe;
+                    if (observe) {
+                        const port = String(observe.port);
+                        if (status.bindings.observePort !== observe.port ||
+                            !status.claims.some((claim) => claim.type === 'observe-port' &&
+                                claim.key === port &&
+                                claim.sessionId === session.sessionId &&
+                                claim.claimEpoch === session.claimEpoch)) {
+                            throw new Error('OBSERVE_AUTHORITY_MISMATCH: Observe cleanup claim no longer matches the closing binding');
+                        }
+                        await (dependencies.stopBoundObserve ?? stopBoundObserve)(observe);
+                    }
                     const metro = (status.bindings.metroCleanup ?? status.bindings.metro);
                     if (metro?.mode === 'managed' &&
                         !(await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {

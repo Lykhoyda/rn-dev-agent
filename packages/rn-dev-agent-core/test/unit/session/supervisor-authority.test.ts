@@ -251,6 +251,150 @@ test('supervisor close atomically blocks operation admission before Metro teardo
   await assert.doesNotReject(close);
 });
 
+test('supervisor close proves runner and Observe cleanup before releasing claims', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  const stoppedRunners = [];
+  const stoppedObserveServers = [];
+  const authority = createSupervisorAuthority(
+    {
+      stateDir,
+      source: {
+        kind: 'git',
+        contentRoot: '/repo',
+        appRoot: '/repo',
+        sourceKey: 'source-key',
+        worktreeKey: 'worktree-key',
+        appRootKey: 'app-key',
+        head: 'abc123',
+      },
+      supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+      uid: '501',
+      startHeartbeat: false,
+      ownerStatus: () => 'match',
+    },
+    {
+      stopBoundRunner: async (binding) => {
+        stoppedRunners.push(binding);
+      },
+      stopBoundObserve: async (binding) => {
+        stoppedObserveServers.push(binding);
+      },
+    },
+  );
+  const runner = {
+    platform: 'ios',
+    deviceId: 'device-a',
+    port: 8100,
+    pid: 201,
+    processBirth: 'runner-birth',
+    instanceId: 'runner-a',
+    capability: 'runner-capability',
+  };
+  const observe = {
+    port: authority.observePort,
+    pid: 202,
+    processBirth: 'observe-birth',
+    instanceId: 'observe-a',
+    cleanupCapability: 'observe-capability',
+  };
+  authority.registry.claimResources(authority.session, [
+    { type: 'runner', key: 'ios:device-a:8100' },
+  ]);
+  authority.registry.updateBindings(authority.session, {
+    bindings: { runner, observe },
+  });
+
+  await assert.doesNotReject(authority.close());
+  assert.deepEqual(stoppedRunners, [runner]);
+  assert.deepEqual(stoppedObserveServers, [observe]);
+
+  const registry = openSessionRegistry(authority.layout.registry, {
+    ownerStatus: () => 'match',
+  });
+  try {
+    const status = registry.getSessionStatus(authority.session.sessionId);
+    assert.equal(status?.state, 'released');
+    assert.deepEqual(status?.claims, []);
+  } finally {
+    registry.close();
+  }
+});
+
+test('supervisor close retains claims when runner or Observe cleanup is unproven', async (t) => {
+  for (const failedResource of ['runner', 'observe']) {
+    await t.test(failedResource, async () => {
+      const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+      roots.push(stateDir);
+      const authority = createSupervisorAuthority(
+        {
+          stateDir,
+          source: {
+            kind: 'git',
+            contentRoot: '/repo',
+            appRoot: '/repo',
+            sourceKey: `source-key-${failedResource}`,
+            worktreeKey: `worktree-key-${failedResource}`,
+            appRootKey: `app-key-${failedResource}`,
+            head: 'abc123',
+          },
+          supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+          uid: '501',
+          startHeartbeat: false,
+          ownerStatus: () => 'match',
+        },
+        {
+          stopBoundRunner: async () => {
+            if (failedResource === 'runner') throw new Error('RUNNER_ADOPTION_REQUIRED');
+          },
+          stopBoundObserve: async () => {
+            if (failedResource === 'observe') throw new Error('OBSERVE_AUTHORITY_MISMATCH');
+          },
+        },
+      );
+      authority.registry.claimResources(authority.session, [
+        { type: 'runner', key: 'ios:device-a:8100' },
+      ]);
+      authority.registry.updateBindings(authority.session, {
+        bindings: {
+          runner: {
+            platform: 'ios',
+            deviceId: 'device-a',
+            port: 8100,
+            pid: 201,
+            processBirth: 'runner-birth',
+            instanceId: 'runner-a',
+            capability: 'runner-capability',
+          },
+          observe: {
+            port: authority.observePort,
+            pid: 202,
+            processBirth: 'observe-birth',
+            instanceId: 'observe-a',
+            cleanupCapability: 'observe-capability',
+          },
+        },
+      });
+
+      await assert.rejects(authority.close(), new RegExp(failedResource.toUpperCase()));
+
+      const registry = openSessionRegistry(authority.layout.registry, {
+        ownerStatus: () => 'match',
+      });
+      try {
+        const status = registry.getSessionStatus(authority.session.sessionId);
+        assert.equal(status?.state, 'closing');
+        assert.deepEqual(
+          status?.claims.map((claim) => claim.type),
+          ['metro-port', 'observe-port', 'runner', 'source'],
+        );
+      } finally {
+        registry.close();
+      }
+    });
+  }
+});
+
 test('supervisor close retains an unpublished managed Metro transition', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
