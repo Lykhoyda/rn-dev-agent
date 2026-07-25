@@ -102,6 +102,28 @@ test('failed lifecycle stages invalidate target authority before propagating fai
   assert.deepEqual(calls, ['execute', 'complete:false']);
 });
 
+test('failed grouped UI stages invalidate target authority after partial dispatch', async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      [{ tapOn: { id: 'link' } }, { openLink: 'example://next' }],
+      async () => {
+        calls.push('execute');
+        throw new Error('later command failed');
+      },
+      async () => {
+        calls.push('claim');
+      },
+      async (targetExpected) => {
+        calls.push(`complete:${targetExpected}`);
+      },
+    ),
+    /later command failed/,
+  );
+
+  assert.deepEqual(calls, ['claim', 'execute', 'complete:false']);
+});
+
 test('flow headers cannot override the authority-bound app', async () => {
   assert.equal(resolveMaestroFlowAppId(APP_ID, APP_ID), APP_ID);
   assert.throws(

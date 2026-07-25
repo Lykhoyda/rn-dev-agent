@@ -49775,8 +49775,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
     try {
       results.push(await executeStage(stage.commands));
     } catch (error2) {
-      if (!stage.requiresOrigin)
-        await completeOrigin(false);
+      await completeOrigin(false);
       throw error2;
     }
   }

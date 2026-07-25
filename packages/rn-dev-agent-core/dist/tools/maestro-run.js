@@ -114,8 +114,7 @@ export async function executeMaestroAuthorityStages(commands, executeStage, clai
             results.push(await executeStage(stage.commands));
         }
         catch (error) {
-            if (!stage.requiresOrigin)
-                await completeOrigin(false);
+            await completeOrigin(false);
             throw error;
         }
     }
