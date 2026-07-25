@@ -112,8 +112,9 @@ test('native app origin accepts a matching app target on the exact claimed devic
           },
         ];
       },
-      proveTargetDevice: async ({ deviceId, targetDeviceName }) => {
-        if (deviceId !== 'SIM-A' || targetDeviceName !== 'Issue582') {
+      proveTargetDevices: async ({ deviceId, targetDeviceNames }) => {
+        assert.deepEqual(targetDeviceNames, ['iPhone 16', 'Issue582']);
+        if (deviceId !== 'SIM-A' || !targetDeviceNames.includes('Issue582')) {
           throw new Error('foreign device');
         }
       },
@@ -144,7 +145,7 @@ test('native app origin rejects when only a sibling device is attached to the Me
           deviceName: 'Sibling',
         },
       ],
-      proveTargetDevice: async () => {
+      proveTargetDevices: async () => {
         throw new Error('foreign device');
       },
     }),
@@ -161,6 +162,35 @@ test('native app origin rejects when only a sibling device is attached to the Me
       }),
     (error) => error instanceof SessionAuthorityError && error.code === 'METRO_ORIGIN_MISMATCH',
   );
+});
+
+test('native app origin identity ignores ephemeral target replacement', async () => {
+  let targetId = 'target-before';
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      fetchTargets: async () => [
+        {
+          id: targetId,
+          title: 'com.example.app (Issue582)',
+          appId: 'com.example.app',
+          vm: 'Hermes',
+          webSocketDebuggerUrl: `ws://127.0.0.1:8082/${targetId}`,
+          deviceName: 'Issue582',
+        },
+      ],
+      proveTargetDevices: async () => {},
+    }),
+  );
+  const status = statusWith({
+    metro: { port: 8082 },
+    device: { platform: 'ios', deviceId: 'SIM-A', appId: 'com.example.app' },
+  });
+
+  const before = await probe({ axis: 'A', phase: 'preflight', status });
+  targetId = 'target-after';
+  const after = await probe({ axis: 'A', phase: 'postflight', status });
+
+  assert.equal(before.identity, after.identity);
 });
 
 test('controller probe uses the handoff-only lookup solely for cancellation', async () => {

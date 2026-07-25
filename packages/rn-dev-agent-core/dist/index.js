@@ -2673,6 +2673,6 @@ main().catch((err) => {
         console.error(`CDP bridge log: ${logger.logFilePath}`);
     }
     if (!diagnosticContractProbe)
-        stopFastRunner(getActiveSession()?.deviceId);
+        void stopFastRunner(getActiveSession()?.deviceId);
     process.exit(1);
 });

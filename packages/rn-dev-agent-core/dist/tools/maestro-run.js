@@ -35,7 +35,7 @@ export async function runFlowParked(run, opts = {}) {
             await release({ deviceId: opts.deviceId });
         }
         else {
-            (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
+            await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
         }
         return await run();
     }

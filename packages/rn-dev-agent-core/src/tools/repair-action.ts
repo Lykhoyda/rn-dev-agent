@@ -37,7 +37,7 @@ async function bringTargetAppToForeground(
   // repair path so users don't have to call cdp_restart manually after
   // a SELECTOR_NOT_FOUND.
   try {
-    stopFastRunner(deviceId);
+    await stopFastRunner(deviceId);
   } catch {
     /* best-effort — fast-runner may already be dead */
   }

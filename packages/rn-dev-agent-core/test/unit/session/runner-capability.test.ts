@@ -143,7 +143,7 @@ test('persisted iOS teardown never signals a reused PID', async () => {
       processBirth: `${birth.token}-reused`,
     });
 
-    stopFastRunner('device-1');
+    await stopFastRunner('device-1');
 
     assert.doesNotThrow(() => process.kill(child.pid!, 0));
   } finally {

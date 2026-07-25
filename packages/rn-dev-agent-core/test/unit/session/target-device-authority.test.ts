@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { proveTargetDeviceAssociation } from '../../../dist/session/target-device-authority.js';
+import {
+  proveTargetDeviceAssociation,
+  proveTargetDeviceAssociations,
+} from '../../../dist/session/target-device-authority.js';
 
 test('target association accepts only one exact iOS device', async () => {
   await proveTargetDeviceAssociation(
@@ -34,6 +37,30 @@ test('target association accepts only one exact iOS device', async () => {
     ),
     /ambiguous or foreign/,
   );
+});
+
+test('target association resolves one iOS inventory for multiple targets', async () => {
+  let inventoryCalls = 0;
+  await proveTargetDeviceAssociations(
+    {
+      platform: 'ios',
+      deviceId: 'device-a',
+      targetDeviceNames: ['Foreign', 'iPhone A'],
+    },
+    {
+      execute: async () => {
+        inventoryCalls += 1;
+        return {
+          stdout: JSON.stringify({
+            devices: {
+              runtime: [{ udid: 'device-a', name: 'iPhone A', state: 'Booted' }],
+            },
+          }),
+        };
+      },
+    },
+  );
+  assert.equal(inventoryCalls, 1);
 });
 
 test('target association rejects an Android model belonging to another serial', async () => {

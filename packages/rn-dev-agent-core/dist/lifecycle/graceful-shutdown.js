@@ -30,7 +30,7 @@ export function buildGracefulShutdown(deps) {
                 logger.warn('MCP', `shutdown: disconnect failed: ${err instanceof Error ? err.message : err}`);
             }
             try {
-                deps.stopFastRunnerFn();
+                await deps.stopFastRunnerFn();
             }
             catch (err) {
                 logger.warn('MCP', `shutdown: stopFastRunner failed: ${err instanceof Error ? err.message : err}`);

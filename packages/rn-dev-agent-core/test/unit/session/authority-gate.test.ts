@@ -116,6 +116,29 @@ test('postflight drift rejects the result instead of returning a false success',
   assert.equal(envelope.data, undefined);
 });
 
+test('origin-disrupting lifecycle tools retain preflight origin proof', async () => {
+  const { runtime, calls } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('device_reset_state', async () => okResult({ reset: true }))({
+    relaunch: false,
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(calls.includes('preflight:A'), true);
+  assert.equal(calls.includes('postflight:A'), false);
+  assert.equal(
+    envelope.meta.authorityReceipt.nativeAppOrigin.authorityScope,
+    'preflight-live-metro-target-device',
+  );
+});
+
 test('reload atomically replaces target authority and permits only B-axis identity change', async () => {
   const { runtime, calls, status } = fixture();
   status.bindings.metro.port = 8193;

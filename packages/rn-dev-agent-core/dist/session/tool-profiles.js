@@ -158,6 +158,16 @@ add(proof, {
     liveBundleProbe: true,
 });
 export function authorityProfileFor(tool, args = {}) {
+    if (tool === 'device_find' && args.action === 'click') {
+        return profiles.get('device_press');
+    }
+    if (tool === 'device_reset_state' || tool === 'maestro_run' || tool === 'maestro_test_all') {
+        const profile = profiles.get(tool);
+        return {
+            ...profile,
+            postflightAxes: profile.axes.filter((axis) => axis !== 'A'),
+        };
+    }
     if (tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios') {
         return {
             kind: 'transition',

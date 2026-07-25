@@ -302,7 +302,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
             catch (error) {
                 clearActiveSession();
                 if (lockPlatform === 'ios')
-                    stopFastRunner(deviceId);
+                    await stopFastRunner(deviceId);
                 else
                     await stopAndroidRunner(deviceId);
                 releaseDeviceLockForSession();
@@ -469,7 +469,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 // session open), and fast-runner serves the (ref-less) snapshot.
                 closeSession: async () => {
                     clearActiveSession(); // also clears refMap via its side-effect
-                    stopFastRunner(session?.deviceId);
+                    await stopFastRunner(session?.deviceId);
                     await stopAndroidRunner(session?.deviceId);
                     return okResult({ closed: true });
                 },
@@ -533,7 +533,7 @@ export function runnerLeakFailureHint(reason, session) {
  */
 async function reacquireIosTargetApp(appId, deviceId) {
     try {
-        stopFastRunner(deviceId);
+        await stopFastRunner(deviceId);
     }
     catch {
         /* best-effort — may already be dead */

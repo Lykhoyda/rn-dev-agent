@@ -186,7 +186,11 @@ function receipt(status, profile, observations) {
             ? { authorityScope: 'initial-bundle', sourceFidelity: 'not-proven' }
             : undefined,
         nativeAppOrigin: profile.axes.includes('A')
-            ? { authorityScope: 'live-metro-target-device' }
+            ? {
+                authorityScope: observations.some(({ axis }) => axis === 'A')
+                    ? 'live-metro-target-device'
+                    : 'preflight-live-metro-target-device',
+            }
             : undefined,
     };
 }
@@ -650,7 +654,11 @@ export function createAuthorityGate(runtime, dependencies) {
                     ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] }
                     : profile;
                 const allBefore = [...before, ...optionalBefore];
-                const after = await Promise.all(effectiveProfile.axes.map((axis) => dependencies.probe({
+                const postflightAxes = [
+                    ...(profile.postflightAxes ?? profile.axes),
+                    ...optionalBefore.map(({ axis }) => axis),
+                ];
+                const after = await Promise.all(postflightAxes.map((axis) => dependencies.probe({
                     axis,
                     phase: 'postflight',
                     tool,
@@ -658,11 +666,14 @@ export function createAuthorityGate(runtime, dependencies) {
                     status,
                     args,
                 })));
-                for (let index = 0; index < allBefore.length; index += 1) {
-                    if (runtimeTargetChanged && allBefore[index]?.axis === 'B')
+                for (const observation of allBefore) {
+                    if (runtimeTargetChanged && observation.axis === 'B')
                         continue;
-                    if (allBefore[index]?.identity !== after[index]?.identity) {
-                        throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', `${allBefore[index]?.axis ?? 'unknown'} authority changed during the operation`);
+                    if (!postflightAxes.includes(observation.axis))
+                        continue;
+                    const postflight = after.find((candidate) => candidate.axis === observation.axis);
+                    if (observation.identity !== postflight?.identity) {
+                        throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', `${observation.axis} authority changed during the operation`);
                     }
                 }
                 registry.verifyOperation(operation);

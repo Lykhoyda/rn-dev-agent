@@ -20,7 +20,15 @@ test('every registered MCP tool has one explicit authority profile', () => {
 });
 
 test('native runner mutations prove app origin without requiring a live CDP bundle seat', () => {
-  assert.deepEqual(authorityProfileFor('device_press').axes, [
+  assert.deepEqual(authorityProfileFor('device_press').axes, ['C', 'S', 'I', 'M', 'A', 'D', 'R']);
+  assert.equal(authorityProfileFor('device_press').liveBundleProbe, false);
+  assert.equal(authorityProfileFor('device_press').axes.includes('B'), false);
+  assert.equal(authorityProfileFor('cdp_interact').liveBundleProbe, true);
+  assert.ok(authorityProfileFor('cdp_interact').axes.includes('B'));
+});
+
+test('device_find click and lifecycle tools use mutation-aware origin authority', () => {
+  assert.deepEqual(authorityProfileFor('device_find', { action: 'click' }).axes, [
     'C',
     'S',
     'I',
@@ -29,10 +37,12 @@ test('native runner mutations prove app origin without requiring a live CDP bund
     'D',
     'R',
   ]);
-  assert.equal(authorityProfileFor('device_press').liveBundleProbe, false);
-  assert.equal(authorityProfileFor('device_press').axes.includes('B'), false);
-  assert.equal(authorityProfileFor('cdp_interact').liveBundleProbe, true);
-  assert.ok(authorityProfileFor('cdp_interact').axes.includes('B'));
+  assert.equal(authorityProfileFor('device_find', { action: 'get' }).mutation, false);
+  for (const tool of ['device_reset_state', 'maestro_run', 'maestro_test_all']) {
+    const profile = authorityProfileFor(tool);
+    assert.ok(profile.axes.includes('A'));
+    assert.equal(profile.postflightAxes?.includes('A'), false);
+  }
 });
 
 test('hybrid execution separates required and optional bundle authority', () => {

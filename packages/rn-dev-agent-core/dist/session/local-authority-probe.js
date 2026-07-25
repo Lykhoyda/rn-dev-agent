@@ -9,7 +9,7 @@ import { inspectSessionOwner } from './process-owner.js';
 import { readProcessBirth } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 import { resolveSourceIdentity } from './source-identity.js';
-import { proveTargetDeviceAssociation, } from './target-device-authority.js';
+import { proveTargetDeviceAssociations, } from './target-device-authority.js';
 function identity(value) {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -79,8 +79,8 @@ export function createLocalAuthorityProbe(dependencies) {
     const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
     const fetchTargets = dependencies.fetchTargets ??
         (async (port) => JSON.parse(await fetchText(`http://127.0.0.1:${port}/json/list`)));
-    const proveTargetDevice = dependencies.proveTargetDevice ??
-        ((input) => proveTargetDeviceAssociation(input, {
+    const proveTargetDevices = dependencies.proveTargetDevices ??
+        ((input) => proveTargetDeviceAssociations(input, {
             execute: async (file, args) => ({
                 stdout: execFileSync(file, args, {
                     encoding: 'utf8',
@@ -203,21 +203,14 @@ export function createLocalAuthorityProbe(dependencies) {
             catch {
                 throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'authority-bound Metro targets could not be inspected');
             }
-            const matchedTargetIds = [];
-            for (const target of targets) {
-                try {
-                    await proveTargetDevice({
-                        platform,
-                        deviceId,
-                        targetDeviceName: target.deviceName,
-                    });
-                    matchedTargetIds.push(target.id);
-                }
-                catch {
-                    continue;
-                }
+            try {
+                await proveTargetDevices({
+                    platform,
+                    deviceId,
+                    targetDeviceNames: targets.map(({ deviceName }) => deviceName),
+                });
             }
-            if (matchedTargetIds.length === 0) {
+            catch {
                 throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'the claimed device app is not attached to the authority-bound Metro');
             }
             return {
@@ -227,7 +220,6 @@ export function createLocalAuthorityProbe(dependencies) {
                     platform,
                     deviceId,
                     appId,
-                    targetIds: matchedTargetIds.sort(),
                 }),
                 detail: { authorityScope: 'live-metro-target-device' },
             };

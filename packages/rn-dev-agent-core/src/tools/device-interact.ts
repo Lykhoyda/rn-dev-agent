@@ -198,7 +198,7 @@ export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFe
     {
       closeSession: async () => {
         clearActiveSession();
-        stopFastRunner(session?.deviceId);
+        await stopFastRunner(session?.deviceId);
         await stopAndroidRunner(session?.deviceId);
         return okResult({ closed: true });
       },

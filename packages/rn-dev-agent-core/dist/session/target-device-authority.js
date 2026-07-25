@@ -1,6 +1,15 @@
 export async function proveTargetDeviceAssociation(input, dependencies) {
-    const targetDeviceName = input.targetDeviceName?.trim();
-    if (!targetDeviceName) {
+    return proveTargetDeviceAssociations({
+        platform: input.platform,
+        deviceId: input.deviceId,
+        targetDeviceNames: [input.targetDeviceName],
+    }, dependencies);
+}
+export async function proveTargetDeviceAssociations(input, dependencies) {
+    const targetDeviceNames = new Set(input.targetDeviceNames
+        .map((name) => name?.trim())
+        .filter((name) => Boolean(name)));
+    if (targetDeviceNames.size === 0) {
         throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association');
     }
     if (input.platform === 'ios') {
@@ -8,7 +17,9 @@ export async function proveTargetDeviceAssociation(input, dependencies) {
         const parsed = JSON.parse(output.stdout);
         const matching = Object.values(parsed.devices ?? {})
             .flat()
-            .filter((device) => device.state === 'Booted' && device.name === targetDeviceName);
+            .filter((device) => device.state === 'Booted' &&
+            typeof device.name === 'string' &&
+            targetDeviceNames.has(device.name));
         if (matching.length !== 1 || matching[0]?.udid !== input.deviceId) {
             throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign');
         }
@@ -22,7 +33,8 @@ export async function proveTargetDeviceAssociation(input, dependencies) {
     const matching = [];
     for (const serial of devices) {
         const model = (await dependencies.execute('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])).stdout.trim();
-        if (model && (targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
+        if (model &&
+            [...targetDeviceNames].some((targetDeviceName) => targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
             matching.push(serial);
         }
     }

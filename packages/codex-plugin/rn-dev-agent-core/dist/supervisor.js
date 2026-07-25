@@ -735,10 +735,6 @@ function probeProcessBirth(pid, dependencies = {}) {
   }
   return { status: "unknown" };
 }
-function processBirthMatches(expected, dependencies = {}) {
-  const observed = readProcessBirth(expected.pid, dependencies);
-  return observed !== null && observed.token === expected.token;
-}
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
@@ -44416,7 +44412,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   if (shouldReuseRunner(runnerState, deviceId))
     return runnerState;
   if (runnerState)
-    stopFastRunner(deviceId);
+    await stopFastRunner(deviceId);
   const authority = runnerAuthorityFromEnvironment(true);
   const desired = resolveRunnerRequestedPort(port);
   const projectPath = join16(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
@@ -44538,20 +44534,9 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
     });
   });
 }
-function stopFastRunner(deviceId) {
+async function stopFastRunner(deviceId) {
   adoptPersistedFastRunnerState(deviceId);
-  if (runnerProcess) {
-    runnerProcess.kill("SIGTERM");
-    runnerProcess = null;
-  } else if (runnerState?.pid) {
-    if (typeof runnerState.processBirth === "string" && processBirthMatches({ pid: runnerState.pid, token: runnerState.processBirth })) {
-      try {
-        process.kill(runnerState.pid, "SIGTERM");
-      } catch {
-      }
-    }
-  }
-  clearStateFile();
+  await reapStaleFastRunner();
 }
 function clearFastRunnerAfterVerifiedStop(binding) {
   const expected = {
@@ -44747,9 +44732,7 @@ async function probeFastRunnerLiveness(deps = {}) {
 }
 async function reapStaleFastRunner(deps = {}) {
   const getState = deps.getState ?? (() => runnerState);
-  const processAlive = deps.processAlive ?? defaultProcessAlive2;
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const matchesProcessBirth = deps.matchesProcessBirth ?? processBirthMatches;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const clearState = deps.clearState ?? clearStateFile;
   const graceMs = deps.graceMs ?? 500;
@@ -44758,13 +44741,37 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   const expectedBirth = typeof state.processBirth === "string" ? { pid: state.pid, token: state.processBirth } : null;
   if (!expectedBirth) {
-    if (!processAlive(state.pid)) {
+    const observed = deps.probeProcessBirth ? deps.probeProcessBirth(state.pid) : deps.processAlive ? deps.processAlive(state.pid) ? { status: "present" } : { status: "absent" } : probeProcessBirth(state.pid);
+    if (observed.status === "absent") {
       clearState();
       return;
     }
     throw new Error("RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority");
   }
-  if (!matchesProcessBirth(expectedBirth)) {
+  const probeExpected = () => {
+    if (deps.probeProcessBirth) {
+      const observed2 = deps.probeProcessBirth(expectedBirth.pid);
+      if (observed2.status === "unknown")
+        return "unknown";
+      if (observed2.status === "absent")
+        return "gone";
+      return observed2.birth.token === expectedBirth.token ? "match" : "gone";
+    }
+    if (deps.matchesProcessBirth) {
+      return deps.matchesProcessBirth(expectedBirth) ? "match" : "gone";
+    }
+    const observed = probeProcessBirth(expectedBirth.pid);
+    if (observed.status === "unknown")
+      return "unknown";
+    if (observed.status === "absent")
+      return "gone";
+    return observed.birth.token === expectedBirth.token ? "match" : "gone";
+  };
+  const initial = probeExpected();
+  if (initial === "unknown") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven");
+  }
+  if (initial === "gone") {
     clearState();
     return;
   }
@@ -44775,14 +44782,26 @@ async function reapStaleFastRunner(deps = {}) {
   } catch {
   }
   await sleep6(graceMs);
-  if (processAlive(state.pid) && matchesProcessBirth(expectedBirth)) {
-    try {
-      sendSignal(state.pid, "SIGKILL");
-    } catch {
-    }
+  const afterTerm = probeExpected();
+  if (afterTerm === "unknown") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  }
+  if (afterTerm === "gone") {
+    clearState();
+    return;
+  }
+  try {
+    sendSignal(state.pid, "SIGKILL");
+  } catch {
   }
   if (spawnedExit) {
     await Promise.race([spawnedExit, sleep6(250)]);
+  } else {
+    await sleep6(50);
+  }
+  const afterKill = probeExpected();
+  if (afterKill !== "gone") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
   }
   clearState();
 }
@@ -48698,7 +48717,7 @@ async function runFlowParked(run, opts = {}) {
       const release = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
       await release({ deviceId: opts.deviceId });
     } else {
-      (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
+      await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
     }
     return await run();
   } finally {
@@ -50151,14 +50170,14 @@ async function closeDeviceSession(deps) {
   const result = await deps.closeUnderlyingSession();
   if (!result.isError) {
     deps.clearActiveSession();
-    deps.stopFastRunner(deviceId);
+    await deps.stopFastRunner(deviceId);
     await deps.stopAndroidRunner(deviceId);
     deps.releaseDeviceLock();
     return result;
   }
   if (isBenignSessionGoneError(result)) {
     deps.clearActiveSession();
-    deps.stopFastRunner(deviceId);
+    await deps.stopFastRunner(deviceId);
     await deps.stopAndroidRunner(deviceId);
     deps.releaseDeviceLock();
     return okResult({
@@ -50376,7 +50395,7 @@ function createDeviceSnapshotHandler(deps = {}) {
       } catch (error2) {
         clearActiveSession();
         if (lockPlatform === "ios")
-          stopFastRunner(deviceId);
+          await stopFastRunner(deviceId);
         else
           await stopAndroidRunner(deviceId);
         releaseDeviceLockForSession();
@@ -50507,7 +50526,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         // session open), and fast-runner serves the (ref-less) snapshot.
         closeSession: async () => {
           clearActiveSession();
-          stopFastRunner(session?.deviceId);
+          await stopFastRunner(session?.deviceId);
           await stopAndroidRunner(session?.deviceId);
           return okResult({ closed: true });
         },
@@ -50553,7 +50572,7 @@ function runnerLeakFailureHint(reason, session) {
 }
 async function reacquireIosTargetApp(appId, deviceId) {
   try {
-    stopFastRunner(deviceId);
+    await stopFastRunner(deviceId);
   } catch {
   }
   try {
@@ -50852,7 +50871,7 @@ async function fetchSnapshotNodes(allowCache = false) {
   }, {
     closeSession: async () => {
       clearActiveSession();
-      stopFastRunner(session?.deviceId);
+      await stopFastRunner(session?.deviceId);
       await stopAndroidRunner(session?.deviceId);
       return okResult({ closed: true });
     },
@@ -58712,7 +58731,7 @@ var init_repair_engine = __esm({
 // packages/rn-dev-agent-core/dist/tools/repair-action.js
 async function bringTargetAppToForeground(platform, bundleId, deviceId) {
   try {
-    stopFastRunner(deviceId);
+    await stopFastRunner(deviceId);
   } catch {
   }
   try {
@@ -66978,7 +66997,7 @@ function buildGracefulShutdown(deps) {
         logger.warn("MCP", `shutdown: disconnect failed: ${err instanceof Error ? err.message : err}`);
       }
       try {
-        deps.stopFastRunnerFn();
+        await deps.stopFastRunnerFn();
       } catch (err) {
         logger.warn("MCP", `shutdown: stopFastRunner failed: ${err instanceof Error ? err.message : err}`);
       }
@@ -71438,6 +71457,16 @@ function add(names, profile) {
   }
 }
 function authorityProfileFor(tool, args = {}) {
+  if (tool === "device_find" && args.action === "click") {
+    return profiles.get("device_press");
+  }
+  if (tool === "device_reset_state" || tool === "maestro_run" || tool === "maestro_test_all") {
+    const profile2 = profiles.get(tool);
+    return {
+      ...profile2,
+      postflightAxes: profile2.axes.filter((axis) => axis !== "A")
+    };
+  }
   if (tool === "cdp_restart" && args.hardReset === true && args.platform === "ios") {
     return {
       kind: "transition",
@@ -71759,7 +71788,9 @@ function receipt(status, profile, observations) {
       ...detail ? { detail } : {}
     })),
     bundle: profile.axes.includes("B") ? { authorityScope: "initial-bundle", sourceFidelity: "not-proven" } : void 0,
-    nativeAppOrigin: profile.axes.includes("A") ? { authorityScope: "live-metro-target-device" } : void 0
+    nativeAppOrigin: profile.axes.includes("A") ? {
+      authorityScope: observations.some(({ axis }) => axis === "A") ? "live-metro-target-device" : "preflight-live-metro-target-device"
+    } : void 0
   };
 }
 function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle) {
@@ -72156,7 +72187,11 @@ function createAuthorityGate(runtime, dependencies) {
         }
         const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;
         const allBefore = [...before, ...optionalBefore];
-        const after = await Promise.all(effectiveProfile.axes.map((axis) => dependencies.probe({
+        const postflightAxes = [
+          ...profile.postflightAxes ?? profile.axes,
+          ...optionalBefore.map(({ axis }) => axis)
+        ];
+        const after = await Promise.all(postflightAxes.map((axis) => dependencies.probe({
           axis,
           phase: "postflight",
           tool,
@@ -72164,11 +72199,14 @@ function createAuthorityGate(runtime, dependencies) {
           status,
           args
         })));
-        for (let index = 0; index < allBefore.length; index += 1) {
-          if (runtimeTargetChanged && allBefore[index]?.axis === "B")
+        for (const observation of allBefore) {
+          if (runtimeTargetChanged && observation.axis === "B")
             continue;
-          if (allBefore[index]?.identity !== after[index]?.identity) {
-            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", `${allBefore[index]?.axis ?? "unknown"} authority changed during the operation`);
+          if (!postflightAxes.includes(observation.axis))
+            continue;
+          const postflight = after.find((candidate) => candidate.axis === observation.axis);
+          if (observation.identity !== postflight?.identity) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", `${observation.axis} authority changed during the operation`);
           }
         }
         registry2.verifyOperation(operation);
@@ -72282,14 +72320,21 @@ var init_metro_authority = __esm({
 
 // packages/rn-dev-agent-core/dist/session/target-device-authority.js
 async function proveTargetDeviceAssociation(input, dependencies) {
-  const targetDeviceName = input.targetDeviceName?.trim();
-  if (!targetDeviceName) {
+  return proveTargetDeviceAssociations({
+    platform: input.platform,
+    deviceId: input.deviceId,
+    targetDeviceNames: [input.targetDeviceName]
+  }, dependencies);
+}
+async function proveTargetDeviceAssociations(input, dependencies) {
+  const targetDeviceNames = new Set(input.targetDeviceNames.map((name) => name?.trim()).filter((name) => Boolean(name)));
+  if (targetDeviceNames.size === 0) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
   }
   if (input.platform === "ios") {
     const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
     const parsed = JSON.parse(output.stdout);
-    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && device.name === targetDeviceName);
+    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.name === "string" && targetDeviceNames.has(device.name));
     if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
       throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
     }
@@ -72299,7 +72344,7 @@ async function proveTargetDeviceAssociation(input, dependencies) {
   const matching = [];
   for (const serial of devices) {
     const model = (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim();
-    if (model && (targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
+    if (model && [...targetDeviceNames].some((targetDeviceName) => targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
       matching.push(serial);
     }
   }
@@ -72372,7 +72417,7 @@ function createLocalAuthorityProbe(dependencies) {
   const fetchText = dependencies.fetchText ?? defaultFetchText;
   const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
   const fetchTargets2 = dependencies.fetchTargets ?? (async (port) => JSON.parse(await fetchText(`http://127.0.0.1:${port}/json/list`)));
-  const proveTargetDevice = dependencies.proveTargetDevice ?? ((input) => proveTargetDeviceAssociation(input, {
+  const proveTargetDevices = dependencies.proveTargetDevices ?? ((input) => proveTargetDeviceAssociations(input, {
     execute: async (file, args) => ({
       stdout: execFileSync15(file, args, {
         encoding: "utf8",
@@ -72477,20 +72522,13 @@ function createLocalAuthorityProbe(dependencies) {
       } catch {
         throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "authority-bound Metro targets could not be inspected");
       }
-      const matchedTargetIds = [];
-      for (const target of targets) {
-        try {
-          await proveTargetDevice({
-            platform,
-            deviceId,
-            targetDeviceName: target.deviceName
-          });
-          matchedTargetIds.push(target.id);
-        } catch {
-          continue;
-        }
-      }
-      if (matchedTargetIds.length === 0) {
+      try {
+        await proveTargetDevices({
+          platform,
+          deviceId,
+          targetDeviceNames: targets.map(({ deviceName }) => deviceName)
+        });
+      } catch {
         throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "the claimed device app is not attached to the authority-bound Metro");
       }
       return {
@@ -72499,8 +72537,7 @@ function createLocalAuthorityProbe(dependencies) {
           port,
           platform,
           deviceId,
-          appId,
-          targetIds: matchedTargetIds.sort()
+          appId
         }),
         detail: { authorityScope: "live-metro-target-device" }
       };
@@ -74401,7 +74438,7 @@ var init_index = __esm({
         console.error(`CDP bridge log: ${logger.logFilePath}`);
       }
       if (!diagnosticContractProbe)
-        stopFastRunner(getActiveSession()?.deviceId);
+        void stopFastRunner(getActiveSession()?.deviceId);
       process.exit(1);
     });
   }

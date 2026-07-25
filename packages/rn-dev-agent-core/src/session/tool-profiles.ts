@@ -3,6 +3,7 @@ export type AuthorityAxis = 'C' | 'S' | 'I' | 'M' | 'A' | 'B' | 'D' | 'R' | 'O' 
 export interface AuthorityProfile {
   kind: 'diagnostic' | 'transition' | 'authoritative';
   axes: readonly AuthorityAxis[];
+  postflightAxes?: readonly AuthorityAxis[];
   optionalAxes?: readonly AuthorityAxis[];
   mutation: boolean;
   liveBundleProbe: boolean;
@@ -182,6 +183,16 @@ export function authorityProfileFor(
   tool: string,
   args: Record<string, unknown> = {},
 ): AuthorityProfile {
+  if (tool === 'device_find' && args.action === 'click') {
+    return profiles.get('device_press')!;
+  }
+  if (tool === 'device_reset_state' || tool === 'maestro_run' || tool === 'maestro_test_all') {
+    const profile = profiles.get(tool)!;
+    return {
+      ...profile,
+      postflightAxes: profile.axes.filter((axis) => axis !== 'A'),
+    };
+  }
   if (tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios') {
     return {
       kind: 'transition',

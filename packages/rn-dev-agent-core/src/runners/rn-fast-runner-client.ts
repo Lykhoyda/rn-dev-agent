@@ -48,7 +48,11 @@ import {
   isAmbiguousTransportFailure,
   parseStatusProbeReply,
 } from './transport-recovery.js';
-import { processBirthMatches, readProcessBirth } from '../session/process-birth.js';
+import {
+  probeProcessBirth,
+  readProcessBirth,
+  type ProcessBirthProbe,
+} from '../session/process-birth.js';
 
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
@@ -685,7 +689,7 @@ export async function startFastRunner(
 ): Promise<FastRunnerState> {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
-  if (runnerState) stopFastRunner(deviceId);
+  if (runnerState) await stopFastRunner(deviceId);
   const authority = runnerAuthorityFromEnvironment(true)!;
 
   const desired = resolveRunnerRequestedPort(port);
@@ -837,24 +841,9 @@ export async function startFastRunner(
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
 // (session close, restart, maestro park) would otherwise no-op against empty
 // in-memory state and leak the persisted runner — so adopt first, then reap.
-export function stopFastRunner(deviceId?: string): void {
+export async function stopFastRunner(deviceId?: string): Promise<void> {
   adoptPersistedFastRunnerState(deviceId);
-  if (runnerProcess) {
-    runnerProcess.kill('SIGTERM');
-    runnerProcess = null;
-  } else if (runnerState?.pid) {
-    if (
-      typeof runnerState.processBirth === 'string' &&
-      processBirthMatches({ pid: runnerState.pid, token: runnerState.processBirth })
-    ) {
-      try {
-        process.kill(runnerState.pid, 'SIGTERM');
-      } catch {
-        /* already dead */
-      }
-    }
-  }
-  clearStateFile();
+  await reapStaleFastRunner();
 }
 
 export function clearFastRunnerAfterVerifiedStop(binding: Record<string, unknown>): void {
@@ -1014,6 +1003,7 @@ export interface ReapDeps {
   processAlive?: (pid: number) => boolean;
   sendSignal?: (pid: number, sig: NodeJS.Signals) => void;
   matchesProcessBirth?: (expected: { pid: number; token: string }) => boolean;
+  probeProcessBirth?: (pid: number) => ProcessBirthProbe;
   sleep?: (ms: number) => Promise<void>;
   clearState?: () => void;
   /** Time to wait between SIGTERM and SIGKILL escalation. Default 500ms. */
@@ -1246,9 +1236,7 @@ export async function probeFastRunnerLiveness(
 
 export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   const getState = deps.getState ?? (() => runnerState);
-  const processAlive = deps.processAlive ?? defaultProcessAlive;
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const matchesProcessBirth = deps.matchesProcessBirth ?? processBirthMatches;
   const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const clearState = deps.clearState ?? clearStateFile;
   const graceMs = deps.graceMs ?? 500;
@@ -1258,7 +1246,14 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   const expectedBirth =
     typeof state.processBirth === 'string' ? { pid: state.pid, token: state.processBirth } : null;
   if (!expectedBirth) {
-    if (!processAlive(state.pid)) {
+    const observed = deps.probeProcessBirth
+      ? deps.probeProcessBirth(state.pid)
+      : deps.processAlive
+        ? deps.processAlive(state.pid)
+          ? { status: 'present' as const }
+          : { status: 'absent' as const }
+        : probeProcessBirth(state.pid);
+    if (observed.status === 'absent') {
       clearState();
       return;
     }
@@ -1266,7 +1261,26 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
       'RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority',
     );
   }
-  if (!matchesProcessBirth(expectedBirth)) {
+  const probeExpected = (): 'match' | 'gone' | 'unknown' => {
+    if (deps.probeProcessBirth) {
+      const observed = deps.probeProcessBirth(expectedBirth.pid);
+      if (observed.status === 'unknown') return 'unknown';
+      if (observed.status === 'absent') return 'gone';
+      return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+    }
+    if (deps.matchesProcessBirth) {
+      return deps.matchesProcessBirth(expectedBirth) ? 'match' : 'gone';
+    }
+    const observed = probeProcessBirth(expectedBirth.pid);
+    if (observed.status === 'unknown') return 'unknown';
+    if (observed.status === 'absent') return 'gone';
+    return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+  };
+  const initial = probeExpected();
+  if (initial === 'unknown') {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven');
+  }
+  if (initial === 'gone') {
     clearState();
     return;
   }
@@ -1281,17 +1295,27 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     /* already dead */
   }
   await sleep(graceMs);
-  if (processAlive(state.pid) && matchesProcessBirth(expectedBirth)) {
-    try {
-      sendSignal(state.pid, 'SIGKILL');
-    } catch {
-      /* race: died between checks */
-    }
+  const afterTerm = probeExpected();
+  if (afterTerm === 'unknown') {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+  }
+  if (afterTerm === 'gone') {
+    clearState();
+    return;
+  }
+  try {
+    sendSignal(state.pid, 'SIGKILL');
+  } catch {
+    /* race: died between checks */
   }
   if (spawnedExit) {
-    // Let the registered child exit handler publish exit/signal/output-tail
-    // evidence before timeout containment snapshots the postmortem.
     await Promise.race([spawnedExit, sleep(250)]);
+  } else {
+    await sleep(50);
+  }
+  const afterKill = probeExpected();
+  if (afterKill !== 'gone') {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
   }
   clearState();
 }

@@ -158,6 +158,16 @@ function stableMachOSha256(path) {
         binary.fill(0, signatureOffset, signatureEnd);
         foundSignature = true;
       }
+      if (command === 0x32 && commandSize >= 24) {
+        binary.writeUInt32LE(0, commandOffset + 16);
+        const toolCount = binary.readUInt32LE(commandOffset + 20);
+        if (commandSize < 24 + toolCount * 8) {
+          throw new Error('build-darwin-process-birth-helper: invalid build-version command');
+        }
+        for (let toolIndex = 0; toolIndex < toolCount; toolIndex += 1) {
+          binary.writeUInt32LE(0, commandOffset + 28 + toolIndex * 8);
+        }
+      }
       commandOffset += commandSize;
       if (commandOffset > sliceOffset + sliceSize) {
         throw new Error('build-darwin-process-birth-helper: invalid Mach-O load commands');
@@ -225,13 +235,14 @@ if (process.platform !== 'darwin' || process.argv.includes('--verify-only')) {
   process.exit(0);
 }
 
+const forceRebuild = process.argv.includes('--force-rebuild');
 let packagedHelperCurrent = true;
 try {
   verifyPackagedHelper();
 } catch {
   packagedHelperCurrent = false;
 }
-if (packagedHelperCurrent) process.exit(0);
+if (packagedHelperCurrent && !forceRebuild) process.exit(0);
 
 mkdirSync(dirname(output), { recursive: true });
 writeFileSync(temporarySource, source, { encoding: 'utf8', mode: 0o600 });
@@ -271,6 +282,19 @@ if (signResult.error || signResult.status !== 0) {
 }
 
 chmodSync(temporaryOutput, 0o755);
+if (packagedHelperCurrent) {
+  const manifest = JSON.parse(readFileSync(manifestOutput, 'utf8'));
+  if (stableMachOSha256(temporaryOutput) !== manifest.stableBinarySha256) {
+    rmSync(temporaryOutput, { force: true });
+    console.error(
+      'build-darwin-process-birth-helper: source rebuild does not match packaged helper',
+    );
+    process.exit(1);
+  }
+  rmSync(temporaryOutput, { force: true });
+  verifyPackagedHelper();
+  process.exit(0);
+}
 renameSync(temporaryOutput, output);
 writeFileSync(
   manifestOutput,

@@ -266,7 +266,11 @@ function receipt(
       ? { authorityScope: 'initial-bundle', sourceFidelity: 'not-proven' }
       : undefined,
     nativeAppOrigin: profile.axes.includes('A')
-      ? { authorityScope: 'live-metro-target-device' }
+      ? {
+          authorityScope: observations.some(({ axis }) => axis === 'A')
+            ? 'live-metro-target-device'
+            : 'preflight-live-metro-target-device',
+        }
       : undefined,
   };
 }
@@ -821,8 +825,12 @@ export function createAuthorityGate(
               ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] }
               : profile;
           const allBefore = [...before, ...optionalBefore];
+          const postflightAxes = [
+            ...(profile.postflightAxes ?? profile.axes),
+            ...optionalBefore.map(({ axis }) => axis),
+          ];
           const after = await Promise.all(
-            effectiveProfile.axes.map((axis) =>
+            postflightAxes.map((axis) =>
               dependencies.probe({
                 axis,
                 phase: 'postflight',
@@ -833,12 +841,14 @@ export function createAuthorityGate(
               }),
             ),
           );
-          for (let index = 0; index < allBefore.length; index += 1) {
-            if (runtimeTargetChanged && allBefore[index]?.axis === 'B') continue;
-            if (allBefore[index]?.identity !== after[index]?.identity) {
+          for (const observation of allBefore) {
+            if (runtimeTargetChanged && observation.axis === 'B') continue;
+            if (!postflightAxes.includes(observation.axis)) continue;
+            const postflight = after.find((candidate) => candidate.axis === observation.axis);
+            if (observation.identity !== postflight?.identity) {
               throw new SessionAuthorityError(
                 'AUTHORITY_LOST_DURING_OPERATION',
-                `${allBefore[index]?.axis ?? 'unknown'} authority changed during the operation`,
+                `${observation.axis} authority changed during the operation`,
               );
             }
           }

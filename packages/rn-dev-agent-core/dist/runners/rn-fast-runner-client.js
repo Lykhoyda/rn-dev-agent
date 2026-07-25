@@ -11,7 +11,7 @@ import { buildRunnerQuiescenceEnv } from './quiescence.js';
 import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
-import { processBirthMatches, readProcessBirth } from '../session/process-birth.js';
+import { probeProcessBirth, readProcessBirth, } from '../session/process-birth.js';
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
 // + attach the XCUITest runner (device-proven on GitHub macos runners).
@@ -538,7 +538,7 @@ opts = {}) {
     if (shouldReuseRunner(runnerState, deviceId))
         return runnerState;
     if (runnerState)
-        stopFastRunner(deviceId);
+        await stopFastRunner(deviceId);
     const authority = runnerAuthorityFromEnvironment(true);
     const desired = resolveRunnerRequestedPort(port);
     const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
@@ -670,24 +670,9 @@ opts = {}) {
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
 // (session close, restart, maestro park) would otherwise no-op against empty
 // in-memory state and leak the persisted runner — so adopt first, then reap.
-export function stopFastRunner(deviceId) {
+export async function stopFastRunner(deviceId) {
     adoptPersistedFastRunnerState(deviceId);
-    if (runnerProcess) {
-        runnerProcess.kill('SIGTERM');
-        runnerProcess = null;
-    }
-    else if (runnerState?.pid) {
-        if (typeof runnerState.processBirth === 'string' &&
-            processBirthMatches({ pid: runnerState.pid, token: runnerState.processBirth })) {
-            try {
-                process.kill(runnerState.pid, 'SIGTERM');
-            }
-            catch {
-                /* already dead */
-            }
-        }
-    }
-    clearStateFile();
+    await reapStaleFastRunner();
 }
 export function clearFastRunnerAfterVerifiedStop(binding) {
     const expected = {
@@ -932,9 +917,7 @@ export async function probeFastRunnerLiveness(deps = {}) {
 }
 export async function reapStaleFastRunner(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
-    const processAlive = deps.processAlive ?? defaultProcessAlive;
     const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-    const matchesProcessBirth = deps.matchesProcessBirth ?? processBirthMatches;
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     const clearState = deps.clearState ?? clearStateFile;
     const graceMs = deps.graceMs ?? 500;
@@ -943,13 +926,43 @@ export async function reapStaleFastRunner(deps = {}) {
         return;
     const expectedBirth = typeof state.processBirth === 'string' ? { pid: state.pid, token: state.processBirth } : null;
     if (!expectedBirth) {
-        if (!processAlive(state.pid)) {
+        const observed = deps.probeProcessBirth
+            ? deps.probeProcessBirth(state.pid)
+            : deps.processAlive
+                ? deps.processAlive(state.pid)
+                    ? { status: 'present' }
+                    : { status: 'absent' }
+                : probeProcessBirth(state.pid);
+        if (observed.status === 'absent') {
             clearState();
             return;
         }
         throw new Error('RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority');
     }
-    if (!matchesProcessBirth(expectedBirth)) {
+    const probeExpected = () => {
+        if (deps.probeProcessBirth) {
+            const observed = deps.probeProcessBirth(expectedBirth.pid);
+            if (observed.status === 'unknown')
+                return 'unknown';
+            if (observed.status === 'absent')
+                return 'gone';
+            return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+        }
+        if (deps.matchesProcessBirth) {
+            return deps.matchesProcessBirth(expectedBirth) ? 'match' : 'gone';
+        }
+        const observed = probeProcessBirth(expectedBirth.pid);
+        if (observed.status === 'unknown')
+            return 'unknown';
+        if (observed.status === 'absent')
+            return 'gone';
+        return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+    };
+    const initial = probeExpected();
+    if (initial === 'unknown') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven');
+    }
+    if (initial === 'gone') {
         clearState();
         return;
     }
@@ -964,18 +977,29 @@ export async function reapStaleFastRunner(deps = {}) {
         /* already dead */
     }
     await sleep(graceMs);
-    if (processAlive(state.pid) && matchesProcessBirth(expectedBirth)) {
-        try {
-            sendSignal(state.pid, 'SIGKILL');
-        }
-        catch {
-            /* race: died between checks */
-        }
+    const afterTerm = probeExpected();
+    if (afterTerm === 'unknown') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+    }
+    if (afterTerm === 'gone') {
+        clearState();
+        return;
+    }
+    try {
+        sendSignal(state.pid, 'SIGKILL');
+    }
+    catch {
+        /* race: died between checks */
     }
     if (spawnedExit) {
-        // Let the registered child exit handler publish exit/signal/output-tail
-        // evidence before timeout containment snapshots the postmortem.
         await Promise.race([spawnedExit, sleep(250)]);
+    }
+    else {
+        await sleep(50);
+    }
+    const afterKill = probeExpected();
+    if (afterKill !== 'gone') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
     }
     clearState();
 }
