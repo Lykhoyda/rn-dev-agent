@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type { CDPClient } from '../cdp-client.js';
+import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
 import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
+import type { HermesTarget } from '../types.js';
 import { captureInstallGeneration } from './install-authority.js';
 import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
@@ -11,6 +13,10 @@ import { readProcessBirth } from './process-birth.js';
 import { SessionAuthorityError, type SessionStatus } from './registry.js';
 import type { WorkerAuthorityRuntime } from './runtime.js';
 import { resolveSourceIdentity, type SourceIdentity } from './source-identity.js';
+import {
+  proveTargetDeviceAssociation,
+  type TargetDeviceAssociation,
+} from './target-device-authority.js';
 import type { AuthorityAxis } from './tool-profiles.js';
 
 interface LocalAuthorityProbeDependencies {
@@ -20,6 +26,8 @@ interface LocalAuthorityProbeDependencies {
   resolveSource?: (status: SessionStatus) => SourceIdentity;
   fetchText?: (url: string, init?: RequestInit) => Promise<string>;
   fetchJson?: (url: string, init?: RequestInit) => Promise<Record<string, unknown>>;
+  fetchTargets?: (port: number) => Promise<HermesTarget[]>;
+  proveTargetDevice?: (input: TargetDeviceAssociation) => Promise<void>;
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
   proofActive?: (runId: string) => boolean;
   inspectOwner?: typeof inspectSessionOwner;
@@ -115,6 +123,22 @@ export function createLocalAuthorityProbe(
 }) => Promise<AuthorityObservation> {
   const fetchText = dependencies.fetchText ?? defaultFetchText;
   const fetchJson = dependencies.fetchJson ?? defaultFetchJson;
+  const fetchTargets =
+    dependencies.fetchTargets ??
+    (async (port: number) =>
+      JSON.parse(await fetchText(`http://127.0.0.1:${port}/json/list`)) as HermesTarget[]);
+  const proveTargetDevice =
+    dependencies.proveTargetDevice ??
+    ((input: TargetDeviceAssociation) =>
+      proveTargetDeviceAssociation(input, {
+        execute: async (file, args) => ({
+          stdout: execFileSync(file, args, {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 5_000,
+          }),
+        }),
+      }));
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
   const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
@@ -241,6 +265,67 @@ export function createLocalAuthorityProbe(
           servingRoot,
           buildGeneration: metro.buildGeneration,
         }),
+      };
+    }
+
+    if (axis === 'A') {
+      const metro = objectBinding(status, 'metro');
+      const device = objectBinding(status, 'device');
+      const port = Number(metro.port);
+      const platform = device.platform as 'ios' | 'android';
+      const deviceId = String(device.deviceId ?? '');
+      const appId = String(device.appId ?? '');
+      if (
+        !Number.isSafeInteger(port) ||
+        (platform !== 'ios' && platform !== 'android') ||
+        !deviceId ||
+        !appId
+      ) {
+        throw new SessionAuthorityError(
+          'METRO_ORIGIN_MISMATCH',
+          'native app origin authority is incomplete',
+        );
+      }
+      let targets: HermesTarget[];
+      try {
+        targets = filterValidTargets(await fetchTargets(port)).filter((target) =>
+          targetMatchesBundleId(target, appId),
+        );
+      } catch {
+        throw new SessionAuthorityError(
+          'METRO_ORIGIN_MISMATCH',
+          'authority-bound Metro targets could not be inspected',
+        );
+      }
+      const matchedTargetIds: string[] = [];
+      for (const target of targets) {
+        try {
+          await proveTargetDevice({
+            platform,
+            deviceId,
+            targetDeviceName: target.deviceName,
+          });
+          matchedTargetIds.push(target.id);
+        } catch {
+          continue;
+        }
+      }
+      if (matchedTargetIds.length === 0) {
+        throw new SessionAuthorityError(
+          'METRO_ORIGIN_MISMATCH',
+          'the claimed device app is not attached to the authority-bound Metro',
+        );
+      }
+      return {
+        axis,
+        identity: identity({
+          port,
+          platform,
+          deviceId,
+          appId,
+          targetIds: matchedTargetIds.sort(),
+        }),
+        detail: { authorityScope: 'live-metro-target-device' },
       };
     }
 

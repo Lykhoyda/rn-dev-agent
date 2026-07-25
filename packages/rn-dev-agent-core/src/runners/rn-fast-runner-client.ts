@@ -1257,7 +1257,16 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   if (!state) return;
   const expectedBirth =
     typeof state.processBirth === 'string' ? { pid: state.pid, token: state.processBirth } : null;
-  if (!expectedBirth || !matchesProcessBirth(expectedBirth)) {
+  if (!expectedBirth) {
+    if (!processAlive(state.pid)) {
+      clearState();
+      return;
+    }
+    throw new Error(
+      'RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority',
+    );
+  }
+  if (!matchesProcessBirth(expectedBirth)) {
     clearState();
     return;
   }

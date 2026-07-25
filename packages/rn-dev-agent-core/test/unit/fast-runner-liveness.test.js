@@ -333,6 +333,38 @@ test('M7 reap: reused PID clears state without sending a signal', async () => {
   assert.equal(clearCalls, 1);
 });
 
+test('M7 reap: live legacy state without process birth blocks replacement', async () => {
+  let clearCalls = 0;
+  await assert.rejects(
+    () =>
+      reapStaleFastRunner({
+        getState: () => ({ ...STATE, processBirth: undefined }),
+        processAlive: () => true,
+        sendSignal: () => assert.fail('unproven process must not be signalled'),
+        sleep: async () => assert.fail('unproven process must not enter the grace period'),
+        clearState: () => {
+          clearCalls++;
+        },
+      }),
+    /RUNNER_ADOPTION_REQUIRED/,
+  );
+  assert.equal(clearCalls, 0);
+});
+
+test('M7 reap: dead legacy state without process birth can be cleared', async () => {
+  let clearCalls = 0;
+  await reapStaleFastRunner({
+    getState: () => ({ ...STATE, processBirth: undefined }),
+    processAlive: () => false,
+    sendSignal: () => assert.fail('dead legacy process must not be signalled'),
+    sleep: async () => assert.fail('dead legacy process must not enter the grace period'),
+    clearState: () => {
+      clearCalls++;
+    },
+  });
+  assert.equal(clearCalls, 1);
+});
+
 test('M7 reap: PID reuse during grace prevents SIGKILL escalation', async () => {
   const signals = [];
   let birthChecks = 0;

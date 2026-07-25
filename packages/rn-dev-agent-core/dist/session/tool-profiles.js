@@ -116,7 +116,7 @@ add(nativeRead, {
 });
 add(nativeMutation, {
     kind: 'authoritative',
-    axes: ['C', 'S', 'I', 'M', 'D', 'R'],
+    axes: ['C', 'S', 'I', 'M', 'A', 'D', 'R'],
     mutation: true,
     liveBundleProbe: false,
 });
@@ -128,7 +128,7 @@ add(hybridMutation, {
 });
 add(optionalHybridMutation, {
     kind: 'authoritative',
-    axes: ['C', 'S', 'I', 'M', 'D', 'R'],
+    axes: ['C', 'S', 'I', 'M', 'A', 'D', 'R'],
     optionalAxes: ['B'],
     mutation: true,
     liveBundleProbe: true,

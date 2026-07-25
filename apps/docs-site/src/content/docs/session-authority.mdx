@@ -56,7 +56,7 @@ If marker signing is unavailable, Metro may emit an unsigned `unavailable` marke
 
 All published tools have an exhaustive profile. Session-bound arguments omitted by legacy callers are filled only from the current session; a conflicting platform, device, app, port, or target returns a named authority error.
 
-Native runner operations use the exact install, Metro, device, and capability-authenticated runner identities. They do not require a live CDP debugger seat. CDP reads and mutations additionally require the exact signed bundle target.
+Native runner mutations use the exact install, Metro, device, and capability-authenticated runner identities, then prove that the bound app and device still appear on the authority-bound Metro's live target list. This origin check does not require a live CDP debugger seat. CDP reads and mutations additionally require the exact signed bundle target.
 
 Every successful authoritative call receives a preflight/postflight authority receipt. If an axis changes during the handler, the outer result becomes `AUTHORITY_LOST_DURING_OPERATION`; a handler's apparent PASS is never preserved.
 

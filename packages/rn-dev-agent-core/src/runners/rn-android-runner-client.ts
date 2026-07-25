@@ -957,6 +957,12 @@ async function startAndroidRunnerAttempt(
 
   return new Promise((resolve, reject) => {
     let resolved = false;
+    let forwardRemoved = false;
+    const removeForward = () => {
+      if (forwardRemoved) return;
+      forwardRemoved = true;
+      void execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => {});
+    };
 
     const child = spawn(
       'adb',
@@ -1032,6 +1038,7 @@ async function startAndroidRunnerAttempt(
     };
 
     child.on('error', (err) => {
+      removeForward();
       if (resolved) return;
       resolved = true;
       reject(new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
@@ -1039,17 +1046,9 @@ async function startAndroidRunnerAttempt(
 
     child.on('exit', (code) => {
       if (runnerProcess === child) {
-        const exitState = runnerState;
         clearAndroidStateFile();
-        if (typeof exitState?.hostPort === 'number') {
-          execFileAsync(
-            'adb',
-            buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort),
-          ).catch(() => {
-            /* best-effort: must never throw from exit handler */
-          });
-        }
       }
+      removeForward();
       if (!resolved) {
         resolved = true;
         reject(

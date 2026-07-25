@@ -180,6 +180,46 @@ test('managed Metro proves a cross-platform listener belongs to the spawned laun
   assert.equal(binding.servingRoot, '/app');
 });
 
+test('managed Metro stops polling when the launcher exits by signal', async () => {
+  let listenerProbes = 0;
+  await assert.rejects(
+    () =>
+      startManagedMetro(
+        {
+          appRoot: '/app',
+          runtimeRoot: '/tmp',
+          sourceRoot: '/app',
+          sessionId: 'session-a',
+          port: 8341,
+          instanceId: 'metro-a',
+          buildGeneration: 1,
+          signerCapability: 'signer',
+        },
+        {
+          readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+          exists: () => true,
+          spawnProcess: () => ({
+            pid: 101,
+            exitCode: null,
+            signalCode: 'SIGTERM',
+            kill: () => true,
+            unref: () => {},
+          }),
+          listenerPid: () => {
+            listenerProbes++;
+            return null;
+          },
+          readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+          probeBirth: () => ({ status: 'absent' }),
+          probeListener: () => ({ status: 'absent' }),
+          wait: async () => assert.fail('signalled launcher must not wait for the startup deadline'),
+        },
+      ),
+    /METRO_START_UNAVAILABLE/,
+  );
+  assert.equal(listenerProbes, 0);
+});
+
 test('managed Metro stops its owned process tree and proves the listener is gone', async () => {
   const binding = await startManagedMetro(
     {

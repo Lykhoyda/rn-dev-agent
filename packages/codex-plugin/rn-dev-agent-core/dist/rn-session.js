@@ -7980,7 +7980,7 @@ async function startManagedMetro(input, dependencies = {}) {
   let lastError = null;
   let listenerIdentity = null;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null)
+    if (child.exitCode !== null || child.signalCode != null)
       break;
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {

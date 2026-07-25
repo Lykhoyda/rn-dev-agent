@@ -20,6 +20,7 @@ const axisErrors = {
     S: 'SOURCE_WORKTREE_MISMATCH',
     I: 'APP_INSTALL_IDENTITY_CHANGED',
     M: 'METRO_AUTHORITY_MISMATCH',
+    A: 'METRO_ORIGIN_MISMATCH',
     B: 'BUNDLE_HANDSHAKE_UNAVAILABLE',
     D: 'DEVICE_AUTHORITY_MISMATCH',
     R: 'RUNNER_OWNERSHIP_MISMATCH',
@@ -37,6 +38,12 @@ function requireCompleteAxes(status, profile) {
         if (axis === 'S') {
             if (!status.source.kind) {
                 throw new SessionAuthorityError(axisErrors.S, 'source identity is incomplete');
+            }
+            continue;
+        }
+        if (axis === 'A') {
+            if (!status.bindings.metro || !status.bindings.device) {
+                throw new SessionAuthorityError(axisErrors.A, 'native app origin requires Metro and device authority');
             }
             continue;
         }
@@ -177,6 +184,9 @@ function receipt(status, profile, observations) {
         })),
         bundle: profile.axes.includes('B')
             ? { authorityScope: 'initial-bundle', sourceFidelity: 'not-proven' }
+            : undefined,
+        nativeAppOrigin: profile.axes.includes('A')
+            ? { authorityScope: 'live-metro-target-device' }
             : undefined,
     };
 }

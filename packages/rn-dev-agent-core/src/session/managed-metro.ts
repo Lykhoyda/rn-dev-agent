@@ -278,7 +278,7 @@ export async function startManagedMetro(
   let lastError: unknown = null;
   let listenerIdentity: ManagedMetroProcessIdentity | null = null;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) break;
+    if (child.exitCode !== null || child.signalCode != null) break;
     const pid = listenerPid(input.port);
     if (pid && ownsListener(pid, child.pid)) {
       const listenerBirth = probeBirth(pid);

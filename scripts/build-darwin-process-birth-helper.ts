@@ -225,6 +225,14 @@ if (process.platform !== 'darwin' || process.argv.includes('--verify-only')) {
   process.exit(0);
 }
 
+let packagedHelperCurrent = true;
+try {
+  verifyPackagedHelper();
+} catch {
+  packagedHelperCurrent = false;
+}
+if (packagedHelperCurrent) process.exit(0);
+
 mkdirSync(dirname(output), { recursive: true });
 writeFileSync(temporarySource, source, { encoding: 'utf8', mode: 0o600 });
 const result = spawnSync(
@@ -263,21 +271,7 @@ if (signResult.error || signResult.status !== 0) {
 }
 
 chmodSync(temporaryOutput, 0o755);
-let retainPackagedBinary = false;
-if (existsSync(output)) {
-  try {
-    retainPackagedBinary =
-      hasValidCodeSignature(output) &&
-      stableMachOSha256(output) === stableMachOSha256(temporaryOutput);
-  } catch {
-    retainPackagedBinary = false;
-  }
-}
-if (retainPackagedBinary) {
-  rmSync(temporaryOutput);
-} else {
-  renameSync(temporaryOutput, output);
-}
+renameSync(temporaryOutput, output);
 writeFileSync(
   manifestOutput,
   `${JSON.stringify(

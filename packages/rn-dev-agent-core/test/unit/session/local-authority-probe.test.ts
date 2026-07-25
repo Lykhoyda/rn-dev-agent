@@ -88,6 +88,81 @@ test('bundle probe normalizes CDP transport failure to optional bundle unavailab
   );
 });
 
+test('native app origin accepts a matching app target on the exact claimed device', async () => {
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      fetchTargets: async (port) => {
+        assert.equal(port, 8082);
+        return [
+          {
+            id: 'foreign',
+            title: 'com.example.app (iPhone 16)',
+            appId: 'com.example.app',
+            vm: 'Hermes',
+            webSocketDebuggerUrl: 'ws://127.0.0.1:8082/foreign',
+            deviceName: 'iPhone 16',
+          },
+          {
+            id: 'claimed',
+            title: 'com.example.app (Issue582)',
+            appId: 'com.example.app',
+            vm: 'Hermes',
+            webSocketDebuggerUrl: 'ws://127.0.0.1:8082/claimed',
+            deviceName: 'Issue582',
+          },
+        ];
+      },
+      proveTargetDevice: async ({ deviceId, targetDeviceName }) => {
+        if (deviceId !== 'SIM-A' || targetDeviceName !== 'Issue582') {
+          throw new Error('foreign device');
+        }
+      },
+    }),
+  );
+  const observation = await probe({
+    axis: 'A',
+    status: statusWith({
+      metro: { port: 8082 },
+      device: { platform: 'ios', deviceId: 'SIM-A', appId: 'com.example.app' },
+    }),
+  });
+
+  assert.equal(observation.axis, 'A');
+  assert.deepEqual(observation.detail, { authorityScope: 'live-metro-target-device' });
+});
+
+test('native app origin rejects when only a sibling device is attached to the Metro', async () => {
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      fetchTargets: async () => [
+        {
+          id: 'foreign',
+          title: 'com.example.app (Sibling)',
+          appId: 'com.example.app',
+          vm: 'Hermes',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:8082/foreign',
+          deviceName: 'Sibling',
+        },
+      ],
+      proveTargetDevice: async () => {
+        throw new Error('foreign device');
+      },
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      probe({
+        axis: 'A',
+        status: statusWith({
+          metro: { port: 8082 },
+          device: { platform: 'ios', deviceId: 'SIM-A', appId: 'com.example.app' },
+        }),
+      }),
+    (error) => error instanceof SessionAuthorityError && error.code === 'METRO_ORIGIN_MISMATCH',
+  );
+});
+
 test('controller probe uses the handoff-only lookup solely for cancellation', async () => {
   const processBirth = readProcessBirth(process.pid);
   assert.ok(processBirth);

@@ -19,9 +19,18 @@ test('every registered MCP tool has one explicit authority profile', () => {
   );
 });
 
-test('native runner operations do not require a live CDP bundle seat', () => {
-  assert.deepEqual(authorityProfileFor('device_press').axes, ['C', 'S', 'I', 'M', 'D', 'R']);
+test('native runner mutations prove app origin without requiring a live CDP bundle seat', () => {
+  assert.deepEqual(authorityProfileFor('device_press').axes, [
+    'C',
+    'S',
+    'I',
+    'M',
+    'A',
+    'D',
+    'R',
+  ]);
   assert.equal(authorityProfileFor('device_press').liveBundleProbe, false);
+  assert.equal(authorityProfileFor('device_press').axes.includes('B'), false);
   assert.equal(authorityProfileFor('cdp_interact').liveBundleProbe, true);
   assert.ok(authorityProfileFor('cdp_interact').axes.includes('B'));
 });
@@ -35,12 +44,21 @@ test('hybrid execution separates required and optional bundle authority', () => 
   }
   const action = authorityProfileFor('cdp_run_action');
   assert.equal(action.axes.includes('B'), false);
+  assert.equal(action.axes.includes('A'), true);
   assert.deepEqual(action.optionalAxes, ['B']);
   assert.equal(action.axes.includes('R'), true);
 });
 
 test('lock and live navigation paths receive exact mutation authority', () => {
-  assert.deepEqual(authorityProfileFor('cdp_lock_e2e_test').axes, ['C', 'S', 'I', 'M', 'D', 'R']);
+  assert.deepEqual(authorityProfileFor('cdp_lock_e2e_test').axes, [
+    'C',
+    'S',
+    'I',
+    'M',
+    'A',
+    'D',
+    'R',
+  ]);
   assert.deepEqual(authorityProfileFor('cdp_nav_graph', { action: 'read' }).axes, ['C', 'S']);
   assert.deepEqual(authorityProfileFor('cdp_nav_graph', { action: 'navigate' }).axes, ['C', 'S']);
   for (const action of ['scan', 'go']) {
