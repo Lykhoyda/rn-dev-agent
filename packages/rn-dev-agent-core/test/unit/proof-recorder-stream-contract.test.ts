@@ -25,12 +25,24 @@ test('the recorder supervisor releases start streams and owns child output', asy
   assert.match(supervisorLaunch, /3< <\(printf/);
   assert.match(supervisorLaunch, /> "\$recorder_log" 2>&1 <<'PY' &$/);
   assert.match(script, /stdout=log,\n\s+stderr=subprocess\.STDOUT,/);
-  assert.ok(script.indexOf('SUPERVISOR_PID=$!') < script.indexOf('> "$token_tmp"'));
-  assert.ok(script.indexOf('action == "START"') < script.indexOf('subprocess.Popen('));
+  const supervisorPidIndex = script.indexOf('SUPERVISOR_PID=$!');
+  const tokenWriteIndex = script.indexOf('> "$token_tmp"');
+  const startActionIndex = script.indexOf('action == "START"');
+  const recorderSpawnIndex = script.indexOf('subprocess.Popen(');
+  assert.notEqual(supervisorPidIndex, -1);
+  assert.notEqual(tokenWriteIndex, -1);
+  assert.notEqual(startActionIndex, -1);
+  assert.notEqual(recorderSpawnIndex, -1);
+  assert.ok(supervisorPidIndex < tokenWriteIndex);
+  assert.ok(startActionIndex < recorderSpawnIndex);
   assert.match(script, /else f"failed \{return_code\}\\n"/);
   assert.match(
     script,
     /if \[\[ "\$supervisor_terminal" == "true" \]\]; then\n\s+:/,
+  );
+  assert.match(
+    script,
+    /sleep 1\n\n\s+if \[\[ -s "\$\(supervisor_state_file "\$scope"\)" \]\]; then/,
   );
   const directLaunches = script
     .split('\n')
@@ -133,7 +145,11 @@ test('terminal supervisor state takes precedence over a reused live PID', async 
       { encoding: 'utf8' },
     );
     assert.equal(stopped.status, 0, stopped.stderr);
-    assert.equal(replacement.exitCode, null);
+    const replacementState = spawnSync('ps', ['-p', `${replacement.pid}`, '-o', 'stat='], {
+      encoding: 'utf8',
+    });
+    assert.equal(replacementState.status, 0);
+    assert.doesNotMatch(replacementState.stdout.trim(), /^Z/);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
   } finally {
     replacement.kill('SIGKILL');

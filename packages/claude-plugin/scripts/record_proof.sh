@@ -918,6 +918,12 @@ cmd_stop() {
   fi
   sleep 1
 
+  if [[ -s "$(supervisor_state_file "$scope")" ]]; then
+    supervisor_state="$(cat "$(supervisor_state_file "$scope")")"
+    supervisor_failed="false"
+    [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
+  fi
+
   if [[ "$platform" == "android" ]]; then
     local -a adb_args=()
     local serialf="${PID_PREFIX}-${scope}.serial"

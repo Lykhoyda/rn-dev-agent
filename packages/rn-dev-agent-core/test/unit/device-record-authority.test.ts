@@ -88,6 +88,40 @@ test('provisional recorder cleanup capability-aborts an unbound live process', a
   );
 });
 
+test('provisional recorder cleanup capability-aborts a bound starting supervisor', async () => {
+  const calls: string[][] = [];
+  let statusReads = 0;
+  await stopBoundRecorder(
+    {
+      phase: 'starting',
+      script: '/workspace/record_proof.sh',
+      scope: 'c'.repeat(64),
+    },
+    () => {
+      throw new Error('starting cleanup must not use process identity');
+    },
+    async (_script, args) => {
+      calls.push(args);
+      if (args[0] === 'status') {
+        statusReads += 1;
+        return {
+          stdout:
+            statusReads === 1
+              ? `ios: pid=765 birth=${'a'.repeat(64)} status=recording output=proof.mp4\n`
+              : 'No active recordings\n',
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    },
+  );
+
+  assert.deepEqual(
+    calls.map((args) => args[0]),
+    ['status', 'abort', 'status'],
+  );
+});
+
 test('synthetic staged deadlines classify as timeouts', () => {
   assert.deepEqual(classifyExecError({ code: 'ETIMEDOUT' }), {
     timedOut: true,
