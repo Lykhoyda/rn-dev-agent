@@ -1104,7 +1104,7 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
   });
   registry.updateBindings(cleanupOwner, {
     state: 'blocked',
-    bindings: { recoveryCapabilityHash: 'recovery-cleanup' },
+    bindings: { metroPort: 8341, recoveryCapabilityHash: 'recovery-cleanup' },
   });
   registry.bindWorker(contender, {
     instanceId: 'worker-contender',
@@ -1113,12 +1113,24 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
   });
   registry.updateBindings(contender, {
     state: 'blocked',
-    bindings: { recoveryCapabilityHash: 'recovery-contender' },
+    bindings: { metroPort: 8341, recoveryCapabilityHash: 'recovery-contender' },
   });
-  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:9100' }]);
+  registry.claimResources(owner, [
+    { type: 'metro-port', key: '8341' },
+    { type: 'runner', key: 'ios:device-a:9100' },
+  ]);
+  const metro = {
+    mode: 'managed',
+    port: 8341,
+    pid: 401,
+    birth: 'metro-birth',
+    instanceId: 'metro-a',
+  };
   registry.updateBindings(owner, {
     state: 'ready',
     bindings: {
+      metroPort: 8341,
+      metro,
       runner: {
         platform: 'ios',
         deviceId: 'device-a',
@@ -1143,10 +1155,14 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
   const resumed = registry.getSessionStatus(contender.sessionId);
   assert.equal(resumed?.state, 'handoff_cleanup');
   assert.deepEqual(resumed?.bindings.handoffCleanup, interruptedPlan);
+  assert.deepEqual(resumed?.bindings.metro, metro);
+  assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, contender.sessionId);
   assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, contender.sessionId);
   registry.completeHandoffCleanupResource(contender, 'worker-contender', 'runner');
   registry.finishHandoffCleanup(contender, 'worker-contender');
-  assert.equal(registry.getSessionStatus(contender.sessionId)?.state, 'source_bound');
+  const completed = registry.getSessionStatus(contender.sessionId);
+  assert.equal(completed?.state, 'source_bound');
+  assert.deepEqual(completed?.bindings.metro, metro);
 });
 
 test('stale adoption transfers an interrupted recovery cleanup plan unchanged', () => {

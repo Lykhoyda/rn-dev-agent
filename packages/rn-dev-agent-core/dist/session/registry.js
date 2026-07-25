@@ -1244,6 +1244,7 @@ export class SessionRegistry {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'stale handoff cleanup state has no durable cleanup plan');
             }
             if (resumesCleanup) {
+                const resumesMetroCleanup = priorCleanup.metro !== null && typeof priorCleanup.metro === 'object';
                 this.#database
                     .prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
              WHERE session_id = ? AND claim_epoch = ?`)
@@ -1257,8 +1258,8 @@ export class SessionRegistry {
                     ...targetBindings,
                     adoptionRequired: null,
                     recoveryHandles: targetBindings.recoveryHandles,
-                    metro: null,
-                    metroCleanup: null,
+                    metro: resumesMetroCleanup ? null : (priorBindings.metro ?? null),
+                    metroCleanup: resumesMetroCleanup ? null : (priorBindings.metroCleanup ?? null),
                     device: priorBindings.device ?? null,
                     install: priorBindings.install ?? null,
                     bundle: null,
