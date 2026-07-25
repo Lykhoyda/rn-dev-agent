@@ -10,12 +10,32 @@ function digest(parts) {
     }
     return hash.digest('hex');
 }
+function framedDigest(parts) {
+    const hash = createHash('sha256');
+    for (const part of parts) {
+        const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
+        hash.update(`${bytes.byteLength}:`);
+        hash.update(bytes);
+    }
+    return hash.digest('hex');
+}
 function defaultGit(root, args) {
     return execFileSync('git', ['-C', root, ...args], {
         encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 5_000,
+        maxBuffer: 64 * 1024 * 1024,
     }).trim();
+}
+function isDefinitiveNonGitError(error) {
+    if (!(error instanceof Error))
+        return false;
+    const stderr = 'stderr' in error && typeof error.stderr === 'string'
+        ? error.stderr
+        : 'stderr' in error && Buffer.isBuffer(error.stderr)
+            ? error.stderr.toString('utf8')
+            : '';
+    return `${error.message}\n${stderr}`.toLowerCase().includes('not a git repository');
 }
 function assertContained(root, candidate, code) {
     const child = relative(root, candidate);
@@ -77,6 +97,8 @@ export function resolveSourceIdentity(inputRoot, dependencies = {}) {
                 error.message.startsWith('NON_GIT_'))) {
             throw error;
         }
+        if (!isDefinitiveNonGitError(error))
+            throw error;
         return resolveDeclaredIdentity(appRoot, dependencies, canonicalize);
     }
 }
@@ -91,17 +113,51 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         .split('\0')
         .filter(Boolean)
         .sort();
-    const dirtyParts = ['git-dirty-v1', diff];
-    for (const entry of untracked) {
+    const ignored = git(identity.contentRoot, [
+        'ls-files',
+        '--others',
+        '--ignored',
+        '--exclude-standard',
+        '-z',
+    ])
+        .split('\0')
+        .filter(Boolean)
+        .sort();
+    const gitlinks = git(identity.contentRoot, ['ls-files', '--stage', '-z'])
+        .split('\0')
+        .flatMap((entry) => {
+        const match = /^160000 [0-9a-f]+ \d+\t(.+)$/i.exec(entry);
+        return match?.[1] ? [match[1]] : [];
+    });
+    for (const entry of gitlinks) {
+        const submodule = resolve(identity.contentRoot, entry);
+        assertContained(identity.contentRoot, submodule, 'STRICT_PROOF_PATH_ESCAPE');
+        const status = git(submodule, [
+            'status',
+            '--porcelain=v1',
+            '--untracked-files=all',
+            '--ignore-submodules=none',
+        ]);
+        if (status) {
+            throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
+        }
+    }
+    const dirtyParts = ['git-dirty-v2', diff];
+    for (const [classification, entry] of [
+        ...untracked.map((entry) => ['untracked', entry]),
+        ...ignored.map((entry) => ['ignored', entry]),
+    ]) {
         const file = resolve(identity.contentRoot, entry);
         assertContained(identity.contentRoot, file, 'STRICT_PROOF_PATH_ESCAPE');
         const stat = lstatSync(file);
         if (stat.isFile()) {
-            dirtyParts.push(entry, 'file', readFileSync(file));
+            dirtyParts.push(classification, entry, 'file', readFileSync(file));
             continue;
         }
         if (stat.isSymbolicLink()) {
-            dirtyParts.push(entry, 'symlink', readlinkSync(file));
+            const target = realpathSync(file);
+            assertContained(identity.contentRoot, target, 'STRICT_PROOF_PATH_ESCAPE');
+            dirtyParts.push(classification, entry, 'symlink', readlinkSync(file));
             continue;
         }
         throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink');
@@ -112,6 +168,6 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         worktreeKey: identity.worktreeKey,
         appRootKey: identity.appRootKey,
         head,
-        dirtyDigest: digest(dirtyParts),
+        dirtyDigest: framedDigest(dirtyParts),
     };
 }

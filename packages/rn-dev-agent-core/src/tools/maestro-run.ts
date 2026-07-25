@@ -49,6 +49,7 @@ import {
 } from '../domain/maestro-runner-report.js';
 import type { SessionState } from '../types.js';
 import {
+  completeManagedRunnerParkAuthority,
   claimManagedNativeOriginAuthority,
   completeManagedNativeOriginAuthority,
 } from '../session/authority-gate.js';
@@ -62,6 +63,7 @@ export interface FlowParkOpts {
   stopFastRunner?: (deviceId?: string) => void | Promise<void>;
   markCdpStale?: () => void;
   releaseAndroidSlot?: (opts: { deviceId?: string }) => Promise<void>;
+  completeRunnerPark?: () => Promise<void>;
 }
 
 /**
@@ -81,6 +83,7 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
     } else {
       await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
     }
+    await opts.completeRunnerPark?.();
     return await run();
   } finally {
     stale();
@@ -506,7 +509,11 @@ export function createMaestroRunHandler(
             claimOrigin,
             completeOrigin,
           ),
-        { platform, deviceId: requestedDeviceId },
+        {
+          platform,
+          deviceId: requestedDeviceId,
+          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+        },
       );
       writeFileSync(flowFile, validatedContent, 'utf-8');
       const stdout = stageResults.map((result) => result.stdout).join('\n');

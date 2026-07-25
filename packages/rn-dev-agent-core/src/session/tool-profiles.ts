@@ -230,6 +230,7 @@ export function authorityProfileFor(
     return {
       kind: 'authoritative',
       axes: ['C', 'S', 'I', 'M', 'D', 'R'],
+      postflightAxes: ['C', 'S', 'I', 'M', 'D'],
       managedOrigin: true,
       mutation: true,
       liveBundleProbe: false,

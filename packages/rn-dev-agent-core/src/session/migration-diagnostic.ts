@@ -7,7 +7,7 @@ import {
   openBoundSubdirectory,
   readBoundDirectoryFiles,
 } from './bound-directory.js';
-import type { SessionStatus } from './registry.js';
+import { AUTHORITY_REGISTRY_SCHEMA_VERSION, type SessionStatus } from './registry.js';
 
 interface MigrationDiagnosticDependencies {
   exists?: (path: string) => boolean;
@@ -17,7 +17,7 @@ interface MigrationDiagnosticDependencies {
 export interface AuthorityMigrationDiagnostic {
   rollout: 'strict-default';
   storeAvailable: true;
-  registrySchema: 3;
+  registrySchema: typeof AUTHORITY_REGISTRY_SCHEMA_VERSION;
   legacyStateDetected: boolean;
   bundleHandshake: {
     supported: true;
@@ -85,7 +85,7 @@ export function inspectAuthorityMigration(
   return {
     rollout: 'strict-default',
     storeAvailable: true,
-    registrySchema: 3,
+    registrySchema: AUTHORITY_REGISTRY_SCHEMA_VERSION,
     legacyStateDetected,
     bundleHandshake: {
       supported: true,

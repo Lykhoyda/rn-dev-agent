@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { readlinkSync, realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { findProjectRoot } from '../nav-graph/storage.js';
 
@@ -14,10 +14,8 @@ const defaultExec: ExecFn = (cmd, args) =>
     stdio: ['ignore', 'pipe', 'ignore'],
   });
 
-const pidCwdCache = new Map<number, string | null>();
-
 export function _resetMetroCwdCacheForTest(): void {
-  pidCwdCache.clear();
+  // Retained for compatibility with older tests and callers.
 }
 
 export function parseLsofPid(stdout: string): number | null {
@@ -46,16 +44,38 @@ export function pidForPort(port: number, exec: ExecFn = defaultExec): number | n
   }
 }
 
-function cwdForPid(pid: number, exec: ExecFn): string | null {
-  if (pidCwdCache.has(pid)) return pidCwdCache.get(pid) ?? null;
-  let cwd: string | null = null;
+export function cwdForProcess(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+  exec: ExecFn = defaultExec,
+  readLink: typeof readlinkSync = readlinkSync,
+): string | null {
   try {
-    cwd = parseLsofCwd(exec('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn']));
+    if (platform === 'linux') {
+      return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
+    }
+    if (platform === 'darwin') {
+      const cwd = parseLsofCwd(exec('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn']));
+      return cwd ? realpathOrResolve(cwd) : null;
+    }
+    if (platform === 'win32') {
+      const commandLine = exec('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`,
+      ]);
+      const explicitRoot =
+        /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
+          commandLine,
+        );
+      const root = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+      return root ? realpathOrResolve(root) : null;
+    }
+    return null;
   } catch {
-    cwd = null;
+    return null;
   }
-  pidCwdCache.set(pid, cwd);
-  return cwd;
 }
 
 function realpathOrResolve(p: string): string {
@@ -70,8 +90,7 @@ export function cwdForPort(port: number, exec: ExecFn = defaultExec): string | n
   if (exec === defaultExec && process.platform !== 'darwin') return null;
   const pid = pidForPort(port, exec);
   if (pid == null) return null;
-  const cwd = cwdForPid(pid, exec);
-  return cwd ? realpathOrResolve(cwd) : null;
+  return cwdForProcess(pid, 'darwin', exec);
 }
 
 export function pathMatchesRoot(
@@ -83,6 +102,16 @@ export function pathMatchesRoot(
   const b = realpathOrResolve(projectRoot);
   if (a === b) return true;
   return a.startsWith(b + sep) || b.startsWith(a + sep);
+}
+
+export function pathIsWithinRoot(
+  candidate: string | null,
+  root: string | null | undefined,
+): boolean {
+  if (!candidate || !root) return false;
+  const canonicalCandidate = realpathOrResolve(candidate);
+  const canonicalRoot = realpathOrResolve(root);
+  return canonicalCandidate === canonicalRoot || canonicalCandidate.startsWith(canonicalRoot + sep);
 }
 
 export function resolveBridgeProjectRoot(): string | null {

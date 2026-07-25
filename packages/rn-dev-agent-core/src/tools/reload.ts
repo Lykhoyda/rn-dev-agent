@@ -140,7 +140,7 @@ export async function recoverAfterFailedReconnect(
   createClient: (port: number) => CDPClient,
   captured: CapturedClientState,
   deps: ReloadHandlerDeps = {},
-  authorityTarget?: { deviceId: string; appId: string },
+  authorityTarget?: { platform: 'ios' | 'android'; deviceId: string; appId: string },
 ): Promise<RelaunchRecoveryResult> {
   const execFile = deps.execFile ?? defaultExecFile;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -165,7 +165,7 @@ export async function recoverAfterFailedReconnect(
     return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
   }
 
-  const platform = captured.platform ?? 'ios';
+  const platform = authorityTarget.platform;
   try {
     if (platform === 'ios') {
       await execFile('xcrun', ['simctl', 'terminate', deviceId, bundleId], {
@@ -247,7 +247,15 @@ export function createReloadHandler(
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   return withConnection(
     getClient,
-    async (args: { full: boolean; deviceId?: string; appId?: string }, client) => {
+    async (
+      args: {
+        full: boolean;
+        platform?: 'ios' | 'android';
+        deviceId?: string;
+        appId?: string;
+      },
+      client,
+    ) => {
       try {
         const result = await client.evaluate(
           '(function() {' +
@@ -323,7 +331,9 @@ export function createReloadHandler(
           createClient,
           captured,
           deps,
-          args.deviceId && args.appId ? { deviceId: args.deviceId, appId: args.appId } : undefined,
+          args.platform && args.deviceId && args.appId
+            ? { platform: args.platform, deviceId: args.deviceId, appId: args.appId }
+            : undefined,
         );
         if (recovery.ok) {
           reconnected = true;

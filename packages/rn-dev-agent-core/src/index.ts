@@ -928,6 +928,7 @@ trackedTool(
     token: z.string().optional(),
     adoptionHandle: z.string().optional(),
     confirmed: z.boolean().optional(),
+    force: z.boolean().optional(),
   },
   sessionHandler,
 );

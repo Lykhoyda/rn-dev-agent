@@ -37,3 +37,7 @@ test('PR#272 cdp_run_action registration exposes params as a string record', () 
     /params:\s*z[\s\S]{0,30}\.record\(z\.string\(\),\s*z\.string\(\)\)[\s\S]{0,30}\.optional\(\)/,
   );
 });
+
+test('rn_session registration exposes force for dev-client repinning', () => {
+  assert.match(registrationBlock('rn_session'), /force:\s*z\.boolean\(\)\.optional\(\)/);
+});

@@ -3756,49 +3756,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative4, options, skipNormalization) {
+    function resolveComponent(base, relative5, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize2(base, options), options);
-        relative4 = parse3(serialize2(relative4, options), options);
+        relative5 = parse3(serialize2(relative5, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative4.scheme) {
-        target.scheme = relative4.scheme;
-        target.userinfo = relative4.userinfo;
-        target.host = relative4.host;
-        target.port = relative4.port;
-        target.path = removeDotSegments(relative4.path || "");
-        target.query = relative4.query;
+      if (!options.tolerant && relative5.scheme) {
+        target.scheme = relative5.scheme;
+        target.userinfo = relative5.userinfo;
+        target.host = relative5.host;
+        target.port = relative5.port;
+        target.path = removeDotSegments(relative5.path || "");
+        target.query = relative5.query;
       } else {
-        if (relative4.userinfo !== void 0 || relative4.host !== void 0 || relative4.port !== void 0) {
-          target.userinfo = relative4.userinfo;
-          target.host = relative4.host;
-          target.port = relative4.port;
-          target.path = removeDotSegments(relative4.path || "");
-          target.query = relative4.query;
+        if (relative5.userinfo !== void 0 || relative5.host !== void 0 || relative5.port !== void 0) {
+          target.userinfo = relative5.userinfo;
+          target.host = relative5.host;
+          target.port = relative5.port;
+          target.path = removeDotSegments(relative5.path || "");
+          target.query = relative5.query;
         } else {
-          if (!relative4.path) {
+          if (!relative5.path) {
             target.path = base.path;
-            if (relative4.query !== void 0) {
-              target.query = relative4.query;
+            if (relative5.query !== void 0) {
+              target.query = relative5.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative4.path[0] === "/") {
-              target.path = removeDotSegments(relative4.path);
+            if (relative5.path[0] === "/") {
+              target.path = removeDotSegments(relative5.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative4.path;
+                target.path = "/" + relative5.path;
               } else if (!base.path) {
-                target.path = relative4.path;
+                target.path = relative5.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative4.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative5.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative4.query;
+            target.query = relative5.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3806,7 +3806,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative4.fragment;
+      target.fragment = relative5.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -9912,8 +9912,8 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest2 = createHash17("sha1").update(key + GUID).digest("base64");
-        if (res.headers["sec-websocket-accept"] !== digest2) {
+        const digest3 = createHash17("sha1").update(key + GUID).digest("base64");
+        if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
         }
@@ -10588,12 +10588,12 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest2 = createHash17("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash17("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
           "Connection: Upgrade",
-          `Sec-WebSocket-Accept: ${digest2}`
+          `Sec-WebSocket-Accept: ${digest3}`
         ];
         const ws = new this.options.WebSocket(null, void 0, this.options);
         if (protocols.size) {
@@ -18880,7 +18880,7 @@ var init_storage = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync } from "node:child_process";
-import { realpathSync as realpathSync2 } from "node:fs";
+import { readlinkSync, realpathSync as realpathSync2 } from "node:fs";
 import { resolve, sep as sep2 } from "node:path";
 function parseLsofPid(stdout) {
   for (const line of stdout.split("\n")) {
@@ -18907,17 +18907,30 @@ function pidForPort(port, exec = defaultExec) {
     return null;
   }
 }
-function cwdForPid(pid, exec) {
-  if (pidCwdCache.has(pid))
-    return pidCwdCache.get(pid) ?? null;
-  let cwd = null;
+function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync) {
   try {
-    cwd = parseLsofCwd(exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
+    if (platform === "linux") {
+      return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
+    }
+    if (platform === "darwin") {
+      const cwd = parseLsofCwd(exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
+      return cwd ? realpathOrResolve(cwd) : null;
+    }
+    if (platform === "win32") {
+      const commandLine = exec("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`
+      ]);
+      const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
+      const root = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+      return root ? realpathOrResolve(root) : null;
+    }
+    return null;
   } catch {
-    cwd = null;
+    return null;
   }
-  pidCwdCache.set(pid, cwd);
-  return cwd;
 }
 function realpathOrResolve(p) {
   try {
@@ -18932,8 +18945,7 @@ function cwdForPort(port, exec = defaultExec) {
   const pid = pidForPort(port, exec);
   if (pid == null)
     return null;
-  const cwd = cwdForPid(pid, exec);
-  return cwd ? realpathOrResolve(cwd) : null;
+  return cwdForProcess(pid, "darwin", exec);
 }
 function pathMatchesRoot(servingCwd, projectRoot) {
   if (!servingCwd || !projectRoot)
@@ -18944,11 +18956,18 @@ function pathMatchesRoot(servingCwd, projectRoot) {
     return true;
   return a.startsWith(b + sep2) || b.startsWith(a + sep2);
 }
+function pathIsWithinRoot(candidate, root) {
+  if (!candidate || !root)
+    return false;
+  const canonicalCandidate = realpathOrResolve(candidate);
+  const canonicalRoot = realpathOrResolve(root);
+  return canonicalCandidate === canonicalRoot || canonicalCandidate.startsWith(canonicalRoot + sep2);
+}
 function resolveBridgeProjectRoot() {
   const root = findProjectRoot();
   return root ? realpathOrResolve(root) : null;
 }
-var CWD_LSOF_TIMEOUT_MS, defaultExec, pidCwdCache;
+var CWD_LSOF_TIMEOUT_MS, defaultExec;
 var init_metro_cwd = __esm({
   "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
     "use strict";
@@ -18959,7 +18978,6 @@ var init_metro_cwd = __esm({
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
     });
-    pidCwdCache = /* @__PURE__ */ new Map();
   }
 });
 
@@ -25480,7 +25498,7 @@ function openAuthorityStore(path, options = {}) {
     database = openedDatabase;
     secureDatabaseFiles(path);
     runInitialization(() => openedDatabase.exec(`
-        PRAGMA busy_timeout=5;
+        PRAGMA busy_timeout=50;
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS authority_meta (
           key TEXT PRIMARY KEY,
@@ -25598,12 +25616,13 @@ function openSessionRegistry(path, dependencies) {
     throw error2;
   }
 }
-var INITIALIZATION_WAIT2, SessionAuthorityError, errorAxes, conflictCodes, SessionRegistry;
+var INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, errorAxes, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
+    AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
     SessionAuthorityError = class extends Error {
       code;
       holder;
@@ -26829,8 +26848,8 @@ var init_registry = __esm({
           const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
           if (existing)
             return existing.port;
-          const digest2 = createHash6("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
-          const preferred = digest2.readUInt32BE(0) % input.span;
+          const digest3 = createHash6("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+          const preferred = digest3.readUInt32BE(0) % input.span;
           for (let offset = 0; offset < input.span; offset += 1) {
             const port = input.base + (preferred + offset) % input.span;
             const occupied = this.#database.prepare("SELECT worktree_key FROM allocations WHERE service = ? AND port = ?").get(input.service, port);
@@ -26865,8 +26884,8 @@ var init_registry = __esm({
       #initialize() {
         const schema = this.#database.prepare("SELECT value FROM authority_meta WHERE key = ?").get("schema_version")?.value;
         const version2 = Number(schema);
-        if (!Number.isSafeInteger(version2) || version2 < 1 || version2 > 4) {
-          throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version2 > 4 ? `authority registry schema ${version2} is newer than supported schema 4` : "authority registry schema version is invalid");
+        if (!Number.isSafeInteger(version2) || version2 < 1 || version2 > AUTHORITY_REGISTRY_SCHEMA_VERSION) {
+          throw new SessionAuthorityError("AUTHORITY_STORE_UNAVAILABLE", version2 > 4 ? `authority registry schema ${version2} is newer than supported schema ${AUTHORITY_REGISTRY_SCHEMA_VERSION}` : "authority registry schema version is invalid");
         }
         this.#database.exec("BEGIN IMMEDIATE");
         try {
@@ -26945,7 +26964,7 @@ var init_registry = __esm({
               this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
             }
           }
-          this.#database.exec("UPDATE authority_meta SET value = '4' WHERE key = 'schema_version';");
+          this.#database.exec(`UPDATE authority_meta SET value = '${AUTHORITY_REGISTRY_SCHEMA_VERSION}' WHERE key = 'schema_version';`);
           this.#database.exec("COMMIT");
         } catch (error2) {
           this.#database.exec("ROLLBACK");
@@ -27220,6 +27239,7 @@ function authorityProfileFor(tool, args = {}) {
     return {
       kind: "authoritative",
       axes: ["C", "S", "I", "M", "D", "R"],
+      postflightAxes: ["C", "S", "I", "M", "D"],
       managedOrigin: true,
       mutation: true,
       liveBundleProbe: false
@@ -27419,6 +27439,13 @@ async function completeManagedNativeOriginAuthority(args, targetExpected) {
     throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin authority is unavailable");
   }
   await authority.complete(targetExpected);
+}
+async function completeManagedRunnerParkAuthority(args) {
+  const complete = args[managedRunnerPark];
+  if (!complete) {
+    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "managed runner parking authority is unavailable");
+  }
+  await complete();
 }
 function requireCompleteAxes(status, profile) {
   for (const axis of profile.axes) {
@@ -27641,6 +27668,22 @@ function createAuthorityGate(runtime, dependencies) {
       if (runtimeStatus.available && runtimeStatus.state === "blocked") {
         return authorityFailure(new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery"));
       }
+      if (runtimeStatus.available && tool === "observe" && args.action === "start" && runtimeStatus.bindings.observe) {
+        profile = {
+          kind: "authoritative",
+          axes: ["C", "S", "O"],
+          mutation: false,
+          liveBundleProbe: false
+        };
+      }
+      if (runtimeStatus.available && tool === "cdp_disconnect" && !runtimeStatus.bindings.bundle) {
+        profile = {
+          kind: "authoritative",
+          axes: ["C", "S"],
+          mutation: false,
+          liveBundleProbe: false
+        };
+      }
       if (runtimeStatus.available && tool === "cdp_restart" && args.hardReset === true) {
         try {
           bindSessionArguments(runtimeStatus, profile, args);
@@ -27672,8 +27715,8 @@ function createAuthorityGate(runtime, dependencies) {
             before: ["C", "S", "I", "M", "D", "R"],
             after: ["C", "S", "I", "M", "D"]
           } : tool === "observe" ? args.action === "stop" ? {
-            before: ["C", "S", "I", "M", "B", "D", "R", "O"],
-            after: ["C", "S", "I", "M", "B", "D", "R"]
+            before: ["C", "S", "O"],
+            after: ["C", "S"]
           } : {
             before: ["C", "S", "I", "M", "B", "D", "R"],
             after: ["C", "S", "I", "M", "B", "D", "R", "O"]
@@ -27760,10 +27803,19 @@ function createAuthorityGate(runtime, dependencies) {
             const current = runtime.requireAvailable();
             registry3.endOperation(operation2);
             operation2 = null;
-            current.registry.updateBindings(current.session, {
-              bindings: { proof: { runId } },
-              expectedAuthorityVersion: status.authorityVersion
-            });
+            try {
+              current.registry.updateBindings(current.session, {
+                bindings: { proof: { runId } },
+                expectedAuthorityVersion: status.authorityVersion
+              });
+            } catch (bindingError) {
+              try {
+                await handler({ action: "discard" });
+              } catch (rollbackError) {
+                throw new AggregateError([bindingError, rollbackError], "PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed after binding rejection");
+              }
+              throw bindingError;
+            }
             const proofStatus = runtime.status();
             if (!proofStatus.available) {
               throw new SessionAuthorityError(proofStatus.code, proofStatus.reason);
@@ -27814,6 +27866,7 @@ function createAuthorityGate(runtime, dependencies) {
         let managedRuntimeTargetChanged = false;
         let optionalBundleClaimed = false;
         let optionalBundleRecoveryFailed = false;
+        let managedRunnerParked = false;
         if (profile.optionalAxes?.includes("B")) {
           Object.defineProperty(args, optionalBundleAdmission, {
             configurable: true,
@@ -27998,6 +28051,40 @@ function createAuthorityGate(runtime, dependencies) {
             }
           });
         }
+        if (tool === "maestro_run" || tool === "maestro_test_all") {
+          Object.defineProperty(args, managedRunnerPark, {
+            configurable: true,
+            value: async () => {
+              if (managedRunnerParked)
+                return;
+              const currentStatus = runtime.status();
+              if (!currentStatus.available) {
+                throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+              }
+              const runner = currentStatus.bindings.runner;
+              if (!runner) {
+                throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "managed runner parking lost the bound runner before commit");
+              }
+              registry2.verifyOperation(operation);
+              operation = registry2.replaceBindingsDuringOperation(operation, {
+                state: currentStatus.bindings.bundle ? "ready" : "device_bound",
+                bindings: { runner: null },
+                releaseResources: [
+                  {
+                    type: "runner",
+                    key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`
+                  }
+                ]
+              });
+              const parkedStatus = runtime.status();
+              if (!parkedStatus.available) {
+                throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);
+              }
+              status = parkedStatus;
+              managedRunnerParked = true;
+            }
+          });
+        }
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
         const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
@@ -28073,14 +28160,18 @@ function createAuthorityGate(runtime, dependencies) {
           ...effectiveProfile,
           axes: effectiveProfile.axes.filter((axis) => axis !== "B")
         } : effectiveProfile;
-        const receiptProfile = finalOrigin ? {
+        const runnerAwareReceiptProfile = managedRunnerParked ? {
           ...receiptBaseProfile,
+          axes: receiptBaseProfile.axes.filter((axis) => axis !== "R")
+        } : receiptBaseProfile;
+        const receiptProfile = finalOrigin ? {
+          ...runnerAwareReceiptProfile,
           axes: [
-            ...receiptBaseProfile.axes,
+            ...runnerAwareReceiptProfile.axes,
             "A",
             ...finalManagedBundle ? ["B"] : []
           ]
-        } : receiptBaseProfile;
+        } : runnerAwareReceiptProfile;
         for (const observation of allBefore) {
           if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === "B") {
             continue;
@@ -28136,7 +28227,7 @@ function createAuthorityGate(runtime, dependencies) {
     }
   };
 }
-var optionalBundleAdmission, managedNativeOrigin, axisBinding, axisErrors;
+var optionalBundleAdmission, managedNativeOrigin, managedRunnerPark, axisBinding, axisErrors;
 var init_authority_gate = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-gate.js"() {
     "use strict";
@@ -28145,6 +28236,7 @@ var init_authority_gate = __esm({
     init_tool_profiles();
     optionalBundleAdmission = /* @__PURE__ */ Symbol("optionalBundleAdmission");
     managedNativeOrigin = /* @__PURE__ */ Symbol("managedNativeOrigin");
+    managedRunnerPark = /* @__PURE__ */ Symbol("managedRunnerPark");
     axisBinding = {
       I: "install",
       M: "metro",
@@ -28184,6 +28276,7 @@ async function runFlowParked(run, opts = {}) {
     } else {
       await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
     }
+    await opts.completeRunnerPark?.();
     return await run();
   } finally {
     stale();
@@ -28397,7 +28490,11 @@ function createMaestroRunHandler(deps = {}) {
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
         });
-      }, claimOrigin, completeOrigin), { platform, deviceId: requestedDeviceId });
+      }, claimOrigin, completeOrigin), {
+        platform,
+        deviceId: requestedDeviceId,
+        completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
+      });
       writeFileSync7(flowFile, validatedContent, "utf-8");
       const stdout = stageResults.map((result) => result.stdout).join("\n");
       const stderr = stageResults.map((result) => result.stderr).join("\n");
@@ -51923,7 +52020,7 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
     steps.push("skip-relaunch:no-exact-authority-target");
     return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
   }
-  const platform = captured.platform ?? "ios";
+  const platform = authorityTarget.platform;
   try {
     if (platform === "ios") {
       await execFile28("xcrun", ["simctl", "terminate", deviceId, bundleId], {
@@ -52041,7 +52138,7 @@ function createReloadHandler(getClient2, setClient2, createClient2, deps = {}) {
     let forceMeta = {};
     if (!reconnected) {
       const captured = captureClientState(getClient2());
-      const recovery = await recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps, args.deviceId && args.appId ? { deviceId: args.deviceId, appId: args.appId } : void 0);
+      const recovery = await recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps, args.platform && args.deviceId && args.appId ? { platform: args.platform, deviceId: args.deviceId, appId: args.appId } : void 0);
       if (recovery.ok) {
         reconnected = true;
         client2 = getClient2();
@@ -54469,6 +54566,7 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
+init_registry();
 function readPackageIntegrationManifest(appRoot, dependencies) {
   const manifestPath = join29(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
   if (dependencies.exists || dependencies.readText) {
@@ -54513,7 +54611,7 @@ function inspectAuthorityMigration(status, dependencies = {}) {
   return {
     rollout: "strict-default",
     storeAvailable: true,
-    registrySchema: 3,
+    registrySchema: AUTHORITY_REGISTRY_SCHEMA_VERSION,
     legacyStateDetected,
     bundleHandshake: {
       supported: true,
@@ -62030,8 +62128,8 @@ async function captureMetroBinding(input, dependencies = {}) {
   if (!status.includes("packager-status:running")) {
     throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
   }
-  const servingRoot = (dependencies.servingRoot ?? cwdForPort)(input.port);
-  if (!servingRoot || !pathMatchesRoot(servingRoot, input.sourceRoot)) {
+  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
+  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
     throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
   }
   return {
@@ -67188,7 +67286,11 @@ function createMaestroTestAllHandler() {
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
           });
-        }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected)), { platform, deviceId: requestedDeviceId });
+        }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected)), {
+          platform,
+          deviceId: requestedDeviceId,
+          completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
+        });
         const stdout = stageResults.map((result) => result.stdout).join("\n");
         const stderr = stageResults.map((result) => result.stderr).join("\n");
         const output = (stdout + "\n" + stderr).trim();
@@ -67538,8 +67640,8 @@ init_rn_android_runner_client();
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash12 } from "node:crypto";
-import { readFileSync as readFileSync28, statSync as statSync11 } from "node:fs";
-import { join as join41 } from "node:path";
+import { lstatSync as lstatSync9, readFileSync as readFileSync28, readdirSync as readdirSync10, readlinkSync as readlinkSync2, statSync as statSync11 } from "node:fs";
+import { join as join41, relative as relative2 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
     encoding: "utf8",
@@ -67548,8 +67650,36 @@ function runText(command, args) {
     maxBuffer: 8 * 1024 * 1024
   });
 }
+function digest(parts) {
+  const hash = createHash12("sha256");
+  for (const part of parts) {
+    hash.update(`${part.byteLength}:`);
+    hash.update(part);
+  }
+  return hash.digest("hex");
+}
 function generation(parts) {
-  return createHash12("sha256").update(parts.join("\0")).digest("hex");
+  return digest(parts.map((part) => Buffer.from(part)));
+}
+function listAppFiles(appPath) {
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync10(directory, { withFileTypes: true })) {
+      const path = join41(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        files.push(relative2(appPath, path));
+      } else {
+        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
+      }
+    }
+  };
+  visit(appPath);
+  return files.sort();
+}
+function iosAppFiles(appPath, dependencies) {
+  return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
 }
 function androidApkPaths(target, text) {
   return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
@@ -67580,9 +67710,10 @@ function captureInstallGeneration(target, dependencies = {}) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
     }
     const stat2 = dependencies.stat ?? statSync11;
-    const metadata2 = [infoPath, join41(appPath, executable)].map((path) => {
+    const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
+      const path = join41(appPath, entry);
       const value = stat2(path);
-      return `${path}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+      return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
     });
     return generation(metadata2);
   }
@@ -69137,7 +69268,7 @@ import { readFileSync as readFileSync32 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname18, join as join46 } from "node:path";
-import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync30, readdirSync as readdirSync10, existsSync as existsSync32 } from "node:fs";
+import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync30, readdirSync as readdirSync11, existsSync as existsSync32 } from "node:fs";
 import { createHash as createHash13 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
@@ -69202,7 +69333,7 @@ function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
   if (!existsSync32(dir))
     return [];
-  return readdirSync10(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
+  return readdirSync11(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
 function parseLockedTest(text, filePath) {
   if (!/^#\s*e2e-locked-test:\s*true\s*$/m.test(text))
@@ -69485,7 +69616,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join49 } from "node:path";
-import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync34, readdirSync as readdirSync11, existsSync as existsSync34 } from "node:fs";
+import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync34, readdirSync as readdirSync12, existsSync as existsSync34 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -69529,7 +69660,7 @@ function listRequests(projectRoot) {
   if (!existsSync34(dir))
     return [];
   const out = [];
-  for (const f of readdirSync11(dir)) {
+  for (const f of readdirSync12(dir)) {
     if (!f.endsWith(".json"))
       continue;
     try {
@@ -69811,13 +69942,13 @@ init_app_installed_probe();
 init_storage();
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
-import { readdirSync as readdirSync12 } from "node:fs";
+import { readdirSync as readdirSync13 } from "node:fs";
 import { join as join50 } from "node:path";
 async function listActions(projectRoot) {
   const actionsDir = join50(projectRoot, ".rn-agent", "actions");
   let files;
   try {
-    files = readdirSync12(actionsDir);
+    files = readdirSync13(actionsDir);
   } catch {
     return [];
   }
@@ -69944,8 +70075,8 @@ function createBuildLaunchPlan(input) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { closeSync as closeSync6, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync9, openSync as openSync6, readFileSync as readFileSync35 } from "node:fs";
-import { basename as basename6, isAbsolute as isAbsolute4, join as join51, relative as relative2, resolve as resolve6, sep as sep6 } from "node:path";
+import { closeSync as closeSync6, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync6, readFileSync as readFileSync35 } from "node:fs";
+import { basename as basename6, isAbsolute as isAbsolute4, join as join51, relative as relative3, resolve as resolve6, sep as sep6 } from "node:path";
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
@@ -70098,7 +70229,11 @@ if (rawSession) {
     process.exit(2);
   }
 }
-if (!session && typeof manifest.sessionCli === 'string' && fs.existsSync(manifest.sessionCli)) {
+if (!session && typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
+  process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
+  process.exit(2);
+}
+if (!session && typeof manifest.sessionCli === 'string') {
   sessionCli = manifest.sessionCli;
   const [major, minor] = process.versions.node.split('.').map(Number);
   const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
@@ -70244,7 +70379,7 @@ function assertBoundCleanup(result) {
   }
 }
 function assertNoSymlinkPath(root, candidate) {
-  const child = relative2(root, candidate);
+  const child = relative3(root, candidate);
   if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute4(child)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
   }
@@ -70252,7 +70387,7 @@ function assertNoSymlinkPath(root, candidate) {
   for (const component of [root, ...child.split(sep6).filter(Boolean)]) {
     current = component === root ? root : join51(current, component);
     try {
-      if (lstatSync9(current).isSymbolicLink()) {
+      if (lstatSync10(current).isSymbolicLink()) {
         throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
       }
     } catch (error2) {
@@ -70264,7 +70399,7 @@ function assertNoSymlinkPath(root, candidate) {
 }
 function regularFileIdentity(root, candidate) {
   assertNoSymlinkPath(root, candidate);
-  const identity2 = lstatSync9(candidate, { bigint: true });
+  const identity2 = lstatSync10(candidate, { bigint: true });
   if (!identity2.isFile()) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file");
   }
@@ -70663,6 +70798,9 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status2) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before device binding");
         }
+        if (status2.bindings.runner || status2.bindings.observe || status2.bindings.proof) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner, Observe, or proof authority to be released first");
+        }
         if (!input.buildReceipt) {
           registry2.replaceDeviceAuthority(session, {
             resource: { type: "device", key: `${platform}:${deviceId}` },
@@ -70707,6 +70845,9 @@ function createSessionHandler(runtime, dependencies = {}) {
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "bind_metro") {
+        if (input.mode === "managed") {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro authority can only be established by the verified managed launcher");
+        }
         const port = required2(input.metroPort, "metroPort");
         const pid = required2(input.metroPid, "metroPid");
         const instanceId = required2(input.metroInstanceId, "metroInstanceId");
@@ -70723,7 +70864,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           sourceRoot,
           buildGeneration
         });
-        const nextMetro = { ...metro2, mode: input.mode ?? "external" };
+        const nextMetro = { ...metro2, mode: "external" };
         const priorMetro = status2.bindings.metro;
         const priorBundle = status2.bindings.bundle;
         const priorTargetId = priorBundle?.targetId;
@@ -71168,9 +71309,9 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash14 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { lstatSync as lstatSync10, readFileSync as readFileSync36, readlinkSync, realpathSync as realpathSync5 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join53, relative as relative3, resolve as resolve7 } from "node:path";
-function digest(parts) {
+import { lstatSync as lstatSync11, readFileSync as readFileSync36, readlinkSync as readlinkSync3, realpathSync as realpathSync5 } from "node:fs";
+import { isAbsolute as isAbsolute5, join as join53, relative as relative4, resolve as resolve7 } from "node:path";
+function digest2(parts) {
   const hash = createHash14("sha256");
   for (const part of parts) {
     hash.update(part);
@@ -71178,15 +71319,32 @@ function digest(parts) {
   }
   return hash.digest("hex");
 }
+function framedDigest(parts) {
+  const hash = createHash14("sha256");
+  for (const part of parts) {
+    const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
+    hash.update(`${bytes.byteLength}:`);
+    hash.update(bytes);
+  }
+  return hash.digest("hex");
+}
 function defaultGit(root, args) {
   return execFileSync14("git", ["-C", root, ...args], {
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5e3
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5e3,
+    maxBuffer: 64 * 1024 * 1024
   }).trim();
 }
+function isDefinitiveNonGitError(error2) {
+  if (!(error2 instanceof Error))
+    return false;
+  const stderr = "stderr" in error2 && typeof error2.stderr === "string" ? error2.stderr : "stderr" in error2 && Buffer.isBuffer(error2.stderr) ? error2.stderr.toString("utf8") : "";
+  return `${error2.message}
+${stderr}`.toLowerCase().includes("not a git repository");
+}
 function assertContained(root, candidate, code) {
-  const child = relative3(root, candidate);
+  const child = relative4(root, candidate);
   if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute5(child)) {
     throw new Error(`${code}: path is outside the declared content root`);
   }
@@ -71201,17 +71359,17 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   for (const entry of [...dependencies.declaredManifests].sort()) {
     const manifest = canonicalize(resolve7(contentRoot, entry));
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
-    manifestParts.push(relative3(contentRoot, manifest), readFileSync36(manifest));
+    manifestParts.push(relative4(contentRoot, manifest), readFileSync36(manifest));
   }
-  const manifestDigest = digest(manifestParts);
-  const appRelative = relative3(contentRoot, appRoot) || ".";
+  const manifestDigest = digest2(manifestParts);
+  const appRelative = relative4(contentRoot, appRoot) || ".";
   return {
     kind: "declared-root",
     contentRoot,
     appRoot,
-    sourceKey: digest(["declared-source", contentRoot, manifestDigest]),
-    worktreeKey: digest(["declared-root", contentRoot]),
-    appRootKey: digest(["declared-app", appRelative]),
+    sourceKey: digest2(["declared-source", contentRoot, manifestDigest]),
+    worktreeKey: digest2(["declared-root", contentRoot]),
+    appRootKey: digest2(["declared-app", appRelative]),
     manifestDigest,
     declaredManifests: [...dependencies.declaredManifests]
   };
@@ -71226,20 +71384,22 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
     const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
     const commonDirectory = canonicalize(isAbsolute5(commonRaw) ? commonRaw : join53(contentRoot, commonRaw));
     const head = git(appRoot, ["rev-parse", "HEAD"]);
-    const appRelative = relative3(contentRoot, appRoot) || ".";
+    const appRelative = relative4(contentRoot, appRoot) || ".";
     return {
       kind: "git",
       contentRoot,
       appRoot,
-      sourceKey: digest(["git-source", commonDirectory]),
-      worktreeKey: digest(["git-worktree", contentRoot]),
-      appRootKey: digest(["git-app", appRelative]),
+      sourceKey: digest2(["git-source", commonDirectory]),
+      worktreeKey: digest2(["git-worktree", contentRoot]),
+      appRootKey: digest2(["git-app", appRelative]),
       head
     };
   } catch (error2) {
     if (error2 instanceof Error && (error2.message.startsWith("APP_ROOT_OUTSIDE_WORKTREE") || error2.message.startsWith("NON_GIT_"))) {
       throw error2;
     }
+    if (!isDefinitiveNonGitError(error2))
+      throw error2;
     return resolveDeclaredIdentity(appRoot, dependencies, canonicalize);
   }
 }
@@ -71251,17 +71411,46 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
-  const dirtyParts = ["git-dirty-v1", diff];
-  for (const entry of untracked) {
+  const ignored = git(identity2.contentRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "-z"
+  ]).split("\0").filter(Boolean).sort();
+  const gitlinks = git(identity2.contentRoot, ["ls-files", "--stage", "-z"]).split("\0").flatMap((entry) => {
+    const match = /^160000 [0-9a-f]+ \d+\t(.+)$/i.exec(entry);
+    return match?.[1] ? [match[1]] : [];
+  });
+  for (const entry of gitlinks) {
+    const submodule = resolve7(identity2.contentRoot, entry);
+    assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
+    const status = git(submodule, [
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignore-submodules=none"
+    ]);
+    if (status) {
+      throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
+    }
+  }
+  const dirtyParts = ["git-dirty-v2", diff];
+  for (const [classification, entry] of [
+    ...untracked.map((entry2) => ["untracked", entry2]),
+    ...ignored.map((entry2) => ["ignored", entry2])
+  ]) {
     const file = resolve7(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
-    const stat2 = lstatSync10(file);
+    const stat2 = lstatSync11(file);
     if (stat2.isFile()) {
-      dirtyParts.push(entry, "file", readFileSync36(file));
+      dirtyParts.push(classification, entry, "file", readFileSync36(file));
       continue;
     }
     if (stat2.isSymbolicLink()) {
-      dirtyParts.push(entry, "symlink", readlinkSync(file));
+      const target = realpathSync5(file);
+      assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
+      dirtyParts.push(classification, entry, "symlink", readlinkSync3(file));
       continue;
     }
     throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
@@ -71272,7 +71461,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     worktreeKey: identity2.worktreeKey,
     appRootKey: identity2.appRootKey,
     head,
-    dirtyDigest: digest(dirtyParts)
+    dirtyDigest: framedDigest(dirtyParts)
   };
 }
 
@@ -72205,7 +72394,8 @@ trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent author
   handoffId: external_exports.string().optional(),
   token: external_exports.string().optional(),
   adoptionHandle: external_exports.string().optional(),
-  confirmed: external_exports.boolean().optional()
+  confirmed: external_exports.boolean().optional(),
+  force: external_exports.boolean().optional()
 }, sessionHandler);
 trackedTool("cdp_status", "Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.", {
   metroPort: external_exports.number().optional().describe("Diagnostic comparison only; cdp_status never changes the active Metro port"),

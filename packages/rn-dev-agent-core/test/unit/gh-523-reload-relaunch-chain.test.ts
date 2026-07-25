@@ -68,6 +68,7 @@ test('force reconnect success does not invoke native recovery', async () => {
       },
     },
     {
+      platform: 'ios',
       deviceId: 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
       appId: 'com.example.app',
     },
@@ -98,6 +99,7 @@ test('iOS recovery uses only the exact authority target before reconnecting', as
       sleep: async () => {},
     },
     {
+      platform: 'ios',
       deviceId: 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
       appId: 'com.example.app',
     },
@@ -145,6 +147,33 @@ test('Android recovery uses adb -s with the exact authority target', async () =>
   ]);
   assert.equal(calls[1][0], 'adb');
   assert.equal(calls[1][2], 'emulator-5556');
+});
+
+test('Android recovery keeps the authority-bound platform after the client target is cleared', async () => {
+  const h = harness([
+    () => mockClient({ platform: 'android', autoConnectFails: true }),
+    () => mockClient({ platform: 'android', autoConnectFails: true }),
+    () => mockClient({ platform: 'android' }),
+  ]);
+  const calls = [];
+  const result = await recoverAfterFailedReconnect(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    { ...captured(), platform: undefined },
+    {
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      sleep: async () => {},
+    },
+    { platform: 'android', deviceId: 'emulator-5556', appId: 'com.example.app' },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0][0], 'adb');
+  assert.equal(calls[1][0], 'adb');
 });
 
 test('missing exact authority never falls back to captured, persisted, or booted state', async () => {

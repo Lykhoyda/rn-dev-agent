@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import {
   parseLsofPid,
   parseLsofCwd,
   cwdForPort,
+  cwdForProcess,
   pathMatchesRoot,
   _resetMetroCwdCacheForTest,
 } from '../../dist/cdp/metro-cwd.js';
@@ -38,7 +40,7 @@ test('cwdForPort: composes pid→cwd via injected exec', () => {
   assert.equal(cwdForPort(8081, exec), '/repo/worktreeA');
 });
 
-test('cwdForPort: memoizes pid→cwd but re-resolves port→pid each call', () => {
+test('cwdForPort: re-resolves PID and CWD every call so PID reuse cannot retain a stale root', () => {
   _resetMetroCwdCacheForTest();
   let pidCalls = 0;
   let cwdCalls = 0;
@@ -52,8 +54,25 @@ test('cwdForPort: memoizes pid→cwd but re-resolves port→pid each call', () =
   };
   cwdForPort(8081, exec);
   cwdForPort(8081, exec);
-  assert.equal(pidCalls, 2, 'port→pid re-resolved each call (guards port reuse)');
-  assert.equal(cwdCalls, 1, 'pid→cwd memoized');
+  assert.equal(pidCalls, 2);
+  assert.equal(cwdCalls, 2);
+});
+
+test('cwdForProcess: resolves Linux process cwd through procfs', () => {
+  assert.equal(
+    cwdForProcess(777, 'linux', undefined, (path) => {
+      assert.equal(path, '/proc/777/cwd');
+      return '/repo/worktreeA';
+    }),
+    '/repo/worktreeA',
+  );
+});
+
+test('cwdForProcess: accepts an explicit Windows Metro project root', () => {
+  assert.equal(
+    cwdForProcess(777, 'win32', () => 'node metro.js start --projectRoot "C:\\repo\\worktreeA"'),
+    resolve('C:\\repo\\worktreeA'),
+  );
 });
 
 test('cwdForPort: fail-open — null when exec throws or returns junk', () => {

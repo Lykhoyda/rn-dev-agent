@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { openAuthorityStore, } from './authority-store.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
 export class SessionAuthorityError extends Error {
     code;
     holder;
@@ -1667,9 +1668,11 @@ export class SessionRegistry {
             .prepare('SELECT value FROM authority_meta WHERE key = ?')
             .get('schema_version')?.value;
         const version = Number(schema);
-        if (!Number.isSafeInteger(version) || version < 1 || version > 4) {
+        if (!Number.isSafeInteger(version) ||
+            version < 1 ||
+            version > AUTHORITY_REGISTRY_SCHEMA_VERSION) {
             throw new SessionAuthorityError('AUTHORITY_STORE_UNAVAILABLE', version > 4
-                ? `authority registry schema ${version} is newer than supported schema 4`
+                ? `authority registry schema ${version} is newer than supported schema ${AUTHORITY_REGISTRY_SCHEMA_VERSION}`
                 : 'authority registry schema version is invalid');
         }
         this.#database.exec('BEGIN IMMEDIATE');
@@ -1749,7 +1752,7 @@ export class SessionRegistry {
                     this.#database.exec("ALTER TABLE handoffs ADD COLUMN source_state TEXT NOT NULL DEFAULT 'active';");
                 }
             }
-            this.#database.exec("UPDATE authority_meta SET value = '4' WHERE key = 'schema_version';");
+            this.#database.exec(`UPDATE authority_meta SET value = '${AUTHORITY_REGISTRY_SCHEMA_VERSION}' WHERE key = 'schema_version';`);
             this.#database.exec('COMMIT');
         }
         catch (error) {

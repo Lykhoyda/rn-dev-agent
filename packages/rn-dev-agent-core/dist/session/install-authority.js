@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 function runText(command, args) {
     return execFileSync(command, [...args], {
         encoding: 'utf8',
@@ -21,13 +21,35 @@ function runBuffer(command, args) {
 function digest(parts) {
     const hash = createHash('sha256');
     for (const part of parts) {
+        hash.update(`${part.byteLength}:`);
         hash.update(part);
-        hash.update('\0');
     }
     return hash.digest('hex');
 }
 function generation(parts) {
-    return createHash('sha256').update(parts.join('\0')).digest('hex');
+    return digest(parts.map((part) => Buffer.from(part)));
+}
+function listAppFiles(appPath) {
+    const files = [];
+    const visit = (directory) => {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+            const path = join(directory, entry.name);
+            if (entry.isDirectory()) {
+                visit(path);
+            }
+            else if (entry.isFile() || entry.isSymbolicLink()) {
+                files.push(relative(appPath, path));
+            }
+            else {
+                throw new Error('APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry');
+            }
+        }
+    };
+    visit(appPath);
+    return files.sort();
+}
+function iosAppFiles(appPath, dependencies) {
+    return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
 }
 function androidApkPaths(target, text) {
     return text('adb', ['-s', target.deviceId, 'shell', 'pm', 'path', target.appId])
@@ -63,9 +85,10 @@ export function captureInstallGeneration(target, dependencies = {}) {
             throw new Error('APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable');
         }
         const stat = dependencies.stat ?? statSync;
-        const metadata = [infoPath, join(appPath, executable)].map((path) => {
+        const metadata = iosAppFiles(appPath, dependencies).map((entry) => {
+            const path = join(appPath, entry);
             const value = stat(path);
-            return `${path}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+            return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
         });
         return generation(metadata);
     }
@@ -118,9 +141,27 @@ export function captureInstalledArtifact(target, dependencies = {}) {
         if (!executable) {
             throw new Error('APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable');
         }
+        const files = iosAppFiles(appPath, dependencies);
+        const lstat = dependencies.lstat ?? lstatSync;
+        const readLink = dependencies.readLink ?? readlinkSync;
+        const artifactParts = [];
+        for (const entry of files) {
+            const path = join(appPath, entry);
+            const stat = lstat(path);
+            artifactParts.push(Buffer.from(entry));
+            if (stat.isFile()) {
+                artifactParts.push(Buffer.from('file'), read(path));
+            }
+            else if (stat.isSymbolicLink()) {
+                artifactParts.push(Buffer.from('symlink'), Buffer.from(readLink(path)));
+            }
+            else {
+                throw new Error('APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry');
+            }
+        }
         return {
             ...target,
-            artifactDigest: digest([read(infoPath), read(join(appPath, executable))]),
+            artifactDigest: digest(artifactParts),
             installGeneration: captureInstallGeneration(target, dependencies),
         };
     }

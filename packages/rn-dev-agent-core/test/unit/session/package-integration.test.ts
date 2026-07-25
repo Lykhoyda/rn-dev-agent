@@ -79,6 +79,38 @@ test('integration preview refreshes the session CLI without replacing original s
   assert.deepEqual(second.manifest.originalScripts, first.manifest.originalScripts);
 });
 
+test('copied adapter fails closed when its persisted session CLI no longer exists', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-missing-cli-'));
+  try {
+    const integrationRoot = join(root, '.rn-agent', 'integration');
+    mkdirSync(integrationRoot, { recursive: true });
+    const adapterPath = join(integrationRoot, 'rn-session-adapter.cjs');
+    writeFileSync(adapterPath, renderProjectAdapter());
+    writeFileSync(
+      join(integrationRoot, 'rn-session-integration.json'),
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        sessionCli: join(root, 'removed-plugin', 'rn-session.js'),
+        originalScripts: {
+          ios: ['node', '-e', 'process.exit(0)'],
+          android: ['expo', 'run:android'],
+        },
+      }),
+    );
+
+    const result = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /reapply integration/i);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro integration composes object and promise configs and is reversible', async () => {
   const original = 'const base = { serializer: {} };\nmodule.exports = base;\n';
   const integrated = previewMetroIntegration(original);

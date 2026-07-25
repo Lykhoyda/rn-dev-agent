@@ -92,7 +92,7 @@ export async function recoverAfterFailedReconnect(getClient, setClient, createCl
         steps.push('skip-relaunch:no-exact-authority-target');
         return { ok: false, via: null, reason: first.reason, relaunchSteps: steps };
     }
-    const platform = captured.platform ?? 'ios';
+    const platform = authorityTarget.platform;
     try {
         if (platform === 'ios') {
             await execFile('xcrun', ['simctl', 'terminate', deviceId, bundleId], {
@@ -230,7 +230,9 @@ export function createReloadHandler(getClient, setClient, createClient, deps = {
             const captured = captureClientState(getClient());
             // GH #523 sub-1: force_reconnect, escalating into an automatic simctl
             // terminate+launch when even that finds no target.
-            const recovery = await recoverAfterFailedReconnect(getClient, setClient, createClient, captured, deps, args.deviceId && args.appId ? { deviceId: args.deviceId, appId: args.appId } : undefined);
+            const recovery = await recoverAfterFailedReconnect(getClient, setClient, createClient, captured, deps, args.platform && args.deviceId && args.appId
+                ? { platform: args.platform, deviceId: args.deviceId, appId: args.appId }
+                : undefined);
             if (recovery.ok) {
                 reconnected = true;
                 client = getClient();

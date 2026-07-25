@@ -71,3 +71,24 @@ test('Metro binding fails closed when serving-root provenance is unavailable', a
     /METRO_AUTHORITY_MISMATCH/,
   );
 });
+
+test('Metro binding rejects a serving root above the claimed worktree', async () => {
+  await assert.rejects(
+    captureMetroBinding(
+      {
+        port: 8341,
+        pid: 202,
+        instanceId: 'metro-a',
+        sourceRoot: '/repo/worktree',
+        buildGeneration: 3,
+      },
+      {
+        listenerPid: () => 202,
+        readBirth: () => ({ pid: 202, source: 'darwin-ps', token: 'metro-birth' }),
+        fetchStatus: async () => 'packager-status:running',
+        servingRoot: () => '/repo',
+      },
+    ),
+    /METRO_AUTHORITY_MISMATCH/,
+  );
+});

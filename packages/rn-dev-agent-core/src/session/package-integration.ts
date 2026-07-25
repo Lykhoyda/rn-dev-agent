@@ -213,7 +213,11 @@ if (rawSession) {
     process.exit(2);
   }
 }
-if (!session && typeof manifest.sessionCli === 'string' && fs.existsSync(manifest.sessionCli)) {
+if (!session && typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
+  process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
+  process.exit(2);
+}
+if (!session && typeof manifest.sessionCli === 'string') {
   sessionCli = manifest.sessionCli;
   const [major, minor] = process.versions.node.split('.').map(Number);
   const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)

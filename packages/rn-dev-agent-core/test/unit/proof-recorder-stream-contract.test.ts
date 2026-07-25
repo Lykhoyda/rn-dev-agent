@@ -64,7 +64,7 @@ test('the recorder supervisor releases start streams and owns child output', asy
   assert.deepEqual(directLaunches, []);
 });
 
-function fixture() {
+function fixture({ recorderExitDelay = 30 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'proof-recorder-supervisor-'));
   const legacyPrefix = join(root, 'record');
   const runtimeDirectory = join(root, 'runtime');
@@ -90,7 +90,7 @@ if [[ "$*" == "simctl list devices booted" ]]; then
 elif [[ "$*" == *"recordVideo"* ]]; then
   raw_path="\${@: -1}"
   printf partial > "$raw_path"
-  sleep 1.2
+  sleep ${recorderExitDelay}
   exit 7
 fi
 `,
@@ -109,7 +109,7 @@ fi
 }
 
 test('a spontaneous nonzero recorder exit is reported as failure', async () => {
-  const state = fixture();
+  const state = fixture({ recorderExitDelay: 1.2 });
   const scope = 'e'.repeat(64);
   try {
     const output = join(state.root, 'capture.mp4');

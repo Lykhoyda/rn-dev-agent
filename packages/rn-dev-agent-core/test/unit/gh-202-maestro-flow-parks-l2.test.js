@@ -9,10 +9,14 @@ test('GH#202 runFlowParked: parks L2 before the flow and marks CDP stale after (
       calls.push('flow');
       return 'RESULT';
     },
-    { stopFastRunner: () => calls.push('stop'), markCdpStale: () => calls.push('stale') },
+    {
+      stopFastRunner: () => calls.push('stop'),
+      completeRunnerPark: async () => calls.push('commit-park'),
+      markCdpStale: () => calls.push('stale'),
+    },
   );
   assert.equal(out, 'RESULT');
-  assert.deepEqual(calls, ['stop', 'flow', 'stale']);
+  assert.deepEqual(calls, ['stop', 'commit-park', 'flow', 'stale']);
 });
 
 test('GH#202 runFlowParked: still marks CDP stale when the flow throws', async () => {

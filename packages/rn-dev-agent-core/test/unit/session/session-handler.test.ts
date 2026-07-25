@@ -530,6 +530,78 @@ test('Metro rebinding clears the prior bundle and releases its target claim', as
   assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-a' }]);
 });
 
+test('device rebinding refuses to discard live runner, Observe, or proof authority', async () => {
+  let replaced = false;
+  const status = {
+    sessionId: 'session-a',
+    bindings: {
+      runner: { instanceId: 'runner-a' },
+      observe: { instanceId: 'observe-a' },
+      proof: { runId: 'proof-a' },
+    },
+  };
+  const handler = createSessionHandler({
+    status: () => ({ available: true, ...status }),
+    requireOperational: () => ({
+      registry: {
+        getSessionStatus: () => status,
+        replaceDeviceAuthority: () => {
+          replaced = true;
+        },
+      },
+      session: { sessionId: 'session-a', claimEpoch: 1 },
+    }),
+  });
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'SIM-2',
+    appId: 'dev.example',
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(replaced, false);
+  assert.match(result.content[0].text, /runner, Observe, or proof authority/i);
+});
+
+test('public Metro binding rejects managed mode without process management proof', async () => {
+  let captured = false;
+  const status = {
+    sessionId: 'session-a',
+    source: { contentRoot: '/project' },
+    bindings: { metroPort: 8193 },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      captureMetro: async () => {
+        captured = true;
+        throw new Error('must not capture an unverifiable managed process');
+      },
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_metro',
+    metroPort: 8193,
+    metroPid: 123,
+    metroInstanceId: 'metro-a',
+    buildGeneration: 2,
+    mode: 'managed',
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(captured, false);
+  assert.match(result.content[0].text, /managed Metro authority/i);
+});
+
 test('an exactly idempotent Metro rebind preserves bundle authority and ready state', async () => {
   let update;
   const metro = {

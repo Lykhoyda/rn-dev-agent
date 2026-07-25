@@ -212,6 +212,12 @@ export function createSessionHandler(
             'session disappeared before device binding',
           );
         }
+        if (status.bindings.runner || status.bindings.observe || status.bindings.proof) {
+          throw new SessionAuthorityError(
+            'DEVICE_AUTHORITY_MISMATCH',
+            'device rebinding requires runner, Observe, or proof authority to be released first',
+          );
+        }
         if (!input.buildReceipt) {
           registry.replaceDeviceAuthority(session, {
             resource: { type: 'device', key: `${platform}:${deviceId}` },
@@ -265,6 +271,12 @@ export function createSessionHandler(
       }
 
       if (input.action === 'bind_metro') {
+        if (input.mode === 'managed') {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'managed Metro authority can only be established by the verified managed launcher',
+          );
+        }
         const port = required(input.metroPort, 'metroPort') as number;
         const pid = required(input.metroPid, 'metroPid') as number;
         const instanceId = required(input.metroInstanceId, 'metroInstanceId') as string;
@@ -284,7 +296,7 @@ export function createSessionHandler(
           sourceRoot,
           buildGeneration,
         });
-        const nextMetro = { ...metro, mode: input.mode ?? ('external' as const) };
+        const nextMetro = { ...metro, mode: 'external' as const };
         const priorMetro = status.bindings.metro as Record<string, unknown> | undefined;
         const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
         const priorTargetId = priorBundle?.targetId;

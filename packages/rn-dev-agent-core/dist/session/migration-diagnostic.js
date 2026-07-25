@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, readBoundDirectoryFiles, } from './bound-directory.js';
+import { AUTHORITY_REGISTRY_SCHEMA_VERSION } from './registry.js';
 function readPackageIntegrationManifest(appRoot, dependencies) {
     const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
     if (dependencies.exists || dependencies.readText) {
@@ -50,7 +51,7 @@ export function inspectAuthorityMigration(status, dependencies = {}) {
     return {
         rollout: 'strict-default',
         storeAvailable: true,
-        registrySchema: 3,
+        registrySchema: AUTHORITY_REGISTRY_SCHEMA_VERSION,
         legacyStateDetected,
         bundleHandshake: {
             supported: true,

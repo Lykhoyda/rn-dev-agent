@@ -40,6 +40,7 @@ import {
   runnerReportArgs,
 } from '../domain/maestro-runner-report.js';
 import {
+  completeManagedRunnerParkAuthority,
   claimManagedNativeOriginAuthority,
   completeManagedNativeOriginAuthority,
 } from '../session/authority-gate.js';
@@ -259,7 +260,11 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
               () => claimManagedNativeOriginAuthority(args),
               (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
             ),
-          { platform, deviceId: requestedDeviceId },
+          {
+            platform,
+            deviceId: requestedDeviceId,
+            completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          },
         );
         const stdout = stageResults.map((result) => result.stdout).join('\n');
         const stderr = stageResults.map((result) => result.stderr).join('\n');

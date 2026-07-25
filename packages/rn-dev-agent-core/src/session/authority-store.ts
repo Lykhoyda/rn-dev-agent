@@ -141,7 +141,7 @@ export function openAuthorityStore(
     secureDatabaseFiles(path);
     runInitialization(() =>
       openedDatabase.exec(`
-        PRAGMA busy_timeout=5;
+        PRAGMA busy_timeout=50;
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS authority_meta (
           key TEXT PRIMARY KEY,

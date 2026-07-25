@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  completeManagedRunnerParkAuthority,
   completeManagedNativeOriginAuthority,
   claimOptionalBundleAuthority,
   createAuthorityGate,
@@ -185,6 +186,40 @@ test('origin-disrupting lifecycle tools invalidate bundle authority when no targ
   assert.equal(envelope.ok, true);
   assert.equal(status.bindings.bundle, null);
   assert.equal(envelope.meta.authorityReceipt.nativeAppOrigin, undefined);
+});
+
+test('Maestro parking transactionally releases runner authority before dispatch', async () => {
+  const { runtime, registry, status, calls } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push(`release:${input.releaseResources?.[0]?.key}`);
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('maestro_run', async (args) => {
+    await completeManagedRunnerParkAuthority(args);
+    return okResult({ passed: true });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(status.bindings.runner, null);
+  assert.ok(calls.includes('release:ios:device:9100'));
+  assert.equal(calls.includes('postflight:R'), false);
+  assert.equal(envelope.meta.authorityReceipt.axes.includes('R'), false);
 });
 
 test('failed managed origin proof invalidates prior bundle authority', async () => {
@@ -724,6 +759,98 @@ test('transition handlers remain fenced across their expected authority version 
   assert.equal(calls.at(-1), 'end');
 });
 
+test('repeated Observe start is an authoritative idempotent read of the existing binding', async () => {
+  const { runtime, calls } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('observe', async () => okResult({ running: true }))({
+    action: 'start',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityTransition, undefined);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S', 'preflight:O'],
+  );
+});
+
+test('Observe stop requires only controller, source, and Observe authority', async () => {
+  const { runtime, status, calls } = fixture();
+  status.bindings.bundle = null;
+  status.bindings.runner = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('observe', async () => {
+    status.bindings.observe = null;
+    status.authorityVersion += 1;
+    return okResult({ running: false });
+  })({ action: 'stop' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S', 'preflight:O'],
+  );
+});
+
+test('unbound CDP disconnect is an idempotent authoritative operation', async () => {
+  const { runtime, status, calls } = fixture();
+  status.bindings.bundle = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_disconnect', async () => okResult({ disconnected: true }))(
+    {},
+  );
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityTransition, undefined);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S'],
+  );
+});
+
+test('failed proof binding discards the rehearsal state created by the handler', async () => {
+  const { runtime, registry, status } = fixture();
+  const actions: string[] = [];
+  (registry as typeof registry & { updateBindings(): never }).updateBindings = () => {
+    throw new Error('registry write failed');
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('proof_capture', async (args: { action: string }) => {
+    actions.push(args.action);
+    return okResult(args.action === 'discard' ? { discarded: true } : { rehearsing: true });
+  })({ action: 'begin_rehearsal', runId: 'proof-new' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.match(envelope.error, /registry write failed/);
+  assert.deepEqual(actions, ['begin_rehearsal', 'discard']);
+  assert.equal(status.bindings.proof.runId, 'proof');
+});
+
 test('handoff cancellation requires controller authority and runs as a fenced transition', async () => {
   const { runtime, status, calls } = fixture();
   status.state = 'handoff';
@@ -819,7 +946,7 @@ test('warning lifecycle transitions reconcile and commit staged platform receipt
   assert.equal(calls.includes('commit-receipts'), true);
 });
 
-test('runner and Observe lifecycle transitions probe complete before and after axes', async () => {
+test('runner transitions and idempotent Observe starts probe their exact axes', async () => {
   const { runtime, calls, status } = fixture();
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis, phase }) => {
@@ -856,10 +983,12 @@ test('runner and Observe lifecycle transitions probe complete before and after a
   calls.length = 0;
   status.bindings.observe = { instanceId: 'observe' };
   await gate.wrap('observe', async () => {
-    status.authorityVersion += 1;
     return okResult({ running: true });
   })({ action: 'start' });
-  assert.ok(calls.includes('preflight:R'));
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S', 'preflight:O'],
+  );
   assert.ok(calls.includes('postflight:O'));
 });
 

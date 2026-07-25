@@ -4,6 +4,7 @@ import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } fro
 import { authorityProfileFor } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
+const managedRunnerPark = Symbol('managedRunnerPark');
 export async function claimOptionalBundleAuthority(args) {
     return (await args[optionalBundleAdmission]?.()) ?? false;
 }
@@ -20,6 +21,13 @@ export async function completeManagedNativeOriginAuthority(args, targetExpected)
         throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin authority is unavailable');
     }
     await authority.complete(targetExpected);
+}
+export async function completeManagedRunnerParkAuthority(args) {
+    const complete = args[managedRunnerPark];
+    if (!complete) {
+        throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'managed runner parking authority is unavailable');
+    }
+    await complete();
 }
 const axisBinding = {
     I: 'install',
@@ -313,6 +321,27 @@ export function createAuthorityGate(runtime, dependencies) {
             if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
                 return authorityFailure(new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'blocked contender exposes only accept_handoff and adopt_stale recovery'));
             }
+            if (runtimeStatus.available &&
+                tool === 'observe' &&
+                args.action === 'start' &&
+                runtimeStatus.bindings.observe) {
+                profile = {
+                    kind: 'authoritative',
+                    axes: ['C', 'S', 'O'],
+                    mutation: false,
+                    liveBundleProbe: false,
+                };
+            }
+            if (runtimeStatus.available &&
+                tool === 'cdp_disconnect' &&
+                !runtimeStatus.bindings.bundle) {
+                profile = {
+                    kind: 'authoritative',
+                    axes: ['C', 'S'],
+                    mutation: false,
+                    liveBundleProbe: false,
+                };
+            }
             if (runtimeStatus.available && tool === 'cdp_restart' && args.hardReset === true) {
                 try {
                     bindSessionArguments(runtimeStatus, profile, args);
@@ -351,8 +380,8 @@ export function createAuthorityGate(runtime, dependencies) {
                         : tool === 'observe'
                             ? args.action === 'stop'
                                 ? {
-                                    before: ['C', 'S', 'I', 'M', 'B', 'D', 'R', 'O'],
-                                    after: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
+                                    before: ['C', 'S', 'O'],
+                                    after: ['C', 'S'],
                                 }
                                 : {
                                     before: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
@@ -446,10 +475,21 @@ export function createAuthorityGate(runtime, dependencies) {
                         const current = runtime.requireAvailable();
                         registry.endOperation(operation);
                         operation = null;
-                        current.registry.updateBindings(current.session, {
-                            bindings: { proof: { runId } },
-                            expectedAuthorityVersion: status.authorityVersion,
-                        });
+                        try {
+                            current.registry.updateBindings(current.session, {
+                                bindings: { proof: { runId } },
+                                expectedAuthorityVersion: status.authorityVersion,
+                            });
+                        }
+                        catch (bindingError) {
+                            try {
+                                await handler({ action: 'discard' });
+                            }
+                            catch (rollbackError) {
+                                throw new AggregateError([bindingError, rollbackError], 'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed after binding rejection');
+                            }
+                            throw bindingError;
+                        }
                         const proofStatus = runtime.status();
                         if (!proofStatus.available) {
                             throw new SessionAuthorityError(proofStatus.code, proofStatus.reason);
@@ -503,6 +543,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 let managedRuntimeTargetChanged = false;
                 let optionalBundleClaimed = false;
                 let optionalBundleRecoveryFailed = false;
+                let managedRunnerParked = false;
                 if (profile.optionalAxes?.includes('B')) {
                     Object.defineProperty(args, optionalBundleAdmission, {
                         configurable: true,
@@ -699,6 +740,40 @@ export function createAuthorityGate(runtime, dependencies) {
                         },
                     });
                 }
+                if (tool === 'maestro_run' || tool === 'maestro_test_all') {
+                    Object.defineProperty(args, managedRunnerPark, {
+                        configurable: true,
+                        value: async () => {
+                            if (managedRunnerParked)
+                                return;
+                            const currentStatus = runtime.status();
+                            if (!currentStatus.available) {
+                                throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                            }
+                            const runner = currentStatus.bindings.runner;
+                            if (!runner) {
+                                throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'managed runner parking lost the bound runner before commit');
+                            }
+                            registry.verifyOperation(operation);
+                            operation = registry.replaceBindingsDuringOperation(operation, {
+                                state: currentStatus.bindings.bundle ? 'ready' : 'device_bound',
+                                bindings: { runner: null },
+                                releaseResources: [
+                                    {
+                                        type: 'runner',
+                                        key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`,
+                                    },
+                                ],
+                            });
+                            const parkedStatus = runtime.status();
+                            if (!parkedStatus.available) {
+                                throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);
+                            }
+                            status = parkedStatus;
+                            managedRunnerParked = true;
+                        },
+                    });
+                }
                 registry.verifyOperation(operation);
                 const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                 const directRuntimeReset = tool === 'cdp_reload' || tool === 'cdp_restart';
@@ -791,16 +866,22 @@ export function createAuthorityGate(runtime, dependencies) {
                         axes: effectiveProfile.axes.filter((axis) => axis !== 'B'),
                     }
                     : effectiveProfile;
-                const receiptProfile = finalOrigin
+                const runnerAwareReceiptProfile = managedRunnerParked
                     ? {
                         ...receiptBaseProfile,
+                        axes: receiptBaseProfile.axes.filter((axis) => axis !== 'R'),
+                    }
+                    : receiptBaseProfile;
+                const receiptProfile = finalOrigin
+                    ? {
+                        ...runnerAwareReceiptProfile,
                         axes: [
-                            ...receiptBaseProfile.axes,
+                            ...runnerAwareReceiptProfile.axes,
                             'A',
                             ...(finalManagedBundle ? ['B'] : []),
                         ],
                     }
-                    : receiptBaseProfile;
+                    : runnerAwareReceiptProfile;
                 for (const observation of allBefore) {
                     if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === 'B') {
                         continue;

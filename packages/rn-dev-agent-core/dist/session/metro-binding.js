@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
+import { cwdForProcess, pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import { readProcessBirth } from './process-birth.js';
 function numericListener(output, emptyStatus) {
     const value = String(output).trim();
@@ -106,8 +106,10 @@ export async function captureMetroBinding(input, dependencies = {}) {
     if (!status.includes('packager-status:running')) {
         throw new Error('METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running');
     }
-    const servingRoot = (dependencies.servingRoot ?? cwdForPort)(input.port);
-    if (!servingRoot || !pathMatchesRoot(servingRoot, input.sourceRoot)) {
+    const servingRoot = dependencies.servingRoot
+        ? dependencies.servingRoot(input.port)
+        : cwdForProcess(input.pid);
+    if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
         throw new Error('METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree');
     }
     return {

@@ -18,7 +18,7 @@ import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../r
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
-import { claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
+import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 const defaultExecFile = promisify(execFileCb);
 /**
@@ -39,6 +39,7 @@ export async function runFlowParked(run, opts = {}) {
         else {
             await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
         }
+        await opts.completeRunnerPark?.();
         return await run();
     }
     finally {
@@ -336,7 +337,11 @@ export function createMaestroRunHandler(deps = {}) {
                     encoding: 'utf8',
                     maxBuffer: 10 * 1024 * 1024,
                 });
-            }, claimOrigin, completeOrigin), { platform, deviceId: requestedDeviceId });
+            }, claimOrigin, completeOrigin), {
+                platform,
+                deviceId: requestedDeviceId,
+                completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+            });
             writeFileSync(flowFile, validatedContent, 'utf-8');
             const stdout = stageResults.map((result) => result.stdout).join('\n');
             const stderr = stageResults.map((result) => result.stderr).join('\n');

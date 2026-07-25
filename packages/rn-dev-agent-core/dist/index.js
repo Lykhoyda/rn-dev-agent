@@ -741,6 +741,7 @@ trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent author
     token: z.string().optional(),
     adoptionHandle: z.string().optional(),
     confirmed: z.boolean().optional(),
+    force: z.boolean().optional(),
 }, sessionHandler);
 trackedTool('cdp_status', 'Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.', {
     metroPort: z
