@@ -105,6 +105,12 @@ fi
     ffmpeg,
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${FAKE_FFMPEG_SUCCESS:-0}" == "1" ]]; then
+  [[ "$*" == *" -f mp4 "* ]] || exit 2
+  printf converted > "\${@: -1}"
+  [[ -z "\${FAKE_CONVERSION_MARKER:-}" ]] || touch "\${FAKE_CONVERSION_MARKER}"
+  exit 0
+fi
 if [[ "\${FAKE_TERMINATE_CONVERSION:-0}" == "1" ]]; then
   touch "\${FAKE_CONVERSION_MARKER}"
   kill -TERM "$PPID"
@@ -422,12 +428,14 @@ test('Android finalized output retries failed remote deletion without repulling'
     );
 
     assert.notEqual(firstStop.status, 0);
-    assert.equal(existsSync(output), false);
+    const finalizedOutput = `${output.slice(0, -4)}.mov`;
+    assert.equal(existsSync(finalizedOutput), true);
     const pullManifest = `${state.prefix}-${scope}.pull-manifest`;
     assert.equal(existsSync(pullManifest), true);
     const pulledCapture = readFileSync(pullManifest, 'utf8').split('\n')[1];
     assert.equal(existsSync(pulledCapture), true);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
+    writeFileSync(finalizedOutput, 'replacement');
 
     const secondStop = spawnSync(
       'bash',
@@ -448,6 +456,7 @@ test('Android finalized output retries failed remote deletion without repulling'
 
     assert.equal(secondStop.status, 0, secondStop.stderr);
     assert.equal(existsSync(state.remoteDeleteMarker), true);
+    assert.equal(readFileSync(finalizedOutput, 'utf8'), 'recording');
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
     assert.equal(existsSync(pullManifest), false);
   } finally {
@@ -486,6 +495,47 @@ test('Android migrates pending path-only finalization through a fresh pull', () 
     assert.equal(existsSync(state.pullMarker), true);
     assert.equal(existsSync(state.remoteDeleteMarker), true);
     assert.equal(readFileSync(legacyFinalized, 'utf8'), 'recording');
+    assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android adopts authenticated finalized output when the device copy is gone', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    const finalizedOutput = `${output.slice(0, -4)}.mov`;
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.path`, output);
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+    writeFileSync(`${state.prefix}-${scope}.finalized-path`, finalizedOutput);
+    writeFileSync(finalizedOutput, 'authenticated-finalized');
+    writeFileSync(
+      `${state.prefix}-${scope}.finalized-identity`,
+      captureIdentity(finalizedOutput),
+    );
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_FAIL: '1',
+          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+          FAKE_STAT: '',
+        },
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(state.pullMarker), false);
+    assert.equal(existsSync(state.remoteDeleteMarker), true);
+    assert.equal(readFileSync(finalizedOutput, 'utf8'), 'authenticated-finalized');
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
   } finally {
     state.cleanup();
@@ -568,6 +618,79 @@ test('Android finalizes an existing raw capture when replacement pull fails', ()
   }
 });
 
+test('Android retains an unbound prior capture in the replacement manifest', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    const raw = join(state.runtimeDirectory, 'raw-android-123.mp4');
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.path`, output);
+    writeFileSync(`${state.prefix}-${scope}.raw-path`, raw);
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+    writeFileSync(raw, 'prior-recording');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
+          FAKE_REMOTE_DELETE_FAIL: '1',
+          FAKE_STAT: '',
+        },
+      },
+    );
+
+    assert.notEqual(result.status, 0);
+    const manifest = readFileSync(
+      `${state.prefix}-${scope}.pull-manifest`,
+      'utf8',
+    ).split('\n');
+    assert.equal(manifest[3], raw);
+    assert.equal(manifest[4], captureIdentity(raw));
+    assert.equal(existsSync(raw), true);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android supplies an explicit MP4 format to conversion staging', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.path`, output);
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_CONVERSION_MARKER: state.conversionMarker,
+          FAKE_FFMPEG_SUCCESS: '1',
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
+          FAKE_STAT: '',
+        },
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(state.conversionMarker), true);
+    assert.equal(readFileSync(output, 'utf8'), 'converted');
+  } finally {
+    state.cleanup();
+  }
+});
+
 test('Android retains the device capture when fallback raw completion is unproven', () => {
   const state = fixture();
   try {
@@ -633,6 +756,14 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     assert.notEqual(firstStop.status, 0);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), true);
+    const cleanupReceipt = readFileSync(
+      `${state.prefix}-${scope}.cleanup-pending`,
+      'utf8',
+    ).split('\n');
+    assert.equal(cleanupReceipt[0], 'v2');
+    assert.equal(cleanupReceipt[6], '1');
+    const retainedCapture = cleanupReceipt[7];
+    assert.equal(existsSync(retainedCapture), false);
 
     const status = spawnSync('bash', [state.script, 'status', scope], {
       encoding: 'utf8',
@@ -662,6 +793,51 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     );
     assert.equal(retry.status, 0, retry.stderr);
     assert.match(retry.stdout, /^Saved: /m);
+    assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android cleanup receipt restores output and removes its private artifact', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    const raw = join(state.runtimeDirectory, 'raw-android-pull.abc123');
+    seedLocalBinding(state.prefix);
+    writeFileSync(output, 'original-output');
+    const outputIdentity = captureIdentity(output);
+    writeFileSync(raw, 'recovery-output');
+    const rawIdentity = captureIdentity(raw);
+    writeFileSync(
+      `${state.prefix}-${scope}.cleanup-pending`,
+      [
+        'v2',
+        '999999',
+        'local-birth',
+        output,
+        outputIdentity,
+        String(Buffer.byteLength('original-output')),
+        '1',
+        raw,
+        rawIdentity,
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(output, 'replacement');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: process.env,
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output, 'utf8'), 'recovery-output');
+    assert.equal(existsSync(raw), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), false);
   } finally {
     state.cleanup();

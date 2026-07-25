@@ -12,7 +12,6 @@ PID_PREFIX="${RUNTIME_DIR}/record"
 SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
 PENDING_PULL_FILE=""
 PENDING_PULL_MANIFEST=""
-PENDING_OUTPUT_FILE=""
 PENDING_STAGE_FILE=""
 
 usage() {
@@ -168,10 +167,6 @@ cleanup_pending_pull() {
     [[ "$pull_committed" == "true" ]] || rm -f "$PENDING_PULL_FILE"
     PENDING_PULL_FILE=""
     PENDING_PULL_MANIFEST=""
-  fi
-  if [[ -n "$PENDING_OUTPUT_FILE" ]]; then
-    rm -f "$PENDING_OUTPUT_FILE"
-    PENDING_OUTPUT_FILE=""
   fi
   if [[ -n "$PENDING_STAGE_FILE" ]]; then
     rm -f "$PENDING_STAGE_FILE"
@@ -345,7 +340,10 @@ validate_raw_capture_path() {
   local raw_path="$1"
   [[ -z "$raw_path" ]] && return 0
   local private_tail="${raw_path#"$SIDECAR_TEMP_DIR"/}"
-  if [[ "$raw_path" == "$SIDECAR_TEMP_DIR/"* && "$private_tail" =~ ^raw-(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
+  if [[ "$raw_path" == "$SIDECAR_TEMP_DIR/"* ]] && [[
+    "$private_tail" =~ ^raw-(ios|android)-[0-9]+\.(mov|mp4)$ ||
+      "$private_tail" =~ ^raw-android-pull\.[A-Za-z0-9]+$
+  ]]; then
     return 0
   fi
   private_tail="${raw_path#"$RUNTIME_DIR"/}"
@@ -430,16 +428,189 @@ validate_file_identity() {
 publish_capture_copy() {
   local source="$1"
   local destination="$2"
-  local destination_directory
-  destination_directory="$(dirname "$destination")"
-  local temporary
-  temporary="$(mktemp "${destination_directory}/.rn-dev-agent-record.XXXXXX")"
-  PENDING_OUTPUT_FILE="$temporary"
-  chmod 600 "$temporary"
-  cp "$source" "$temporary"
-  capture_file_identity "$temporary" >/dev/null
-  mv -f "$temporary" "$destination"
-  PENDING_OUTPUT_FILE=""
+  python3 - "$source" "$destination" <<'PY'
+import os
+import stat
+import sys
+
+source, destination = sys.argv[1:]
+source_flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    source_flags |= os.O_NOFOLLOW
+source_descriptor = os.open(source, source_flags)
+temporary_descriptor = -1
+temporary_path = ""
+try:
+    source_before = os.fstat(source_descriptor)
+    if (
+        not stat.S_ISREG(source_before.st_mode)
+        or source_before.st_uid != os.getuid()
+        or source_before.st_mode & 0o022
+        or source_before.st_size <= 0
+    ):
+        raise RuntimeError("recording source is unsafe")
+    destination_directory = os.path.dirname(destination)
+    temporary_descriptor, temporary_path = __import__("tempfile").mkstemp(
+        prefix=".rn-dev-agent-record.",
+        dir=destination_directory,
+    )
+    os.fchmod(temporary_descriptor, 0o600)
+    while True:
+        chunk = os.read(source_descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        view = memoryview(chunk)
+        while view:
+            written = os.write(temporary_descriptor, view)
+            view = view[written:]
+    os.fsync(temporary_descriptor)
+    source_after = os.fstat(source_descriptor)
+    if (
+        source_after.st_dev != source_before.st_dev
+        or source_after.st_ino != source_before.st_ino
+        or source_after.st_size != source_before.st_size
+        or source_after.st_mtime_ns != source_before.st_mtime_ns
+        or source_after.st_ctime_ns != source_before.st_ctime_ns
+    ):
+        raise RuntimeError("recording source changed during publication")
+    temporary_before = os.fstat(temporary_descriptor)
+    temporary_path_before = os.lstat(temporary_path)
+    if (
+        temporary_path_before.st_dev != temporary_before.st_dev
+        or temporary_path_before.st_ino != temporary_before.st_ino
+    ):
+        raise RuntimeError("recording publication temporary changed")
+    os.replace(temporary_path, destination)
+    temporary_path = ""
+    destination_after = os.lstat(destination)
+    if (
+        destination_after.st_dev != temporary_before.st_dev
+        or destination_after.st_ino != temporary_before.st_ino
+    ):
+        raise RuntimeError("recording publication destination changed")
+    os.close(temporary_descriptor)
+    temporary_descriptor = -1
+finally:
+    os.close(source_descriptor)
+    if temporary_descriptor >= 0:
+        os.close(temporary_descriptor)
+    if temporary_path:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+PY
+}
+
+write_cleanup_receipt() {
+  local path="$1"
+  local pid="$2"
+  local birth="$3"
+  local output="$4"
+  local output_identity="$5"
+  local size="$6"
+  shift 6
+  local artifact_count=$(($# / 2))
+  local receipt=$'v2\n'"$pid"$'\n'"$birth"$'\n'"$output"$'\n'"$output_identity"$'\n'"$size"$'\n'"$artifact_count"
+  while [[ $# -gt 0 ]]; do
+    receipt+=$'\n'"$1"$'\n'"$2"
+    shift 2
+  done
+  secure_write_sidecar "$path" "$receipt"
+}
+
+load_cleanup_receipt() {
+  local path="$1"
+  local expected_pid="$2"
+  local expected_birth="$3"
+  CLEANUP_VERSION="$(sed -n '1p' "$path")"
+  CLEANUP_PID="$(sed -n '2p' "$path")"
+  CLEANUP_BIRTH="$(sed -n '3p' "$path")"
+  CLEANUP_OUTPUT="$(sed -n '4p' "$path")"
+  CLEANUP_OUTPUT_IDENTITY="$(sed -n '5p' "$path")"
+  CLEANUP_SIZE="$(sed -n '6p' "$path")"
+  CLEANUP_ARTIFACT_PATHS=()
+  CLEANUP_ARTIFACT_IDENTITIES=()
+  [[
+    "$CLEANUP_PID" == "$expected_pid" &&
+      "$CLEANUP_BIRTH" == "$expected_birth" &&
+      "$CLEANUP_SIZE" =~ ^[1-9][0-9]*$ &&
+      -n "$CLEANUP_OUTPUT" &&
+      -n "$CLEANUP_OUTPUT_IDENTITY"
+  ]] || return 1
+  if [[ "$CLEANUP_VERSION" == "v1" ]]; then
+    return 0
+  fi
+  [[ "$CLEANUP_VERSION" == "v2" ]] || return 1
+  local artifact_count
+  artifact_count="$(sed -n '7p' "$path")"
+  [[ "$artifact_count" =~ ^[0-2]$ ]] || return 1
+  local index
+  for ((index = 0; index < artifact_count; index++)); do
+    local path_line=$((8 + index * 2))
+    local identity_line=$((path_line + 1))
+    CLEANUP_ARTIFACT_PATHS+=("$(sed -n "${path_line}p" "$path")")
+    CLEANUP_ARTIFACT_IDENTITIES+=("$(sed -n "${identity_line}p" "$path")")
+  done
+}
+
+complete_cleanup_receipt() {
+  local scope="$1"
+  local incarnation="$2"
+  local cleanup_path="$3"
+  if ! validate_file_identity "$CLEANUP_OUTPUT" "$CLEANUP_OUTPUT_IDENTITY"; then
+    [[ ${#CLEANUP_ARTIFACT_PATHS[@]} -gt 0 ]] || {
+      echo "Error: finalized recording output identity changed" >&2
+      return 1
+    }
+    local recovery_artifact=""
+    local index
+    for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
+      if validate_file_identity \
+        "${CLEANUP_ARTIFACT_PATHS[$index]}" \
+        "${CLEANUP_ARTIFACT_IDENTITIES[$index]}"; then
+        recovery_artifact="${CLEANUP_ARTIFACT_PATHS[$index]}"
+        break
+      fi
+    done
+    [[ -n "$recovery_artifact" ]] || {
+      echo "Error: finalized recording output and recovery artifact changed" >&2
+      return 1
+    }
+    publish_capture_copy "$recovery_artifact" "$CLEANUP_OUTPUT"
+    CLEANUP_OUTPUT_IDENTITY="$(capture_file_identity "$CLEANUP_OUTPUT")" || return 1
+    CLEANUP_SIZE="$(wc -c < "$CLEANUP_OUTPUT" | tr -d ' ')"
+    local -a artifacts=()
+    for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
+      artifacts+=(
+        "${CLEANUP_ARTIFACT_PATHS[$index]}"
+        "${CLEANUP_ARTIFACT_IDENTITIES[$index]}"
+      )
+    done
+    write_cleanup_receipt \
+      "$cleanup_path" \
+      "$CLEANUP_PID" \
+      "$CLEANUP_BIRTH" \
+      "$CLEANUP_OUTPUT" \
+      "$CLEANUP_OUTPUT_IDENTITY" \
+      "$CLEANUP_SIZE" \
+      "${artifacts[@]}"
+  fi
+  local index
+  for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
+    local artifact_path="${CLEANUP_ARTIFACT_PATHS[$index]}"
+    local artifact_identity="${CLEANUP_ARTIFACT_IDENTITIES[$index]}"
+    validate_raw_capture_path "$artifact_path"
+    if sidecar_exists "$artifact_path"; then
+      validate_file_identity "$artifact_path" "$artifact_identity" || {
+        echo "Error: cleanup artifact identity changed" >&2
+        return 1
+      }
+      remove_owned_state_path "$artifact_path"
+    fi
+  done
+  remove_recording_sidecars "$scope" "$incarnation"
+  echo "Saved: $CLEANUP_OUTPUT ($CLEANUP_SIZE bytes)"
 }
 
 current_incarnation() {
@@ -1381,35 +1552,11 @@ cmd_stop() {
   cleanup_path="$(cleanup_pending_file "$scope")"
   if [[ -s "$cleanup_path" ]]; then
     validate_legacy_sidecar "$cleanup_path"
-    local cleanup_version
-    local cleanup_pid
-    local cleanup_birth
-    local cleanup_output
-    local cleanup_identity
-    local cleanup_size
-    cleanup_version="$(sed -n '1p' "$cleanup_path")"
-    cleanup_pid="$(sed -n '2p' "$cleanup_path")"
-    cleanup_birth="$(sed -n '3p' "$cleanup_path")"
-    cleanup_output="$(sed -n '4p' "$cleanup_path")"
-    cleanup_identity="$(sed -n '5p' "$cleanup_path")"
-    cleanup_size="$(sed -n '6p' "$cleanup_path")"
-    [[
-      "$cleanup_version" == "v1" &&
-        "$cleanup_pid" == "$expected_pid" &&
-        "$cleanup_birth" == "$expected_birth" &&
-        "$cleanup_size" =~ ^[1-9][0-9]*$ &&
-        -n "$cleanup_output" &&
-        -n "$cleanup_identity"
-    ]] || {
+    load_cleanup_receipt "$cleanup_path" "$expected_pid" "$expected_birth" || {
       echo "Error: pending recorder cleanup identity does not match scope" >&2
       exit 1
     }
-    validate_file_identity "$cleanup_output" "$cleanup_identity" || {
-      echo "Error: finalized recording output identity changed" >&2
-      exit 1
-    }
-    remove_recording_sidecars "$scope" "$incarnation"
-    echo "Saved: $cleanup_output ($cleanup_size bytes)"
+    complete_cleanup_receipt "$scope" "$incarnation" "$cleanup_path"
     return
   fi
   local pf
@@ -1439,8 +1586,17 @@ cmd_stop() {
   if [[ "$platform" == "android" && -s "$finalized_pathf" ]]; then
     finalized_output="$(cat "$finalized_pathf")"
     validate_finalized_output_path "$finalized_output" "$requested_output_path"
-    finalized_output=""
-    finalized_identity=""
+    if [[ -s "$finalized_identityf" ]]; then
+      finalized_identity="$(cat "$finalized_identityf")"
+      if validate_file_identity "$finalized_output" "$finalized_identity"; then
+        output_path="$finalized_output"
+      else
+        finalized_output=""
+        finalized_identity=""
+      fi
+    else
+      finalized_output=""
+    fi
   fi
   local raw_pathf="${PID_PREFIX}-${scope}.raw-path"
   local raw_identityf
@@ -1449,6 +1605,9 @@ cmd_stop() {
   pull_manifestf="$(pull_manifest_file "$scope")"
   local raw_file=""
   local raw_identity=""
+  local retained_raw_file=""
+  local retained_raw_identity=""
+  local pull_manifest_ready="false"
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
   validate_raw_capture_path "$raw_file"
   if [[ -s "$pull_manifestf" ]]; then
@@ -1460,28 +1619,37 @@ cmd_stop() {
     raw_file="$(sed -n '2p' "$pull_manifestf")"
     raw_identity="$(sed -n '3p' "$pull_manifestf")"
     validate_raw_capture_path "$raw_file"
-    validate_file_identity "$raw_file" "$raw_identity" || {
-      echo "Error: completed pull identity changed" >&2
+    if sidecar_exists "$raw_file"; then
+      validate_file_identity "$raw_file" "$raw_identity" || {
+        echo "Error: completed pull identity changed" >&2
+        exit 1
+      }
+      pull_manifest_ready="true"
+    elif [[ -z "$finalized_output" ]]; then
+      echo "Error: completed pull artifact is missing" >&2
       exit 1
-    }
-    local previous_raw_file
-    local previous_raw_identity
-    previous_raw_file="$(sed -n '4p' "$pull_manifestf")"
-    previous_raw_identity="$(sed -n '5p' "$pull_manifestf")"
-    if [[ -n "$previous_raw_file" ]]; then
-      validate_raw_capture_path "$previous_raw_file"
-      if sidecar_exists "$previous_raw_file"; then
-        validate_file_identity "$previous_raw_file" "$previous_raw_identity" || {
+    fi
+    retained_raw_file="$(sed -n '4p' "$pull_manifestf")"
+    retained_raw_identity="$(sed -n '5p' "$pull_manifestf")"
+    if [[ -n "$retained_raw_file" ]]; then
+      validate_raw_capture_path "$retained_raw_file"
+      if sidecar_exists "$retained_raw_file"; then
+        validate_file_identity "$retained_raw_file" "$retained_raw_identity" || {
           echo "Error: prior completed pull identity changed" >&2
           exit 1
         }
-        remove_owned_state_path "$previous_raw_file"
       fi
-      secure_write_sidecar "$pull_manifestf" $'v1\n'"$raw_file"$'\n'"$raw_identity"
     fi
   elif [[ -s "$raw_identityf" ]]; then
     raw_identity="$(cat "$raw_identityf")"
     validate_file_identity "$raw_file" "$raw_identity" || raw_identity=""
+  elif [[ -n "$raw_file" ]] && sidecar_exists "$raw_file"; then
+    if raw_identity="$(capture_file_identity "$raw_file")"; then
+      secure_write_sidecar "$raw_identityf" "$raw_identity"
+    elif [[ -z "$finalized_output" ]]; then
+      echo "Error: prior recording capture identity is unavailable" >&2
+      exit 1
+    fi
   fi
   local supervisor_state=""
   if supervisor_state_is_authenticated && [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
@@ -1585,10 +1753,17 @@ cmd_stop() {
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
       device_path="$(cat "$device_pathf")"
-      if [[ "$supervisor_failed" != "true" && -z "$finalized_output" ]]; then
+      if [[
+        "$supervisor_failed" != "true" &&
+          -z "$finalized_output" &&
+          "$pull_manifest_ready" != "true"
+      ]]; then
         sleep 2
         local prior_raw_file="$raw_file"
         local prior_raw_identity="$raw_identity"
+        local prior_raw_was_present="false"
+        [[ -n "$prior_raw_file" ]] && sidecar_exists "$prior_raw_file" &&
+          prior_raw_was_present="true"
         local pull_file
         pull_file="$(create_private_capture_file)"
         PENDING_PULL_FILE="$pull_file"
@@ -1607,6 +1782,8 @@ cmd_stop() {
                 -n "$prior_raw_identity"
             ]] && validate_file_identity "$prior_raw_file" "$prior_raw_identity"; then
               prior_manifest_tail=$'\n'"$prior_raw_file"$'\n'"$prior_raw_identity"
+              retained_raw_file="$prior_raw_file"
+              retained_raw_identity="$prior_raw_identity"
             fi
             secure_write_sidecar \
               "$pull_manifestf" \
@@ -1640,18 +1817,34 @@ cmd_stop() {
         fi
         if [[
           "$android_pull_failed" != "true" &&
+            "$prior_raw_was_present" == "true" &&
             -n "$prior_raw_file" &&
             "$prior_raw_file" != "$raw_file"
         ]]; then
-          remove_owned_state_path "$prior_raw_file"
-          secure_write_sidecar "$pull_manifestf" $'v1\n'"$raw_file"$'\n'"$raw_identity"
+          [[
+            "$retained_raw_file" == "$prior_raw_file" &&
+              "$retained_raw_identity" == "$prior_raw_identity"
+          ]] || {
+            echo "Error: prior recording capture was not retained in the pull manifest" >&2
+            return 1
+          }
         fi
       fi
     fi
   fi
 
   if [[ "$supervisor_failed" == "true" ]]; then
-    [[ -n "$raw_file" ]] && rm -f "$raw_file"
+    if [[ -n "$raw_file" && -n "$raw_identity" ]] &&
+      validate_file_identity "$raw_file" "$raw_identity"; then
+      remove_owned_state_path "$raw_file"
+    fi
+    if [[
+      -n "$retained_raw_file" &&
+        "$retained_raw_file" != "$raw_file" &&
+        -n "$retained_raw_identity"
+    ]] && validate_file_identity "$retained_raw_file" "$retained_raw_identity"; then
+      remove_owned_state_path "$retained_raw_file"
+    fi
     PENDING_PULL_FILE=""
     if [[ "$platform" == "android" && -n "$device_path" ]]; then
       remove_android_device_capture "$device_path" "${adb_args[@]+"${adb_args[@]}"}" || {
@@ -1669,68 +1862,91 @@ cmd_stop() {
   fi
 
   if [[ "$platform" == "android" ]]; then
-    output_path="${output_path%.*}.mp4"
-    mkdir -p "$(dirname "$output_path")" || true
-    [[ -n "$raw_file" && -n "$raw_identity" ]] &&
-      validate_file_identity "$raw_file" "$raw_identity" || {
-      echo "Error: completed recording capture is unavailable" >&2
-      return 1
-    }
-    local staged_output="$raw_file"
-    local staged_identity="$raw_identity"
-    if command -v ffmpeg >/dev/null 2>&1; then
-      local staged_mp4
-      staged_mp4="$(create_private_capture_file)"
-      PENDING_STAGE_FILE="$staged_mp4"
-      if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$staged_mp4" 2>/dev/null; then
-        staged_output="$staged_mp4"
-        staged_identity="$(capture_file_identity "$staged_output")" || {
-          echo "Error: converted recording output is unstable" >&2
-          return 1
-        }
-      else
-        rm -f "$staged_mp4"
+    if [[ -z "$finalized_output" ]]; then
+      output_path="${output_path%.*}.mp4"
+      mkdir -p "$(dirname "$output_path")" || true
+      [[ -n "$raw_file" && -n "$raw_identity" ]] &&
+        validate_file_identity "$raw_file" "$raw_identity" || {
+        echo "Error: completed recording capture is unavailable" >&2
+        return 1
+      }
+      local staged_output="$raw_file"
+      local staged_identity="$raw_identity"
+      if command -v ffmpeg >/dev/null 2>&1; then
+        local staged_mp4
+        staged_mp4="$(create_private_capture_file)"
+        PENDING_STAGE_FILE="$staged_mp4"
+        if ffmpeg \
+          -y \
+          -i "$raw_file" \
+          -c copy \
+          -movflags +faststart \
+          -f mp4 \
+          "$staged_mp4" 2>/dev/null; then
+          staged_output="$staged_mp4"
+          staged_identity="$(capture_file_identity "$staged_output")" || {
+            echo "Error: converted recording output is unstable" >&2
+            return 1
+          }
+        else
+          rm -f "$staged_mp4"
+          PENDING_STAGE_FILE=""
+          output_path="${output_path%.mp4}.mov"
+        fi
+      fi
+      validate_file_identity "$staged_output" "$staged_identity" || {
+        echo "Error: staged recording output identity changed" >&2
+        return 1
+      }
+      publish_capture_copy "$staged_output" "$output_path"
+      finalized_identity="$(capture_file_identity "$output_path")" || {
+        echo "Error: finalized recording output identity is unsafe" >&2
+        return 1
+      }
+      secure_write_sidecar "$finalized_identityf" "$finalized_identity"
+      secure_write_sidecar "$finalized_pathf" "$output_path"
+      finalized_output="$output_path"
+      if [[ "$staged_output" != "$raw_file" ]]; then
+        remove_owned_state_path "$staged_output"
         PENDING_STAGE_FILE=""
-        output_path="${output_path%.mp4}.mov"
       fi
     fi
-    validate_file_identity "$staged_output" "$staged_identity" || {
-      echo "Error: staged recording output identity changed" >&2
-      return 1
-    }
     if [[ -n "$device_path" ]]; then
       remove_android_device_capture "$device_path" "${adb_args[@]+"${adb_args[@]}"}" || {
         echo "Error: failed to remove recording from device" >&2
         return 1
       }
     fi
-    validate_file_identity "$staged_output" "$staged_identity" || {
-      echo "Error: staged recording output identity changed during device cleanup" >&2
-      return 1
-    }
-    publish_capture_copy "$staged_output" "$output_path"
-    finalized_identity="$(capture_file_identity "$output_path")" || {
-      echo "Error: finalized recording output identity is unsafe" >&2
-      return 1
-    }
-    secure_write_sidecar "$finalized_identityf" "$finalized_identity"
-    secure_write_sidecar "$finalized_pathf" "$output_path"
+    local -a cleanup_artifacts=()
+    if [[ -n "$raw_file" && -n "$raw_identity" ]] &&
+      validate_file_identity "$raw_file" "$raw_identity"; then
+      cleanup_artifacts+=("$raw_file" "$raw_identity")
+    fi
+    if [[
+      -n "$retained_raw_file" &&
+        "$retained_raw_file" != "$raw_file" &&
+        -n "$retained_raw_identity"
+    ]] && validate_file_identity "$retained_raw_file" "$retained_raw_identity"; then
+      cleanup_artifacts+=("$retained_raw_file" "$retained_raw_identity")
+    fi
     local size
     size="$(wc -c < "$output_path" | tr -d ' ')"
-    secure_write_sidecar \
+    write_cleanup_receipt \
       "$cleanup_path" \
-      $'v1\n'"$pid"$'\n'"$birth"$'\n'"$output_path"$'\n'"$finalized_identity"$'\n'"$size"
-    validate_file_identity "$output_path" "$finalized_identity" || {
-      echo "Error: finalized recording output identity changed before cleanup commit" >&2
+      "$pid" \
+      "$birth" \
+      "$output_path" \
+      "$finalized_identity" \
+      "$size" \
+      "${cleanup_artifacts[@]}"
+    load_cleanup_receipt "$cleanup_path" "$pid" "$birth" || {
+      echo "Error: pending recorder cleanup identity is invalid" >&2
       return 1
     }
-    if [[ "$staged_output" != "$raw_file" ]]; then
-      remove_owned_state_path "$staged_output"
-      PENDING_STAGE_FILE=""
-    fi
-    remove_owned_state_path "$raw_file"
+    complete_cleanup_receipt "$scope" "$incarnation" "$cleanup_path"
     PENDING_PULL_FILE=""
     PENDING_PULL_MANIFEST=""
+    return
   else
     output_path="${output_path%.*}.mp4"
     mkdir -p "$(dirname "$output_path")" || true
