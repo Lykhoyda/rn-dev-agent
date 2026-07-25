@@ -20578,11 +20578,18 @@ import { existsSync as existsSync7, readFileSync as readFileSync8 } from "node:f
 import { dirname as dirname5, join as join10 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
-  return execFileSync4(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3
-  });
+  try {
+    return execFileSync4(command, [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    });
+  } catch (error2) {
+    if (command === "/bin/ps" && typeof error2 === "object" && error2 !== null && "status" in error2 && error2.status === 1) {
+      return "";
+    }
+    throw error2;
+  }
 }
 function token(parts) {
   return createHash3("sha256").update(parts.join("\0")).digest("hex");

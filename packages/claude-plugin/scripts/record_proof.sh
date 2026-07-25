@@ -347,7 +347,10 @@ validate_raw_capture_path() {
     return 0
   fi
   private_tail="${raw_path#"$RUNTIME_DIR"/}"
-  if [[ "$raw_path" == "$RUNTIME_DIR/"* && "$private_tail" =~ ^raw-(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
+  if [[ "$raw_path" == "$RUNTIME_DIR/"* ]] && [[
+    "$private_tail" =~ ^raw-(ios|android)-[0-9]+\.(mov|mp4)$ ||
+      "$private_tail" =~ ^raw-android-pull\.[A-Za-z0-9]+$
+  ]]; then
     return 0
   fi
   private_tail="${raw_path#"$PRIOR_RUNTIME_DIR"/}"
@@ -770,7 +773,11 @@ complete_cleanup_receipt() {
     fi
   done
   remove_recording_sidecars "$scope" "$incarnation" "true"
-  if [[ -n "$recovery_artifact" ]]; then
+  if ! validate_file_identity "$CLEANUP_OUTPUT" "$CLEANUP_OUTPUT_IDENTITY"; then
+    [[ -n "$recovery_artifact" ]] || {
+      echo "Error: finalized recording output identity changed" >&2
+      return 1
+    }
     validate_file_identity "$recovery_artifact" "$recovery_identity" || {
       echo "Error: cleanup recovery artifact identity changed" >&2
       return 1
@@ -787,12 +794,9 @@ complete_cleanup_receipt() {
       "$CLEANUP_SIZE" \
       "$recovery_artifact" \
       "$recovery_identity"
+  fi
+  if [[ -n "$recovery_artifact" ]]; then
     remove_owned_state_path "$recovery_artifact"
-  else
-    validate_file_identity "$CLEANUP_OUTPUT" "$CLEANUP_OUTPUT_IDENTITY" || {
-      echo "Error: finalized recording output identity changed" >&2
-      return 1
-    }
   fi
   release_cleanup_claim "$scope"
   echo "Saved: $CLEANUP_OUTPUT ($CLEANUP_SIZE bytes)"
@@ -1842,9 +1846,8 @@ cmd_stop() {
   elif [[ -n "$raw_file" ]] && sidecar_exists "$raw_file"; then
     if raw_identity="$(capture_file_identity "$raw_file")"; then
       secure_write_sidecar "$raw_identityf" "$raw_identity"
-    elif [[ -z "$finalized_output" ]]; then
-      echo "Error: prior recording capture identity is unavailable" >&2
-      exit 1
+    else
+      raw_identity=""
     fi
   fi
   local supervisor_state=""
@@ -2134,7 +2137,7 @@ cmd_stop() {
       "$output_path" \
       "$finalized_identity" \
       "$size" \
-      "${cleanup_artifacts[@]}"
+      "${cleanup_artifacts[@]+"${cleanup_artifacts[@]}"}"
     load_cleanup_receipt "$cleanup_path" "$pid" "$birth" || {
       echo "Error: pending recorder cleanup identity is invalid" >&2
       return 1

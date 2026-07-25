@@ -640,11 +640,18 @@ import { existsSync as existsSync3, readFileSync as readFileSync2 } from "node:f
 import { dirname, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
-  return execFileSync2(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3
-  });
+  try {
+    return execFileSync2(command, [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    });
+  } catch (error2) {
+    if (command === "/bin/ps" && typeof error2 === "object" && error2 !== null && "status" in error2 && error2.status === 1) {
+      return "";
+    }
+    throw error2;
+  }
 }
 function token(parts) {
   return createHash2("sha256").update(parts.join("\0")).digest("hex");

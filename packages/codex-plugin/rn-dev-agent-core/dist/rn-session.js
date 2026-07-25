@@ -7469,11 +7469,18 @@ import { existsSync, readFileSync as readFileSync2 } from "node:fs";
 import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
-  return execFileSync3(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3
-  });
+  try {
+    return execFileSync3(command, [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    });
+  } catch (error) {
+    if (command === "/bin/ps" && typeof error === "object" && error !== null && "status" in error && error.status === 1) {
+      return "";
+    }
+    throw error;
+  }
 }
 function token(parts) {
   return createHash2("sha256").update(parts.join("\0")).digest("hex");

@@ -22,11 +22,24 @@ interface ProcessBirthDependencies {
 }
 
 function defaultRun(command: string, args: readonly string[]): string {
-  return execFileSync(command, [...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 2_000,
-  });
+  try {
+    return execFileSync(command, [...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2_000,
+    });
+  } catch (error) {
+    if (
+      command === '/bin/ps' &&
+      typeof error === 'object' &&
+      error !== null &&
+      'status' in error &&
+      error.status === 1
+    ) {
+      return '';
+    }
+    throw error;
+  }
 }
 
 function token(parts: readonly string[]): string {

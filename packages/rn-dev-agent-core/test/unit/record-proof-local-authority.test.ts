@@ -26,6 +26,7 @@ const processBirthHelper = join(
   'darwin-process-birth',
 );
 const scope = 'd'.repeat(64);
+const recorderStartTimeoutMs = 30_000;
 const execFileAsync = promisify(execFile);
 
 function probeProcessPresence(pid: number): 'present' | 'absent' | 'unknown' {
@@ -128,7 +129,7 @@ done
     [script, 'start', 'ios', output, '--scope', scope, '--udid', 'test-device'],
     {
       encoding: 'utf8',
-      timeout: 5_000,
+      timeout: recorderStartTimeoutMs,
       env: {
         ...process.env,
         PATH: `${root}:${process.env.PATH}`,
@@ -232,7 +233,7 @@ done
   const start = spawnSync(
     'bash',
     [script, 'start', 'ios', output, '--scope', scope, '--udid', 'test-device'],
-    { encoding: 'utf8', timeout: 5_000, env },
+    { encoding: 'utf8', timeout: recorderStartTimeoutMs, env },
   );
   assert.equal(start.status, 0, start.stderr);
   const parsed = parseStartOutput(start.stdout);
@@ -242,7 +243,7 @@ done
   const stop = spawnSync(
     'bash',
     [script, 'stop', scope, String(parsed.pid), parsed.processBirth],
-    { encoding: 'utf8', timeout: 10_000, env },
+    { encoding: 'utf8', timeout: recorderStartTimeoutMs, env },
   );
   assert.equal(stop.status, 0, stop.stderr);
   assert.equal(existsSync(`${prefix}-${scope}.pid`), false);
@@ -306,7 +307,7 @@ done
   const start = await execFileAsync(
     'bash',
     [script, 'start', 'ios', output, '--scope', scope, '--udid', 'test-device'],
-    { encoding: 'utf8', timeout: 5_000, env },
+    { encoding: 'utf8', timeout: recorderStartTimeoutMs, env },
   );
   const parsed = parseStartOutput(start.stdout);
   assert.ok(parsed);

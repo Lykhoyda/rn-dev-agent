@@ -394,8 +394,8 @@ test('Android remote capture remains available when conversion is interrupted', 
     assert.notEqual(result.status, 0);
     assert.equal(existsSync(state.remoteDeleteMarker), false);
     assert.equal(existsSync(state.conversionMarker), true);
-    const abandonedPull = readFileSync(state.pullMarker, 'utf8').trim();
-    assert.equal(existsSync(abandonedPull), false);
+    const retainedPull = readFileSync(state.pullMarker, 'utf8').trim();
+    assert.equal(existsSync(retainedPull), true);
     assert.equal(existsSync(`${state.prefix}-${scope}.device-path`), true);
   } finally {
     state.cleanup();

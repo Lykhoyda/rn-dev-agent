@@ -4,11 +4,23 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 function defaultRun(command, args) {
-    return execFileSync(command, [...args], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 2_000,
-    });
+    try {
+        return execFileSync(command, [...args], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 2_000,
+        });
+    }
+    catch (error) {
+        if (command === '/bin/ps' &&
+            typeof error === 'object' &&
+            error !== null &&
+            'status' in error &&
+            error.status === 1) {
+            return '';
+        }
+        throw error;
+    }
 }
 function token(parts) {
     return createHash('sha256').update(parts.join('\0')).digest('hex');
