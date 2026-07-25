@@ -53,8 +53,13 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-const compiler = '/usr/bin/clang';
+const compiler = '/usr/bin/xcrun';
+const compilerVersion = 'Apple clang version 21.0.0 (clang-2100.0.123.102)';
+const sdkVersion = '26.4';
 const compilerArguments = [
+  '--sdk',
+  'macosx',
+  'clang',
   '-x',
   'c',
   '<source>',
@@ -67,6 +72,8 @@ const compilerArguments = [
   '-arch',
   'x86_64',
   '-mmacosx-version-min=11.0',
+  '-isysroot',
+  '<sdk>',
   '-o',
   '<output>',
 ];
@@ -83,7 +90,9 @@ const recipeSha256 = sha256(
   JSON.stringify({
     sourceSha256: sha256(source),
     compiler,
+    compilerVersion,
     compilerArguments,
+    sdkVersion,
     uuidScheme: 'sha256-recipe-cputype-v1',
     signer,
     signerArguments,
@@ -95,6 +104,40 @@ function hasValidCodeSignature(path) {
     stdio: 'ignore',
   });
   return !result.error && result.status === 0;
+}
+
+function commandOutput(command, arguments_) {
+  const result = spawnSync(command, arguments_, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      result.error?.message || result.stderr.trim() || `${command} exited with ${result.status}`,
+    );
+  }
+  return result.stdout.trim();
+}
+
+function resolveSdkPath() {
+  const activeCompilerVersion = commandOutput(compiler, [
+    '--sdk',
+    'macosx',
+    'clang',
+    '--version',
+  ]).split('\n')[0];
+  if (activeCompilerVersion !== compilerVersion) {
+    throw new Error(
+      `build-darwin-process-birth-helper: expected ${compilerVersion}, received ${activeCompilerVersion}`,
+    );
+  }
+  const activeSdkVersion = commandOutput(compiler, ['--sdk', 'macosx', '--show-sdk-version']);
+  if (activeSdkVersion !== sdkVersion) {
+    throw new Error(
+      `build-darwin-process-birth-helper: expected macOS SDK ${sdkVersion}, received ${activeSdkVersion}`,
+    );
+  }
+  return commandOutput(compiler, ['--sdk', 'macosx', '--show-sdk-path']);
 }
 
 function verifyPackagedHelper() {
@@ -246,10 +289,19 @@ if (packagedHelperCurrent && !forceRebuild) process.exit(0);
 
 mkdirSync(dirname(output), { recursive: true });
 writeFileSync(temporarySource, source, { encoding: 'utf8', mode: 0o600 });
+let sdkPath;
+try {
+  sdkPath = resolveSdkPath();
+} catch (error) {
+  rmSync(temporarySource, { force: true });
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 const result = spawnSync(
   compiler,
   compilerArguments.map((argument) => {
     if (argument === '<source>') return temporarySource;
+    if (argument === '<sdk>') return sdkPath;
     if (argument === '<output>') return temporaryOutput;
     return argument;
   }),
