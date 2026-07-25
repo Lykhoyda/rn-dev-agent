@@ -140,3 +140,82 @@ export async function stopBoundRunner(binding, processProbe = probeProcessBirth,
         throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', `Android device-side runner termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
+export async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile(script, args, { timeout: 60_000, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 })) {
+    const script = String(binding.script ?? '');
+    const scope = String(binding.scope ?? '');
+    const pid = Number(binding.pid);
+    const expectedBirth = String(binding.processBirth ?? '');
+    if (!script || !/^[a-f0-9]{64}$/.test(scope)) {
+        throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup identity is incomplete');
+    }
+    if (binding.phase === 'starting') {
+        try {
+            const initialStatus = await runRecorder(script, ['status', scope]);
+            const active = initialStatus.stdout.match(/^(?:ios|android): pid=(\d+) birth=(\S+) status=\w+ output=.*$/m);
+            let output = '';
+            if (active) {
+                const provisionalPid = Number(active[1]);
+                const reportedBirth = active[2];
+                const current = processProbe(provisionalPid);
+                if (current.status === 'unknown') {
+                    throw new Error('provisional recorder process identity is unavailable');
+                }
+                if (current.status === 'present') {
+                    if (reportedBirth !== 'unbound' && reportedBirth !== current.birth.token) {
+                        throw new Error('provisional recorder PID was reused before cleanup');
+                    }
+                    await runRecorder(script, [
+                        'bind-identity',
+                        scope,
+                        String(provisionalPid),
+                        current.birth.token,
+                    ]);
+                    output = (await runRecorder(script, [
+                        'stop',
+                        scope,
+                        String(provisionalPid),
+                        current.birth.token,
+                    ])).stdout;
+                }
+                else {
+                    await runRecorder(script, ['abort', scope]);
+                }
+            }
+            else if (/^No active recordings/m.test(initialStatus.stdout)) {
+                await runRecorder(script, ['abort', scope]);
+            }
+            else {
+                throw new Error('provisional recorder status is not parseable');
+            }
+            const finalStatus = await runRecorder(script, ['status', scope]);
+            if (!/^No active recordings/m.test(finalStatus.stdout)) {
+                throw new Error('provisional recorder state remains active after cleanup');
+            }
+            return output;
+        }
+        catch (error) {
+            throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', `provisional recorder termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    if (!Number.isSafeInteger(pid) || !expectedBirth) {
+        throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup identity is incomplete');
+    }
+    const current = processProbe(pid);
+    if (current.status === 'unknown') {
+        throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder process identity is unavailable');
+    }
+    if (current.status === 'present' && current.birth.token !== expectedBirth) {
+        throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder PID was reused before cleanup completed');
+    }
+    try {
+        const stopped = await runRecorder(script, ['stop', scope, String(pid), expectedBirth]);
+        const status = await runRecorder(script, ['status', scope]);
+        if (!/^No active recordings/m.test(status.stdout)) {
+            throw new Error('recorder state remains active after cleanup');
+        }
+        return stopped.stdout;
+    }
+    catch (error) {
+        throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', `recorder termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}

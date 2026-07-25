@@ -29,7 +29,11 @@ import {
   type ManagedMetroListenerProbe,
 } from '../session/managed-metro.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
-import { stopBoundObserve, stopBoundRunner } from '../session/process-cleanup.js';
+import {
+  stopBoundObserve,
+  stopBoundRecorder,
+  stopBoundRunner,
+} from '../session/process-cleanup.js';
 
 export interface SessionToolInput {
   action:
@@ -82,6 +86,7 @@ interface SessionHandlerDependencies {
   ) => Promise<BundleAuthorityBinding>;
   stopHandoffObserve?: (binding: Record<string, unknown>) => Promise<void>;
   stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
+  stopHandoffRecorder?: (binding: Record<string, unknown>) => Promise<void>;
   probeProcessBirth?: (pid: number) => ProcessBirthProbe;
   probeListener?: (port: number) => ManagedMetroListenerProbe;
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
@@ -452,6 +457,7 @@ export function createSessionHandler(
               metro?: Record<string, unknown>;
               observe?: Record<string, unknown>;
               runner?: Record<string, unknown>;
+              recorder?: Record<string, unknown>;
             }
           | undefined;
         const priorSessionId = registry.getHandoffOwner(handoffId);
@@ -492,6 +498,23 @@ export function createSessionHandler(
             targetInstance: status.worker.instanceId,
           });
         }
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {
+          const recorderCleanup = registry.beginHandoffCleanupResource(
+            session,
+            status.worker.instanceId,
+            'recorder',
+          );
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError(
+              'RECORDING_AUTHORITY_MISMATCH',
+              'recorder cleanup binding disappeared while fenced',
+            );
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'recorder');
+        }
+        const afterRecorder = registry.getSessionStatus(session.sessionId);
+        cleanup = afterRecorder?.bindings.handoffCleanup as typeof cleanup;
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
           const runnerCleanup = registry.beginHandoffCleanupResource(
             session,
@@ -603,8 +626,24 @@ export function createSessionHandler(
               metro?: Record<string, unknown>;
               runner?: Record<string, unknown>;
               observe?: Record<string, unknown>;
+              recorder?: Record<string, unknown>;
             }
           | undefined;
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {
+          const recorderCleanup = registry.beginHandoffCleanupResource(
+            session,
+            current.worker.instanceId,
+            'recorder',
+          );
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError(
+              'RECORDING_AUTHORITY_MISMATCH',
+              'stale recorder cleanup binding disappeared while fenced',
+            );
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'recorder');
+        }
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
           const runnerCleanup = registry.beginHandoffCleanupResource(
             session,
@@ -707,6 +746,25 @@ export function createSessionHandler(
       }
       const metro = status.bindings.metro as Partial<ManagedMetroBinding> | null | undefined;
       const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
+      const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
+      if (recorder) {
+        const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
+        if (
+          !status.claims.some(
+            (claim) =>
+              claim.type === 'recorder' &&
+              claim.key === claimKey &&
+              claim.sessionId === session.sessionId &&
+              claim.claimEpoch === session.claimEpoch,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'RECORDING_AUTHORITY_MISMATCH',
+            'recorder cleanup claim no longer matches the authenticated binding',
+          );
+        }
+        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder);
+      }
       if (runner) {
         const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(
           runner.port,

@@ -5,14 +5,14 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { detectPlatform } from './platform-utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 import { probeProcessBirth } from '../session/process-birth.js';
+import { getWorkerAuthorityRuntime } from '../session/runtime.js';
+import { stopBoundRecorder } from '../session/process-cleanup.js';
 // Safe by construction: only execFile (argv-based, no shell), never exec.
 // Mirrors the pattern in device-permission.ts and other shell-wrapping tools.
 const execFileAsync = promisify(execFile);
 const START_TIMEOUT_MS = 10_000;
-const STOP_TIMEOUT_MS = 60_000;
 const STATUS_TIMEOUT_MS = 5_000;
 const GIF_TIMEOUT_MS = 60_000;
 export function parseAllBootedIosDevices(jsonText) {
@@ -184,24 +184,46 @@ export function parseStatusOutput(stdout) {
     return active;
 }
 function recordingScope(args) {
-    if (!args.sessionId ||
-        !Number.isSafeInteger(args.claimEpoch) ||
-        !args.platform ||
-        !args.deviceId) {
-        return null;
-    }
     return createHash('sha256')
         .update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`)
         .digest('hex');
 }
-async function runStart(args) {
-    const platform = args.platform ?? (await detectPlatform());
-    if (!platform) {
-        return failResult('No iOS simulator or Android device detected. Boot a device or pass platform explicitly.', { code: 'NO_DEVICE' });
+export function bindRecorderSession(runtime, args) {
+    const available = runtime.requireAvailable();
+    const status = runtime.status();
+    if (!status.available)
+        throw new Error(`${status.code}: ${status.reason}`);
+    const device = status.bindings.device;
+    const platform = device?.platform;
+    const deviceId = device?.deviceId;
+    if ((platform !== 'ios' && platform !== 'android') ||
+        typeof deviceId !== 'string' ||
+        !deviceId) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder requires an exact claimed device');
     }
-    if (platform !== 'ios' && platform !== 'android') {
-        return failResult(`Unknown platform: "${platform}". Expected ios or android.`);
+    if (args.platform !== undefined && args.platform !== platform) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder platform contradicts the session');
     }
+    if (args.deviceId !== undefined && args.deviceId !== deviceId) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder device contradicts the session');
+    }
+    args.platform = platform;
+    args.deviceId = deviceId;
+    args.sessionId = status.sessionId;
+    args.claimEpoch = status.claimEpoch;
+    return { ...available, status, platform, deviceId };
+}
+async function runStart(args, runtime) {
+    let authority;
+    try {
+        authority = bindRecorderSession(runtime, args);
+    }
+    catch (error) {
+        return failResult(error instanceof Error ? error.message : String(error), {
+            code: 'SESSION_STALE',
+        });
+    }
+    const platform = authority.platform;
     if (args.outputPath && pathHasTraversal(args.outputPath)) {
         return failResult(`device_record: outputPath "${args.outputPath}" contains '..' traversal segments — refuse to write to a path that escapes its parent directory`, { code: 'INVALID_PATH' });
     }
@@ -228,29 +250,67 @@ async function runStart(args) {
     }
     args.platform = platform;
     args.deviceId = resolution.deviceId;
-    const scope = recordingScope(args);
-    if (!scope) {
-        return failResult('device_record requires an authority-bound session identity', {
-            code: 'SESSION_STALE',
+    if (authority.status.bindings.recorder) {
+        return failResult('Recording already in progress for this session and device.', {
+            code: 'ALREADY_RECORDING',
         });
     }
+    const scope = recordingScope({
+        sessionId: authority.status.sessionId,
+        claimEpoch: authority.status.claimEpoch,
+        platform,
+        deviceId: resolution.deviceId,
+    });
+    const script = getRecordScript();
+    const claimKey = `${platform}:${resolution.deviceId}`;
     const scriptArgs = ['start', platform, outputPath, '--scope', scope];
     scriptArgs.push(platform === 'ios' ? '--udid' : '--serial', resolution.deviceId);
     try {
-        const { stdout } = await execFileAsync(getRecordScript(), scriptArgs, {
+        authority.registry.updateBindings(authority.session, {
+            bindings: {
+                recorder: {
+                    phase: 'starting',
+                    platform,
+                    deviceId: resolution.deviceId,
+                    output: outputPath,
+                    scope,
+                    script,
+                    claimKey,
+                    sessionId: authority.status.sessionId,
+                    claimEpoch: authority.status.claimEpoch,
+                },
+            },
+            claimResources: [{ type: 'recorder', key: claimKey }],
+        });
+        const { stdout } = await execFileAsync(script, scriptArgs, {
             timeout: START_TIMEOUT_MS,
         });
         const parsed = parseStartOutput(stdout);
         if (!parsed) {
-            return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
+            throw new Error(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
         }
         const processIdentity = probeProcessBirth(parsed.pid);
         if (processIdentity.status !== 'present') {
-            return failResult('Recording started but its process identity could not be proven', {
-                code: 'RECORDING_AUTHORITY_MISMATCH',
-            });
+            throw new Error('Recording started but its process identity could not be proven');
         }
-        await execFileAsync(getRecordScript(), ['bind-identity', scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
+        await execFileAsync(script, ['bind-identity', scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
+        authority.registry.updateBindings(authority.session, {
+            bindings: {
+                recorder: {
+                    phase: 'recording',
+                    platform,
+                    deviceId: resolution.deviceId,
+                    output: parsed.output,
+                    scope,
+                    pid: parsed.pid,
+                    processBirth: processIdentity.birth.token,
+                    script,
+                    claimKey,
+                    sessionId: authority.status.sessionId,
+                    claimEpoch: authority.status.claimEpoch,
+                },
+            },
+        });
         return okResult({
             action: 'start',
             platform,
@@ -263,6 +323,25 @@ async function runStart(args) {
         });
     }
     catch (e) {
+        const aborted = await stopBoundRecorder({
+            phase: 'starting',
+            platform,
+            deviceId: resolution.deviceId,
+            output: outputPath,
+            scope,
+            script,
+            claimKey,
+            sessionId: authority.status.sessionId,
+            claimEpoch: authority.status.claimEpoch,
+        })
+            .then(() => true)
+            .catch(() => false);
+        if (aborted) {
+            authority.registry.updateBindings(authority.session, {
+                bindings: { recorder: null },
+                releaseResources: [{ type: 'recorder', key: claimKey }],
+            });
+        }
         const err = e;
         const detail = (err.stderr || '').trim() || (err.message || '').trim() || String(e);
         if (/No iOS simulator booted/.test(detail)) {
@@ -279,43 +358,30 @@ async function runStart(args) {
         return failResult(`record_proof.sh start failed: ${detail}`);
     }
 }
-async function runStop(args) {
-    const scope = recordingScope(args);
-    if (!scope) {
-        return failResult('device_record requires an authority-bound session and exact device', {
+async function runStop(args, runtime) {
+    let authority;
+    try {
+        authority = bindRecorderSession(runtime, args);
+    }
+    catch (error) {
+        return failResult(error instanceof Error ? error.message : String(error), {
             code: 'SESSION_STALE',
         });
     }
-    let status;
-    try {
-        status = await readScopedStatus(scope);
-    }
-    catch (e) {
-        const err = e;
-        const detail = (err.stderr || '').trim() || (err.message || '').trim() || String(e);
-        return failResult(`record_proof.sh status failed: ${detail}`);
-    }
-    if (status.length === 0) {
+    const recording = authority.status.bindings.recorder;
+    if (!recording) {
         return warnResult({ saved: [] }, 'No active recording for this session and device.', {
             code: 'NO_ACTIVE_RECORDING',
         });
     }
-    const recording = status[0];
-    const current = probeProcessBirth(recording.pid);
-    if (current.status !== 'present' ||
-        current.birth.token !== recording.processBirth ||
-        recording.platform !== args.platform) {
-        return failResult('Recording process identity no longer matches this session', {
-            code: 'RECORDING_AUTHORITY_MISMATCH',
-        });
-    }
     let stopOutput = '';
     try {
-        const { stdout } = await execFileAsync(getRecordScript(), ['stop', scope, String(recording.pid), recording.processBirth], {
-            timeout: STOP_TIMEOUT_MS,
-            maxBuffer: 8 * 1024 * 1024,
+        stopOutput = await stopBoundRecorder(recording);
+        const claimKey = String(recording.claimKey ?? '');
+        authority.registry.updateBindings(authority.session, {
+            bindings: { recorder: null },
+            releaseResources: claimKey ? [{ type: 'recorder', key: claimKey }] : [],
         });
-        stopOutput = stdout;
     }
     catch (e) {
         const err = e;
@@ -370,21 +436,27 @@ async function runStop(args) {
         ...(gifWarnings.length > 0 ? { gifWarnings } : {}),
     });
 }
-async function readScopedStatus(scope) {
-    const { stdout } = await execFileAsync(getRecordScript(), ['status', scope], {
+async function readScopedStatus(script, scope) {
+    const { stdout } = await execFileAsync(script, ['status', scope], {
         timeout: STATUS_TIMEOUT_MS,
     });
     return parseStatusOutput(stdout);
 }
-async function runStatus(args) {
-    const scope = recordingScope(args);
-    if (!scope) {
-        return failResult('device_record requires an authority-bound session and exact device', {
+async function runStatus(args, runtime) {
+    let authority;
+    try {
+        authority = bindRecorderSession(runtime, args);
+    }
+    catch (error) {
+        return failResult(error instanceof Error ? error.message : String(error), {
             code: 'SESSION_STALE',
         });
     }
+    const recording = authority.status.bindings.recorder;
+    if (!recording)
+        return okResult({ action: 'status', active: [] });
     try {
-        const active = await readScopedStatus(scope);
+        const active = await readScopedStatus(String(recording.script ?? ''), String(recording.scope ?? ''));
         return okResult({ action: 'status', active });
     }
     catch (e) {
@@ -393,14 +465,15 @@ async function runStatus(args) {
         return failResult(`record_proof.sh status failed: ${detail}`);
     }
 }
-export function createDeviceRecordHandler() {
+export function createDeviceRecordHandler(deps = {}) {
+    const runtime = deps.runtime ?? getWorkerAuthorityRuntime();
     return async (args) => {
         if (args.action === 'start')
-            return runStart(args);
+            return runStart(args, runtime);
         if (args.action === 'stop')
-            return runStop(args);
+            return runStop(args, runtime);
         if (args.action === 'status')
-            return runStatus(args);
+            return runStatus(args, runtime);
         return failResult(`Unknown action: "${args.action}". Expected start, stop, or status.`);
     };
 }

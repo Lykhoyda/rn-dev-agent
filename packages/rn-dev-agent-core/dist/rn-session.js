@@ -13,7 +13,7 @@ import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
-import { stopBoundObserve, stopBoundRunner } from './session/process-cleanup.js';
+import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from './session/process-cleanup.js';
 import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, writeBoundDirectoryFile, } from './session/bound-directory.js';
 function resolveStatus() {
     const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -268,7 +268,18 @@ async function main() {
             const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
             const buildToken = randomUUID();
             const runner = status.bindings.runner;
+            const recorder = status.bindings.recorder;
             const releaseResources = [];
+            if (recorder) {
+                const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
+                if (!status.claims.some((claim) => claim.type === 'recorder' &&
+                    claim.key === claimKey &&
+                    claim.sessionId === status.sessionId &&
+                    claim.claimEpoch === status.claimEpoch)) {
+                    throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup claim no longer matches the authenticated binding');
+                }
+                releaseResources.push({ type: 'recorder', key: claimKey });
+            }
             if (runner) {
                 const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
                 if (!status.claims.some((claim) => claim.type === 'runner' &&
@@ -283,6 +294,10 @@ async function main() {
             let currentOperation = operation;
             try {
                 await status.registry.runWithOperation(operation, async () => {
+                    if (recorder) {
+                        await stopBoundRecorder(recorder);
+                        status.registry.verifyOperation(operation);
+                    }
                     if (runner) {
                         await stopBoundRunner(runner);
                         status.registry.verifyOperation(operation);
@@ -302,6 +317,7 @@ async function main() {
                             pendingBuild: { buildToken, platform, buildGeneration },
                             bundle: null,
                             runner: null,
+                            recorder: null,
                         },
                     });
                 });
@@ -373,6 +389,16 @@ async function main() {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'release requires the exact session ID and claim epoch in the environment');
             }
             const signerCapability = readSigner(status);
+            const recorder = status.bindings.recorder;
+            if (recorder) {
+                const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
+                if (!status.claims.some((claim) => claim.type === 'recorder' &&
+                    claim.key === claimKey &&
+                    claim.sessionId === status.sessionId &&
+                    claim.claimEpoch === status.claimEpoch)) {
+                    throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup claim no longer matches the authenticated binding');
+                }
+            }
             const runner = status.bindings.runner;
             if (runner) {
                 const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
@@ -399,6 +425,10 @@ async function main() {
             let released = false;
             try {
                 await status.registry.runWithOperation(operation, async () => {
+                    if (recorder) {
+                        await stopBoundRecorder(recorder);
+                        status.registry.verifyOperation(operation);
+                    }
                     if (runner) {
                         await stopBoundRunner(runner);
                         status.registry.verifyOperation(operation);

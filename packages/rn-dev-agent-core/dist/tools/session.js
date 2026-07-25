@@ -11,7 +11,7 @@ import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
 import { stopManagedMetro, } from '../session/managed-metro.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
-import { stopBoundObserve, stopBoundRunner } from '../session/process-cleanup.js';
+import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 function sameMetroAuthority(current, next) {
     return (current?.port === next.port &&
         current.pid === next.pid &&
@@ -305,6 +305,16 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         targetInstance: status.worker.instanceId,
                     });
                 }
+                if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {
+                    const recorderCleanup = registry.beginHandoffCleanupResource(session, status.worker.instanceId, 'recorder');
+                    if (!recorderCleanup) {
+                        throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup binding disappeared while fenced');
+                    }
+                    await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+                    registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'recorder');
+                }
+                const afterRecorder = registry.getSessionStatus(session.sessionId);
+                cleanup = afterRecorder?.bindings.handoffCleanup;
                 if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
                     const runnerCleanup = registry.beginHandoffCleanupResource(session, status.worker.instanceId, 'runner');
                     if (!runnerCleanup) {
@@ -372,6 +382,14 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const adopted = registry.getSessionStatus(session.sessionId);
                 const cleanup = adopted?.bindings.handoffCleanup;
+                if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {
+                    const recorderCleanup = registry.beginHandoffCleanupResource(session, current.worker.instanceId, 'recorder');
+                    if (!recorderCleanup) {
+                        throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'stale recorder cleanup binding disappeared while fenced');
+                    }
+                    await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+                    registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'recorder');
+                }
                 if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
                     const runnerCleanup = registry.beginHandoffCleanupResource(session, current.worker.instanceId, 'runner');
                     if (!runnerCleanup) {
@@ -434,6 +452,17 @@ export function createSessionHandler(runtime, dependencies = {}) {
             }
             const metro = status.bindings.metro;
             const runner = status.bindings.runner;
+            const recorder = status.bindings.recorder;
+            if (recorder) {
+                const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
+                if (!status.claims.some((claim) => claim.type === 'recorder' &&
+                    claim.key === claimKey &&
+                    claim.sessionId === session.sessionId &&
+                    claim.claimEpoch === session.claimEpoch)) {
+                    throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup claim no longer matches the authenticated binding');
+                }
+                await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder);
+            }
             if (runner) {
                 const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
                 if (!status.claims.some((claim) => claim.type === 'runner' &&

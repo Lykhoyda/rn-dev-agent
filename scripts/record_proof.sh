@@ -11,6 +11,7 @@ Usage: record_proof.sh <subcommand> [args]
 Subcommands:
   start <platform> <output-path> --scope <id>  Start a scoped recording
   bind-identity <scope> <pid> <birth>          Bind process identity
+  abort <scope>                                Abort an uncommitted start
   stop <scope> <pid> <birth>                   Stop one scoped recording
   status <scope>                               Show one scoped recording
   convert-gif <input> <output>     Convert video to GIF (requires ffmpeg)
@@ -160,6 +161,63 @@ cmd_bind_identity() {
   echo "$birth" > "$(birth_file "$scope")"
 }
 
+stop_android_recorder() {
+  local scope="$1"
+  local -a adb_args=()
+  local serialf="${PID_PREFIX}-${scope}.serial"
+  [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
+  local remote_pidf="${PID_PREFIX}-${scope}.remote-pid"
+  [[ ! -f "$remote_pidf" ]] && return
+  local remote_pid
+  remote_pid="$(cat "$remote_pidf")"
+  [[ ! "$remote_pid" =~ ^[0-9]+$ ]] && {
+    echo "Error: invalid device-side screenrecord PID" >&2
+    exit 1
+  }
+  if adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -0 "$remote_pid" >/dev/null 2>&1; then
+    adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -2 "$remote_pid" >/dev/null 2>&1 || {
+      echo "Error: failed to signal device-side screenrecord PID $remote_pid" >&2
+      exit 1
+    }
+    local waited=0
+    while adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -0 "$remote_pid" >/dev/null 2>&1 && [[ $waited -lt 20 ]]; do
+      sleep 0.5
+      waited=$((waited + 1))
+    done
+    if adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -0 "$remote_pid" >/dev/null 2>&1; then
+      echo "Error: device-side screenrecord PID $remote_pid did not stop" >&2
+      exit 1
+    fi
+  fi
+}
+
+cmd_abort() {
+  local scope="${1:-}"
+  [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
+  local pf
+  pf="$(pid_file "$scope")"
+  if [[ -f "$pf" ]]; then
+    local pid
+    pid="$(cat "$pf")"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && is_alive "$pid"; then
+      echo "Error: refusing unauthenticated abort of live recorder PID $pid" >&2
+      exit 1
+    fi
+  fi
+  if [[ -f "$(platform_file "$scope")" ]] && [[ "$(cat "$(platform_file "$scope")")" == "android" ]]; then
+    stop_android_recorder "$scope"
+    local -a adb_args=()
+    [[ -f "${PID_PREFIX}-${scope}.serial" ]] && adb_args+=(-s "$(cat "${PID_PREFIX}-${scope}.serial")")
+    if [[ -f "${PID_PREFIX}-${scope}.device-path" ]]; then
+      adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$(cat "${PID_PREFIX}-${scope}.device-path")"
+    fi
+  fi
+  if [[ -f "${PID_PREFIX}-${scope}.raw-path" ]]; then
+    rm -f "$(cat "${PID_PREFIX}-${scope}.raw-path")"
+  fi
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,device-path}
+}
+
 cmd_stop() {
   local scope="${1:-}"
   local expected_pid="${2:-}"
@@ -207,12 +265,7 @@ cmd_stop() {
     local -a adb_args=()
     local serialf="${PID_PREFIX}-${scope}.serial"
     [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
-    local remote_pidf="${PID_PREFIX}-${scope}.remote-pid"
-    if [[ -f "$remote_pidf" ]]; then
-      local remote_pid
-      remote_pid="$(cat "$remote_pidf")"
-      [[ "$remote_pid" =~ ^[0-9]+$ ]] && adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -2 "$remote_pid" 2>/dev/null || true
-    fi
+    stop_android_recorder "$scope"
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
       local device_path
@@ -436,6 +489,7 @@ PYEOF
 case "${1:-}" in
   start)       shift; cmd_start "$@" ;;
   bind-identity) shift; cmd_bind_identity "$@" ;;
+  abort)       shift; cmd_abort "$@" ;;
   stop)        shift; cmd_stop "$@" ;;
   status)      shift; cmd_status "$@" ;;
   convert-gif) shift; cmd_convert_gif "$@" ;;

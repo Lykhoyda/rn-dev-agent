@@ -25009,7 +25009,7 @@ function classifyExecError(err) {
   const e = err;
   const killed = e?.killed === true;
   const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
-  return { timedOut: killed && !overflow, outputTruncated: overflow };
+  return { timedOut: (killed || e?.code === "ETIMEDOUT") && !overflow, outputTruncated: overflow };
 }
 function formatFailureHeadline(summary, cls, fallbackMsg) {
   if (cls.timedOut) {
@@ -25866,6 +25866,12 @@ var init_registry = __esm({
             ...JSON.parse(current.bindings_json),
             ...input.bindings
           };
+          for (const resource of input.claimResources ?? []) {
+            const claim = this.#findConflictingClaim(resource);
+            if (claim && (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
+              throw claimConflict(claim);
+            }
+          }
           if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install") || Object.hasOwn(input.bindings, "runner")) {
             const currentBindings = JSON.parse(current.bindings_json);
             const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
@@ -25877,6 +25883,16 @@ var init_registry = __esm({
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+          }
+          const leaseUntil = now + this.#leaseMs;
+          for (const resource of input.claimResources ?? []) {
+            this.#database.prepare(`INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
           }
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
@@ -26226,7 +26242,7 @@ var init_registry = __esm({
           const leaseUntil = now + this.#leaseMs;
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(session.session_id, session.claim_epoch);
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'recorder')`).run(session.session_id, session.claim_epoch);
           this.#database.prepare(`UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session.session_id, session.claim_epoch);
           this.#database.prepare(`UPDATE sessions
@@ -26296,14 +26312,19 @@ var init_registry = __esm({
           if (bindingsRunnerPresent(prior.bindings_json) && !priorRunnerClaim?.resource_key) {
             throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner binding has no exclusive cleanup claim");
           }
+          const bindings = JSON.parse(prior.bindings_json);
+          const priorRecorderClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'recorder'`).get(prior.session_id, prior.claim_epoch);
+          if (bindings.recorder && !priorRecorderClaim?.resource_key) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder binding has no exclusive cleanup claim");
+          }
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch);
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')`).run(prior.session_id, prior.claim_epoch);
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-          const bindings = JSON.parse(prior.bindings_json);
           const targetBindings = JSON.parse(targetRow.bindings_json);
           const managedMetro = bindings.metro && typeof bindings.metro === "object" && bindings.metro.mode === "managed" ? bindings.metro : null;
           this.#database.prepare(`UPDATE sessions
@@ -26314,6 +26335,7 @@ var init_registry = __esm({
             metro: managedMetro ? null : bindings.metro,
             bundle: null,
             runner: null,
+            recorder: null,
             observe: null,
             proof: null,
             pendingBuild: null,
@@ -26333,6 +26355,12 @@ var init_registry = __esm({
               runner: bindings.runner && typeof bindings.runner === "object" ? {
                 ...bindings.runner,
                 claimKey: priorRunnerClaim?.resource_key,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              recorder: bindings.recorder && typeof bindings.recorder === "object" ? {
+                ...bindings.recorder,
+                claimKey: priorRecorderClaim?.resource_key,
                 stopRequestedAt: null,
                 completedAt: null
               } : null
@@ -26366,6 +26394,14 @@ var init_registry = __esm({
             const claim = this.#findClaim("runner", claimKey);
             if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.capability !== "string" || typeof binding.instanceId !== "string") {
               throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner cleanup claim no longer matches the authenticated binding");
+            }
+          }
+          if (resource === "recorder") {
+            const claimKey = String(binding.claimKey ?? "");
+            const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}`;
+            const claim = this.#findClaim("recorder", claimKey);
+            if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.scope !== "string" || binding.phase !== "starting" && typeof binding.processBirth !== "string") {
+              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder cleanup claim no longer matches the authenticated binding");
             }
           }
           if (resource === "metro") {
@@ -26412,6 +26448,11 @@ var init_registry = __esm({
              WHERE resource_type = 'runner' AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
           }
+          if (resource === "recorder") {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'recorder' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+          }
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
             ...bindings,
@@ -26432,7 +26473,7 @@ var init_registry = __esm({
           }
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
-          for (const resource of ["metro", "runner", "observe"]) {
+          for (const resource of ["metro", "runner", "observe", "recorder"]) {
             const binding = cleanup?.[resource];
             if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
@@ -26578,6 +26619,7 @@ var init_registry = __esm({
               install: priorBindings.install ?? null,
               bundle: null,
               runner: null,
+              recorder: null,
               observe: null,
               proof: null,
               handoffCleanup: priorCleanup
@@ -26591,6 +26633,7 @@ var init_registry = __esm({
           const metroCleanup = priorBindings.metroCleanup && typeof priorBindings.metroCleanup === "object" ? priorBindings.metroCleanup : priorMetro?.mode === "managed" ? priorMetro : null;
           const runnerCleanup = priorBindings.runner && typeof priorBindings.runner === "object" ? priorBindings.runner : null;
           const observeCleanup = priorBindings.observe && typeof priorBindings.observe === "object" ? priorBindings.observe : null;
+          const recorderCleanup = priorBindings.recorder && typeof priorBindings.recorder === "object" ? priorBindings.recorder : null;
           if (activeOperation?.profile === "transition:ensure-metro" && !metroCleanup && !priorBindings.metro) {
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "stale Metro transition has not published exact cleanup authority");
           }
@@ -26602,6 +26645,14 @@ var init_registry = __esm({
               throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner cleanup claim no longer matches the authenticated binding");
             }
           }
+          let recorderClaimKey = null;
+          if (recorderCleanup) {
+            recorderClaimKey = `${String(recorderCleanup.platform)}:${String(recorderCleanup.deviceId)}`;
+            const recorderClaim = this.#findClaim("recorder", recorderClaimKey);
+            if (recorderClaim?.session_id !== prior.session_id || recorderClaim.claim_epoch !== prior.claim_epoch) {
+              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup claim no longer matches the authenticated binding");
+            }
+          }
           if (observeCleanup) {
             const observePort = String(observeCleanup.port);
             const observeClaim = this.#findClaim("observe-port", observePort);
@@ -26609,14 +26660,12 @@ var init_registry = __esm({
               throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup claim no longer matches the authenticated binding");
             }
           }
-          this.#database.prepare(runnerCleanup ? `DELETE FROM claims
-               WHERE session_id = ? AND claim_epoch = ?
-                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')` : `DELETE FROM claims
-               WHERE session_id = ? AND claim_epoch = ?
-                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup);
+          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup || recorderCleanup);
           const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
@@ -26631,6 +26680,7 @@ var init_registry = __esm({
             install: priorBindings.install ?? null,
             bundle: null,
             runner: null,
+            recorder: null,
             observe: null,
             proof: null,
             handoffCleanup: cleanupRequired ? {
@@ -26643,6 +26693,12 @@ var init_registry = __esm({
               runner: runnerCleanup ? {
                 ...runnerCleanup,
                 claimKey: runnerClaimKey,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              recorder: recorderCleanup ? {
+                ...recorderCleanup,
+                claimKey: recorderClaimKey,
                 stopRequestedAt: null,
                 completedAt: null
               } : null,
@@ -54491,6 +54547,7 @@ function projectPublicAuthorityStatus(status) {
     metroBound: Boolean(status.bindings.metro),
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
+    recorderBound: Boolean(status.bindings.recorder),
     ...recoveryStatus ? { recovery: recoveryStatus } : {},
     migration: inspectAuthorityMigration(status)
   };
@@ -61714,17 +61771,600 @@ init_dev_client_picker();
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
-init_platform_utils();
-import { execFile as execFile22 } from "node:child_process";
+import { execFile as execFile23 } from "node:child_process";
 import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync26 } from "node:fs";
-import { promisify as promisify24 } from "node:util";
+import { promisify as promisify25 } from "node:util";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { dirname as dirname14, join as join33 } from "node:path";
 init_process_birth();
-var execFileAsync5 = promisify24(execFile22);
+
+// packages/rn-dev-agent-core/dist/session/runtime.js
+init_process_birth();
+
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+init_process_birth();
+function defaultProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error2) {
+    const code = error2.code;
+    if (code === "ESRCH")
+      return "dead";
+    if (code === "EPERM")
+      return "alive";
+    return "unknown";
+  }
+}
+function inspectSessionOwner(owner, dependencies = {}) {
+  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
+  if (state === "dead")
+    return "mismatch";
+  if (state === "unknown")
+    return "unknown";
+  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
+  if (!observed)
+    return "unknown";
+  return observed.token === owner.token ? "match" : "mismatch";
+}
+
+// packages/rn-dev-agent-core/dist/session/runtime.js
+init_registry();
+init_secure_state_file();
+var WorkerAuthorityRuntime = class {
+  available;
+  #registry;
+  #session;
+  #unavailable;
+  #recoveryOnly;
+  constructor(registry2, session, unavailable2, recoveryOnly = false) {
+    this.#registry = registry2;
+    this.#session = session;
+    this.#unavailable = unavailable2;
+    this.available = registry2 !== null && session !== null;
+    this.#recoveryOnly = recoveryOnly;
+  }
+  requireAvailable() {
+    if (!this.#registry || !this.#session) {
+      throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
+    }
+    return { registry: this.#registry, session: this.#session };
+  }
+  requireOperational() {
+    const available = this.requireAvailable();
+    const status = this.status();
+    if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
+      throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
+    }
+    return available;
+  }
+  requireRecovery() {
+    const available = this.requireAvailable();
+    const status = this.status();
+    if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
+      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
+    }
+    return available;
+  }
+  status() {
+    if (!this.#registry || !this.#session) {
+      return {
+        available: false,
+        code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
+        reason: this.#unavailable?.reason ?? "authority session is unavailable"
+      };
+    }
+    const status = this.#registry.getSessionStatus(this.#session.sessionId);
+    if (!status) {
+      return {
+        available: false,
+        code: "SESSION_OWNER_LOST",
+        reason: "session is no longer present in the authority registry"
+      };
+    }
+    return { available: true, ...status };
+  }
+  close() {
+    this.#registry?.close();
+  }
+};
+function unavailable(reason, fallbackCode) {
+  const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
+  return new WorkerAuthorityRuntime(null, null, {
+    code: matched?.[1] ?? fallbackCode,
+    reason
+  });
+}
+function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
+  if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
+    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
+  }
+  const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);
+  const registryPath = environment.RN_DEV_AGENT_REGISTRY_PATH;
+  const workerInstance = environment.RN_DEV_AGENT_WORKER_INSTANCE;
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
+    return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
+  if (!birth) {
+    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
+  }
+  try {
+    const registry2 = openSessionRegistry(registryPath, {
+      ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
+    });
+    const session = { sessionId, claimEpoch };
+    const status = registry2.getSessionStatus(sessionId);
+    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
+    if (recoveryOnly) {
+      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
+      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
+      if (!recoveryCapability) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
+      }
+      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
+    } else {
+      registry2.bindWorker(session, {
+        instanceId: workerInstance,
+        pid: birth.pid,
+        token: birth.token
+      });
+    }
+    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
+  } catch (error2) {
+    return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
+  }
+}
+var sharedRuntime = null;
+function getWorkerAuthorityRuntime() {
+  sharedRuntime ??= createWorkerAuthorityRuntime();
+  return sharedRuntime;
+}
+
+// packages/rn-dev-agent-core/dist/session/process-cleanup.js
+init_release_android_slot();
+import { execFile as execFileCb19 } from "node:child_process";
+import { promisify as promisify24 } from "node:util";
+
+// packages/rn-dev-agent-core/dist/session/managed-metro.js
+import { execFileSync as execFileSync8, spawn as spawn6 } from "node:child_process";
+import { createHmac, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+init_metro_cwd();
+init_process_birth();
+import { execFileSync as execFileSync7 } from "node:child_process";
+function numericListener(output, emptyStatus) {
+  const value = String(output).trim();
+  if (!value)
+    return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: "unknown" };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+}
+function probeMetroListener(port, platform = process.platform, execute = execFileSync7) {
+  try {
+    if (platform === "win32") {
+      const output = execute("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
+    }
+    if (platform === "linux") {
+      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const value = String(output).trim();
+      if (!value)
+        return { status: "absent" };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+    }
+    if (platform === "darwin") {
+      const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 2e3
+      });
+      return numericListener(output, "unknown");
+    }
+    return { status: "unknown" };
+  } catch (error2) {
+    const failure = error2;
+    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
+  }
+}
+function metroListenerPid(port, platform = process.platform, execute = execFileSync7) {
+  const probe = probeMetroListener(port, platform, execute);
+  return probe.status === "listening" ? probe.pid : null;
+}
+async function fetchMetroStatus(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: controller.signal
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function captureMetroBinding(input, dependencies = {}) {
+  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
+  if (!birth) {
+    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
+  }
+  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
+  if (!status.includes("packager-status:running")) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
+  }
+  const servingRoot = (dependencies.servingRoot ?? cwdForPort)(input.port);
+  if (!servingRoot || !pathMatchesRoot(servingRoot, input.sourceRoot)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
+  }
+  return {
+    port: input.port,
+    pid: input.pid,
+    birth: birth.token,
+    instanceId: input.instanceId,
+    servingRoot,
+    buildGeneration: input.buildGeneration
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/managed-metro.js
+init_process_birth();
+var METRO_LAUNCHER_SOURCE = String.raw`
+const { spawn } = require('node:child_process');
+const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
+const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
+if (!executable) process.exit(1);
+const child = spawn(executable, args, {
+  cwd: process.cwd(),
+  env: process.env,
+  stdio: 'inherit',
+});
+child.once('error', () => process.exit(1));
+child.once('exit', (code, signal) => {
+  process.exit(signal ? 1 : (code ?? 1));
+});
+setInterval(() => {}, 1 << 30);
+`;
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync8) {
+  return probeMetroListener(port, platform, execute);
+}
+function managementProof(sessionId, authority, signerCapability) {
+  return createHmac("sha256", signerCapability).update([
+    sessionId,
+    authority.port,
+    authority.pid,
+    authority.birth,
+    authority.launcherPid,
+    authority.launcherBirth,
+    authority.instanceId
+  ].join("\0")).digest("hex");
+}
+function signalProcessTree(input) {
+  if (process.platform === "win32") {
+    const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
+    execFileSync8("taskkill.exe", ["/PID", String(pid), "/T"], {
+      stdio: "ignore",
+      timeout: 2e3
+    });
+    return;
+  }
+  process.kill(-input.launcherPid, input.signal);
+}
+function exactProcessState(expected, probe) {
+  if (probe.status === "unknown")
+    return "unknown";
+  if (probe.status === "absent")
+    return "stopped";
+  return probe.birth.token === expected.birth ? "present" : "stopped";
+}
+async function stopManagedMetroProcesses(input, dependencies) {
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
+  const signalTree = dependencies.signalTree ?? signalProcessTree;
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve8) => setTimeout(resolve8, ms)));
+  const inspect = () => {
+    const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
+    const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
+    const port = probeListener(input.port);
+    return { launcher, listener, port };
+  };
+  const initial = inspect();
+  if (initial.launcher === "unknown" || initial.listener === "unknown" || initial.port.status === "unknown") {
+    return false;
+  }
+  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.launcher !== "present")) {
+    return false;
+  }
+  if (initial.launcher === "stopped" && initial.listener === "stopped" && initial.port.status === "absent") {
+    return true;
+  }
+  try {
+    signalTree({
+      launcherPid: input.launcher.pid,
+      listenerPid: input.listener?.pid ?? input.launcher.pid,
+      launcherPresent: initial.launcher === "present",
+      signal: "SIGTERM"
+    });
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    const current = inspect();
+    if (current.launcher === "unknown" || current.listener === "unknown" || current.port.status === "unknown") {
+      return false;
+    }
+    if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
+      return true;
+    }
+    if (current.port.status === "listening" && input.listener && (current.port.pid !== input.listener.pid || current.listener !== "present")) {
+      return false;
+    }
+    if (Date.now() >= deadline)
+      return false;
+    await wait(25);
+  }
+}
+async function stopManagedMetro(binding, input, dependencies = {}) {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
+    return false;
+  }
+  const expected = managementProof(input.sessionId, {
+    port: binding.port,
+    pid: binding.pid,
+    birth: binding.birth,
+    launcherPid: binding.launcherPid,
+    launcherBirth: binding.launcherBirth,
+    instanceId: binding.instanceId
+  }, input.signerCapability);
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const observedBuffer = Buffer.from(binding.managementProof, "hex");
+  if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual3(expectedBuffer, observedBuffer)) {
+    return false;
+  }
+  return stopManagedMetroProcesses({
+    port: binding.port,
+    launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
+    listener: { pid: binding.pid, birth: binding.birth }
+  }, dependencies);
+}
+
+// packages/rn-dev-agent-core/dist/session/process-cleanup.js
+init_process_birth();
+init_registry();
+var execFile22 = promisify24(execFileCb19);
+async function waitForExactStopped(probe, deadlineMs, code, message) {
+  while (true) {
+    const status = probe();
+    if (status === "stopped")
+      return;
+    if (status === "unknown") {
+      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
+    }
+    if (Date.now() >= deadlineMs) {
+      throw new SessionAuthorityError(code, message);
+    }
+    await new Promise((resolve8) => setTimeout(resolve8, 25));
+  }
+}
+async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request2 = fetch) {
+  const deadlineMs = Date.now() + timeoutMs;
+  const port = Number(binding.port);
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.cleanupCapability ?? "");
+  if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup authority is incomplete");
+  }
+  const currentListener = listenerProbe(port);
+  if (currentListener.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener lookup is inconclusive");
+  }
+  if (currentListener.status === "absent" || currentListener.pid !== pid)
+    return;
+  const currentBirth = processProbe(pid);
+  if (currentBirth.status === "unknown") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe process identity is unavailable");
+  }
+  if (currentBirth.status === "absent") {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener identity is internally inconsistent");
+  }
+  if (currentBirth.birth.token !== expectedBirth) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener PID was reused before cleanup completed");
+  }
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup timed out before the stop request");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), remainingMs);
+  let response;
+  try {
+    response = await request2(`http://127.0.0.1:${port}/api/stop`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${capability}`,
+        "x-rn-observe-instance": instanceId
+      },
+      signal: controller.signal
+    });
+  } catch {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup request failed or timed out");
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe server refused fenced cleanup");
+  }
+  await waitForExactStopped(() => {
+    const observed = listenerProbe(port);
+    if (observed.status === "unknown")
+      return "unknown";
+    return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
+  }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
+}
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile22("adb", args, { timeout: 5e3, encoding: "utf8" })) {
+  const deadlineMs = Date.now() + timeoutMs;
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.capability ?? "");
+  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
+  }
+  const platform = String(binding.platform ?? "");
+  const deviceId = String(binding.deviceId ?? "");
+  const port = Number(binding.port);
+  const current = processProbe(pid);
+  if (current.status === "unknown") {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
+  }
+  if (current.status === "present" && current.birth.token === expectedBirth) {
+    signalProcess(pid, "SIGTERM");
+    await waitForExactStopped(() => {
+      const observed = processProbe(pid);
+      if (observed.status === "unknown")
+        return "unknown";
+      return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
+    }, deadlineMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+  }
+  if (platform !== "android")
+    return;
+  if (!deviceId || !Number.isSafeInteger(port)) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "Android runner cleanup identity is incomplete");
+  }
+  const serial = ["-s", deviceId];
+  try {
+    await runAdb([...serial, "forward", "--remove", `tcp:${port}`]);
+    for (const pkg of OWNED_PACKAGES) {
+      await runAdb([...serial, "shell", "am", "force-stop", pkg]);
+      const process3 = await runAdb([...serial, "shell", "sh", "-c", `pidof ${pkg} || true`]);
+      if (process3.stdout.trim()) {
+        throw new Error(`${pkg} remains alive after force-stop`);
+      }
+    }
+    const instrumentation = await runAdb([
+      ...serial,
+      "shell",
+      "dumpsys",
+      "activity",
+      "instrumentation"
+    ]);
+    const output = `${instrumentation.stdout}
+${instrumentation.stderr}`;
+    if (OWNED_PACKAGES.some((pkg) => output.includes(pkg))) {
+      throw new Error("owned instrumentation remains registered");
+    }
+  } catch (error2) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
+}
+async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile22(script, args, { timeout: 6e4, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 })) {
+  const script = String(binding.script ?? "");
+  const scope = String(binding.scope ?? "");
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  if (!script || !/^[a-f0-9]{64}$/.test(scope)) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
+  }
+  if (binding.phase === "starting") {
+    try {
+      const initialStatus = await runRecorder(script, ["status", scope]);
+      const active = initialStatus.stdout.match(/^(?:ios|android): pid=(\d+) birth=(\S+) status=\w+ output=.*$/m);
+      let output = "";
+      if (active) {
+        const provisionalPid = Number(active[1]);
+        const reportedBirth = active[2];
+        const current2 = processProbe(provisionalPid);
+        if (current2.status === "unknown") {
+          throw new Error("provisional recorder process identity is unavailable");
+        }
+        if (current2.status === "present") {
+          if (reportedBirth !== "unbound" && reportedBirth !== current2.birth.token) {
+            throw new Error("provisional recorder PID was reused before cleanup");
+          }
+          await runRecorder(script, [
+            "bind-identity",
+            scope,
+            String(provisionalPid),
+            current2.birth.token
+          ]);
+          output = (await runRecorder(script, [
+            "stop",
+            scope,
+            String(provisionalPid),
+            current2.birth.token
+          ])).stdout;
+        } else {
+          await runRecorder(script, ["abort", scope]);
+        }
+      } else if (/^No active recordings/m.test(initialStatus.stdout)) {
+        await runRecorder(script, ["abort", scope]);
+      } else {
+        throw new Error("provisional recorder status is not parseable");
+      }
+      const finalStatus = await runRecorder(script, ["status", scope]);
+      if (!/^No active recordings/m.test(finalStatus.stdout)) {
+        throw new Error("provisional recorder state remains active after cleanup");
+      }
+      return output;
+    } catch (error2) {
+      throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `provisional recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    }
+  }
+  if (!Number.isSafeInteger(pid) || !expectedBirth) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
+  }
+  const current = processProbe(pid);
+  if (current.status === "unknown") {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder process identity is unavailable");
+  }
+  if (current.status === "present" && current.birth.token !== expectedBirth) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder PID was reused before cleanup completed");
+  }
+  try {
+    const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);
+    const status = await runRecorder(script, ["status", scope]);
+    if (!/^No active recordings/m.test(status.stdout)) {
+      throw new Error("recorder state remains active after cleanup");
+    }
+    return stopped.stdout;
+  } catch (error2) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
+}
+
+// packages/rn-dev-agent-core/dist/tools/device-record.js
+var execFileAsync5 = promisify25(execFile23);
 var START_TIMEOUT_MS = 1e4;
-var STOP_TIMEOUT_MS = 6e4;
 var STATUS_TIMEOUT_MS = 5e3;
 var GIF_TIMEOUT_MS = 6e4;
 function parseAllBootedIosDevices(jsonText) {
@@ -61867,19 +62507,41 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  if (!args.sessionId || !Number.isSafeInteger(args.claimEpoch) || !args.platform || !args.deviceId) {
-    return null;
-  }
   return createHash7("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
-async function runStart(args) {
-  const platform = args.platform ?? await detectPlatform();
-  if (!platform) {
-    return failResult("No iOS simulator or Android device detected. Boot a device or pass platform explicitly.", { code: "NO_DEVICE" });
+function bindRecorderSession(runtime, args) {
+  const available = runtime.requireAvailable();
+  const status = runtime.status();
+  if (!status.available)
+    throw new Error(`${status.code}: ${status.reason}`);
+  const device = status.bindings.device;
+  const platform = device?.platform;
+  const deviceId = device?.deviceId;
+  if (platform !== "ios" && platform !== "android" || typeof deviceId !== "string" || !deviceId) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: recorder requires an exact claimed device");
   }
-  if (platform !== "ios" && platform !== "android") {
-    return failResult(`Unknown platform: "${platform}". Expected ios or android.`);
+  if (args.platform !== void 0 && args.platform !== platform) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: recorder platform contradicts the session");
   }
+  if (args.deviceId !== void 0 && args.deviceId !== deviceId) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: recorder device contradicts the session");
+  }
+  args.platform = platform;
+  args.deviceId = deviceId;
+  args.sessionId = status.sessionId;
+  args.claimEpoch = status.claimEpoch;
+  return { ...available, status, platform, deviceId };
+}
+async function runStart(args, runtime) {
+  let authority;
+  try {
+    authority = bindRecorderSession(runtime, args);
+  } catch (error2) {
+    return failResult(error2 instanceof Error ? error2.message : String(error2), {
+      code: "SESSION_STALE"
+    });
+  }
+  const platform = authority.platform;
   if (args.outputPath && pathHasTraversal(args.outputPath)) {
     return failResult(`device_record: outputPath "${args.outputPath}" contains '..' traversal segments \u2014 refuse to write to a path that escapes its parent directory`, { code: "INVALID_PATH" });
   }
@@ -61897,29 +62559,67 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
   }
   args.platform = platform;
   args.deviceId = resolution.deviceId;
-  const scope = recordingScope(args);
-  if (!scope) {
-    return failResult("device_record requires an authority-bound session identity", {
-      code: "SESSION_STALE"
+  if (authority.status.bindings.recorder) {
+    return failResult("Recording already in progress for this session and device.", {
+      code: "ALREADY_RECORDING"
     });
   }
+  const scope = recordingScope({
+    sessionId: authority.status.sessionId,
+    claimEpoch: authority.status.claimEpoch,
+    platform,
+    deviceId: resolution.deviceId
+  });
+  const script = getRecordScript();
+  const claimKey = `${platform}:${resolution.deviceId}`;
   const scriptArgs = ["start", platform, outputPath, "--scope", scope];
   scriptArgs.push(platform === "ios" ? "--udid" : "--serial", resolution.deviceId);
   try {
-    const { stdout } = await execFileAsync5(getRecordScript(), scriptArgs, {
+    authority.registry.updateBindings(authority.session, {
+      bindings: {
+        recorder: {
+          phase: "starting",
+          platform,
+          deviceId: resolution.deviceId,
+          output: outputPath,
+          scope,
+          script,
+          claimKey,
+          sessionId: authority.status.sessionId,
+          claimEpoch: authority.status.claimEpoch
+        }
+      },
+      claimResources: [{ type: "recorder", key: claimKey }]
+    });
+    const { stdout } = await execFileAsync5(script, scriptArgs, {
       timeout: START_TIMEOUT_MS
     });
     const parsed = parseStartOutput(stdout);
     if (!parsed) {
-      return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
+      throw new Error(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
     }
     const processIdentity = probeProcessBirth(parsed.pid);
     if (processIdentity.status !== "present") {
-      return failResult("Recording started but its process identity could not be proven", {
-        code: "RECORDING_AUTHORITY_MISMATCH"
-      });
+      throw new Error("Recording started but its process identity could not be proven");
     }
-    await execFileAsync5(getRecordScript(), ["bind-identity", scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
+    await execFileAsync5(script, ["bind-identity", scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
+    authority.registry.updateBindings(authority.session, {
+      bindings: {
+        recorder: {
+          phase: "recording",
+          platform,
+          deviceId: resolution.deviceId,
+          output: parsed.output,
+          scope,
+          pid: parsed.pid,
+          processBirth: processIdentity.birth.token,
+          script,
+          claimKey,
+          sessionId: authority.status.sessionId,
+          claimEpoch: authority.status.claimEpoch
+        }
+      }
+    });
     return okResult({
       action: "start",
       platform,
@@ -61931,6 +62631,23 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
       note: "Call device_record action=stop to finalize. Android caps at 180s; iOS has no inherent cap but xcrun simctl io may stall on long captures."
     });
   } catch (e) {
+    const aborted2 = await stopBoundRecorder({
+      phase: "starting",
+      platform,
+      deviceId: resolution.deviceId,
+      output: outputPath,
+      scope,
+      script,
+      claimKey,
+      sessionId: authority.status.sessionId,
+      claimEpoch: authority.status.claimEpoch
+    }).then(() => true).catch(() => false);
+    if (aborted2) {
+      authority.registry.updateBindings(authority.session, {
+        bindings: { recorder: null },
+        releaseResources: [{ type: "recorder", key: claimKey }]
+      });
+    }
     const err = e;
     const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);
     if (/No iOS simulator booted/.test(detail)) {
@@ -61947,40 +62664,29 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
     return failResult(`record_proof.sh start failed: ${detail}`);
   }
 }
-async function runStop(args) {
-  const scope = recordingScope(args);
-  if (!scope) {
-    return failResult("device_record requires an authority-bound session and exact device", {
+async function runStop(args, runtime) {
+  let authority;
+  try {
+    authority = bindRecorderSession(runtime, args);
+  } catch (error2) {
+    return failResult(error2 instanceof Error ? error2.message : String(error2), {
       code: "SESSION_STALE"
     });
   }
-  let status;
-  try {
-    status = await readScopedStatus(scope);
-  } catch (e) {
-    const err = e;
-    const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);
-    return failResult(`record_proof.sh status failed: ${detail}`);
-  }
-  if (status.length === 0) {
+  const recording = authority.status.bindings.recorder;
+  if (!recording) {
     return warnResult({ saved: [] }, "No active recording for this session and device.", {
       code: "NO_ACTIVE_RECORDING"
     });
   }
-  const recording = status[0];
-  const current = probeProcessBirth(recording.pid);
-  if (current.status !== "present" || current.birth.token !== recording.processBirth || recording.platform !== args.platform) {
-    return failResult("Recording process identity no longer matches this session", {
-      code: "RECORDING_AUTHORITY_MISMATCH"
-    });
-  }
   let stopOutput = "";
   try {
-    const { stdout } = await execFileAsync5(getRecordScript(), ["stop", scope, String(recording.pid), recording.processBirth], {
-      timeout: STOP_TIMEOUT_MS,
-      maxBuffer: 8 * 1024 * 1024
+    stopOutput = await stopBoundRecorder(recording);
+    const claimKey = String(recording.claimKey ?? "");
+    authority.registry.updateBindings(authority.session, {
+      bindings: { recorder: null },
+      releaseResources: claimKey ? [{ type: "recorder", key: claimKey }] : []
     });
-    stopOutput = stdout;
   } catch (e) {
     const err = e;
     const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);
@@ -62028,21 +62734,26 @@ async function runStop(args) {
     ...gifWarnings.length > 0 ? { gifWarnings } : {}
   });
 }
-async function readScopedStatus(scope) {
-  const { stdout } = await execFileAsync5(getRecordScript(), ["status", scope], {
+async function readScopedStatus(script, scope) {
+  const { stdout } = await execFileAsync5(script, ["status", scope], {
     timeout: STATUS_TIMEOUT_MS
   });
   return parseStatusOutput(stdout);
 }
-async function runStatus(args) {
-  const scope = recordingScope(args);
-  if (!scope) {
-    return failResult("device_record requires an authority-bound session and exact device", {
+async function runStatus(args, runtime) {
+  let authority;
+  try {
+    authority = bindRecorderSession(runtime, args);
+  } catch (error2) {
+    return failResult(error2 instanceof Error ? error2.message : String(error2), {
       code: "SESSION_STALE"
     });
   }
+  const recording = authority.status.bindings.recorder;
+  if (!recording)
+    return okResult({ action: "status", active: [] });
   try {
-    const active = await readScopedStatus(scope);
+    const active = await readScopedStatus(String(recording.script ?? ""), String(recording.scope ?? ""));
     return okResult({ action: "status", active });
   } catch (e) {
     const err = e;
@@ -62050,21 +62761,22 @@ async function runStatus(args) {
     return failResult(`record_proof.sh status failed: ${detail}`);
   }
 }
-function createDeviceRecordHandler() {
+function createDeviceRecordHandler(deps = {}) {
+  const runtime = deps.runtime ?? getWorkerAuthorityRuntime();
   return async (args) => {
     if (args.action === "start")
-      return runStart(args);
+      return runStart(args, runtime);
     if (args.action === "stop")
-      return runStop(args);
+      return runStop(args, runtime);
     if (args.action === "status")
-      return runStatus(args);
+      return runStatus(args, runtime);
     return failResult(`Unknown action: "${args.action}". Expected start, stop, or status.`);
   };
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash9, randomUUID as randomUUID7 } from "node:crypto";
-import { execFileSync as execFileSync7 } from "node:child_process";
+import { execFileSync as execFileSync9 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync4, existsSync as existsSync27, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync15, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync4, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename5, dirname as dirname15, extname, isAbsolute as isAbsolute3, join as join34, relative, resolve as resolve4, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -62824,7 +63536,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync7("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync9("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
@@ -62833,8 +63545,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync7("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync7("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync9("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync9("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
       const artifactBytes = readFileSync23(resolvedArtifactPath);
@@ -62842,17 +63554,17 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync7("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync9("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
   const root = realpathSync4(resolve4(candidateRoot));
-  const sha = execFileSync7("git", ["-C", root, "rev-parse", "HEAD"], {
+  const sha = execFileSync9("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync7("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync9("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!isOfficialProofCandidateRemote(remote)) {
@@ -62873,7 +63585,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
   if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
-  const confirmedSha = execFileSync7("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync9("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -62983,7 +63695,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync7("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync9("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
@@ -63015,8 +63727,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync7("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync7("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync9("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync9("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -63027,7 +63739,7 @@ function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
   const path = relative(root, proofRoot).replaceAll(sep5, "/");
-  return execFileSync7("git", ["ls-files", "-z", "--", path], {
+  return execFileSync9("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -63154,6 +63866,24 @@ function createProofCaptureHandler(deps) {
     active.stage = "rejected";
     active.invalidationReasons = ["PROOF_PATH_DRIFT"];
     return proofFailure(active.invalidationReasons, active.stage);
+  };
+  const currentAuthority = (active) => {
+    try {
+      return deps.authority(active.context.runId);
+    } catch {
+      return null;
+    }
+  };
+  const authorityMatches = (active) => {
+    const current = currentAuthority(active);
+    return current !== null && hashProofValue(current) === hashProofValue(active.authority);
+  };
+  const refreshAuthority = (active) => {
+    const current = currentAuthority(active);
+    if (!current)
+      return false;
+    active.authority = current;
+    return true;
   };
   const artifactPaths = (active) => [
     active.context.receiptPath,
@@ -63622,6 +64352,9 @@ function createProofCaptureHandler(deps) {
       }
       if (!stillAtStart())
         return proofFailure(["START_STATE_DRIFT"], active.stage);
+      if (!authorityMatches(active)) {
+        return proofFailure(["PROOF_AUTHORITY_CHANGED"], active.stage);
+      }
       let statusResult;
       try {
         statusResult = await deps.record({ action: "status" });
@@ -63658,6 +64391,9 @@ function createProofCaptureHandler(deps) {
       ];
       if (reasons.length > 0)
         return rejectCapture(active, reasons);
+      if (!refreshAuthority(active)) {
+        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
+      }
       active.recordingStartedAt = deps.now();
       active.stage = "recording";
       active.invalidationReasons = [];
@@ -63670,6 +64406,7 @@ function createProofCaptureHandler(deps) {
       active.recordingEvents = deps.monitor.stop();
       active.recordingObservations = deps.monitor.observations();
       const pathDrifted = !contextIsCurrent(active);
+      const authorityChanged = !authorityMatches(active);
       const shutdown2 = await shutdownRecorder(active);
       if (pathDrifted) {
         active.stage = "rejected";
@@ -63678,6 +64415,12 @@ function createProofCaptureHandler(deps) {
       }
       if (!shutdown2.confirmed || shutdown2.reasons.length > 0) {
         return rejectCapture(active, shutdown2.reasons);
+      }
+      if (authorityChanged) {
+        return rejectCapture(active, ["PROOF_AUTHORITY_CHANGED"]);
+      }
+      if (!refreshAuthority(active)) {
+        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
       }
       const saved = shutdown2.stopData?.saved;
       if (!Array.isArray(saved))
@@ -64601,10 +65344,10 @@ function buildNavigationPlan(graph, targetScreen, fromScreen) {
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
 init_storage();
-import { execFileSync as execFileSync8 } from "node:child_process";
+import { execFileSync as execFileSync10 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync8("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync10("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -65338,12 +66081,12 @@ init_agent_device_wrapper();
 init_project_config();
 init_maestro_validator();
 init_maestro_run();
-import { execFile as execFileCb19 } from "node:child_process";
-import { promisify as promisify25 } from "node:util";
+import { execFile as execFileCb20 } from "node:child_process";
+import { promisify as promisify26 } from "node:util";
 import { existsSync as existsSync28, readFileSync as readFileSync24, writeFileSync as writeFileSync15, readdirSync as readdirSync7 } from "node:fs";
 import { join as join36 } from "node:path";
 import { homedir as homedir10 } from "node:os";
-var execFile23 = promisify25(execFileCb19);
+var execFile24 = promisify26(execFileCb20);
 var AUTH_ROUTE_PATTERNS = [
   "login",
   "signin",
@@ -65501,7 +66244,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   try {
-    await runFlowParked(() => execFile23(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile24(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -65716,9 +66459,9 @@ init_app_installed_probe();
 init_recover_detached();
 init_resolve_ios_app_file();
 init_maestro_validator();
-import { execFile as execFileCb20 } from "node:child_process";
-import { promisify as promisify26 } from "node:util";
-var defaultExecFile3 = promisify26(execFileCb20);
+import { execFile as execFileCb21 } from "node:child_process";
+import { promisify as promisify27 } from "node:util";
+var defaultExecFile3 = promisify27(execFileCb21);
 var SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 function safeSimctlTarget(deviceId) {
   return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
@@ -65916,7 +66659,7 @@ function buildGracefulShutdown(deps) {
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash11 } from "node:crypto";
-import { execFileSync as execFileSync9 } from "node:child_process";
+import { execFileSync as execFileSync11 } from "node:child_process";
 import { closeSync as closeSync5, existsSync as existsSync29, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync25, statSync as statSync10, unlinkSync as unlinkSync10, writeFileSync as writeFileSync16, writeSync as writeSync2 } from "node:fs";
 import { tmpdir as tmpdir11, userInfo as userInfo2 } from "node:os";
 import { join as join37, resolve as resolve5 } from "node:path";
@@ -65936,7 +66679,7 @@ function defaultProcessAlive4(pid) {
 }
 function defaultProcessName(pid) {
   try {
-    const out = execFileSync9("ps", ["-p", String(pid), "-o", "args="], {
+    const out = execFileSync11("ps", ["-p", String(pid), "-o", "args="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -65948,7 +66691,7 @@ function defaultProcessName(pid) {
 }
 function defaultProcessParent(pid) {
   try {
-    const out = execFileSync9("ps", ["-p", String(pid), "-o", "ppid="], {
+    const out = execFileSync11("ps", ["-p", String(pid), "-o", "ppid="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -66318,12 +67061,12 @@ init_maestro_device_authority();
 init_maestro_runner_report();
 init_authority_gate();
 init_registry();
-import { execFile as execFileCb21 } from "node:child_process";
-import { promisify as promisify27 } from "node:util";
+import { execFile as execFileCb22 } from "node:child_process";
+import { promisify as promisify28 } from "node:util";
 import { existsSync as existsSync31, readdirSync as readdirSync8, readFileSync as readFileSync26, writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join39 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
-var execFile24 = promisify27(execFileCb21);
+var execFile25 = promisify28(execFileCb22);
 function discoverFlows(dir, pattern) {
   if (!existsSync31(dir))
     return [];
@@ -66442,7 +67185,7 @@ function createMaestroTestAllHandler() {
           writeFileSync18(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
-          return execFile24(flowDispatch.binPath, finalArgs, {
+          return execFile25(flowDispatch.binPath, finalArgs, {
             timeout: remainingTimeout,
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
@@ -66795,12 +67538,12 @@ init_rn_fast_runner_client();
 init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync10 } from "node:child_process";
+import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash12 } from "node:crypto";
 import { readFileSync as readFileSync28, statSync as statSync11 } from "node:fs";
 import { join as join41 } from "node:path";
 function runText(command, args) {
-  return execFileSync10(command, [...args], {
+  return execFileSync12(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
@@ -67131,7 +67874,7 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { dirname as dirname17, join as join43 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
-import { randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 function makeCsrfToken() {
   return randomBytes6(24).toString("hex");
 }
@@ -67144,7 +67887,7 @@ function isPostAllowed(req, token2) {
     const got = String(gotRaw);
     const a = Buffer.from(got);
     const b = Buffer.from(token2);
-    if (a.length !== b.length || !timingSafeEqual3(a, b)) {
+    if (a.length !== b.length || !timingSafeEqual4(a, b)) {
       return { ok: false, status: 403, reason: "bad csrf token" };
     }
   }
@@ -67798,7 +68541,7 @@ async function autostartObserve(deps) {
 init_project_config();
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn6, execFile as execFile25 } from "node:child_process";
+import { spawn as spawn7, execFile as execFile26 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
 import { join as join45 } from "node:path";
@@ -67861,8 +68604,8 @@ var scheduleAfter = (fn, delayMs) => {
   else
     setTimeout(fn, delayMs);
 };
-var defaultSpawn = (cmd, args) => spawn6(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-async function detectIdb(execFileFn = execFile25) {
+var defaultSpawn = (cmd, args) => spawn7(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+async function detectIdb(execFileFn = execFile26) {
   return new Promise((resolve8) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve8(!err));
   });
@@ -67996,7 +68739,7 @@ var IosSimctlLoopSource = class {
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
   return new Promise((resolve8, reject) => {
-    execFile25(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+    execFile26(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -68540,8 +69283,8 @@ function redactSecrets(text, secretValues) {
 }
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync11 } from "node:child_process";
-var defaultExec3 = (cmd, args) => execFileSync11(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+import { execFileSync as execFileSync13 } from "node:child_process";
+var defaultExec3 = (cmd, args) => execFileSync13(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -69109,161 +69852,17 @@ async function listActions(projectRoot) {
   return results;
 }
 
-// packages/rn-dev-agent-core/dist/session/runtime.js
-init_process_birth();
-
-// packages/rn-dev-agent-core/dist/session/process-owner.js
-init_process_birth();
-function defaultProcessState(pid) {
-  try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (error2) {
-    const code = error2.code;
-    if (code === "ESRCH")
-      return "dead";
-    if (code === "EPERM")
-      return "alive";
-    return "unknown";
-  }
-}
-function inspectSessionOwner(owner, dependencies = {}) {
-  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
-  if (state === "dead")
-    return "mismatch";
-  if (state === "unknown")
-    return "unknown";
-  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
-  if (!observed)
-    return "unknown";
-  return observed.token === owner.token ? "match" : "mismatch";
-}
-
-// packages/rn-dev-agent-core/dist/session/runtime.js
-init_registry();
-init_secure_state_file();
-var WorkerAuthorityRuntime = class {
-  available;
-  #registry;
-  #session;
-  #unavailable;
-  #recoveryOnly;
-  constructor(registry2, session, unavailable2, recoveryOnly = false) {
-    this.#registry = registry2;
-    this.#session = session;
-    this.#unavailable = unavailable2;
-    this.available = registry2 !== null && session !== null;
-    this.#recoveryOnly = recoveryOnly;
-  }
-  requireAvailable() {
-    if (!this.#registry || !this.#session) {
-      throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
-    }
-    return { registry: this.#registry, session: this.#session };
-  }
-  requireOperational() {
-    const available = this.requireAvailable();
-    const status = this.status();
-    if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
-      throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
-    }
-    return available;
-  }
-  requireRecovery() {
-    const available = this.requireAvailable();
-    const status = this.status();
-    if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
-      throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
-    }
-    return available;
-  }
-  status() {
-    if (!this.#registry || !this.#session) {
-      return {
-        available: false,
-        code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
-        reason: this.#unavailable?.reason ?? "authority session is unavailable"
-      };
-    }
-    const status = this.#registry.getSessionStatus(this.#session.sessionId);
-    if (!status) {
-      return {
-        available: false,
-        code: "SESSION_OWNER_LOST",
-        reason: "session is no longer present in the authority registry"
-      };
-    }
-    return { available: true, ...status };
-  }
-  close() {
-    this.#registry?.close();
-  }
-};
-function unavailable(reason, fallbackCode) {
-  const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
-  return new WorkerAuthorityRuntime(null, null, {
-    code: matched?.[1] ?? fallbackCode,
-    reason
-  });
-}
-function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
-  if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
-    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
-  }
-  const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
-  const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);
-  const registryPath = environment.RN_DEV_AGENT_REGISTRY_PATH;
-  const workerInstance = environment.RN_DEV_AGENT_WORKER_INSTANCE;
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
-    return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
-  if (!birth) {
-    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
-  }
-  try {
-    const registry2 = openSessionRegistry(registryPath, {
-      ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
-    });
-    const session = { sessionId, claimEpoch };
-    const status = registry2.getSessionStatus(sessionId);
-    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
-    if (recoveryOnly) {
-      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
-      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
-      if (!recoveryCapability) {
-        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
-      }
-      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
-    } else {
-      registry2.bindWorker(session, {
-        instanceId: workerInstance,
-        pid: birth.pid,
-        token: birth.token
-      });
-    }
-    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
-  } catch (error2) {
-    return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
-  }
-}
-var sharedRuntime = null;
-function getWorkerAuthorityRuntime() {
-  sharedRuntime ??= createWorkerAuthorityRuntime();
-  return sharedRuntime;
-}
-
 // packages/rn-dev-agent-core/dist/tools/session.js
 init_registry();
 init_utils();
 
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
-import { createHmac, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 function serialize(payload) {
   return JSON.stringify(payload);
 }
 function sign(payload, capability) {
-  return createHmac("sha256", capability).update(serialize(payload)).digest("hex");
+  return createHmac2("sha256", capability).update(serialize(payload)).digest("hex");
 }
 function verifyBuildReceipt(receipt2, capability, expected) {
   if (receipt2.version !== 1 || !receipt2.payload || !receipt2.signature) {
@@ -69271,7 +69870,7 @@ function verifyBuildReceipt(receipt2, capability, expected) {
   }
   const expectedSignature = Buffer.from(sign(receipt2.payload, capability), "hex");
   const actualSignature = Buffer.from(receipt2.signature, "hex");
-  if (expectedSignature.length !== actualSignature.length || !timingSafeEqual4(expectedSignature, actualSignature)) {
+  if (expectedSignature.length !== actualSignature.length || !timingSafeEqual5(expectedSignature, actualSignature)) {
     throw new Error("BUILD_RECEIPT_INVALID: build receipt signature is invalid");
   }
   for (const [key, value] of Object.entries(expected)) {
@@ -69280,108 +69879,6 @@ function verifyBuildReceipt(receipt2, capability, expected) {
     }
   }
   return receipt2.payload;
-}
-
-// packages/rn-dev-agent-core/dist/session/metro-binding.js
-init_metro_cwd();
-init_process_birth();
-import { execFileSync as execFileSync12 } from "node:child_process";
-function numericListener(output, emptyStatus) {
-  const value = String(output).trim();
-  if (!value)
-    return { status: emptyStatus };
-  const candidates = value.split(/\s+/);
-  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
-    return { status: "unknown" };
-  }
-  const pids = new Set(candidates.map(Number));
-  const [pid] = pids;
-  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-}
-function probeMetroListener(port, platform = process.platform, execute = execFileSync12) {
-  try {
-    if (platform === "win32") {
-      const output = execute("powershell.exe", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
-      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
-      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
-    }
-    if (platform === "linux") {
-      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2e3
-      });
-      const value = String(output).trim();
-      if (!value)
-        return { status: "absent" };
-      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
-      const [pid] = pids;
-      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-    }
-    if (platform === "darwin") {
-      const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 2e3
-      });
-      return numericListener(output, "unknown");
-    }
-    return { status: "unknown" };
-  } catch (error2) {
-    const failure = error2;
-    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
-  }
-}
-function metroListenerPid(port, platform = process.platform, execute = execFileSync12) {
-  const probe = probeMetroListener(port, platform, execute);
-  return probe.status === "listening" ? probe.pid : null;
-}
-async function fetchMetroStatus(port) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2e3);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/status`, {
-      signal: controller.signal
-    });
-    if (!response.ok)
-      throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function captureMetroBinding(input, dependencies = {}) {
-  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
-  }
-  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
-  if (listenerPid !== input.pid) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
-  if (!birth) {
-    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
-  }
-  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
-  if (!status.includes("packager-status:running")) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
-  }
-  const servingRoot = (dependencies.servingRoot ?? cwdForPort)(input.port);
-  if (!servingRoot || !pathMatchesRoot(servingRoot, input.sourceRoot)) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
-  }
-  return {
-    port: input.port,
-    pid: input.pid,
-    birth: birth.token,
-    instanceId: input.instanceId,
-    servingRoot,
-    buildGeneration: input.buildGeneration
-  };
 }
 
 // packages/rn-dev-agent-core/dist/session/build-adapter.js
@@ -70104,270 +70601,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
 import { dirname as dirname19, join as join52 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 init_process_birth();
-
-// packages/rn-dev-agent-core/dist/session/managed-metro.js
-import { execFileSync as execFileSync13, spawn as spawn7 } from "node:child_process";
-import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
-init_process_birth();
-var METRO_LAUNCHER_SOURCE = String.raw`
-const { spawn } = require('node:child_process');
-const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
-const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
-if (!executable) process.exit(1);
-const child = spawn(executable, args, {
-  cwd: process.cwd(),
-  env: process.env,
-  stdio: 'inherit',
-});
-child.once('error', () => process.exit(1));
-child.once('exit', (code, signal) => {
-  process.exit(signal ? 1 : (code ?? 1));
-});
-setInterval(() => {}, 1 << 30);
-`;
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync13) {
-  return probeMetroListener(port, platform, execute);
-}
-function managementProof(sessionId, authority, signerCapability) {
-  return createHmac2("sha256", signerCapability).update([
-    sessionId,
-    authority.port,
-    authority.pid,
-    authority.birth,
-    authority.launcherPid,
-    authority.launcherBirth,
-    authority.instanceId
-  ].join("\0")).digest("hex");
-}
-function signalProcessTree(input) {
-  if (process.platform === "win32") {
-    const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
-    execFileSync13("taskkill.exe", ["/PID", String(pid), "/T"], {
-      stdio: "ignore",
-      timeout: 2e3
-    });
-    return;
-  }
-  process.kill(-input.launcherPid, input.signal);
-}
-function exactProcessState(expected, probe) {
-  if (probe.status === "unknown")
-    return "unknown";
-  if (probe.status === "absent")
-    return "stopped";
-  return probe.birth.token === expected.birth ? "present" : "stopped";
-}
-async function stopManagedMetroProcesses(input, dependencies) {
-  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
-  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
-  const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve8) => setTimeout(resolve8, ms)));
-  const inspect = () => {
-    const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
-    const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
-    const port = probeListener(input.port);
-    return { launcher, listener, port };
-  };
-  const initial = inspect();
-  if (initial.launcher === "unknown" || initial.listener === "unknown" || initial.port.status === "unknown") {
-    return false;
-  }
-  if (initial.port.status === "listening" && (input.listener ? initial.port.pid !== input.listener.pid || initial.listener !== "present" : initial.launcher !== "present")) {
-    return false;
-  }
-  if (initial.launcher === "stopped" && initial.listener === "stopped" && initial.port.status === "absent") {
-    return true;
-  }
-  try {
-    signalTree({
-      launcherPid: input.launcher.pid,
-      listenerPid: input.listener?.pid ?? input.launcher.pid,
-      launcherPresent: initial.launcher === "present",
-      signal: "SIGTERM"
-    });
-  } catch {
-    return false;
-  }
-  const deadline = Date.now() + 2e3;
-  while (true) {
-    const current = inspect();
-    if (current.launcher === "unknown" || current.listener === "unknown" || current.port.status === "unknown") {
-      return false;
-    }
-    if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
-      return true;
-    }
-    if (current.port.status === "listening" && input.listener && (current.port.pid !== input.listener.pid || current.listener !== "present")) {
-      return false;
-    }
-    if (Date.now() >= deadline)
-      return false;
-    await wait(25);
-  }
-}
-async function stopManagedMetro(binding, input, dependencies = {}) {
-  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
-    return false;
-  }
-  const expected = managementProof(input.sessionId, {
-    port: binding.port,
-    pid: binding.pid,
-    birth: binding.birth,
-    launcherPid: binding.launcherPid,
-    launcherBirth: binding.launcherBirth,
-    instanceId: binding.instanceId
-  }, input.signerCapability);
-  const expectedBuffer = Buffer.from(expected, "hex");
-  const observedBuffer = Buffer.from(binding.managementProof, "hex");
-  if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual5(expectedBuffer, observedBuffer)) {
-    return false;
-  }
-  return stopManagedMetroProcesses({
-    port: binding.port,
-    launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
-    listener: { pid: binding.pid, birth: binding.birth }
-  }, dependencies);
-}
-
-// packages/rn-dev-agent-core/dist/tools/session.js
 init_device_arbiter();
-
-// packages/rn-dev-agent-core/dist/session/process-cleanup.js
-init_release_android_slot();
-import { execFile as execFileCb22 } from "node:child_process";
-import { promisify as promisify28 } from "node:util";
-init_process_birth();
-init_registry();
-var execFile26 = promisify28(execFileCb22);
-async function waitForExactStopped(probe, deadlineMs, code, message) {
-  while (true) {
-    const status = probe();
-    if (status === "stopped")
-      return;
-    if (status === "unknown") {
-      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
-    }
-    if (Date.now() >= deadlineMs) {
-      throw new SessionAuthorityError(code, message);
-    }
-    await new Promise((resolve8) => setTimeout(resolve8, 25));
-  }
-}
-async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request2 = fetch) {
-  const deadlineMs = Date.now() + timeoutMs;
-  const port = Number(binding.port);
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? "");
-  const instanceId = String(binding.instanceId ?? "");
-  const capability = String(binding.cleanupCapability ?? "");
-  if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup authority is incomplete");
-  }
-  const currentListener = listenerProbe(port);
-  if (currentListener.status === "unknown") {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener lookup is inconclusive");
-  }
-  if (currentListener.status === "absent" || currentListener.pid !== pid)
-    return;
-  const currentBirth = processProbe(pid);
-  if (currentBirth.status === "unknown") {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe process identity is unavailable");
-  }
-  if (currentBirth.status === "absent") {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener identity is internally inconsistent");
-  }
-  if (currentBirth.birth.token !== expectedBirth) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener PID was reused before cleanup completed");
-  }
-  const remainingMs = deadlineMs - Date.now();
-  if (remainingMs <= 0) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup timed out before the stop request");
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), remainingMs);
-  let response;
-  try {
-    response = await request2(`http://127.0.0.1:${port}/api/stop`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${capability}`,
-        "x-rn-observe-instance": instanceId
-      },
-      signal: controller.signal
-    });
-  } catch {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup request failed or timed out");
-  } finally {
-    clearTimeout(timeout);
-  }
-  if (!response.ok) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe server refused fenced cleanup");
-  }
-  await waitForExactStopped(() => {
-    const observed = listenerProbe(port);
-    if (observed.status === "unknown")
-      return "unknown";
-    return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
-  }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
-}
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile26("adb", args, { timeout: 5e3, encoding: "utf8" })) {
-  const deadlineMs = Date.now() + timeoutMs;
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? "");
-  const instanceId = String(binding.instanceId ?? "");
-  const capability = String(binding.capability ?? "");
-  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
-  }
-  const platform = String(binding.platform ?? "");
-  const deviceId = String(binding.deviceId ?? "");
-  const port = Number(binding.port);
-  const current = processProbe(pid);
-  if (current.status === "unknown") {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
-  }
-  if (current.status === "present" && current.birth.token === expectedBirth) {
-    signalProcess(pid, "SIGTERM");
-    await waitForExactStopped(() => {
-      const observed = processProbe(pid);
-      if (observed.status === "unknown")
-        return "unknown";
-      return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
-    }, deadlineMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
-  }
-  if (platform !== "android")
-    return;
-  if (!deviceId || !Number.isSafeInteger(port)) {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "Android runner cleanup identity is incomplete");
-  }
-  const serial = ["-s", deviceId];
-  try {
-    await runAdb([...serial, "forward", "--remove", `tcp:${port}`]);
-    for (const pkg of OWNED_PACKAGES) {
-      await runAdb([...serial, "shell", "am", "force-stop", pkg]);
-      const process3 = await runAdb([...serial, "shell", "sh", "-c", `pidof ${pkg} || true`]);
-      if (process3.stdout.trim()) {
-        throw new Error(`${pkg} remains alive after force-stop`);
-      }
-    }
-    const instrumentation = await runAdb([
-      ...serial,
-      "shell",
-      "dumpsys",
-      "activity",
-      "instrumentation"
-    ]);
-    const output = `${instrumentation.stdout}
-${instrumentation.stderr}`;
-    if (OWNED_PACKAGES.some((pkg) => output.includes(pkg))) {
-      throw new Error("owned instrumentation remains registered");
-    }
-  } catch (error2) {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
-  }
-}
-
-// packages/rn-dev-agent-core/dist/tools/session.js
 function sameMetroAuthority(current, next) {
   return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
 }
@@ -70635,6 +70869,16 @@ function createSessionHandler(runtime, dependencies = {}) {
             targetInstance: status2.worker.instanceId
           });
         }
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup binding disappeared while fenced");
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
+        }
+        const afterRecorder = registry2.getSessionStatus(session.sessionId);
+        cleanup = afterRecorder?.bindings.handoffCleanup;
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
           const runnerCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "runner");
           if (!runnerCleanup) {
@@ -70700,6 +70944,14 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         const adopted = registry2.getSessionStatus(session.sessionId);
         const cleanup = adopted?.bindings.handoffCleanup;
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup binding disappeared while fenced");
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+        }
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
           const runnerCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "runner");
           if (!runnerCleanup) {
@@ -70760,6 +71012,14 @@ function createSessionHandler(runtime, dependencies = {}) {
       }
       const metro = status.bindings.metro;
       const runner = status.bindings.runner;
+      const recorder2 = status.bindings.recorder;
+      if (recorder2) {
+        const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
+        if (!status.claims.some((claim) => claim.type === "recorder" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup claim no longer matches the authenticated binding");
+        }
+        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder2);
+      }
       if (runner) {
         const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
         if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {

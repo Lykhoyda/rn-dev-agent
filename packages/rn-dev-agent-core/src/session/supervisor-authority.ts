@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ProcessBirth } from './process-birth.js';
-import { stopBoundObserve, stopBoundRunner } from './process-cleanup.js';
+import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import type { OwnerStatus, SessionRef, SessionRegistry } from './registry.js';
 import { openSessionRegistry } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
@@ -49,6 +49,7 @@ export function createSupervisorAuthority(
   dependencies: {
     stopManagedMetro?: typeof stopManagedMetro;
     stopBoundRunner?: typeof stopBoundRunner;
+    stopBoundRecorder?: typeof stopBoundRecorder;
     stopBoundObserve?: typeof stopBoundObserve;
   } = {},
 ): SupervisorAuthority {
@@ -223,6 +224,27 @@ export function createSupervisorAuthority(
           status = registry.beginSessionClose(session);
         }
         if (status) {
+          const recorder = status.bindings.recorder as
+            | Record<string, unknown>
+            | null
+            | undefined;
+          if (recorder) {
+            const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
+            if (
+              !status.claims.some(
+                (claim) =>
+                  claim.type === 'recorder' &&
+                  claim.key === claimKey &&
+                  claim.sessionId === session.sessionId &&
+                  claim.claimEpoch === session.claimEpoch,
+              )
+            ) {
+              throw new Error(
+                'RECORDING_AUTHORITY_MISMATCH: recorder cleanup claim no longer matches the closing binding',
+              );
+            }
+            await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(recorder);
+          }
           const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
           if (runner) {
             const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(

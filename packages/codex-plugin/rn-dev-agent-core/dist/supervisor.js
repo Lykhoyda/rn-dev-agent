@@ -13393,7 +13393,7 @@ function classifyExecError(err) {
   const e = err;
   const killed = e?.killed === true;
   const overflow = e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
-  return { timedOut: killed && !overflow, outputTruncated: overflow };
+  return { timedOut: (killed || e?.code === "ETIMEDOUT") && !overflow, outputTruncated: overflow };
 }
 function formatFailureHeadline(summary, cls, fallbackMsg) {
   if (cls.timedOut) {
@@ -14250,6 +14250,12 @@ var init_registry = __esm({
             ...JSON.parse(current.bindings_json),
             ...input.bindings
           };
+          for (const resource of input.claimResources ?? []) {
+            const claim = this.#findConflictingClaim(resource);
+            if (claim && (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
+              throw claimConflict(claim);
+            }
+          }
           if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install") || Object.hasOwn(input.bindings, "runner")) {
             const currentBindings = JSON.parse(current.bindings_json);
             const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
@@ -14261,6 +14267,16 @@ var init_registry = __esm({
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+          }
+          const leaseUntil = now + this.#leaseMs;
+          for (const resource of input.claimResources ?? []) {
+            this.#database.prepare(`INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
           }
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
@@ -14610,7 +14626,7 @@ var init_registry = __esm({
           const leaseUntil = now + this.#leaseMs;
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(session.session_id, session.claim_epoch);
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'recorder')`).run(session.session_id, session.claim_epoch);
           this.#database.prepare(`UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session.session_id, session.claim_epoch);
           this.#database.prepare(`UPDATE sessions
@@ -14680,14 +14696,19 @@ var init_registry = __esm({
           if (bindingsRunnerPresent(prior.bindings_json) && !priorRunnerClaim?.resource_key) {
             throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner binding has no exclusive cleanup claim");
           }
+          const bindings = JSON.parse(prior.bindings_json);
+          const priorRecorderClaim = this.#database.prepare(`SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'recorder'`).get(prior.session_id, prior.claim_epoch);
+          if (bindings.recorder && !priorRecorderClaim?.resource_key) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder binding has no exclusive cleanup claim");
+          }
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch);
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')`).run(prior.session_id, prior.claim_epoch);
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-          const bindings = JSON.parse(prior.bindings_json);
           const targetBindings = JSON.parse(targetRow.bindings_json);
           const managedMetro = bindings.metro && typeof bindings.metro === "object" && bindings.metro.mode === "managed" ? bindings.metro : null;
           this.#database.prepare(`UPDATE sessions
@@ -14698,6 +14719,7 @@ var init_registry = __esm({
             metro: managedMetro ? null : bindings.metro,
             bundle: null,
             runner: null,
+            recorder: null,
             observe: null,
             proof: null,
             pendingBuild: null,
@@ -14717,6 +14739,12 @@ var init_registry = __esm({
               runner: bindings.runner && typeof bindings.runner === "object" ? {
                 ...bindings.runner,
                 claimKey: priorRunnerClaim?.resource_key,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              recorder: bindings.recorder && typeof bindings.recorder === "object" ? {
+                ...bindings.recorder,
+                claimKey: priorRecorderClaim?.resource_key,
                 stopRequestedAt: null,
                 completedAt: null
               } : null
@@ -14750,6 +14778,14 @@ var init_registry = __esm({
             const claim = this.#findClaim("runner", claimKey);
             if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.capability !== "string" || typeof binding.instanceId !== "string") {
               throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner cleanup claim no longer matches the authenticated binding");
+            }
+          }
+          if (resource === "recorder") {
+            const claimKey = String(binding.claimKey ?? "");
+            const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}`;
+            const claim = this.#findClaim("recorder", claimKey);
+            if (!claimKey || claimKey !== expectedClaimKey || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch || typeof binding.scope !== "string" || binding.phase !== "starting" && typeof binding.processBirth !== "string") {
+              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "handoff recorder cleanup claim no longer matches the authenticated binding");
             }
           }
           if (resource === "metro") {
@@ -14796,6 +14832,11 @@ var init_registry = __esm({
              WHERE resource_type = 'runner' AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
           }
+          if (resource === "recorder") {
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = 'recorder' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+          }
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
             ...bindings,
@@ -14816,7 +14857,7 @@ var init_registry = __esm({
           }
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
-          for (const resource of ["metro", "runner", "observe"]) {
+          for (const resource of ["metro", "runner", "observe", "recorder"]) {
             const binding = cleanup?.[resource];
             if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
@@ -14962,6 +15003,7 @@ var init_registry = __esm({
               install: priorBindings.install ?? null,
               bundle: null,
               runner: null,
+              recorder: null,
               observe: null,
               proof: null,
               handoffCleanup: priorCleanup
@@ -14975,6 +15017,7 @@ var init_registry = __esm({
           const metroCleanup = priorBindings.metroCleanup && typeof priorBindings.metroCleanup === "object" ? priorBindings.metroCleanup : priorMetro?.mode === "managed" ? priorMetro : null;
           const runnerCleanup = priorBindings.runner && typeof priorBindings.runner === "object" ? priorBindings.runner : null;
           const observeCleanup = priorBindings.observe && typeof priorBindings.observe === "object" ? priorBindings.observe : null;
+          const recorderCleanup = priorBindings.recorder && typeof priorBindings.recorder === "object" ? priorBindings.recorder : null;
           if (activeOperation?.profile === "transition:ensure-metro" && !metroCleanup && !priorBindings.metro) {
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "stale Metro transition has not published exact cleanup authority");
           }
@@ -14986,6 +15029,14 @@ var init_registry = __esm({
               throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner cleanup claim no longer matches the authenticated binding");
             }
           }
+          let recorderClaimKey = null;
+          if (recorderCleanup) {
+            recorderClaimKey = `${String(recorderCleanup.platform)}:${String(recorderCleanup.deviceId)}`;
+            const recorderClaim = this.#findClaim("recorder", recorderClaimKey);
+            if (recorderClaim?.session_id !== prior.session_id || recorderClaim.claim_epoch !== prior.claim_epoch) {
+              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup claim no longer matches the authenticated binding");
+            }
+          }
           if (observeCleanup) {
             const observePort = String(observeCleanup.port);
             const observeClaim = this.#findClaim("observe-port", observePort);
@@ -14993,14 +15044,12 @@ var init_registry = __esm({
               throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup claim no longer matches the authenticated binding");
             }
           }
-          this.#database.prepare(runnerCleanup ? `DELETE FROM claims
-               WHERE session_id = ? AND claim_epoch = ?
-                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')` : `DELETE FROM claims
-               WHERE session_id = ? AND claim_epoch = ?
-                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
+          this.#database.prepare(`DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup);
+          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup || recorderCleanup);
           const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
@@ -15015,6 +15064,7 @@ var init_registry = __esm({
             install: priorBindings.install ?? null,
             bundle: null,
             runner: null,
+            recorder: null,
             observe: null,
             proof: null,
             handoffCleanup: cleanupRequired ? {
@@ -15027,6 +15077,12 @@ var init_registry = __esm({
               runner: runnerCleanup ? {
                 ...runnerCleanup,
                 claimKey: runnerClaimKey,
+                stopRequestedAt: null,
+                completedAt: null
+              } : null,
+              recorder: recorderCleanup ? {
+                ...recorderCleanup,
+                claimKey: recorderClaimKey,
                 stopRequestedAt: null,
                 completedAt: null
               } : null,
@@ -22208,6 +22264,80 @@ ${instrumentation.stderr}`;
     }
   } catch (error2) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
+}
+async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile15(script, args, { timeout: 6e4, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 })) {
+  const script = String(binding.script ?? "");
+  const scope = String(binding.scope ?? "");
+  const pid = Number(binding.pid);
+  const expectedBirth = String(binding.processBirth ?? "");
+  if (!script || !/^[a-f0-9]{64}$/.test(scope)) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
+  }
+  if (binding.phase === "starting") {
+    try {
+      const initialStatus = await runRecorder(script, ["status", scope]);
+      const active = initialStatus.stdout.match(/^(?:ios|android): pid=(\d+) birth=(\S+) status=\w+ output=.*$/m);
+      let output = "";
+      if (active) {
+        const provisionalPid = Number(active[1]);
+        const reportedBirth = active[2];
+        const current2 = processProbe(provisionalPid);
+        if (current2.status === "unknown") {
+          throw new Error("provisional recorder process identity is unavailable");
+        }
+        if (current2.status === "present") {
+          if (reportedBirth !== "unbound" && reportedBirth !== current2.birth.token) {
+            throw new Error("provisional recorder PID was reused before cleanup");
+          }
+          await runRecorder(script, [
+            "bind-identity",
+            scope,
+            String(provisionalPid),
+            current2.birth.token
+          ]);
+          output = (await runRecorder(script, [
+            "stop",
+            scope,
+            String(provisionalPid),
+            current2.birth.token
+          ])).stdout;
+        } else {
+          await runRecorder(script, ["abort", scope]);
+        }
+      } else if (/^No active recordings/m.test(initialStatus.stdout)) {
+        await runRecorder(script, ["abort", scope]);
+      } else {
+        throw new Error("provisional recorder status is not parseable");
+      }
+      const finalStatus = await runRecorder(script, ["status", scope]);
+      if (!/^No active recordings/m.test(finalStatus.stdout)) {
+        throw new Error("provisional recorder state remains active after cleanup");
+      }
+      return output;
+    } catch (error2) {
+      throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `provisional recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    }
+  }
+  if (!Number.isSafeInteger(pid) || !expectedBirth) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
+  }
+  const current = processProbe(pid);
+  if (current.status === "unknown") {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder process identity is unavailable");
+  }
+  if (current.status === "present" && current.birth.token !== expectedBirth) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder PID was reused before cleanup completed");
+  }
+  try {
+    const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);
+    const status = await runRecorder(script, ["status", scope]);
+    if (!/^No active recordings/m.test(status.stdout)) {
+      throw new Error("recorder state remains active after cleanup");
+    }
+    return stopped.stdout;
+  } catch (error2) {
+    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
 var execFile15;
@@ -56445,6 +56575,7 @@ function projectPublicAuthorityStatus(status) {
     metroBound: Boolean(status.bindings.metro),
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
+    recorderBound: Boolean(status.bindings.recorder),
     ...recoveryStatus ? { recovery: recoveryStatus } : {},
     migration: inspectAuthorityMigration(status)
   };
@@ -63984,6 +64115,128 @@ var init_device_deeplink = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/runtime.js
+function unavailable(reason, fallbackCode) {
+  const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
+  return new WorkerAuthorityRuntime(null, null, {
+    code: matched?.[1] ?? fallbackCode,
+    reason
+  });
+}
+function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
+  if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
+    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
+  }
+  const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);
+  const registryPath = environment.RN_DEV_AGENT_REGISTRY_PATH;
+  const workerInstance = environment.RN_DEV_AGENT_WORKER_INSTANCE;
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
+    return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
+  if (!birth) {
+    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
+  }
+  try {
+    const registry2 = openSessionRegistry(registryPath, {
+      ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
+    });
+    const session = { sessionId, claimEpoch };
+    const status = registry2.getSessionStatus(sessionId);
+    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
+    if (recoveryOnly) {
+      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
+      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
+      if (!recoveryCapability) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
+      }
+      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
+    } else {
+      registry2.bindWorker(session, {
+        instanceId: workerInstance,
+        pid: birth.pid,
+        token: birth.token
+      });
+    }
+    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
+  } catch (error2) {
+    return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
+  }
+}
+function getWorkerAuthorityRuntime() {
+  sharedRuntime ??= createWorkerAuthorityRuntime();
+  return sharedRuntime;
+}
+var WorkerAuthorityRuntime, sharedRuntime;
+var init_runtime = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime.js"() {
+    "use strict";
+    init_process_birth();
+    init_process_owner();
+    init_registry();
+    init_secure_state_file();
+    WorkerAuthorityRuntime = class {
+      available;
+      #registry;
+      #session;
+      #unavailable;
+      #recoveryOnly;
+      constructor(registry2, session, unavailable2, recoveryOnly = false) {
+        this.#registry = registry2;
+        this.#session = session;
+        this.#unavailable = unavailable2;
+        this.available = registry2 !== null && session !== null;
+        this.#recoveryOnly = recoveryOnly;
+      }
+      requireAvailable() {
+        if (!this.#registry || !this.#session) {
+          throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
+        }
+        return { registry: this.#registry, session: this.#session };
+      }
+      requireOperational() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
+        }
+        return available;
+      }
+      requireRecovery() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
+        }
+        return available;
+      }
+      status() {
+        if (!this.#registry || !this.#session) {
+          return {
+            available: false,
+            code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
+            reason: this.#unavailable?.reason ?? "authority session is unavailable"
+          };
+        }
+        const status = this.#registry.getSessionStatus(this.#session.sessionId);
+        if (!status) {
+          return {
+            available: false,
+            code: "SESSION_OWNER_LOST",
+            reason: "session is no longer present in the authority registry"
+          };
+        }
+        return { available: true, ...status };
+      }
+      close() {
+        this.#registry?.close();
+      }
+    };
+    sharedRuntime = null;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile23 } from "node:child_process";
 import { createHash as createHash10 } from "node:crypto";
@@ -64131,19 +64384,41 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  if (!args.sessionId || !Number.isSafeInteger(args.claimEpoch) || !args.platform || !args.deviceId) {
-    return null;
-  }
   return createHash10("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
-async function runStart(args) {
-  const platform = args.platform ?? await detectPlatform();
-  if (!platform) {
-    return failResult("No iOS simulator or Android device detected. Boot a device or pass platform explicitly.", { code: "NO_DEVICE" });
+function bindRecorderSession(runtime, args) {
+  const available = runtime.requireAvailable();
+  const status = runtime.status();
+  if (!status.available)
+    throw new Error(`${status.code}: ${status.reason}`);
+  const device = status.bindings.device;
+  const platform = device?.platform;
+  const deviceId = device?.deviceId;
+  if (platform !== "ios" && platform !== "android" || typeof deviceId !== "string" || !deviceId) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: recorder requires an exact claimed device");
   }
-  if (platform !== "ios" && platform !== "android") {
-    return failResult(`Unknown platform: "${platform}". Expected ios or android.`);
+  if (args.platform !== void 0 && args.platform !== platform) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: recorder platform contradicts the session");
   }
+  if (args.deviceId !== void 0 && args.deviceId !== deviceId) {
+    throw new Error("DEVICE_AUTHORITY_MISMATCH: recorder device contradicts the session");
+  }
+  args.platform = platform;
+  args.deviceId = deviceId;
+  args.sessionId = status.sessionId;
+  args.claimEpoch = status.claimEpoch;
+  return { ...available, status, platform, deviceId };
+}
+async function runStart(args, runtime) {
+  let authority;
+  try {
+    authority = bindRecorderSession(runtime, args);
+  } catch (error2) {
+    return failResult(error2 instanceof Error ? error2.message : String(error2), {
+      code: "SESSION_STALE"
+    });
+  }
+  const platform = authority.platform;
   if (args.outputPath && pathHasTraversal(args.outputPath)) {
     return failResult(`device_record: outputPath "${args.outputPath}" contains '..' traversal segments \u2014 refuse to write to a path that escapes its parent directory`, { code: "INVALID_PATH" });
   }
@@ -64161,29 +64436,67 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
   }
   args.platform = platform;
   args.deviceId = resolution.deviceId;
-  const scope = recordingScope(args);
-  if (!scope) {
-    return failResult("device_record requires an authority-bound session identity", {
-      code: "SESSION_STALE"
+  if (authority.status.bindings.recorder) {
+    return failResult("Recording already in progress for this session and device.", {
+      code: "ALREADY_RECORDING"
     });
   }
+  const scope = recordingScope({
+    sessionId: authority.status.sessionId,
+    claimEpoch: authority.status.claimEpoch,
+    platform,
+    deviceId: resolution.deviceId
+  });
+  const script = getRecordScript();
+  const claimKey = `${platform}:${resolution.deviceId}`;
   const scriptArgs = ["start", platform, outputPath, "--scope", scope];
   scriptArgs.push(platform === "ios" ? "--udid" : "--serial", resolution.deviceId);
   try {
-    const { stdout } = await execFileAsync5(getRecordScript(), scriptArgs, {
+    authority.registry.updateBindings(authority.session, {
+      bindings: {
+        recorder: {
+          phase: "starting",
+          platform,
+          deviceId: resolution.deviceId,
+          output: outputPath,
+          scope,
+          script,
+          claimKey,
+          sessionId: authority.status.sessionId,
+          claimEpoch: authority.status.claimEpoch
+        }
+      },
+      claimResources: [{ type: "recorder", key: claimKey }]
+    });
+    const { stdout } = await execFileAsync5(script, scriptArgs, {
       timeout: START_TIMEOUT_MS
     });
     const parsed = parseStartOutput(stdout);
     if (!parsed) {
-      return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
+      throw new Error(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
     }
     const processIdentity = probeProcessBirth(parsed.pid);
     if (processIdentity.status !== "present") {
-      return failResult("Recording started but its process identity could not be proven", {
-        code: "RECORDING_AUTHORITY_MISMATCH"
-      });
+      throw new Error("Recording started but its process identity could not be proven");
     }
-    await execFileAsync5(getRecordScript(), ["bind-identity", scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
+    await execFileAsync5(script, ["bind-identity", scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
+    authority.registry.updateBindings(authority.session, {
+      bindings: {
+        recorder: {
+          phase: "recording",
+          platform,
+          deviceId: resolution.deviceId,
+          output: parsed.output,
+          scope,
+          pid: parsed.pid,
+          processBirth: processIdentity.birth.token,
+          script,
+          claimKey,
+          sessionId: authority.status.sessionId,
+          claimEpoch: authority.status.claimEpoch
+        }
+      }
+    });
     return okResult({
       action: "start",
       platform,
@@ -64195,6 +64508,23 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
       note: "Call device_record action=stop to finalize. Android caps at 180s; iOS has no inherent cap but xcrun simctl io may stall on long captures."
     });
   } catch (e) {
+    const aborted2 = await stopBoundRecorder({
+      phase: "starting",
+      platform,
+      deviceId: resolution.deviceId,
+      output: outputPath,
+      scope,
+      script,
+      claimKey,
+      sessionId: authority.status.sessionId,
+      claimEpoch: authority.status.claimEpoch
+    }).then(() => true).catch(() => false);
+    if (aborted2) {
+      authority.registry.updateBindings(authority.session, {
+        bindings: { recorder: null },
+        releaseResources: [{ type: "recorder", key: claimKey }]
+      });
+    }
     const err = e;
     const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);
     if (/No iOS simulator booted/.test(detail)) {
@@ -64211,40 +64541,29 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
     return failResult(`record_proof.sh start failed: ${detail}`);
   }
 }
-async function runStop(args) {
-  const scope = recordingScope(args);
-  if (!scope) {
-    return failResult("device_record requires an authority-bound session and exact device", {
+async function runStop(args, runtime) {
+  let authority;
+  try {
+    authority = bindRecorderSession(runtime, args);
+  } catch (error2) {
+    return failResult(error2 instanceof Error ? error2.message : String(error2), {
       code: "SESSION_STALE"
     });
   }
-  let status;
-  try {
-    status = await readScopedStatus(scope);
-  } catch (e) {
-    const err = e;
-    const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);
-    return failResult(`record_proof.sh status failed: ${detail}`);
-  }
-  if (status.length === 0) {
+  const recording = authority.status.bindings.recorder;
+  if (!recording) {
     return warnResult({ saved: [] }, "No active recording for this session and device.", {
       code: "NO_ACTIVE_RECORDING"
     });
   }
-  const recording = status[0];
-  const current = probeProcessBirth(recording.pid);
-  if (current.status !== "present" || current.birth.token !== recording.processBirth || recording.platform !== args.platform) {
-    return failResult("Recording process identity no longer matches this session", {
-      code: "RECORDING_AUTHORITY_MISMATCH"
-    });
-  }
   let stopOutput = "";
   try {
-    const { stdout } = await execFileAsync5(getRecordScript(), ["stop", scope, String(recording.pid), recording.processBirth], {
-      timeout: STOP_TIMEOUT_MS,
-      maxBuffer: 8 * 1024 * 1024
+    stopOutput = await stopBoundRecorder(recording);
+    const claimKey = String(recording.claimKey ?? "");
+    authority.registry.updateBindings(authority.session, {
+      bindings: { recorder: null },
+      releaseResources: claimKey ? [{ type: "recorder", key: claimKey }] : []
     });
-    stopOutput = stdout;
   } catch (e) {
     const err = e;
     const detail = (err.stderr || "").trim() || (err.message || "").trim() || String(e);
@@ -64292,21 +64611,26 @@ async function runStop(args) {
     ...gifWarnings.length > 0 ? { gifWarnings } : {}
   });
 }
-async function readScopedStatus(scope) {
-  const { stdout } = await execFileAsync5(getRecordScript(), ["status", scope], {
+async function readScopedStatus(script, scope) {
+  const { stdout } = await execFileAsync5(script, ["status", scope], {
     timeout: STATUS_TIMEOUT_MS
   });
   return parseStatusOutput(stdout);
 }
-async function runStatus(args) {
-  const scope = recordingScope(args);
-  if (!scope) {
-    return failResult("device_record requires an authority-bound session and exact device", {
+async function runStatus(args, runtime) {
+  let authority;
+  try {
+    authority = bindRecorderSession(runtime, args);
+  } catch (error2) {
+    return failResult(error2 instanceof Error ? error2.message : String(error2), {
       code: "SESSION_STALE"
     });
   }
+  const recording = authority.status.bindings.recorder;
+  if (!recording)
+    return okResult({ action: "status", active: [] });
   try {
-    const active = await readScopedStatus(scope);
+    const active = await readScopedStatus(String(recording.script ?? ""), String(recording.scope ?? ""));
     return okResult({ action: "status", active });
   } catch (e) {
     const err = e;
@@ -64314,28 +64638,29 @@ async function runStatus(args) {
     return failResult(`record_proof.sh status failed: ${detail}`);
   }
 }
-function createDeviceRecordHandler() {
+function createDeviceRecordHandler(deps = {}) {
+  const runtime = deps.runtime ?? getWorkerAuthorityRuntime();
   return async (args) => {
     if (args.action === "start")
-      return runStart(args);
+      return runStart(args, runtime);
     if (args.action === "stop")
-      return runStop(args);
+      return runStop(args, runtime);
     if (args.action === "status")
-      return runStatus(args);
+      return runStatus(args, runtime);
     return failResult(`Unknown action: "${args.action}". Expected start, stop, or status.`);
   };
 }
-var execFileAsync5, START_TIMEOUT_MS, STOP_TIMEOUT_MS, STATUS_TIMEOUT_MS, GIF_TIMEOUT_MS;
+var execFileAsync5, START_TIMEOUT_MS, STATUS_TIMEOUT_MS, GIF_TIMEOUT_MS;
 var init_device_record = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-record.js"() {
     "use strict";
     init_utils();
-    init_platform_utils();
     init_path_safety();
     init_process_birth();
+    init_runtime();
+    init_process_cleanup();
     execFileAsync5 = promisify25(execFile23);
     START_TIMEOUT_MS = 1e4;
-    STOP_TIMEOUT_MS = 6e4;
     STATUS_TIMEOUT_MS = 5e3;
     GIF_TIMEOUT_MS = 6e4;
   }
@@ -65368,6 +65693,24 @@ function createProofCaptureHandler(deps) {
     active.invalidationReasons = ["PROOF_PATH_DRIFT"];
     return proofFailure(active.invalidationReasons, active.stage);
   };
+  const currentAuthority = (active) => {
+    try {
+      return deps.authority(active.context.runId);
+    } catch {
+      return null;
+    }
+  };
+  const authorityMatches = (active) => {
+    const current = currentAuthority(active);
+    return current !== null && hashProofValue(current) === hashProofValue(active.authority);
+  };
+  const refreshAuthority = (active) => {
+    const current = currentAuthority(active);
+    if (!current)
+      return false;
+    active.authority = current;
+    return true;
+  };
   const artifactPaths = (active) => [
     active.context.receiptPath,
     active.context.videoPath,
@@ -65835,6 +66178,9 @@ function createProofCaptureHandler(deps) {
       }
       if (!stillAtStart())
         return proofFailure(["START_STATE_DRIFT"], active.stage);
+      if (!authorityMatches(active)) {
+        return proofFailure(["PROOF_AUTHORITY_CHANGED"], active.stage);
+      }
       let statusResult;
       try {
         statusResult = await deps.record({ action: "status" });
@@ -65871,6 +66217,9 @@ function createProofCaptureHandler(deps) {
       ];
       if (reasons.length > 0)
         return rejectCapture(active, reasons);
+      if (!refreshAuthority(active)) {
+        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
+      }
       active.recordingStartedAt = deps.now();
       active.stage = "recording";
       active.invalidationReasons = [];
@@ -65883,6 +66232,7 @@ function createProofCaptureHandler(deps) {
       active.recordingEvents = deps.monitor.stop();
       active.recordingObservations = deps.monitor.observations();
       const pathDrifted = !contextIsCurrent(active);
+      const authorityChanged = !authorityMatches(active);
       const shutdown2 = await shutdownRecorder(active);
       if (pathDrifted) {
         active.stage = "rejected";
@@ -65891,6 +66241,12 @@ function createProofCaptureHandler(deps) {
       }
       if (!shutdown2.confirmed || shutdown2.reasons.length > 0) {
         return rejectCapture(active, shutdown2.reasons);
+      }
+      if (authorityChanged) {
+        return rejectCapture(active, ["PROOF_AUTHORITY_CHANGED"]);
+      }
+      if (!refreshAuthority(active)) {
+        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
       }
       const saved = shutdown2.stopData?.saved;
       if (!Array.isArray(saved))
@@ -71326,128 +71682,6 @@ var init_action_inventory = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/runtime.js
-function unavailable(reason, fallbackCode) {
-  const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
-  return new WorkerAuthorityRuntime(null, null, {
-    code: matched?.[1] ?? fallbackCode,
-    reason
-  });
-}
-function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
-  if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
-    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
-  }
-  const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
-  const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);
-  const registryPath = environment.RN_DEV_AGENT_REGISTRY_PATH;
-  const workerInstance = environment.RN_DEV_AGENT_WORKER_INSTANCE;
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
-    return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
-  if (!birth) {
-    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
-  }
-  try {
-    const registry2 = openSessionRegistry(registryPath, {
-      ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
-    });
-    const session = { sessionId, claimEpoch };
-    const status = registry2.getSessionStatus(sessionId);
-    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
-    if (recoveryOnly) {
-      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
-      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
-      if (!recoveryCapability) {
-        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
-      }
-      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
-    } else {
-      registry2.bindWorker(session, {
-        instanceId: workerInstance,
-        pid: birth.pid,
-        token: birth.token
-      });
-    }
-    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
-  } catch (error2) {
-    return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
-  }
-}
-function getWorkerAuthorityRuntime() {
-  sharedRuntime ??= createWorkerAuthorityRuntime();
-  return sharedRuntime;
-}
-var WorkerAuthorityRuntime, sharedRuntime;
-var init_runtime = __esm({
-  "packages/rn-dev-agent-core/dist/session/runtime.js"() {
-    "use strict";
-    init_process_birth();
-    init_process_owner();
-    init_registry();
-    init_secure_state_file();
-    WorkerAuthorityRuntime = class {
-      available;
-      #registry;
-      #session;
-      #unavailable;
-      #recoveryOnly;
-      constructor(registry2, session, unavailable2, recoveryOnly = false) {
-        this.#registry = registry2;
-        this.#session = session;
-        this.#unavailable = unavailable2;
-        this.available = registry2 !== null && session !== null;
-        this.#recoveryOnly = recoveryOnly;
-      }
-      requireAvailable() {
-        if (!this.#registry || !this.#session) {
-          throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
-        }
-        return { registry: this.#registry, session: this.#session };
-      }
-      requireOperational() {
-        const available = this.requireAvailable();
-        const status = this.status();
-        if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
-        }
-        return available;
-      }
-      requireRecovery() {
-        const available = this.requireAvailable();
-        const status = this.status();
-        if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
-        }
-        return available;
-      }
-      status() {
-        if (!this.#registry || !this.#session) {
-          return {
-            available: false,
-            code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
-            reason: this.#unavailable?.reason ?? "authority session is unavailable"
-          };
-        }
-        const status = this.#registry.getSessionStatus(this.#session.sessionId);
-        if (!status) {
-          return {
-            available: false,
-            code: "SESSION_OWNER_LOST",
-            reason: "session is no longer present in the authority registry"
-          };
-        }
-        return { available: true, ...status };
-      }
-      close() {
-        this.#registry?.close();
-      }
-    };
-    sharedRuntime = null;
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
 import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 function serialize(payload) {
@@ -72477,6 +72711,16 @@ function createSessionHandler(runtime, dependencies = {}) {
             targetInstance: status2.worker.instanceId
           });
         }
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup binding disappeared while fenced");
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
+        }
+        const afterRecorder = registry2.getSessionStatus(session.sessionId);
+        cleanup = afterRecorder?.bindings.handoffCleanup;
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
           const runnerCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "runner");
           if (!runnerCleanup) {
@@ -72542,6 +72786,14 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         const adopted = registry2.getSessionStatus(session.sessionId);
         const cleanup = adopted?.bindings.handoffCleanup;
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup binding disappeared while fenced");
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+        }
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
           const runnerCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "runner");
           if (!runnerCleanup) {
@@ -72602,6 +72854,14 @@ function createSessionHandler(runtime, dependencies = {}) {
       }
       const metro = status.bindings.metro;
       const runner = status.bindings.runner;
+      const recorder2 = status.bindings.recorder;
+      if (recorder2) {
+        const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
+        if (!status.claims.some((claim) => claim.type === "recorder" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup claim no longer matches the authenticated binding");
+        }
+        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder2);
+      }
       if (runner) {
         const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
         if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
@@ -75153,6 +75413,14 @@ function createSupervisorAuthority(input, dependencies = {}) {
           status = registry2.beginSessionClose(session);
         }
         if (status) {
+          const recorder2 = status.bindings.recorder;
+          if (recorder2) {
+            const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
+            if (!status.claims.some((claim) => claim.type === "recorder" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+              throw new Error("RECORDING_AUTHORITY_MISMATCH: recorder cleanup claim no longer matches the closing binding");
+            }
+            await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(recorder2);
+          }
           const runner = status.bindings.runner;
           if (runner) {
             const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;

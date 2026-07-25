@@ -77,18 +77,23 @@ test('behavioral: stop survives a serial-less single-device Android state (repro
   const hermetic = realSrc
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${pidPrefix}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(base, 'raw')}"`);
+  const scope = 'a'.repeat(64);
 
   const seedState = () => {
-    writeFileSync(`${pidPrefix}-android.pid`, '999999'); // dead pid → no wait loop
-    writeFileSync(`${pidPrefix}-android.path`, join(base, 'out.mp4'));
-    writeFileSync(`${pidPrefix}-android.device-path`, '/sdcard/gh374-nonexistent.mp4');
-    // deliberately NO `${pidPrefix}-android.serial`
+    writeFileSync(`${pidPrefix}-${scope}.pid`, '999999');
+    writeFileSync(`${pidPrefix}-${scope}.birth`, 'birth-token');
+    writeFileSync(`${pidPrefix}-${scope}.platform`, 'android');
+    writeFileSync(`${pidPrefix}-${scope}.path`, join(base, 'out.mp4'));
+    writeFileSync(`${pidPrefix}-${scope}.raw-path`, join(base, 'raw.mp4'));
+    writeFileSync(`${pidPrefix}-${scope}.device-path`, '/sdcard/gh374-nonexistent.mp4');
   };
   const runStop = (scriptText) => {
     const p = join(base, 'record_proof.sh');
     writeFileSync(p, scriptText);
     seedState();
-    const r = spawnSync('bash', [p, 'stop'], { encoding: 'utf8' });
+    const r = spawnSync('bash', [p, 'stop', scope, '999999', 'birth-token'], {
+      encoding: 'utf8',
+    });
     return `${r.stdout || ''}\n${r.stderr || ''}`;
   };
 

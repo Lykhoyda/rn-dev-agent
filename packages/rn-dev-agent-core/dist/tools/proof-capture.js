@@ -713,6 +713,25 @@ export function createProofCaptureHandler(deps) {
         active.invalidationReasons = ['PROOF_PATH_DRIFT'];
         return proofFailure(active.invalidationReasons, active.stage);
     };
+    const currentAuthority = (active) => {
+        try {
+            return deps.authority(active.context.runId);
+        }
+        catch {
+            return null;
+        }
+    };
+    const authorityMatches = (active) => {
+        const current = currentAuthority(active);
+        return current !== null && hashProofValue(current) === hashProofValue(active.authority);
+    };
+    const refreshAuthority = (active) => {
+        const current = currentAuthority(active);
+        if (!current)
+            return false;
+        active.authority = current;
+        return true;
+    };
     const artifactPaths = (active) => [
         active.context.receiptPath,
         active.context.videoPath,
@@ -1263,6 +1282,9 @@ export function createProofCaptureHandler(deps) {
             }
             if (!stillAtStart())
                 return proofFailure(['START_STATE_DRIFT'], active.stage);
+            if (!authorityMatches(active)) {
+                return proofFailure(['PROOF_AUTHORITY_CHANGED'], active.stage);
+            }
             let statusResult;
             try {
                 statusResult = await deps.record({ action: 'status' });
@@ -1301,6 +1323,9 @@ export function createProofCaptureHandler(deps) {
             ];
             if (reasons.length > 0)
                 return rejectCapture(active, reasons);
+            if (!refreshAuthority(active)) {
+                return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
+            }
             active.recordingStartedAt = deps.now();
             active.stage = 'recording';
             active.invalidationReasons = [];
@@ -1313,6 +1338,7 @@ export function createProofCaptureHandler(deps) {
             active.recordingEvents = deps.monitor.stop();
             active.recordingObservations = deps.monitor.observations();
             const pathDrifted = !contextIsCurrent(active);
+            const authorityChanged = !authorityMatches(active);
             const shutdown = await shutdownRecorder(active);
             if (pathDrifted) {
                 active.stage = 'rejected';
@@ -1321,6 +1347,12 @@ export function createProofCaptureHandler(deps) {
             }
             if (!shutdown.confirmed || shutdown.reasons.length > 0) {
                 return rejectCapture(active, shutdown.reasons);
+            }
+            if (authorityChanged) {
+                return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
+            }
+            if (!refreshAuthority(active)) {
+                return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
             }
             const saved = shutdown.stopData?.saved;
             if (!Array.isArray(saved))

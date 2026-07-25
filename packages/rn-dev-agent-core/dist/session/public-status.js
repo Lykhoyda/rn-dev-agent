@@ -34,6 +34,7 @@ export function projectPublicAuthorityStatus(status) {
         metroBound: Boolean(status.bindings.metro),
         bundleBound: Boolean(status.bindings.bundle),
         runnerBound: Boolean(status.bindings.runner),
+        recorderBound: Boolean(status.bindings.recorder),
         ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
         migration: inspectAuthorityMigration(status),
     };

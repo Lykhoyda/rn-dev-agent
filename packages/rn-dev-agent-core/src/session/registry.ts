@@ -62,6 +62,7 @@ export interface HandoffCleanupPlan {
   metro?: Record<string, unknown>;
   observe?: Record<string, unknown>;
   runner?: Record<string, unknown>;
+  recorder?: Record<string, unknown>;
 }
 
 export interface SessionRegistryDependencies {
@@ -695,6 +696,7 @@ export class SessionRegistry {
       bindings: Record<string, unknown>;
       expectedAuthorityVersion?: number;
       releaseResources?: readonly ResourceClaim[];
+      claimResources?: readonly ResourceClaim[];
     },
   ): void {
     const now = this.#now();
@@ -713,6 +715,15 @@ export class SessionRegistry {
         ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
         ...input.bindings,
       };
+      for (const resource of input.claimResources ?? []) {
+        const claim = this.#findConflictingClaim(resource);
+        if (
+          claim &&
+          (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)
+        ) {
+          throw claimConflict(claim);
+        }
+      }
       if (
         Object.hasOwn(input.bindings, 'device') ||
         Object.hasOwn(input.bindings, 'install') ||
@@ -735,6 +746,20 @@ export class SessionRegistry {
                AND session_id = ? AND claim_epoch = ?`,
           )
           .run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+      }
+      const leaseUntil = now + this.#leaseMs;
+      for (const resource of input.claimResources ?? []) {
+        this.#database
+          .prepare(
+            `INSERT INTO claims(
+              resource_type, resource_key, session_id, claim_epoch, lease_until_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(resource_type, resource_key) DO UPDATE SET
+              session_id = excluded.session_id,
+              claim_epoch = excluded.claim_epoch,
+              lease_until_ms = excluded.lease_until_ms`,
+          )
+          .run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
       }
       this.#database
         .prepare(
@@ -1443,7 +1468,7 @@ export class SessionRegistry {
         .prepare(
           `DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`,
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'recorder')`,
         )
         .run(session.session_id, session.claim_epoch);
       this.#database
@@ -1592,6 +1617,19 @@ export class SessionRegistry {
           'handoff runner binding has no exclusive cleanup claim',
         );
       }
+      const bindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
+      const priorRecorderClaim = this.#database
+        .prepare(
+          `SELECT resource_key FROM claims
+           WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'recorder'`,
+        )
+        .get(prior.session_id, prior.claim_epoch) as { resource_key?: unknown } | undefined;
+      if (bindings.recorder && !priorRecorderClaim?.resource_key) {
+        throw new SessionAuthorityError(
+          'RECORDING_AUTHORITY_MISMATCH',
+          'handoff recorder binding has no exclusive cleanup claim',
+        );
+      }
 
       this.#database
         .prepare(
@@ -1603,7 +1641,7 @@ export class SessionRegistry {
         .prepare(
           `DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')`,
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`,
         )
         .run(prior.session_id, prior.claim_epoch);
       this.#database
@@ -1618,7 +1656,6 @@ export class SessionRegistry {
           prior.session_id,
           prior.claim_epoch,
         );
-      const bindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
       const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
       const managedMetro =
         bindings.metro &&
@@ -1639,6 +1676,7 @@ export class SessionRegistry {
             metro: managedMetro ? null : bindings.metro,
             bundle: null,
             runner: null,
+            recorder: null,
             observe: null,
             proof: null,
             pendingBuild: null,
@@ -1665,6 +1703,15 @@ export class SessionRegistry {
                   ? {
                       ...(bindings.runner as Record<string, unknown>),
                       claimKey: priorRunnerClaim?.resource_key,
+                      stopRequestedAt: null,
+                      completedAt: null,
+                    }
+                  : null,
+              recorder:
+                bindings.recorder && typeof bindings.recorder === 'object'
+                  ? {
+                      ...(bindings.recorder as Record<string, unknown>),
+                      claimKey: priorRecorderClaim?.resource_key,
                       stopRequestedAt: null,
                       completedAt: null,
                     }
@@ -1697,7 +1744,7 @@ export class SessionRegistry {
   beginHandoffCleanupResource(
     target: SessionRef,
     targetInstance: string,
-    resource: 'metro' | 'runner' | 'observe',
+    resource: 'metro' | 'runner' | 'observe' | 'recorder',
   ): Record<string, unknown> | null {
     const now = this.#now();
     return this.#transaction(() => {
@@ -1725,6 +1772,24 @@ export class SessionRegistry {
           throw new SessionAuthorityError(
             'RUNNER_OWNERSHIP_MISMATCH',
             'handoff runner cleanup claim no longer matches the authenticated binding',
+          );
+        }
+      }
+      if (resource === 'recorder') {
+        const claimKey = String(binding.claimKey ?? '');
+        const expectedClaimKey = `${String(binding.platform)}:${String(binding.deviceId)}`;
+        const claim = this.#findClaim('recorder', claimKey);
+        if (
+          !claimKey ||
+          claimKey !== expectedClaimKey ||
+          claim?.session_id !== target.sessionId ||
+          claim.claim_epoch !== target.claimEpoch ||
+          typeof binding.scope !== 'string' ||
+          (binding.phase !== 'starting' && typeof binding.processBirth !== 'string')
+        ) {
+          throw new SessionAuthorityError(
+            'RECORDING_AUTHORITY_MISMATCH',
+            'handoff recorder cleanup claim no longer matches the authenticated binding',
           );
         }
       }
@@ -1780,7 +1845,7 @@ export class SessionRegistry {
   completeHandoffCleanupResource(
     target: SessionRef,
     targetInstance: string,
-    resource: 'metro' | 'runner' | 'observe',
+    resource: 'metro' | 'runner' | 'observe' | 'recorder',
   ): void {
     const now = this.#now();
     this.#transaction(() => {
@@ -1802,6 +1867,15 @@ export class SessionRegistry {
           .prepare(
             `DELETE FROM claims
              WHERE resource_type = 'runner' AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`,
+          )
+          .run(String(binding.claimKey), target.sessionId, target.claimEpoch);
+      }
+      if (resource === 'recorder') {
+        this.#database
+          .prepare(
+            `DELETE FROM claims
+             WHERE resource_type = 'recorder' AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`,
           )
           .run(String(binding.claimKey), target.sessionId, target.claimEpoch);
@@ -1850,7 +1924,7 @@ export class SessionRegistry {
       }
       const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
       const cleanup = bindings.handoffCleanup as Record<string, unknown> | undefined;
-      for (const resource of ['metro', 'runner', 'observe'] as const) {
+      for (const resource of ['metro', 'runner', 'observe', 'recorder'] as const) {
         const binding = cleanup?.[resource];
         if (
           binding &&
@@ -2142,6 +2216,7 @@ export class SessionRegistry {
               install: priorBindings.install ?? null,
               bundle: null,
               runner: null,
+              recorder: null,
               observe: null,
               proof: null,
               handoffCleanup: priorCleanup,
@@ -2177,6 +2252,10 @@ export class SessionRegistry {
         priorBindings.observe && typeof priorBindings.observe === 'object'
           ? (priorBindings.observe as Record<string, unknown>)
           : null;
+      const recorderCleanup =
+        priorBindings.recorder && typeof priorBindings.recorder === 'object'
+          ? (priorBindings.recorder as Record<string, unknown>)
+          : null;
       if (
         activeOperation?.profile === 'transition:ensure-metro' &&
         !metroCleanup &&
@@ -2203,6 +2282,22 @@ export class SessionRegistry {
           );
         }
       }
+      let recorderClaimKey: string | null = null;
+      if (recorderCleanup) {
+        recorderClaimKey = `${String(recorderCleanup.platform)}:${String(
+          recorderCleanup.deviceId,
+        )}`;
+        const recorderClaim = this.#findClaim('recorder', recorderClaimKey);
+        if (
+          recorderClaim?.session_id !== prior.session_id ||
+          recorderClaim.claim_epoch !== prior.claim_epoch
+        ) {
+          throw new SessionAuthorityError(
+            'RECORDING_AUTHORITY_MISMATCH',
+            'stale recorder cleanup claim no longer matches the authenticated binding',
+          );
+        }
+      }
       if (observeCleanup) {
         const observePort = String(observeCleanup.port);
         const observeClaim = this.#findClaim('observe-port', observePort);
@@ -2219,13 +2314,9 @@ export class SessionRegistry {
       }
       this.#database
         .prepare(
-          runnerCleanup
-            ? `DELETE FROM claims
-               WHERE session_id = ? AND claim_epoch = ?
-                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')`
-            : `DELETE FROM claims
-               WHERE session_id = ? AND claim_epoch = ?
-                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`,
+          `DELETE FROM claims
+           WHERE session_id = ? AND claim_epoch = ?
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`,
         )
         .run(prior.session_id, prior.claim_epoch);
       this.#database
@@ -2240,7 +2331,9 @@ export class SessionRegistry {
           prior.session_id,
           prior.claim_epoch,
         );
-      const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup);
+      const cleanupRequired = Boolean(
+        metroCleanup || runnerCleanup || observeCleanup || recorderCleanup,
+      );
       const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
       this.#database
         .prepare(
@@ -2265,6 +2358,7 @@ export class SessionRegistry {
             install: priorBindings.install ?? null,
             bundle: null,
             runner: null,
+            recorder: null,
             observe: null,
             proof: null,
             handoffCleanup: cleanupRequired
@@ -2281,6 +2375,14 @@ export class SessionRegistry {
                     ? {
                         ...runnerCleanup,
                         claimKey: runnerClaimKey,
+                        stopRequestedAt: null,
+                        completedAt: null,
+                      }
+                    : null,
+                  recorder: recorderCleanup
+                    ? {
+                        ...recorderCleanup,
+                        claimKey: recorderClaimKey,
                         stopRequestedAt: null,
                         completedAt: null,
                       }

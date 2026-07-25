@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { stopBoundObserve, stopBoundRunner } from './process-cleanup.js';
+import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import { openSessionRegistry } from './registry.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro } from './managed-metro.js';
@@ -169,6 +169,17 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                     status = registry.beginSessionClose(session);
                 }
                 if (status) {
+                    const recorder = status.bindings.recorder;
+                    if (recorder) {
+                        const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
+                        if (!status.claims.some((claim) => claim.type === 'recorder' &&
+                            claim.key === claimKey &&
+                            claim.sessionId === session.sessionId &&
+                            claim.claimEpoch === session.claimEpoch)) {
+                            throw new Error('RECORDING_AUTHORITY_MISMATCH: recorder cleanup claim no longer matches the closing binding');
+                        }
+                        await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(recorder);
+                    }
                     const runner = status.bindings.runner;
                     if (runner) {
                         const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;

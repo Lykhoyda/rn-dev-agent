@@ -10,6 +10,7 @@ function cleanupRuntime(
   includeObserve = true,
   includeRunner = true,
   includeMetro = false,
+  includeRecorder = false,
 ) {
   const status = {
     sessionId: 'target',
@@ -53,6 +54,19 @@ function cleanupRuntime(
               processBirth: 'observe-birth',
               instanceId: 'observe',
               cleanupCapability: 'capability',
+              stopRequestedAt: null,
+              completedAt: null,
+            }
+          : null,
+        recorder: includeRecorder
+          ? {
+              platform: 'ios',
+              deviceId: 'device',
+              scope: 'a'.repeat(64),
+              pid: 789,
+              processBirth: 'record-birth',
+              script: '/workspace/record_proof.sh',
+              claimKey: 'ios:device',
               stopRequestedAt: null,
               completedAt: null,
             }
@@ -108,6 +122,27 @@ test('handoff cleanup remains fenced when exact shutdown is not proven', async (
 
   assert.equal(finished, false);
   assert.equal(result.isError, true);
+});
+
+test('handoff cleanup finalizes the session recorder before release', async () => {
+  const calls: string[] = [];
+  const handler = createSessionHandler(
+    cleanupRuntime(() => calls.push('finish'), false, false, false, true),
+    {
+      stopHandoffRecorder: async () => {
+        calls.push('recorder');
+      },
+    },
+  );
+
+  const result = await handler({
+    action: 'accept_handoff',
+    handoffId: 'handoff',
+    token: 'token',
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls, ['recorder', 'finish']);
 });
 
 test('handoff cleanup unblocks only after every managed process stops', async () => {
