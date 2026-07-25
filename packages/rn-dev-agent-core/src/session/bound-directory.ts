@@ -6,7 +6,6 @@ import {
   existsSync,
   fstatSync,
   lstatSync,
-  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -1734,7 +1733,7 @@ export function openBoundDirectory(path: string): BoundDirectory {
 export function closeBoundDirectory(directory: BoundDirectory): void {
   if (directory.closed) return;
   const cleanupErrors: Error[] = [];
-  for (const child of [...directory.children]) {
+  for (const child of directory.children) {
     try {
       closeBoundDirectory(child);
     } catch (error) {
@@ -1945,7 +1944,7 @@ export function casBoundDirectoryFiles(
   writes: readonly BoundFileWrite[],
   dependencies: BoundOperationDependencies = {},
 ): BoundCasResult {
-  for (const transactionId of [...directory.pendingCleanups.keys()]) {
+  for (const transactionId of directory.pendingCleanups.keys()) {
     retryBoundDirectoryCleanup(directory, { transactionId });
   }
   const transactionId = randomUUID();

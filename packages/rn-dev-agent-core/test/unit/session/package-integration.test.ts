@@ -384,9 +384,7 @@ test('bound CAS rolls back an ancestor switched and restored during mutation', (
           unrelatedPath,
         )},'noise');fs.renameSync(${JSON.stringify(
           agentPath,
-        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
-          external,
-        )},${JSON.stringify(
+        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(external)},${JSON.stringify(
           agentPath,
         )},'dir');fs.unlinkSync(${JSON.stringify(
           agentPath,
@@ -422,9 +420,7 @@ test('bound CAS rolls back an ancestor switched and restored during mutation', (
 
 test('bound CAS rejects a restored integration-directory switch', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-integration-switch-'));
-  const externalRoot = mkdtempSync(
-    join(tmpdir(), 'rn-session-bound-integration-switch-external-'),
-  );
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-integration-switch-external-'));
   const agentPath = join(root, '.rn-agent');
   const integrationPath = join(agentPath, 'integration');
   const external = join(externalRoot, 'integration');
@@ -440,9 +436,7 @@ test('bound CAS rejects a restored integration-directory switch', () => {
         '-e',
         `const fs=require('node:fs');setTimeout(()=>{fs.renameSync(${JSON.stringify(
           integrationPath,
-        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
-          external,
-        )},${JSON.stringify(
+        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(external)},${JSON.stringify(
           integrationPath,
         )},'dir');fs.writeFileSync(${JSON.stringify(
           join(external, 'swap-noise'),
@@ -482,9 +476,7 @@ test('bound CAS rejects a restored integration-directory switch', () => {
 
 test('bound CAS rejects an external switch during transaction mutation', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-observed-switch-'));
-  const externalRoot = mkdtempSync(
-    join(tmpdir(), 'rn-session-bound-observed-switch-external-'),
-  );
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-observed-switch-external-'));
   const agentPath = join(root, '.rn-agent');
   const integrationPath = join(agentPath, 'integration');
   const external = join(externalRoot, 'integration');
@@ -557,9 +549,7 @@ test('bound CAS retains cleanup after a late integration-directory switch', () =
         '-e',
         `const fs=require('node:fs');setTimeout(()=>{fs.renameSync(${JSON.stringify(
           integrationPath,
-        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
-          external,
-        )},${JSON.stringify(
+        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(external)},${JSON.stringify(
           integrationPath,
         )},'dir');fs.unlinkSync(${JSON.stringify(
           integrationPath,
@@ -681,9 +671,7 @@ test('bound recovery retains cleanup after a transient ancestor switch', () => {
                 agentPath,
               )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
                 external,
-              )},${JSON.stringify(
-                agentPath,
-              )},'dir');fs.unlinkSync(${JSON.stringify(
+              )},${JSON.stringify(agentPath)},'dir');fs.unlinkSync(${JSON.stringify(
                 agentPath,
               )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)`,
             ],
@@ -700,7 +688,10 @@ test('bound recovery retains cleanup after a transient ancestor switch', () => {
     assert.match(result.cleanupError ?? '', /ancestor changed/);
     assert.match(result.cleanupObligation?.transactionId ?? '', /^[0-9a-f-]{36}$/);
     assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
-    assert.equal(readdirSync(integrationPath).some((name) => name.endsWith('.journal')), true);
+    assert.equal(
+      readdirSync(integrationPath).some((name) => name.endsWith('.journal')),
+      true,
+    );
   } finally {
     closeBoundDirectory(integration);
     closeBoundDirectory(agent);
@@ -742,9 +733,7 @@ test('bound child adoption rejects a newly symlinked parent ancestor', () => {
 
 test('optional child lookup rejects a restored parent ancestor switch', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-optional-switch-'));
-  const externalRoot = mkdtempSync(
-    join(tmpdir(), 'rn-session-bound-optional-switch-external-'),
-  );
+  const externalRoot = mkdtempSync(join(tmpdir(), 'rn-session-bound-optional-switch-external-'));
   const agentPath = join(root, '.rn-agent');
   const external = join(externalRoot, 'agent');
   mkdirSync(agentPath);
@@ -1271,9 +1260,7 @@ test('bound discovery preserves an invalid journal across a fast ancestor swap',
                   agentPath,
                 )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(
                   external,
-                )},${JSON.stringify(
-                  agentPath,
-                )},'dir');fs.unlinkSync(${JSON.stringify(
+                )},${JSON.stringify(agentPath)},'dir');fs.unlinkSync(${JSON.stringify(
                   agentPath,
                 )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(agentPath)})},100)`,
               ],

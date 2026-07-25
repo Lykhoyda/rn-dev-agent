@@ -12,7 +12,7 @@ rn-dev-agent and the standalone **maestro-mcp** server can be used together: mae
 
 ## What happens on handback (already automatic)
 
-When an L2 call sees the runner-leak sentinel after a maestro run, the device-session performs a **state-preserving reacquire** — it re-foregrounds your app (no relaunch) and marks CDP stale so the next read transparently reconnects. You do **not** need a manual `cdp_status` re-pin (shipped in #188).
+When an L2 call sees the runner-leak sentinel after a maestro run, the device-session performs a **state-preserving reacquire** — it re-foregrounds your app (no relaunch) and marks CDP stale so the next read transparently reconnects. If recovery escalates to attach-only or full relaunch, it still reopens the exact authority-bound device instead of selecting an ambient simulator. You do **not** need a manual `cdp_status` re-pin (shipped in #188).
 
 ## The `FOREIGN_RUNNER_ACTIVE` warning
 

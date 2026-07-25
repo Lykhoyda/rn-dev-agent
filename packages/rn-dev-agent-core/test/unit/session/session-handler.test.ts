@@ -438,8 +438,7 @@ test('forced dev-client pin invalidates the prior target before recreating the c
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
-          releaseResources: (_session, resources) =>
-            calls.push(`release:${resources[0].key}`),
+          releaseResources: (_session, resources) => calls.push(`release:${resources[0].key}`),
           updateBindings: (_session, update) =>
             calls.push(update.bindings.bundle === null ? 'clear-bundle' : 'bind-bundle'),
           claimResources: (_session, resources) => calls.push(`claim:${resources[0].key}`),

@@ -11237,7 +11237,7 @@ function closeBoundDirectory(directory) {
   if (directory.closed)
     return;
   const cleanupErrors = [];
-  for (const child of [...directory.children]) {
+  for (const child of directory.children) {
     try {
       closeBoundDirectory(child);
     } catch (error) {
@@ -11375,7 +11375,7 @@ function readBoundDirectoryFiles(directory, names) {
   }));
 }
 function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
-  for (const transactionId2 of [...directory.pendingCleanups.keys()]) {
+  for (const transactionId2 of directory.pendingCleanups.keys()) {
     retryBoundDirectoryCleanup(directory, { transactionId: transactionId2 });
   }
   const transactionId = randomUUID2();

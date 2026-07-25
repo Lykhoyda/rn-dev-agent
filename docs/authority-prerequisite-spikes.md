@@ -50,7 +50,7 @@ building, while authoritative tools return `BUNDLE_HANDSHAKE_UNAVAILABLE`.
 
 Process identity is derived from the OS and hashed:
 
-- macOS: `ps` process start plus `kern.boottime`
+- macOS: `vmmap -summary` launch time plus `kern.bootsessionuuid`, after an exact PID presence check
 - Linux: `/proc/<pid>/stat` start ticks plus kernel boot ID
 - Windows: PowerShell `StartTime` ticks
 
@@ -79,16 +79,22 @@ or port arguments fail with `SESSION_BUILD_IDENTITY_CONFLICT`.
 For a bound session, the adapter first validates or starts the package-local Expo/bare Metro
 CLI on the allocated port. It binds the actual listening PID, portable birth token, serving
 root, and random Metro instance—not merely the launcher shim—before preparing the build.
-Managed cleanup requires a signed management proof and the same launcher birth identity.
+Managed cleanup requires an HMAC-authenticated management proof, matching launcher and listener
+birth identities, and the same listener on the allocated port. Ambiguous probes or incomplete
+startup cleanup fail closed before session claims are released.
+
+Integration reads, writes, rollback, and journal recovery retain and revalidate the real
+`.rn-agent` directory chain. A symlinked or replaced ancestor returns
+`SESSION_INTEGRATION_PATH_UNSAFE` instead of redirecting worktree mutations.
 
 ## Executable evidence
 
 The contracts are covered by:
 
-- `test/unit/session/authority-store.test.js`
-- `test/unit/sqlite-warning-filter.test.js`
-- `test/unit/session/metro-authority.test.js`
-- `test/unit/session/process-birth.test.js`
-- `test/unit/session/build-adapter.test.js`
-- `test/unit/session/package-integration.test.js`
+- `test/unit/session/authority-store.test.ts`
+- `test/unit/sqlite-warning-filter.test.ts`
+- `test/unit/session/metro-authority.test.ts`
+- `test/unit/session/process-birth.test.ts`
+- `test/unit/session/build-adapter.test.ts`
+- `test/unit/session/package-integration.test.ts`
 - `test/unit/session/managed-metro.test.ts`
