@@ -96,6 +96,13 @@ const recipeSha256 = sha256(
   }),
 );
 
+function hasValidCodeSignature(path) {
+  const result = spawnSync(signer, ['--verify', '--strict', path], {
+    stdio: 'ignore',
+  });
+  return !result.error && result.status === 0;
+}
+
 function verifyPackagedHelper() {
   if (!existsSync(output) || !existsSync(manifestOutput)) {
     throw new Error('build-darwin-process-birth-helper: packaged helper provenance is missing');
@@ -119,6 +126,9 @@ function verifyPackagedHelper() {
     throw new Error('build-darwin-process-birth-helper: packaged helper content is stale');
   }
   processMachOUuids(output, false);
+  if (process.platform === 'darwin' && !hasValidCodeSignature(output)) {
+    throw new Error('build-darwin-process-birth-helper: packaged helper signature is invalid');
+  }
 }
 
 function stableMachOSha256(path) {
@@ -264,7 +274,9 @@ chmodSync(temporaryOutput, 0o755);
 let retainPackagedBinary = false;
 if (existsSync(output)) {
   try {
-    retainPackagedBinary = stableMachOSha256(output) === stableMachOSha256(temporaryOutput);
+    retainPackagedBinary =
+      hasValidCodeSignature(output) &&
+      stableMachOSha256(output) === stableMachOSha256(temporaryOutput);
   } catch {
     retainPackagedBinary = false;
   }
