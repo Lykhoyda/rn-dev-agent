@@ -211,7 +211,7 @@ export async function stopBoundRunner(
 
 export async function stopBoundRecorder(
   binding: Record<string, unknown>,
-  processProbe: (pid: number) => ProcessBirthProbe = probeProcessBirth,
+  _processProbe: (pid: number) => ProcessBirthProbe = probeProcessBirth,
   runRecorder: (
     script: string,
     args: string[],
@@ -267,19 +267,6 @@ export async function stopBoundRecorder(
     throw new SessionAuthorityError(
       'RECORDING_AUTHORITY_MISMATCH',
       'recorder cleanup identity is incomplete',
-    );
-  }
-  const current = processProbe(pid);
-  if (current.status === 'unknown') {
-    throw new SessionAuthorityError(
-      'RECORDING_AUTHORITY_MISMATCH',
-      'recorder process identity is unavailable',
-    );
-  }
-  if (current.status === 'present' && current.birth.token !== expectedBirth) {
-    throw new SessionAuthorityError(
-      'RECORDING_AUTHORITY_MISMATCH',
-      'recorder PID was reused before cleanup completed',
     );
   }
   try {

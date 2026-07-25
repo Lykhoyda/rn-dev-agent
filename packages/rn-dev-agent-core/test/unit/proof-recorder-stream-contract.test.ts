@@ -29,12 +29,20 @@ test('the recorder supervisor releases start streams and owns child output', asy
   const tokenWriteIndex = script.indexOf('> "$token_tmp"');
   const startActionIndex = script.indexOf('action == "START"');
   const recorderSpawnIndex = script.indexOf('subprocess.Popen(');
+  const incarnationPublishIndex = script.indexOf(
+    'mv "$incarnation_tmp" "$(incarnation_file "$scope")"',
+  );
+  const supervisorLaunchIndex = script.indexOf('python3 - "$@"');
   assert.notEqual(supervisorPidIndex, -1);
   assert.notEqual(tokenWriteIndex, -1);
   assert.notEqual(startActionIndex, -1);
   assert.notEqual(recorderSpawnIndex, -1);
+  assert.notEqual(incarnationPublishIndex, -1);
+  assert.notEqual(supervisorLaunchIndex, -1);
   assert.ok(supervisorPidIndex < tokenWriteIndex);
   assert.ok(startActionIndex < recorderSpawnIndex);
+  assert.ok(incarnationPublishIndex < supervisorLaunchIndex);
+  assert.match(script, /\$\{PID_PREFIX\}-\$\{scope\}-\$\{incarnation\}\.\$\{suffix\}/);
   assert.match(script, /else f"failed \{return_code\}\\n"/);
   assert.match(
     script,
@@ -42,7 +50,7 @@ test('the recorder supervisor releases start streams and owns child output', asy
   );
   assert.match(
     script,
-    /sleep 1\n\n\s+if \[\[ -s "\$\(supervisor_state_file "\$scope"\)" \]\]; then/,
+    /sleep 1\n\n\s+if \[\[ -s "\$\(supervisor_state_file "\$scope" "\$incarnation"\)" \]\]; then/,
   );
   const directLaunches = script
     .split('\n')
@@ -129,6 +137,7 @@ test('terminal supervisor state takes precedence over a reused live PID', async 
   try {
     assert.ok(replacement.pid);
     const birth = 'a'.repeat(64);
+    const incarnation = 'b'.repeat(32);
     const output = join(state.root, 'capture.mp4');
     const raw = join(state.root, 'capture.mov');
     writeFileSync(`${state.prefix}-${scope}.pid`, `${replacement.pid}\n`);
@@ -136,7 +145,11 @@ test('terminal supervisor state takes precedence over a reused live PID', async 
     writeFileSync(`${state.prefix}-${scope}.platform`, 'ios\n');
     writeFileSync(`${state.prefix}-${scope}.path`, `${output}\n`);
     writeFileSync(`${state.prefix}-${scope}.raw-path`, `${raw}\n`);
-    writeFileSync(`${state.prefix}-${scope}.supervisor-state`, 'exited 0\n');
+    writeFileSync(`${state.prefix}-${scope}.incarnation`, `${incarnation}\n`);
+    writeFileSync(
+      `${state.prefix}-${scope}-${incarnation}.supervisor-state`,
+      'exited 0\n',
+    );
     writeFileSync(raw, 'recording');
 
     const stopped = spawnSync(
@@ -151,6 +164,11 @@ test('terminal supervisor state takes precedence over a reused live PID', async 
     assert.equal(replacementState.status, 0);
     assert.doesNotMatch(replacementState.stdout.trim(), /^Z/);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
+    assert.equal(existsSync(`${state.prefix}-${scope}.incarnation`), false);
+    assert.equal(
+      existsSync(`${state.prefix}-${scope}-${incarnation}.supervisor-state`),
+      false,
+    );
   } finally {
     replacement.kill('SIGKILL');
     state.cleanup();

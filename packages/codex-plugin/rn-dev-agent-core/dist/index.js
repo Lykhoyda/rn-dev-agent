@@ -62290,7 +62290,7 @@ ${instrumentation.stderr}`;
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile22(script, args, {
+async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile22(script, args, {
   timeout: 6e4,
   encoding: "utf8",
   maxBuffer: 8 * 1024 * 1024,
@@ -62328,13 +62328,6 @@ async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runR
   }
   if (!Number.isSafeInteger(pid) || !expectedBirth) {
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
-  }
-  const current = processProbe(pid);
-  if (current.status === "unknown") {
-    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder process identity is unavailable");
-  }
-  if (current.status === "present" && current.birth.token !== expectedBirth) {
-    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder PID was reused before cleanup completed");
   }
   try {
     const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);

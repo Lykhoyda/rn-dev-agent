@@ -39,7 +39,10 @@ test('an exited recorder remains safely finalizable', async () => {
       pid: 321,
       processBirth: 'birth-token',
     },
-    () => ({ status: 'absent' }),
+    () => ({
+      status: 'present',
+      birth: { pid: 321, token: 'replacement-birth', source: 'linux-proc' },
+    }),
     async (_script, args) => {
       calls.push(args);
       return {

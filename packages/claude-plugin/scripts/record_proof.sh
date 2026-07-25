@@ -32,11 +32,66 @@ birth_file() { echo "${PID_PREFIX}-${1}.birth"; }
 remote_birth_file() { echo "${PID_PREFIX}-${1}.remote-birth"; }
 remote_command_file() { echo "${PID_PREFIX}-${1}.remote-command"; }
 remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
-control_token_file() { echo "${PID_PREFIX}-${1}.control-token"; }
-control_request_file() { echo "${PID_PREFIX}-${1}.control-request"; }
-control_response_file() { echo "${PID_PREFIX}-${1}.control-response"; }
-supervisor_state_file() { echo "${PID_PREFIX}-${1}.supervisor-state"; }
-child_pid_file() { echo "${PID_PREFIX}-${1}.child-pid"; }
+incarnation_file() { echo "${PID_PREFIX}-${1}.incarnation"; }
+
+current_incarnation() {
+  local file
+  file="$(incarnation_file "$1")"
+  [[ -s "$file" ]] || return 0
+  local incarnation
+  incarnation="$(cat "$file")"
+  [[ "$incarnation" =~ ^[a-f0-9]{32}$ ]] || {
+    echo "Error: recorder supervisor incarnation is invalid" >&2
+    return 1
+  }
+  printf '%s' "$incarnation"
+}
+
+supervisor_sidecar_file() {
+  local scope="$1"
+  local suffix="$2"
+  local incarnation="${3:-}"
+  [[ -n "$incarnation" ]] || incarnation="$(current_incarnation "$scope")"
+  if [[ -n "$incarnation" ]]; then
+    echo "${PID_PREFIX}-${scope}-${incarnation}.${suffix}"
+  else
+    echo "${PID_PREFIX}-${scope}.${suffix}"
+  fi
+}
+
+control_token_file() { supervisor_sidecar_file "$1" "control-token" "${2:-}"; }
+control_request_file() { supervisor_sidecar_file "$1" "control-request" "${2:-}"; }
+control_response_file() { supervisor_sidecar_file "$1" "control-response" "${2:-}"; }
+supervisor_state_file() { supervisor_sidecar_file "$1" "supervisor-state" "${2:-}"; }
+child_pid_file() { supervisor_sidecar_file "$1" "child-pid" "${2:-}"; }
+
+assert_current_incarnation() {
+  local current
+  current="$(current_incarnation "$1")"
+  [[ -n "$current" && "$current" == "$2" ]] || {
+    echo "Error: recorder supervisor incarnation changed during startup" >&2
+    return 1
+  }
+}
+
+remove_recording_sidecars() {
+  local scope="$1"
+  local incarnation="${2:-}"
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}
+  rm -f \
+    "$(control_token_file "$scope" "$incarnation")" \
+    "$(control_request_file "$scope" "$incarnation")" \
+    "$(control_response_file "$scope" "$incarnation")" \
+    "$(supervisor_state_file "$scope" "$incarnation")" \
+    "$(child_pid_file "$scope" "$incarnation")"
+  local incarnation_path
+  incarnation_path="$(incarnation_file "$scope")"
+  if [[ -n "$incarnation" && -s "$incarnation_path" ]] && [[ "$(cat "$incarnation_path")" == "$incarnation" ]]; then
+    rm -f "$incarnation_path"
+  elif [[ -z "$incarnation" ]]; then
+    rm -f "$incarnation_path"
+  fi
+}
 
 is_alive() {
   local pid="$1"
@@ -191,18 +246,25 @@ start_supervised_recorder() {
   local process_marker="$3"
   shift 3
   local token
+  local incarnation
   token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  incarnation="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
   local request_path
   local response_path
   local state_path
   local child_path
   local token_path
-  request_path="$(control_request_file "$scope")"
-  response_path="$(control_response_file "$scope")"
-  state_path="$(supervisor_state_file "$scope")"
-  child_path="$(child_pid_file "$scope")"
-  token_path="$(control_token_file "$scope")"
+  request_path="$(control_request_file "$scope" "$incarnation")"
+  response_path="$(control_response_file "$scope" "$incarnation")"
+  state_path="$(supervisor_state_file "$scope" "$incarnation")"
+  child_path="$(child_pid_file "$scope" "$incarnation")"
+  token_path="$(control_token_file "$scope" "$incarnation")"
   rm -f "$token_path" "$request_path" "$response_path" "$state_path" "$child_path"
+  local incarnation_tmp
+  incarnation_tmp="$(incarnation_file "$scope").$$"
+  (umask 077; printf '%s\n' "$incarnation" > "$incarnation_tmp")
+  mv "$incarnation_tmp" "$(incarnation_file "$scope")"
+  assert_current_incarnation "$scope" "$incarnation"
 
   python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log") > "$recorder_log" 2>&1 <<'PY' &
 import os
@@ -331,6 +393,7 @@ finally:
 PY
   SUPERVISOR_PID=$!
 
+  assert_current_incarnation "$scope" "$incarnation"
   local token_tmp="${token_path}.$$"
   (umask 077; printf '%s\n' "$token" > "$token_tmp")
   mv "$token_tmp" "$token_path"
@@ -346,7 +409,8 @@ PY
   local birth_tmp="${PID_PREFIX}-${scope}.birth.$$"
   (umask 077; printf '%s\n' "$SUPERVISOR_BIRTH" > "$birth_tmp")
   mv "$birth_tmp" "$(birth_file "$scope")"
-  request_supervisor_signal "$scope" "START"
+  assert_current_incarnation "$scope" "$incarnation"
+  request_supervisor_signal "$scope" "START" "$incarnation"
 
   local waited=0
   while [[ $waited -lt 40 ]]; do
@@ -366,8 +430,9 @@ SUPERVISOR_TERMINAL_STATE=""
 
 wait_for_supervisor_terminal() {
   local scope="$1"
+  local incarnation="${2:-}"
   local state_path
-  state_path="$(supervisor_state_file "$scope")"
+  state_path="$(supervisor_state_file "$scope" "$incarnation")"
   local waited=0
   while [[ $waited -lt 100 ]]; do
     if [[ -s "$state_path" ]]; then
@@ -390,14 +455,15 @@ SUPERVISOR_RESPONSE=""
 request_supervisor_signal() {
   local scope="$1"
   local action="$2"
+  local incarnation="${3:-}"
   local token_path
   local request_path
   local response_path
   local state_path
-  token_path="$(control_token_file "$scope")"
-  request_path="$(control_request_file "$scope")"
-  response_path="$(control_response_file "$scope")"
-  state_path="$(supervisor_state_file "$scope")"
+  token_path="$(control_token_file "$scope" "$incarnation")"
+  request_path="$(control_request_file "$scope" "$incarnation")"
+  response_path="$(control_response_file "$scope" "$incarnation")"
+  state_path="$(supervisor_state_file "$scope" "$incarnation")"
   [[ -s "$token_path" ]] || {
     echo "Error: recorder supervisor capability is unavailable" >&2
     return 1
@@ -763,24 +829,26 @@ stop_android_recorder() {
 cmd_abort() {
   local scope="${1:-}"
   [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
+  local incarnation
+  incarnation="$(current_incarnation "$scope")"
   local pf
   local tokenf
   local statef
   pf="$(pid_file "$scope")"
-  tokenf="$(control_token_file "$scope")"
-  statef="$(supervisor_state_file "$scope")"
+  tokenf="$(control_token_file "$scope" "$incarnation")"
+  statef="$(supervisor_state_file "$scope" "$incarnation")"
   local supervisor_state=""
   [[ -s "$statef" ]] && supervisor_state="$(cat "$statef")"
   if [[ -s "$tokenf" && ( "$supervisor_state" == "starting" || "$supervisor_state" == "running" ) ]]; then
     local abort_failed="false"
-    request_supervisor_signal "$scope" "ABORT" || abort_failed="true"
-    wait_for_supervisor_terminal "$scope"
+    request_supervisor_signal "$scope" "ABORT" "$incarnation" || abort_failed="true"
+    wait_for_supervisor_terminal "$scope" "$incarnation"
     if [[ "$abort_failed" == "true" && "$SUPERVISOR_TERMINAL_STATE" != failed\ * ]]; then
       echo "Error: recorder supervisor rejected authenticated abort" >&2
       exit 1
     fi
   elif [[ "$supervisor_state" == "starting" ]]; then
-    wait_for_supervisor_terminal "$scope"
+    wait_for_supervisor_terminal "$scope" "$incarnation"
   elif [[ "$supervisor_state" == "running" ]]; then
     echo "Error: recorder supervisor capability is unavailable" >&2
     exit 1
@@ -803,7 +871,7 @@ cmd_abort() {
   if [[ -f "${PID_PREFIX}-${scope}.raw-path" ]]; then
     rm -f "$(cat "${PID_PREFIX}-${scope}.raw-path")"
   fi
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,control-token,control-request,control-response,supervisor-state,child-pid}
+  remove_recording_sidecars "$scope" "$incarnation"
 }
 
 cmd_stop() {
@@ -814,6 +882,8 @@ cmd_stop() {
     echo "Error: stop requires valid <scope> <pid> <birth>" >&2
     exit 1
   }
+  local incarnation
+  incarnation="$(current_incarnation "$scope")"
   local pf
   pf="$(pid_file "$scope")"
   [[ ! -f "$pf" ]] && { echo "No active recordings found"; return; }
@@ -835,7 +905,7 @@ cmd_stop() {
   local raw_file=""
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
   local supervisor_state=""
-  [[ -s "$(supervisor_state_file "$scope")" ]] && supervisor_state="$(cat "$(supervisor_state_file "$scope")")"
+  [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]] && supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
   local supervisor_failed="false"
   [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
   local supervisor_terminal="false"
@@ -857,7 +927,7 @@ cmd_stop() {
       echo "Error: recorder process identity changed before stop" >&2
       exit 1
     }
-    request_supervisor_signal "$scope" "INT"
+    request_supervisor_signal "$scope" "INT" "$incarnation"
     local waited=0
     local recorder_stopped="false"
     while [[ $waited -lt 10 ]]; do
@@ -888,7 +958,7 @@ cmd_stop() {
           echo "Error: recorder command identity changed before force stop" >&2
           exit 1
         }
-        request_supervisor_signal "$scope" "KILL"
+        request_supervisor_signal "$scope" "KILL" "$incarnation"
         local force_waited=0
         while [[ $force_waited -lt 6 ]]; do
           probe_local_process "$pid" "$process_marker"
@@ -918,8 +988,8 @@ cmd_stop() {
   fi
   sleep 1
 
-  if [[ -s "$(supervisor_state_file "$scope")" ]]; then
-    supervisor_state="$(cat "$(supervisor_state_file "$scope")")"
+  if [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
+    supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
     supervisor_failed="false"
     [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
   fi
@@ -943,7 +1013,7 @@ cmd_stop() {
 
   if [[ "$supervisor_failed" == "true" ]]; then
     [[ -n "$raw_file" ]] && rm -f "$raw_file"
-    rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,control-token,control-request,control-response,supervisor-state,child-pid}
+    remove_recording_sidecars "$scope" "$incarnation"
     echo "Recorder failed: supervisor terminated unexpectedly"
     return 0
   fi
@@ -969,7 +1039,7 @@ cmd_stop() {
     rm -f "$raw_file"
   fi
 
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,control-token,control-request,control-response,supervisor-state,child-pid}
+  remove_recording_sidecars "$scope" "$incarnation"
   if [[ -n "$output_path" && -f "$output_path" ]]; then
     local size
     size="$(wc -c < "$output_path" | tr -d ' ')"
