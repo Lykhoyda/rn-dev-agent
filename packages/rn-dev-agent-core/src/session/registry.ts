@@ -59,7 +59,6 @@ export interface HandoffCapability {
 }
 
 export interface HandoffCleanupPlan {
-  recovery?: true;
   metro?: Record<string, unknown>;
   observe?: Record<string, unknown>;
   runner?: Record<string, unknown>;
@@ -2087,15 +2086,14 @@ export class SessionRegistry {
         priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === 'object'
           ? (priorBindings.handoffCleanup as Record<string, unknown>)
           : null;
-      const resumesRecoveryCleanup =
-        prior.state === 'handoff_cleanup' && priorCleanup?.recovery === true;
-      if (prior.state === 'handoff_cleanup' && !resumesRecoveryCleanup) {
+      const resumesCleanup = prior.state === 'handoff_cleanup' && priorCleanup !== null;
+      if (prior.state === 'handoff_cleanup' && !resumesCleanup) {
         throw new SessionAuthorityError(
           'HANDOFF_NOT_AUTHORIZED',
-          'stale adoption cannot discard an incomplete handoff cleanup plan',
+          'stale handoff cleanup state has no durable cleanup plan',
         );
       }
-      if (resumesRecoveryCleanup) {
+      if (resumesCleanup) {
         this.#database
           .prepare(
             `UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
@@ -2253,7 +2251,6 @@ export class SessionRegistry {
             proof: null,
             handoffCleanup: cleanupRequired
               ? {
-                  recovery: true,
                   metro: metroCleanup
                     ? {
                         ...metroCleanup,

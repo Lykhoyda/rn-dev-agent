@@ -1092,7 +1092,7 @@ test('handoff cleanup retains runner claim until its durable checkpoint', () => 
   assert.doesNotThrow(() => registry.finishHandoffCleanup(target, 'worker-next'));
 });
 
-test('stale adoption cannot discard another contender handoff cleanup plan', () => {
+test('stale adoption transfers interrupted explicit handoff cleanup unchanged', () => {
   const { registry, create, ownerStates } = fixture();
   const owner = create('a', 'shared-worktree');
   const cleanupOwner = create('b', 'shared-worktree');
@@ -1133,14 +1133,20 @@ test('stale adoption cannot discard another contender handoff cleanup plan', () 
     ...handoff,
     targetInstance: 'worker-cleanup',
   });
+  registry.beginHandoffCleanupResource(cleanupOwner, 'worker-cleanup', 'runner');
+  const interruptedPlan = registry.getSessionStatus(cleanupOwner.sessionId)?.bindings
+    .handoffCleanup;
   ownerStates.set(cleanupOwner.sessionId, 'mismatch');
 
-  assert.throws(
-    () => registry.adoptStaleIntoBlocked(contender, cleanupOwner.sessionId, 'worker-contender'),
-    /incomplete handoff cleanup plan/,
-  );
-  assert.equal(registry.getSessionStatus(cleanupOwner.sessionId)?.state, 'handoff_cleanup');
-  assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, cleanupOwner.sessionId);
+  registry.adoptStaleIntoBlocked(contender, cleanupOwner.sessionId, 'worker-contender');
+
+  const resumed = registry.getSessionStatus(contender.sessionId);
+  assert.equal(resumed?.state, 'handoff_cleanup');
+  assert.deepEqual(resumed?.bindings.handoffCleanup, interruptedPlan);
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, contender.sessionId);
+  registry.completeHandoffCleanupResource(contender, 'worker-contender', 'runner');
+  registry.finishHandoffCleanup(contender, 'worker-contender');
+  assert.equal(registry.getSessionStatus(contender.sessionId)?.state, 'source_bound');
 });
 
 test('stale adoption transfers an interrupted recovery cleanup plan unchanged', () => {

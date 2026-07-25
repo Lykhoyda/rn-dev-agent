@@ -10131,11 +10131,11 @@ var init_registry = __esm({
           const priorBindings = JSON.parse(prior.bindings_json);
           const targetBindings = JSON.parse(targetRow.bindings_json);
           const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
-          const resumesRecoveryCleanup = prior.state === "handoff_cleanup" && priorCleanup?.recovery === true;
-          if (prior.state === "handoff_cleanup" && !resumesRecoveryCleanup) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption cannot discard an incomplete handoff cleanup plan");
+          const resumesCleanup = prior.state === "handoff_cleanup" && priorCleanup !== null;
+          if (prior.state === "handoff_cleanup" && !resumesCleanup) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale handoff cleanup state has no durable cleanup plan");
           }
-          if (resumesRecoveryCleanup) {
+          if (resumesCleanup) {
             this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
              WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
             this.#database.prepare(`UPDATE sessions
@@ -10207,7 +10207,6 @@ var init_registry = __esm({
             observe: null,
             proof: null,
             handoffCleanup: cleanupRequired ? {
-              recovery: true,
               metro: metroCleanup ? {
                 ...metroCleanup,
                 sourceSessionId: prior.session_id,
