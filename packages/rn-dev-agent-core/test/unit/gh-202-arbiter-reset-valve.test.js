@@ -7,7 +7,10 @@ import { dirname, resolve } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sessionSrc = readFileSync(resolve(__dirname, '../../src/tools/session.ts'), 'utf8');
 const indexSrc = readFileSync(resolve(__dirname, '../../src/index.ts'), 'utf8');
-const arbiterSrc = readFileSync(resolve(__dirname, '../../src/lifecycle/device-arbiter.ts'), 'utf8');
+const arbiterSrc = readFileSync(
+  resolve(__dirname, '../../src/lifecycle/device-arbiter.ts'),
+  'utf8',
+);
 const instrSrc = readFileSync(
   resolve(__dirname, '../../src/observability/instrumentation.ts'),
   'utf8',

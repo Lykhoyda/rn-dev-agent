@@ -13,13 +13,7 @@ const { createHash } = require('node:crypto');
 const { dirname, join } = require('node:path');
 
 const repoRoot = dirname(__dirname);
-const output = join(
-  repoRoot,
-  'packages',
-  'rn-dev-agent-core',
-  'native',
-  'darwin-process-birth',
-);
+const output = join(repoRoot, 'packages', 'rn-dev-agent-core', 'native', 'darwin-process-birth');
 const manifestOutput = `${output}.json`;
 const temporaryOutput = `${output}.tmp-${process.pid}`;
 const temporarySource = `${output}.c.tmp-${process.pid}`;
@@ -257,9 +251,7 @@ if (result.error || result.status !== 0) {
 processMachOUuids(temporaryOutput, true);
 const signResult = spawnSync(
   signer,
-  signerArguments.map((argument) =>
-    argument === '<output>' ? temporaryOutput : argument,
-  ),
+  signerArguments.map((argument) => (argument === '<output>' ? temporaryOutput : argument)),
   { stdio: 'inherit' },
 );
 if (signResult.error || signResult.status !== 0) {

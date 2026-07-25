@@ -80,4 +80,4 @@ After `cdp_reload`, auto-reconnect waits up to 30 seconds. If `cdp_component_tre
 
 ### Metro Health Check
 
-The MCP server auto-discovers Metro on ports 8081, 8082, 19000, 19006. Pass `metroPort` to `cdp_status` for non-standard ports.
+Call `rn_session(action="status")` to inspect the bound Metro authority, then use `cdp_status` for passive runtime health and `cdp_metro_events` for bundle failures. Ambient default ports are diagnostic only and never establish session authority.

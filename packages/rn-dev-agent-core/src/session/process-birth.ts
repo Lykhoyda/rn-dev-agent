@@ -80,12 +80,7 @@ export function probeProcessBirth(
         birth: {
           pid,
           source: 'darwin-libproc',
-          token: token([
-            platform,
-            bootSession.toLowerCase(),
-            processMatch[2],
-            processMatch[3],
-          ]),
+          token: token([platform, bootSession.toLowerCase(), processMatch[2], processMatch[3]]),
         },
       };
     }

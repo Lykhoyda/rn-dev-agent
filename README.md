@@ -290,7 +290,7 @@ The `cdp_evaluate` tool runs arbitrary JavaScript in your app's Hermes runtime w
 
 - **Local dev environments only.** Do not point the plugin at production builds, store-signed apps, or any app holding real user data.
 - **Treat the agent like a developer with shell access to your laptop.** Any prompt that reaches `cdp_evaluate` (directly or through another tool) can read or mutate your app's runtime state.
-- **Don't connect to CDP targets you didn't intentionally launch.** The plugin filters Metro endpoints to `127.0.0.1`/`localhost`, but if multiple Hermes targets are running, double-check `cdp_targets`.
+- **Use the fenced session as CDP authority.** `rn_session` binds the intended worktree, Metro, app, and device; `cdp_targets` may explain ambient Hermes processes but never authorizes selecting one. See [Parallel session authority](https://lykhoyda.github.io/rn-dev-agent/session-authority/).
 
 The plugin makes no attempt to sandbox `cdp_evaluate`. If you need that, gate tool access through your agent's permission prompts rather than trusting the tool layer.
 

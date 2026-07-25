@@ -202,10 +202,10 @@ through one internally consistent Metro field — `appId`, an exact bundle-id
 `description`, or the canonical `<bundleId> (<device>)` title; a defaulted
 or ambiguous platform guess never satisfies a platform filter. The refusal
 lists the candidate targets with their inference confidence. Run
-`cdp_targets`, relaunch the requested app, or pass a `targetId` from a
-proven target. In a fenced session, omitted values come only from that
-session; no-filter best-target selection is diagnostic legacy behavior, not
-authoritative success.
+`cdp_targets` only to diagnose the mismatch, relaunch the authority-bound app,
+and call `cdp_connect` again. Omitted values come only from the fenced session;
+no-filter or explicit ambient-target selection is diagnostic legacy behavior,
+not authoritative success.
 
 ### TARGET_SESSION_MISMATCH
 

@@ -259,11 +259,10 @@ Call `cdp_status`. Gate on:
 - `app.isPaused` = false
 - `app.errorCount` = 0
 
-If `app.dev` is false: CDP is connected to the wrong JS context (common in
-RN 0.76+ Bridgeless mode with multiple Hermes targets). Call
-`cdp_reload(full=true)` to force reconnection — the target selection now
-probes `__DEV__` on each candidate. If still false after reload, ask the
-user to restart Metro.
+If `app.dev` is false: the authority-bound runtime lacks the required
+development helpers. Call `cdp_reload(full=true)` to reload that exact app and
+re-prove its signed target. If it is still false, ask the user to restart the
+session-bound Metro and app.
 
 If `isPaused` is true: call `cdp_reload(full=true)` to recover, then
 restart Phase 5.5 from Step 0.

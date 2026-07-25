@@ -102,7 +102,7 @@ Decision tree:
 | "No store found" | Zustand not exposed | Add `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` |
 | All CDP calls fail | Stale authority-bound Hermes target | Reload the bound app and reconnect with `cdp_connect` |
 | `dev: false` in status | Bound runtime lacks development helpers | Restart the session-bound Metro and app, then call `cdp_connect` |
-| fiberTree/navRef missing | Wrong Bridgeless context | RN 0.76+ Bridgeless exposes multiple Hermes targets; `cdp_status` warns if `dev: false` |
+| fiberTree/navRef missing | Bound runtime lacks the expected development context | Reload the authority-bound app; use `cdp_targets` only to diagnose foreign Hermes contexts |
 
 **Code 1006:** Hermes allows only one CDP client. Close all debugger UIs first.
 **Code 1001:** Normal close from a reload — handled automatically, no action needed.

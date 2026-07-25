@@ -139,8 +139,14 @@ test('current process has a portable birth identity on supported hosts', () => {
 test('Darwin process helper ships executable in core and both host runtimes', () => {
   const helperUrls = [
     new URL('../../../dist/native/darwin-process-birth', import.meta.url),
-    new URL('../../../../claude-plugin/rn-dev-agent-core/dist/native/darwin-process-birth', import.meta.url),
-    new URL('../../../../codex-plugin/rn-dev-agent-core/dist/native/darwin-process-birth', import.meta.url),
+    new URL(
+      '../../../../claude-plugin/rn-dev-agent-core/dist/native/darwin-process-birth',
+      import.meta.url,
+    ),
+    new URL(
+      '../../../../codex-plugin/rn-dev-agent-core/dist/native/darwin-process-birth',
+      import.meta.url,
+    ),
   ];
   const helpers = helperUrls.map((url) => readFileSync(url));
   const manifests = helperUrls.map((url) =>
@@ -151,10 +157,7 @@ test('Darwin process helper ships executable in core and both host runtimes', ()
   assert.deepEqual(helpers[2], helpers[0]);
   assert.deepEqual(manifests[1], manifests[0]);
   assert.deepEqual(manifests[2], manifests[0]);
-  assert.equal(
-    manifests[0].binarySha256,
-    createHash('sha256').update(helpers[0]).digest('hex'),
-  );
+  assert.equal(manifests[0].binarySha256, createHash('sha256').update(helpers[0]).digest('hex'));
   assert.match(manifests[0].sourceSha256, /^[a-f0-9]{64}$/);
   assert.match(manifests[0].recipeSha256, /^[a-f0-9]{64}$/);
   assert.match(manifests[0].stableBinarySha256, /^[a-f0-9]{64}$/);
