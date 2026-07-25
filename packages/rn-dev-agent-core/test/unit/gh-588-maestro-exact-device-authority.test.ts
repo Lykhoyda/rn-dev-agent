@@ -69,24 +69,37 @@ test('lifecycle stages re-prove origin before subsequent UI mutation', async () 
       planMaestroAuthorityStages([
         { runFlow: { commands: ['launchApp', { tapOn: { id: 'submit' } }] } },
       ]),
-    /cannot mix app lifecycle transitions/,
+    /cannot contain app lifecycle transitions/,
   );
-  assert.deepEqual(
-    planMaestroAuthorityStages([
-      { runFlow: { when: { visible: 'Continue' }, commands: ['launchApp'] } },
-      { tapOn: { id: 'submit' } },
-    ]),
-    {
-      stages: [
-        {
-          commands: [{ runFlow: { when: { visible: 'Continue' }, commands: ['launchApp'] } }],
-          requiresOrigin: false,
-        },
-        { commands: [{ tapOn: { id: 'submit' } }], requiresOrigin: true },
-      ],
-      targetExpected: true,
-    },
+  assert.throws(
+    () =>
+      planMaestroAuthorityStages([
+        { runFlow: { when: { visible: 'Continue' }, commands: ['launchApp'] } },
+      ]),
+    /cannot contain app lifecycle transitions/,
   );
+});
+
+test('failed lifecycle stages invalidate target authority before propagating failure', async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      ['launchApp'],
+      async () => {
+        calls.push('execute');
+        throw new Error('runner failed');
+      },
+      async () => {
+        calls.push('claim');
+      },
+      async (targetExpected) => {
+        calls.push(`complete:${targetExpected}`);
+      },
+    ),
+    /runner failed/,
+  );
+
+  assert.deepEqual(calls, ['execute', 'complete:false']);
 });
 
 test('flow headers cannot override the authority-bound app', async () => {

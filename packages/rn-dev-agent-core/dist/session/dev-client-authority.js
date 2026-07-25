@@ -1,4 +1,22 @@
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+export function buildBundleAuthorityBinding(input) {
+    return {
+        sessionId: input.sessionId,
+        metroInstanceId: input.metroInstanceId,
+        worktreeKey: input.worktreeKey,
+        appId: input.appId,
+        platform: input.platform,
+        buildGeneration: input.buildGeneration,
+        deviceId: input.deviceId,
+        metroPort: input.metroPort,
+        ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
+        launchMethod: input.devClientUrl ? 'url' : 'app',
+        targetId: input.targetId,
+        connectionGeneration: input.connectionGeneration,
+        authorityScope: 'initial-bundle',
+        sourceFidelity: 'not-proven',
+    };
+}
 export function boundConnectConflict(status, request) {
     const device = status.bindings.device;
     const bundle = status.bindings.bundle;
@@ -64,20 +82,12 @@ export async function pinExactDevClient(input, dependencies) {
         platform: input.platform,
         buildGeneration: input.buildGeneration,
     });
-    return {
-        sessionId: input.sessionId,
-        metroInstanceId: input.metroInstanceId,
-        worktreeKey: input.worktreeKey,
-        appId: input.appId,
-        platform: input.platform,
-        buildGeneration: input.buildGeneration,
+    return buildBundleAuthorityBinding({
+        ...input,
         deviceId: input.deviceId,
         metroPort: input.metroPort,
         ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
-        launchMethod: input.devClientUrl ? 'url' : 'app',
         targetId: connected.targetId,
         connectionGeneration: connected.connectionGeneration,
-        authorityScope: 'initial-bundle',
-        sourceFidelity: 'not-proven',
-    };
+    });
 }

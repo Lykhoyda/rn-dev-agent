@@ -24,7 +24,7 @@ interface PinDevClientDependencies {
   readMarker(): Promise<{ status: 'signed'; marker: MetroAuthorityMarker } | null>;
 }
 
-export interface BundleAuthorityBinding extends MetroAuthorityBinding {
+export interface BundleAuthorityBinding extends MetroAuthorityBinding, Record<string, unknown> {
   deviceId: string;
   metroPort: number;
   devClientUrl?: string;
@@ -33,6 +33,33 @@ export interface BundleAuthorityBinding extends MetroAuthorityBinding {
   connectionGeneration: number;
   authorityScope: 'initial-bundle';
   sourceFidelity: 'not-proven';
+}
+
+export function buildBundleAuthorityBinding(
+  input: MetroAuthorityBinding & {
+    deviceId: string;
+    metroPort: number;
+    devClientUrl?: string;
+    targetId: string;
+    connectionGeneration: number;
+  },
+): BundleAuthorityBinding {
+  return {
+    sessionId: input.sessionId,
+    metroInstanceId: input.metroInstanceId,
+    worktreeKey: input.worktreeKey,
+    appId: input.appId,
+    platform: input.platform,
+    buildGeneration: input.buildGeneration,
+    deviceId: input.deviceId,
+    metroPort: input.metroPort,
+    ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
+    launchMethod: input.devClientUrl ? 'url' : 'app',
+    targetId: input.targetId,
+    connectionGeneration: input.connectionGeneration,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  };
 }
 
 export function boundConnectConflict(
@@ -123,20 +150,12 @@ export async function pinExactDevClient(
     platform: input.platform,
     buildGeneration: input.buildGeneration,
   });
-  return {
-    sessionId: input.sessionId,
-    metroInstanceId: input.metroInstanceId,
-    worktreeKey: input.worktreeKey,
-    appId: input.appId,
-    platform: input.platform,
-    buildGeneration: input.buildGeneration,
+  return buildBundleAuthorityBinding({
+    ...input,
     deviceId: input.deviceId,
     metroPort: input.metroPort,
     ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
-    launchMethod: input.devClientUrl ? 'url' : 'app',
     targetId: connected.targetId,
     connectionGeneration: connected.connectionGeneration,
-    authorityScope: 'initial-bundle',
-    sourceFidelity: 'not-proven',
-  };
+  });
 }

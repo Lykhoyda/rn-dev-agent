@@ -148,36 +148,6 @@ function nestedLifecycleCommandOrSelf(command: unknown): boolean {
   return (name !== null && lifecycleCommands.has(name)) || nestedLifecycleCommand(command);
 }
 
-function lifecycleTargetExpected(command: unknown): boolean | null {
-  const name = commandName(command);
-  if (name !== null && lifecycleCommands.has(name)) return name === 'launchApp';
-  if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
-  const runFlow = (command as Record<string, unknown>).runFlow;
-  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return null;
-  const commands = (runFlow as Record<string, unknown>).commands;
-  if (!Array.isArray(commands)) return null;
-  let expected: boolean | null = null;
-  for (const nested of commands) {
-    const nestedExpected = lifecycleTargetExpected(nested);
-    if (nestedExpected !== null) expected = nestedExpected;
-  }
-  return expected;
-}
-
-function nestedLifecycleMixesMutation(command: unknown): boolean {
-  if (!command || typeof command !== 'object' || Array.isArray(command)) return false;
-  const runFlow = (command as Record<string, unknown>).runFlow;
-  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return false;
-  const commands = (runFlow as Record<string, unknown>).commands;
-  if (!Array.isArray(commands)) return false;
-  return commands.some((nested) => {
-    const name = commandName(nested);
-    if (name !== null && lifecycleCommands.has(name)) return false;
-    if (nestedLifecycleCommand(nested)) return nestedLifecycleMixesMutation(nested);
-    return true;
-  });
-}
-
 export function planMaestroAuthorityStages(commands: readonly unknown[]): {
   stages: AuthorityStage[];
   targetExpected: boolean;
@@ -194,14 +164,8 @@ export function planMaestroAuthorityStages(commands: readonly unknown[]): {
   for (const command of commands) {
     const name = commandName(command);
     if (nestedLifecycleCommand(command)) {
-      if (!nestedLifecycleMixesMutation(command)) {
-        flushPending();
-        stages.push({ commands: [command], requiresOrigin: false });
-        targetExpected = lifecycleTargetExpected(command) ?? false;
-        continue;
-      }
       throw new MaestroValidationError(
-        'conditional runFlow commands cannot mix app lifecycle transitions with UI mutations',
+        'conditional runFlow commands cannot contain app lifecycle transitions',
       );
     }
     if (name !== null && lifecycleCommands.has(name)) {
@@ -226,7 +190,12 @@ export async function executeMaestroAuthorityStages<T>(
   const results: T[] = [];
   for (const stage of plan.stages) {
     if (stage.requiresOrigin) await claimOrigin();
-    results.push(await executeStage(stage.commands));
+    try {
+      results.push(await executeStage(stage.commands));
+    } catch (error) {
+      if (!stage.requiresOrigin) await completeOrigin(false);
+      throw error;
+    }
   }
   await completeOrigin(plan.targetExpected);
   return results;

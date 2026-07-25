@@ -187,7 +187,11 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
-import { boundConnectConflict, pinExactDevClient } from './session/dev-client-authority.js';
+import {
+  boundConnectConflict,
+  buildBundleAuthorityBinding,
+  pinExactDevClient,
+} from './session/dev-client-authority.js';
 import {
   verifyMetroAuthorityMarker,
   type MetroAuthorityMarker,
@@ -782,7 +786,9 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
     instanceId: string;
     buildGeneration: number;
   };
-  const prior = status.bindings.bundle as Record<string, unknown>;
+  const prior = status.bindings.bundle as Record<string, unknown> | null;
+  const install = status.bindings.install as { devClientUrl?: string };
+  const declaredDevice = status.bindings.device as { devClientUrl?: string };
   const client = getClient();
   const target = client.connectedTarget;
   if (
@@ -824,7 +830,7 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
       'BUNDLE_HANDSHAKE_UNAVAILABLE: runtime reset did not expose the signed session marker',
     );
   }
-  verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
+  const verified = verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
     sessionId: status.sessionId,
     metroInstanceId: metro.instanceId,
     worktreeKey: status.worktreeKey,
@@ -832,13 +838,18 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
     platform: device.platform,
     buildGeneration: metro.buildGeneration,
   });
-  return {
-    ...prior,
+  const devClientUrl =
+    (typeof prior?.devClientUrl === 'string' ? prior.devClientUrl : undefined) ??
+    install.devClientUrl ??
+    declaredDevice.devClientUrl;
+  return buildBundleAuthorityBinding({
+    ...verified,
+    deviceId: device.deviceId,
+    metroPort: metro.port,
+    ...(devClientUrl ? { devClientUrl } : {}),
     targetId: target.id,
     connectionGeneration: client.connectionGeneration,
-    authorityScope: 'initial-bundle',
-    sourceFidelity: 'not-proven',
-  };
+  });
 }
 
 const sessionHandler = createSessionHandler(authorityRuntime, {

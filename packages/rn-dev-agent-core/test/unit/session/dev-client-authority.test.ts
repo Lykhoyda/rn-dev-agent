@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { buildSignedMetroMarker } from '../../../dist/session/metro-authority.js';
 import {
   boundConnectConflict,
+  buildBundleAuthorityBinding,
   pinExactDevClient,
 } from '../../../dist/session/dev-client-authority.js';
 
@@ -14,6 +15,27 @@ const expected = {
   platform: 'ios',
   buildGeneration: 2,
 };
+
+test('bundle authority reconstruction is complete without a prior binding', () => {
+  const binding = buildBundleAuthorityBinding({
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    targetId: 'target-restored',
+    connectionGeneration: 9,
+  });
+
+  assert.deepEqual(binding, {
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    launchMethod: 'app',
+    targetId: 'target-restored',
+    connectionGeneration: 9,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  });
+});
 
 test('dev-client pin opens only the declared URL on the exact device and binds its target', async () => {
   const calls = [];

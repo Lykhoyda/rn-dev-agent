@@ -386,6 +386,7 @@ export function createRunActionHandler(deps = {}) {
             const firstResult = await maestroRun({
                 flowPath: action.filePath,
                 platform: args.platform,
+                appId: args.appId,
                 deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
@@ -695,6 +696,7 @@ export function createRunActionHandler(deps = {}) {
             const retryResult = await maestroRun({
                 flowPath: reloadedAction.filePath,
                 platform: args.platform,
+                appId: args.appId,
                 deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,

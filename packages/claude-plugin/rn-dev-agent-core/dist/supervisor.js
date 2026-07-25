@@ -49447,19 +49447,20 @@ function createAuthorityGate(runtime, dependencies) {
               throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
             }
             registry2.verifyOperation(operation);
-            const originObservation = await dependencies.probe({
-              axis: "A",
-              phase: "postflight",
-              tool,
-              profile,
-              status: currentStatus,
-              args
-            });
-            if (!dependencies.refreshRuntimeBinding) {
-              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "managed lifecycle cannot commit without a binding refresh");
-            }
+            let originObservation;
             let bundleObservation;
             try {
+              originObservation = await dependencies.probe({
+                axis: "A",
+                phase: "postflight",
+                tool,
+                profile,
+                status: currentStatus,
+                args
+              });
+              if (!dependencies.refreshRuntimeBinding) {
+                throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "managed lifecycle cannot commit without a binding refresh");
+              }
               const bundle = await dependencies.refreshRuntimeBinding(currentStatus);
               bundleObservation = await dependencies.probe({
                 axis: "B",
@@ -49739,44 +49740,6 @@ function nestedLifecycleCommandOrSelf(command) {
   const name = commandName(command);
   return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
 }
-function lifecycleTargetExpected(command) {
-  const name = commandName(command);
-  if (name !== null && lifecycleCommands.has(name))
-    return name === "launchApp";
-  if (!command || typeof command !== "object" || Array.isArray(command))
-    return null;
-  const runFlow = command.runFlow;
-  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
-    return null;
-  const commands = runFlow.commands;
-  if (!Array.isArray(commands))
-    return null;
-  let expected = null;
-  for (const nested of commands) {
-    const nestedExpected = lifecycleTargetExpected(nested);
-    if (nestedExpected !== null)
-      expected = nestedExpected;
-  }
-  return expected;
-}
-function nestedLifecycleMixesMutation(command) {
-  if (!command || typeof command !== "object" || Array.isArray(command))
-    return false;
-  const runFlow = command.runFlow;
-  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
-    return false;
-  const commands = runFlow.commands;
-  if (!Array.isArray(commands))
-    return false;
-  return commands.some((nested) => {
-    const name = commandName(nested);
-    if (name !== null && lifecycleCommands.has(name))
-      return false;
-    if (nestedLifecycleCommand(nested))
-      return nestedLifecycleMixesMutation(nested);
-    return true;
-  });
-}
 function planMaestroAuthorityStages(commands) {
   const stages = [];
   let pending2 = [];
@@ -49790,13 +49753,7 @@ function planMaestroAuthorityStages(commands) {
   for (const command of commands) {
     const name = commandName(command);
     if (nestedLifecycleCommand(command)) {
-      if (!nestedLifecycleMixesMutation(command)) {
-        flushPending();
-        stages.push({ commands: [command], requiresOrigin: false });
-        targetExpected = lifecycleTargetExpected(command) ?? false;
-        continue;
-      }
-      throw new MaestroValidationError("conditional runFlow commands cannot mix app lifecycle transitions with UI mutations");
+      throw new MaestroValidationError("conditional runFlow commands cannot contain app lifecycle transitions");
     }
     if (name !== null && lifecycleCommands.has(name)) {
       flushPending();
@@ -49815,7 +49772,13 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   for (const stage of plan.stages) {
     if (stage.requiresOrigin)
       await claimOrigin();
-    results.push(await executeStage(stage.commands));
+    try {
+      results.push(await executeStage(stage.commands));
+    } catch (error2) {
+      if (!stage.requiresOrigin)
+        await completeOrigin(false);
+      throw error2;
+    }
   }
   await completeOrigin(plan.targetExpected);
   return results;
@@ -61566,6 +61529,7 @@ function createRunActionHandler(deps = {}) {
       const firstResult = await maestroRun({
         flowPath: action.filePath,
         platform: args.platform,
+        appId: args.appId,
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,
@@ -61822,6 +61786,7 @@ function createRunActionHandler(deps = {}) {
       const retryResult = await maestroRun({
         flowPath: reloadedAction.filePath,
         platform: args.platform,
+        appId: args.appId,
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,
@@ -72961,6 +72926,24 @@ var init_local_authority_probe = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/dev-client-authority.js
+function buildBundleAuthorityBinding(input) {
+  return {
+    sessionId: input.sessionId,
+    metroInstanceId: input.metroInstanceId,
+    worktreeKey: input.worktreeKey,
+    appId: input.appId,
+    platform: input.platform,
+    buildGeneration: input.buildGeneration,
+    deviceId: input.deviceId,
+    metroPort: input.metroPort,
+    ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {},
+    launchMethod: input.devClientUrl ? "url" : "app",
+    targetId: input.targetId,
+    connectionGeneration: input.connectionGeneration,
+    authorityScope: "initial-bundle",
+    sourceFidelity: "not-proven"
+  };
+}
 function boundConnectConflict(status, request2) {
   const device = status.bindings.device;
   const bundle = status.bindings.bundle;
@@ -73022,22 +73005,14 @@ async function pinExactDevClient(input, dependencies) {
     platform: input.platform,
     buildGeneration: input.buildGeneration
   });
-  return {
-    sessionId: input.sessionId,
-    metroInstanceId: input.metroInstanceId,
-    worktreeKey: input.worktreeKey,
-    appId: input.appId,
-    platform: input.platform,
-    buildGeneration: input.buildGeneration,
+  return buildBundleAuthorityBinding({
+    ...input,
     deviceId: input.deviceId,
     metroPort: input.metroPort,
     ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {},
-    launchMethod: input.devClientUrl ? "url" : "app",
     targetId: connected.targetId,
-    connectionGeneration: connected.connectionGeneration,
-    authorityScope: "initial-bundle",
-    sourceFidelity: "not-proven"
-  };
+    connectionGeneration: connected.connectionGeneration
+  });
 }
 var init_dev_client_authority = __esm({
   "packages/rn-dev-agent-core/dist/session/dev-client-authority.js"() {
@@ -73176,6 +73151,8 @@ async function rebindSessionRuntime(status) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const prior = status.bindings.bundle;
+  const install = status.bindings.install;
+  const declaredDevice = status.bindings.device;
   const client2 = getClient();
   const target = client2.connectedTarget;
   if (!client2.isConnected || !target || client2.metroPort !== metro.port || !targetMatchesSession(target, {
@@ -73195,7 +73172,7 @@ async function rebindSessionRuntime(status) {
   if (outer?.status !== "signed" || !outer.marker || !secret?.signerCapability) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: runtime reset did not expose the signed session marker");
   }
-  verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
+  const verified = verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
     sessionId: status.sessionId,
     metroInstanceId: metro.instanceId,
     worktreeKey: status.worktreeKey,
@@ -73203,13 +73180,15 @@ async function rebindSessionRuntime(status) {
     platform: device.platform,
     buildGeneration: metro.buildGeneration
   });
-  return {
-    ...prior,
+  const devClientUrl = (typeof prior?.devClientUrl === "string" ? prior.devClientUrl : void 0) ?? install.devClientUrl ?? declaredDevice.devClientUrl;
+  return buildBundleAuthorityBinding({
+    ...verified,
+    deviceId: device.deviceId,
+    metroPort: metro.port,
+    ...devClientUrl ? { devClientUrl } : {},
     targetId: target.id,
-    connectionGeneration: client2.connectionGeneration,
-    authorityScope: "initial-bundle",
-    sourceFidelity: "not-proven"
-  };
+    connectionGeneration: client2.connectionGeneration
+  });
 }
 async function connectBoundSession(args) {
   const status = authorityRuntime.status();

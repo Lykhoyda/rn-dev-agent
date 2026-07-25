@@ -100,6 +100,7 @@ function classifyFailure(failure: MaestroFailure): {
 export interface RunActionArgs {
   /** Action id matching `<projectRoot>/.rn-agent/actions/<actionId>.yaml`. */
   actionId: string;
+  appId?: string;
   /**
    * Override the project root. Default: process.cwd(). Useful for tests
    * and for projects where cdp-bridge isn't invoked from the project dir.
@@ -614,6 +615,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const firstResult = await maestroRun({
         flowPath: action.filePath,
         platform: args.platform,
+        appId: args.appId,
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,
@@ -966,6 +968,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const retryResult = await maestroRun({
         flowPath: reloadedAction.filePath,
         platform: args.platform,
+        appId: args.appId,
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,

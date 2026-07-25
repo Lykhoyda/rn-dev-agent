@@ -187,6 +187,35 @@ test('origin-disrupting lifecycle tools invalidate bundle authority when no targ
   assert.equal(envelope.meta.authorityReceipt.nativeAppOrigin, undefined);
 });
 
+test('failed managed origin proof invalidates prior bundle authority', async () => {
+  const { runtime, registry, status } = fixture();
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'A') {
+        throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'foreign Metro target');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+    refreshRuntimeBinding: async () => {
+      throw new Error('must not refresh after failed origin proof');
+    },
+  });
+
+  const result = await gate.wrap('maestro_run', async (args) => {
+    await completeManagedNativeOriginAuthority(args, true);
+    return okResult({ launched: true });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'METRO_ORIGIN_MISMATCH');
+  assert.equal(status.bindings.bundle, null);
+});
+
 test('reload atomically replaces target authority and permits only B-axis identity change', async () => {
   const { runtime, calls, status } = fixture();
   status.bindings.metro.port = 8193;

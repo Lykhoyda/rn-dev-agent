@@ -787,22 +787,23 @@ export function createAuthorityGate(
                 throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
               }
               registry!.verifyOperation(operation!);
-              const originObservation = await dependencies.probe({
-                axis: 'A',
-                phase: 'postflight',
-                tool,
-                profile,
-                status: currentStatus,
-                args,
-              });
-              if (!dependencies.refreshRuntimeBinding) {
-                throw new SessionAuthorityError(
-                  'BUNDLE_HANDSHAKE_UNAVAILABLE',
-                  'managed lifecycle cannot commit without a binding refresh',
-                );
-              }
+              let originObservation: AuthorityObservation;
               let bundleObservation: AuthorityObservation;
               try {
+                originObservation = await dependencies.probe({
+                  axis: 'A',
+                  phase: 'postflight',
+                  tool,
+                  profile,
+                  status: currentStatus,
+                  args,
+                });
+                if (!dependencies.refreshRuntimeBinding) {
+                  throw new SessionAuthorityError(
+                    'BUNDLE_HANDSHAKE_UNAVAILABLE',
+                    'managed lifecycle cannot commit without a binding refresh',
+                  );
+                }
                 const bundle = await dependencies.refreshRuntimeBinding(currentStatus);
                 bundleObservation = await dependencies.probe({
                   axis: 'B',
