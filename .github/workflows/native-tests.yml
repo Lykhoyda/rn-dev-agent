@@ -102,7 +102,7 @@ jobs:
       - name: Verify Darwin process-birth helper provenance
         run: |
           set -euo pipefail
-          node scripts/build-darwin-process-birth-helper.ts --verify-only
+          node scripts/build-darwin-process-birth-helper.ts --force-rebuild
           git diff --exit-code -- \
             packages/rn-dev-agent-core/native/darwin-process-birth \
             packages/rn-dev-agent-core/native/darwin-process-birth.json
