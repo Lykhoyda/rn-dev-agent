@@ -754,7 +754,7 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     );
 
     assert.notEqual(firstStop.status, 0);
-    assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
+    assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), true);
     const cleanupReceipt = readFileSync(
       `${state.prefix}-${scope}.cleanup-pending`,
@@ -763,7 +763,7 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     assert.equal(cleanupReceipt[0], 'v2');
     assert.equal(cleanupReceipt[6], '1');
     const retainedCapture = cleanupReceipt[7];
-    assert.equal(existsSync(retainedCapture), false);
+    assert.equal(existsSync(retainedCapture), true);
 
     const status = spawnSync('bash', [state.script, 'status', scope], {
       encoding: 'utf8',
@@ -793,6 +793,7 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     );
     assert.equal(retry.status, 0, retry.stderr);
     assert.match(retry.stdout, /^Saved: /m);
+    assert.equal(existsSync(retainedCapture), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), false);
   } finally {
     state.cleanup();
@@ -838,6 +839,53 @@ test('Android cleanup receipt restores output and removes its private artifact',
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(output, 'utf8'), 'recovery-output');
     assert.equal(existsSync(raw), false);
+    assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android v1 cleanup receipt adopts authenticated raw recovery state', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    const raw = join(state.runtimeDirectory, 'raw-android-pull.abc123');
+    seedLocalBinding(state.prefix);
+    writeFileSync(output, 'original-output');
+    const outputIdentity = captureIdentity(output);
+    writeFileSync(raw, 'recovery-output');
+    const rawIdentity = captureIdentity(raw);
+    writeFileSync(
+      `${state.prefix}-${scope}.pull-manifest`,
+      ['v1', raw, rawIdentity, ''].join('\n'),
+    );
+    writeFileSync(
+      `${state.prefix}-${scope}.cleanup-pending`,
+      [
+        'v1',
+        '999999',
+        'local-birth',
+        output,
+        outputIdentity,
+        String(Buffer.byteLength('original-output')),
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(output, 'replacement');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: process.env,
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output, 'utf8'), 'recovery-output');
+    assert.equal(existsSync(raw), false);
+    assert.equal(existsSync(`${state.prefix}-${scope}.pull-manifest`), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), false);
   } finally {
     state.cleanup();

@@ -554,27 +554,103 @@ load_cleanup_receipt() {
   done
 }
 
+migrate_v1_cleanup_receipt() {
+  local scope="$1"
+  local cleanup_path="$2"
+  local pull_manifest
+  pull_manifest="$(pull_manifest_file "$scope")"
+  CLEANUP_ARTIFACT_PATHS=()
+  CLEANUP_ARTIFACT_IDENTITIES=()
+  if [[ -s "$pull_manifest" ]]; then
+    validate_legacy_sidecar "$pull_manifest"
+    [[ "$(sed -n '1p' "$pull_manifest")" == "v1" ]] || return 1
+    local index
+    for index in 0 1; do
+      local path_line=$((2 + index * 2))
+      local identity_line=$((path_line + 1))
+      local artifact_path
+      local artifact_identity
+      artifact_path="$(sed -n "${path_line}p" "$pull_manifest")"
+      artifact_identity="$(sed -n "${identity_line}p" "$pull_manifest")"
+      [[ -n "$artifact_path" ]] || continue
+      validate_raw_capture_path "$artifact_path"
+      if sidecar_exists "$artifact_path"; then
+        [[ -n "$artifact_identity" ]] &&
+          validate_file_identity "$artifact_path" "$artifact_identity" || return 1
+        CLEANUP_ARTIFACT_PATHS+=("$artifact_path")
+        CLEANUP_ARTIFACT_IDENTITIES+=("$artifact_identity")
+      fi
+    done
+  else
+    local raw_path_sidecar="${PID_PREFIX}-${scope}.raw-path"
+    local raw_identity_sidecar
+    raw_identity_sidecar="$(raw_identity_file "$scope")"
+    if [[ -s "$raw_path_sidecar" ]]; then
+      validate_legacy_sidecar "$raw_path_sidecar"
+      local artifact_path
+      artifact_path="$(cat "$raw_path_sidecar")"
+      validate_raw_capture_path "$artifact_path"
+      if sidecar_exists "$artifact_path"; then
+        [[ -s "$raw_identity_sidecar" ]] || return 1
+        validate_legacy_sidecar "$raw_identity_sidecar"
+        local artifact_identity
+        artifact_identity="$(cat "$raw_identity_sidecar")"
+        validate_file_identity "$artifact_path" "$artifact_identity" || return 1
+        CLEANUP_ARTIFACT_PATHS+=("$artifact_path")
+        CLEANUP_ARTIFACT_IDENTITIES+=("$artifact_identity")
+      fi
+    fi
+  fi
+  local -a artifacts=()
+  local index
+  for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
+    artifacts+=(
+      "${CLEANUP_ARTIFACT_PATHS[$index]}"
+      "${CLEANUP_ARTIFACT_IDENTITIES[$index]}"
+    )
+  done
+  write_cleanup_receipt \
+    "$cleanup_path" \
+    "$CLEANUP_PID" \
+    "$CLEANUP_BIRTH" \
+    "$CLEANUP_OUTPUT" \
+    "$CLEANUP_OUTPUT_IDENTITY" \
+    "$CLEANUP_SIZE" \
+    "${artifacts[@]}"
+  CLEANUP_VERSION="v2"
+}
+
 complete_cleanup_receipt() {
   local scope="$1"
   local incarnation="$2"
   local cleanup_path="$3"
-  if ! validate_file_identity "$CLEANUP_OUTPUT" "$CLEANUP_OUTPUT_IDENTITY"; then
-    [[ ${#CLEANUP_ARTIFACT_PATHS[@]} -gt 0 ]] || {
-      echo "Error: finalized recording output identity changed" >&2
+  if [[ "$CLEANUP_VERSION" == "v1" ]]; then
+    migrate_v1_cleanup_receipt "$scope" "$cleanup_path" || {
+      echo "Error: legacy recorder cleanup recovery state is invalid" >&2
       return 1
     }
-    local recovery_artifact=""
-    local index
-    for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
-      if validate_file_identity \
-        "${CLEANUP_ARTIFACT_PATHS[$index]}" \
-        "${CLEANUP_ARTIFACT_IDENTITIES[$index]}"; then
-        recovery_artifact="${CLEANUP_ARTIFACT_PATHS[$index]}"
-        break
+  fi
+  local recovery_artifact=""
+  local recovery_identity=""
+  local index
+  for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
+    local artifact_path="${CLEANUP_ARTIFACT_PATHS[$index]}"
+    local artifact_identity="${CLEANUP_ARTIFACT_IDENTITIES[$index]}"
+    validate_raw_capture_path "$artifact_path"
+    if sidecar_exists "$artifact_path"; then
+      validate_file_identity "$artifact_path" "$artifact_identity" || {
+        echo "Error: cleanup artifact identity changed" >&2
+        return 1
+      }
+      if [[ -z "$recovery_artifact" ]]; then
+        recovery_artifact="$artifact_path"
+        recovery_identity="$artifact_identity"
       fi
-    done
+    fi
+  done
+  if ! validate_file_identity "$CLEANUP_OUTPUT" "$CLEANUP_OUTPUT_IDENTITY"; then
     [[ -n "$recovery_artifact" ]] || {
-      echo "Error: finalized recording output and recovery artifact changed" >&2
+      echo "Error: finalized recording output identity changed" >&2
       return 1
     }
     publish_capture_copy "$recovery_artifact" "$CLEANUP_OUTPUT"
@@ -596,20 +672,39 @@ complete_cleanup_receipt() {
       "$CLEANUP_SIZE" \
       "${artifacts[@]}"
   fi
-  local index
   for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
     local artifact_path="${CLEANUP_ARTIFACT_PATHS[$index]}"
     local artifact_identity="${CLEANUP_ARTIFACT_IDENTITIES[$index]}"
-    validate_raw_capture_path "$artifact_path"
-    if sidecar_exists "$artifact_path"; then
-      validate_file_identity "$artifact_path" "$artifact_identity" || {
-        echo "Error: cleanup artifact identity changed" >&2
-        return 1
-      }
+    if [[ "$artifact_path" != "$recovery_artifact" ]] && sidecar_exists "$artifact_path"; then
       remove_owned_state_path "$artifact_path"
     fi
   done
-  remove_recording_sidecars "$scope" "$incarnation"
+  remove_recording_sidecars "$scope" "$incarnation" "true"
+  if [[ -n "$recovery_artifact" ]]; then
+    validate_file_identity "$recovery_artifact" "$recovery_identity" || {
+      echo "Error: cleanup recovery artifact identity changed" >&2
+      return 1
+    }
+    publish_capture_copy "$recovery_artifact" "$CLEANUP_OUTPUT"
+    CLEANUP_OUTPUT_IDENTITY="$(capture_file_identity "$CLEANUP_OUTPUT")" || return 1
+    CLEANUP_SIZE="$(wc -c < "$CLEANUP_OUTPUT" | tr -d ' ')"
+    write_cleanup_receipt \
+      "$cleanup_path" \
+      "$CLEANUP_PID" \
+      "$CLEANUP_BIRTH" \
+      "$CLEANUP_OUTPUT" \
+      "$CLEANUP_OUTPUT_IDENTITY" \
+      "$CLEANUP_SIZE" \
+      "$recovery_artifact" \
+      "$recovery_identity"
+    remove_owned_state_path "$recovery_artifact"
+  else
+    validate_file_identity "$CLEANUP_OUTPUT" "$CLEANUP_OUTPUT_IDENTITY" || {
+      echo "Error: finalized recording output identity changed" >&2
+      return 1
+    }
+  fi
+  release_cleanup_claim "$scope"
   echo "Saved: $CLEANUP_OUTPUT ($CLEANUP_SIZE bytes)"
 }
 
@@ -689,13 +784,14 @@ PY
 remove_recording_sidecars() {
   local scope="$1"
   local incarnation="${2:-}"
+  local preserve_cleanup="${3:-false}"
   local path
   for path in "${PID_PREFIX}-${scope}".{path,platform,raw-path,raw-identity,pull-manifest,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,finalized-path,finalized-identity}; do
     remove_owned_state_path "$path"
   done
   local cleanup_path
   cleanup_path="$(cleanup_pending_file "$scope")"
-  if [[ -s "$cleanup_path" ]]; then
+  if [[ "$preserve_cleanup" != "true" && -s "$cleanup_path" ]]; then
     remove_owned_state_path "$(birth_file "$scope")"
     remove_owned_state_path "$(pid_file "$scope")"
   fi
@@ -714,11 +810,21 @@ remove_recording_sidecars() {
   elif [[ -z "$incarnation" ]]; then
     remove_owned_state_path "$incarnation_path"
   fi
+  if [[ "$preserve_cleanup" == "true" ]]; then
+    return
+  fi
   if [[ ! -s "$cleanup_path" ]]; then
     remove_owned_state_path "$(birth_file "$scope")"
     remove_owned_state_path "$(pid_file "$scope")"
   fi
   remove_owned_state_path "$cleanup_path"
+}
+
+release_cleanup_claim() {
+  local scope="$1"
+  remove_owned_state_path "$(birth_file "$scope")"
+  remove_owned_state_path "$(pid_file "$scope")"
+  remove_owned_state_path "$(cleanup_pending_file "$scope")"
 }
 
 is_alive() {
