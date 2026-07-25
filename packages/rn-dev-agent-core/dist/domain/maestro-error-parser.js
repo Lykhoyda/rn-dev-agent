@@ -119,6 +119,9 @@ export function parseMaestroFailure(output, terminal) {
     if (terminal?.failureKind === 'ASSERTION_FAILED') {
         return { kind: 'ASSERTION_FAILED', selector: terminal.failureSelector ?? null, raw };
     }
+    if (terminal?.exitClass === 'timed-out') {
+        return { kind: 'TIMEOUT', selector: terminal.failureSelector ?? null, raw };
+    }
     if (terminal?.exitClass === 'before-first-step' && terminal.bootstrapEvidence) {
         return {
             kind: 'WDA_BOOTSTRAP_FAILED',

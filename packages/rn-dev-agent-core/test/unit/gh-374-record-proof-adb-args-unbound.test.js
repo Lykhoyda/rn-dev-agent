@@ -22,7 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -77,6 +77,17 @@ test('behavioral: stop survives a serial-less single-device Android state (repro
   const hermetic = realSrc
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${pidPrefix}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(base, 'raw')}"`);
+  const fakeAdb = join(base, 'adb');
+  writeFileSync(
+    fakeAdb,
+    `#!/usr/bin/env bash
+if [[ "$*" == "get-state" ]]; then
+  echo device
+fi
+exit 0
+`,
+  );
+  chmodSync(fakeAdb, 0o755);
   const scope = 'a'.repeat(64);
 
   const seedState = () => {
@@ -93,6 +104,7 @@ test('behavioral: stop survives a serial-less single-device Android state (repro
     seedState();
     const r = spawnSync('bash', [p, 'stop', scope, '999999', 'birth-token'], {
       encoding: 'utf8',
+      env: { ...process.env, PATH: `${base}:${process.env.PATH}` },
     });
     return `${r.stdout || ''}\n${r.stderr || ''}`;
   };

@@ -13049,23 +13049,22 @@ async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runR
           throw new Error("provisional recorder process identity is unavailable");
         }
         if (current2.status === "present") {
-          if (reportedBirth !== "unbound" && reportedBirth !== current2.birth.token) {
+          if (reportedBirth === "unbound") {
+            throw new Error("provisional recorder process identity was never bound");
+          }
+          if (reportedBirth !== current2.birth.token) {
             throw new Error("provisional recorder PID was reused before cleanup");
           }
-          await runRecorder(script, [
-            "bind-identity",
-            scope,
-            String(provisionalPid),
-            current2.birth.token
-          ]);
           output = (await runRecorder(script, [
             "stop",
             scope,
             String(provisionalPid),
-            current2.birth.token
+            reportedBirth
           ])).stdout;
-        } else {
+        } else if (reportedBirth === "unbound") {
           await runRecorder(script, ["abort", scope]);
+        } else {
+          output = (await runRecorder(script, ["stop", scope, String(provisionalPid), reportedBirth])).stdout;
         }
       } else if (/^No active recordings/m.test(initialStatus.stdout)) {
         await runRecorder(script, ["abort", scope]);

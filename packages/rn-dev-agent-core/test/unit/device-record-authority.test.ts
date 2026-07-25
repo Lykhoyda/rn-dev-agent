@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { classifyExecError } from '../../dist/domain/maestro-step-parser.js';
+import { parseMaestroFailure } from '../../dist/domain/maestro-error-parser.js';
 import { stopBoundRecorder } from '../../dist/session/process-cleanup.js';
 import { bindRecorderSession } from '../../dist/tools/device-record.js';
 
@@ -52,44 +53,44 @@ test('an exited recorder remains safely finalizable', async () => {
   assert.deepEqual(calls.map((args) => args[0]), ['stop', 'status']);
 });
 
-test('provisional recorder cleanup authenticates a live process before stopping it', async () => {
+test('provisional recorder cleanup refuses a live process without bound birth identity', async () => {
   const calls: string[][] = [];
-  await stopBoundRecorder(
-    {
-      phase: 'starting',
-      script: '/workspace/record_proof.sh',
-      scope: 'b'.repeat(64),
-    },
-    () => ({
-      status: 'present',
-      birth: { pid: 654, source: 'darwin-libproc', token: 'exact-birth' },
-    }),
-    async (_script, args) => {
-      calls.push(args);
-      if (args[0] === 'status' && calls.length === 1) {
+  await assert.rejects(
+    stopBoundRecorder(
+      {
+        phase: 'starting',
+        script: '/workspace/record_proof.sh',
+        scope: 'b'.repeat(64),
+      },
+      () => ({
+        status: 'present',
+        birth: { pid: 654, source: 'darwin-libproc', token: 'exact-birth' },
+      }),
+      async (_script, args) => {
+        calls.push(args);
         return {
           stdout: 'ios: pid=654 birth=unbound status=active output=proof.mp4\n',
           stderr: '',
         };
-      }
-      return {
-        stdout: args[0] === 'status' ? 'No active recordings\n' : '',
-        stderr: '',
-      };
-    },
+      },
+    ),
+    /process identity was never bound/,
   );
 
-  assert.deepEqual(calls, [
-    ['status', 'b'.repeat(64)],
-    ['bind-identity', 'b'.repeat(64), '654', 'exact-birth'],
-    ['stop', 'b'.repeat(64), '654', 'exact-birth'],
-    ['status', 'b'.repeat(64)],
-  ]);
+  assert.deepEqual(calls, [['status', 'b'.repeat(64)]]);
 });
 
 test('synthetic staged deadlines classify as timeouts', () => {
   assert.deepEqual(classifyExecError({ code: 'ETIMEDOUT' }), {
     timedOut: true,
     outputTruncated: false,
+  });
+});
+
+test('synthetic staged deadlines remain timeouts in action failure parsing', () => {
+  assert.deepEqual(parseMaestroFailure('prior successful stage', { exitClass: 'timed-out' }), {
+    kind: 'TIMEOUT',
+    selector: null,
+    raw: 'prior successful stage',
   });
 });

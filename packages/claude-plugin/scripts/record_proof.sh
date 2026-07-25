@@ -30,10 +30,113 @@ pid_file() { echo "${PID_PREFIX}-${1}.pid"; }
 path_file() { echo "${PID_PREFIX}-${1}.path"; }
 platform_file() { echo "${PID_PREFIX}-${1}.platform"; }
 birth_file() { echo "${PID_PREFIX}-${1}.birth"; }
+remote_birth_file() { echo "${PID_PREFIX}-${1}.remote-birth"; }
+remote_command_file() { echo "${PID_PREFIX}-${1}.remote-command"; }
 
 is_alive() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null
+}
+
+android_adb() {
+  local serial="$1"
+  shift
+  if [[ -n "$serial" ]]; then
+    adb -s "$serial" "$@"
+  else
+    adb "$@"
+  fi
+}
+
+require_android_device() {
+  local serial="$1"
+  local state
+  state="$(android_adb "$serial" get-state 2>/dev/null | tr -d '\r')" || {
+    echo "Error: Android device is unreachable" >&2
+    return 1
+  }
+  [[ "$state" == "device" ]] || {
+    echo "Error: Android device is not online" >&2
+    return 1
+  }
+}
+
+ANDROID_SCREENRECORD_PIDS=""
+
+read_android_screenrecord_pids() {
+  local serial="$1"
+  require_android_device "$serial" || return 1
+  ANDROID_SCREENRECORD_PIDS="$(
+    android_adb "$serial" shell "pidof screenrecord || true" 2>/dev/null |
+      tr -d '\r' |
+      xargs
+  )" || {
+    echo "Error: Android screenrecord lookup failed" >&2
+    return 1
+  }
+  require_android_device "$serial" || return 1
+}
+
+ANDROID_PROCESS_STATE="unknown"
+ANDROID_PROCESS_BIRTH=""
+ANDROID_PROCESS_COMMAND=""
+
+probe_android_process() {
+  local serial="$1"
+  local pid="$2"
+  ANDROID_PROCESS_STATE="unknown"
+  ANDROID_PROCESS_BIRTH=""
+  ANDROID_PROCESS_COMMAND=""
+  require_android_device "$serial" || return 1
+
+  local stat_before
+  if ! stat_before="$(android_adb "$serial" shell cat "/proc/$pid/stat" 2>/dev/null | tr -d '\r')"; then
+    require_android_device "$serial" || return 1
+    if android_adb "$serial" shell test ! -e "/proc/$pid" >/dev/null 2>&1; then
+      ANDROID_PROCESS_STATE="absent"
+      return 0
+    fi
+    echo "Error: Android process identity is unavailable" >&2
+    return 1
+  fi
+
+  local boot_id
+  boot_id="$(
+    android_adb "$serial" shell cat /proc/sys/kernel/random/boot_id 2>/dev/null |
+      tr -d '\r'
+  )" || {
+    echo "Error: Android boot identity is unavailable" >&2
+    return 1
+  }
+  local command
+  command="$(android_adb "$serial" shell readlink "/proc/$pid/exe" 2>/dev/null | tr -d '\r')" || {
+    echo "Error: Android process command identity is unavailable" >&2
+    return 1
+  }
+  local stat_after
+  stat_after="$(android_adb "$serial" shell cat "/proc/$pid/stat" 2>/dev/null | tr -d '\r')" || {
+    echo "Error: Android process changed during identity capture" >&2
+    return 1
+  }
+  require_android_device "$serial" || return 1
+
+  local before_tail="${stat_before##*) }"
+  local after_tail="${stat_after##*) }"
+  local start_before
+  local start_after
+  start_before="$(printf '%s\n' "$before_tail" | awk '{print $20}')"
+  start_after="$(printf '%s\n' "$after_tail" | awk '{print $20}')"
+  [[ "$boot_id" =~ ^[0-9a-fA-F-]{36}$ && "$start_before" =~ ^[0-9]+$ ]] || {
+    echo "Error: Android process birth identity is invalid" >&2
+    return 1
+  }
+  [[ "$start_before" == "$start_after" && -n "$command" ]] || {
+    echo "Error: Android process identity changed or has no command" >&2
+    return 1
+  }
+  ANDROID_PROCESS_STATE="present"
+  ANDROID_PROCESS_BIRTH="${boot_id}:${start_before}"
+  ANDROID_PROCESS_COMMAND="$command"
 }
 
 cmd_start() {
@@ -82,9 +185,9 @@ cmd_start() {
   mkdir -p "$(dirname "$output_path")"
   output_path="$(cd "$(dirname "$output_path")" && pwd)/$(basename "$output_path")"
 
-  # Record to temp file in native format; stop will convert to MP4
   local raw_file="${RAW_PREFIX}-${platform}-$$.mov"
   local recorder_log="${PID_PREFIX}-${scope}.log"
+  local rec_pid
 
   if [[ "$platform" == "ios" ]]; then
     if ! xcrun simctl list devices booted 2>/dev/null | grep -q "Booted"; then
@@ -92,8 +195,11 @@ cmd_start() {
       exit 1
     fi
     local ios_target="${target_id:-booted}"
+    echo "$platform" > "$(platform_file "$scope")"
+    echo "$output_path" > "$(path_file "$scope")"
+    echo "$raw_file" > "${PID_PREFIX}-${scope}.raw-path"
     xcrun simctl io "$ios_target" recordVideo --force "$raw_file" > "$recorder_log" 2>&1 &
-    local rec_pid=$!
+    rec_pid=$!
   else
     raw_file="${RAW_PREFIX}-${platform}-$$.mp4"
     if ! adb devices 2>/dev/null | grep -q "device$"; then
@@ -101,47 +207,48 @@ cmd_start() {
       exit 1
     fi
     local device_path="/sdcard/rn-dev-agent-proof-$$.mp4"
-    local -a adb_args=()
-    [[ -n "$target_id" ]] && adb_args+=(-s "$target_id")
-    if [[ -n "$(adb "${adb_args[@]+"${adb_args[@]}"}" shell pidof screenrecord 2>/dev/null || true)" ]]; then
+    read_android_screenrecord_pids "$target_id"
+    if [[ -n "$ANDROID_SCREENRECORD_PIDS" ]]; then
       echo "Error: A screenrecord process already owns this device" >&2
       exit 1
+    fi
+    echo "$platform" > "$(platform_file "$scope")"
+    echo "$output_path" > "$(path_file "$scope")"
+    echo "$raw_file" > "${PID_PREFIX}-${scope}.raw-path"
+    echo "$device_path" > "${PID_PREFIX}-${scope}.device-path"
+    if [[ -n "$target_id" ]]; then
+      echo "$target_id" > "${PID_PREFIX}-${scope}.serial"
+    else
+      rm -f "${PID_PREFIX}-${scope}.serial"
     fi
     if [[ -n "$target_id" ]]; then
       adb -s "$target_id" shell screenrecord "$device_path" > "$recorder_log" 2>&1 &
     else
       adb shell screenrecord "$device_path" > "$recorder_log" 2>&1 &
     fi
-    local rec_pid=$!
+    rec_pid=$!
   fi
 
+  echo "$rec_pid" > "$pf"
   sleep 0.5
   if ! is_alive "$rec_pid"; then
     echo "Error: Recording process died immediately" >&2
     [[ -s "$recorder_log" ]] && sed -n '1,20p' "$recorder_log" >&2
-    rm -f "$pf" "$(path_file "$scope")" "${PID_PREFIX}-${scope}.device-path" "$recorder_log"
     exit 1
   fi
 
-  echo "$rec_pid" > "$pf"
-  echo "$platform" > "$(platform_file "$scope")"
-  echo "$output_path" > "$(path_file "$scope")"
-  echo "$raw_file" > "${PID_PREFIX}-${scope}.raw-path"
-  [[ "$platform" == "android" ]] && echo "$device_path" > "${PID_PREFIX}-${scope}.device-path"
-  # Persist the Android serial so the stop path scopes pkill/pull/rm to
-  # the same device. Unconditionally write or clear — leaving a stale
-  # sidecar from a prior recording would misroute this stop to a now-
-  # disconnected device.
   if [[ "$platform" == "android" ]]; then
-    if [[ -n "$target_id" ]]; then
-      echo "$target_id" > "${PID_PREFIX}-${scope}.serial"
-    else
-      rm -f "${PID_PREFIX}-${scope}.serial"
-    fi
-    local remote_pid
-    remote_pid="$(adb "${adb_args[@]+"${adb_args[@]}"}" shell pidof screenrecord 2>/dev/null | tr -d '\r' | xargs)"
+    read_android_screenrecord_pids "$target_id"
+    local remote_pid="$ANDROID_SCREENRECORD_PIDS"
     [[ ! "$remote_pid" =~ ^[0-9]+$ ]] && { echo "Error: Could not bind the device-side screenrecord PID" >&2; exit 1; }
+    probe_android_process "$target_id" "$remote_pid"
+    [[ "$ANDROID_PROCESS_STATE" == "present" && "$ANDROID_PROCESS_COMMAND" == */screenrecord ]] || {
+      echo "Error: Could not prove the device-side screenrecord identity" >&2
+      exit 1
+    }
     echo "$remote_pid" > "${PID_PREFIX}-${scope}.remote-pid"
+    echo "$ANDROID_PROCESS_BIRTH" > "$(remote_birth_file "$scope")"
+    echo "$ANDROID_PROCESS_COMMAND" > "$(remote_command_file "$scope")"
   fi
   echo "Recording started: platform=$platform pid=$rec_pid output=$output_path"
 }
@@ -163,32 +270,56 @@ cmd_bind_identity() {
 
 stop_android_recorder() {
   local scope="$1"
-  local -a adb_args=()
   local serialf="${PID_PREFIX}-${scope}.serial"
-  [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
+  local serial=""
+  [[ -f "$serialf" ]] && serial="$(cat "$serialf")"
   local remote_pidf="${PID_PREFIX}-${scope}.remote-pid"
-  [[ ! -f "$remote_pidf" ]] && return
+  if [[ ! -f "$remote_pidf" ]]; then
+    read_android_screenrecord_pids "$serial"
+    [[ -z "$ANDROID_SCREENRECORD_PIDS" ]] || {
+      echo "Error: unbound device-side screenrecord remains active" >&2
+      exit 1
+    }
+    return
+  fi
   local remote_pid
   remote_pid="$(cat "$remote_pidf")"
   [[ ! "$remote_pid" =~ ^[0-9]+$ ]] && {
     echo "Error: invalid device-side screenrecord PID" >&2
     exit 1
   }
-  if adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -0 "$remote_pid" >/dev/null 2>&1; then
-    adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -2 "$remote_pid" >/dev/null 2>&1 || {
-      echo "Error: failed to signal device-side screenrecord PID $remote_pid" >&2
-      exit 1
-    }
-    local waited=0
-    while adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -0 "$remote_pid" >/dev/null 2>&1 && [[ $waited -lt 20 ]]; do
-      sleep 0.5
-      waited=$((waited + 1))
-    done
-    if adb "${adb_args[@]+"${adb_args[@]}"}" shell kill -0 "$remote_pid" >/dev/null 2>&1; then
-      echo "Error: device-side screenrecord PID $remote_pid did not stop" >&2
-      exit 1
+  local expected_birth=""
+  local expected_command=""
+  [[ -f "$(remote_birth_file "$scope")" ]] && expected_birth="$(cat "$(remote_birth_file "$scope")")"
+  [[ -f "$(remote_command_file "$scope")" ]] && expected_command="$(cat "$(remote_command_file "$scope")")"
+  [[ "$expected_birth" =~ ^[0-9a-fA-F-]{36}:[0-9]+$ && "$expected_command" == */screenrecord ]] || {
+    echo "Error: device-side screenrecord identity is incomplete" >&2
+    exit 1
+  }
+  probe_android_process "$serial" "$remote_pid"
+  [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
+  [[ "$ANDROID_PROCESS_BIRTH" != "$expected_birth" ]] && return
+  [[ "$ANDROID_PROCESS_COMMAND" == "$expected_command" ]] || {
+    echo "Error: device-side screenrecord command identity changed" >&2
+    exit 1
+  }
+  android_adb "$serial" shell kill -2 "$remote_pid" >/dev/null 2>&1 || {
+    probe_android_process "$serial" "$remote_pid"
+    [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
+    echo "Error: failed to signal device-side screenrecord PID $remote_pid" >&2
+    exit 1
+  }
+  local waited=0
+  while [[ $waited -lt 20 ]]; do
+    sleep 0.5
+    probe_android_process "$serial" "$remote_pid"
+    if [[ "$ANDROID_PROCESS_STATE" == "absent" || "$ANDROID_PROCESS_BIRTH" != "$expected_birth" ]]; then
+      return
     fi
-  fi
+    waited=$((waited + 1))
+  done
+  echo "Error: device-side screenrecord PID $remote_pid did not stop" >&2
+  exit 1
 }
 
 cmd_abort() {
@@ -215,7 +346,7 @@ cmd_abort() {
   if [[ -f "${PID_PREFIX}-${scope}.raw-path" ]]; then
     rm -f "$(cat "${PID_PREFIX}-${scope}.raw-path")"
   fi
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,device-path}
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,device-path}
 }
 
 cmd_stop() {
@@ -297,7 +428,7 @@ cmd_stop() {
     rm -f "$raw_file"
   fi
 
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,device-path}
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,device-path}
   if [[ -n "$output_path" && -f "$output_path" ]]; then
     local size
     size="$(wc -c < "$output_path" | tr -d ' ')"
