@@ -1356,14 +1356,15 @@ cmd_stop() {
     [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
   fi
 
+  local -a adb_args=()
+  local device_path=""
+  local android_pull_failed="false"
   if [[ "$platform" == "android" ]]; then
-    local -a adb_args=()
     local serialf="${PID_PREFIX}-${scope}.serial"
     [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
     stop_android_recorder "$scope"
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
-      local device_path
       device_path="$(cat "$device_pathf")"
       if [[ "$supervisor_failed" != "true" ]]; then
         sleep 2
@@ -1377,22 +1378,29 @@ cmd_stop() {
           rm -f "$pull_file"
           PENDING_PULL_FILE=""
           raw_file=""
+          android_pull_failed="true"
           echo "Warning: Failed to pull recording from device" >&2
         fi
         if [[ -n "$prior_raw_file" && "$prior_raw_file" != "$raw_file" ]]; then
           remove_owned_state_path "$prior_raw_file"
         fi
       fi
-      adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
     fi
   fi
 
   if [[ "$supervisor_failed" == "true" ]]; then
     [[ -n "$raw_file" ]] && rm -f "$raw_file"
     PENDING_PULL_FILE=""
+    if [[ "$platform" == "android" && -n "$device_path" ]]; then
+      adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
+    fi
     remove_recording_sidecars "$scope" "$incarnation"
     echo "Recorder failed: supervisor terminated unexpectedly"
     return 0
+  fi
+  if [[ "$android_pull_failed" == "true" ]]; then
+    echo "Error: recording remains on device for retry" >&2
+    return 1
   fi
 
   output_path="${output_path%.*}.mp4"
@@ -1417,6 +1425,9 @@ cmd_stop() {
     PENDING_PULL_FILE=""
   fi
 
+  if [[ "$platform" == "android" && -n "$device_path" ]]; then
+    adb "${adb_args[@]+"${adb_args[@]}"}" shell rm -f "$device_path" 2>/dev/null || true
+  fi
   remove_recording_sidecars "$scope" "$incarnation"
   if [[ -n "$output_path" && -f "$output_path" ]]; then
     local size

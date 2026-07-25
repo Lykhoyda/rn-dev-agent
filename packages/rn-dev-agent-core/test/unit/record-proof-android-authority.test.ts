@@ -33,8 +33,11 @@ function fixture() {
   const prefix = join(runtimeDirectory, 'record');
   const script = join(root, 'record_proof.sh');
   const adb = join(root, 'adb');
+  const ffmpeg = join(root, 'ffmpeg');
   const killMarker = join(root, 'kill-marker');
   const pullMarker = join(root, 'pull-marker');
+  const remoteDeleteMarker = join(root, 'remote-delete-marker');
+  const conversionMarker = join(root, 'conversion-marker');
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${legacyPrefix}"`)
     .replace(
@@ -74,6 +77,8 @@ elif [[ "$args" == *"kill -2 777"* ]]; then
   touch "\${FAKE_KILL_MARKER}"
 elif [[ "$args" == *"test ! -e /proc/777"* ]]; then
   [[ "\${FAKE_PROC_PRESENT:-1}" == "0" ]]
+elif [[ "$args" == *"shell rm -f"* ]]; then
+  [[ -z "\${FAKE_REMOTE_DELETE_MARKER:-}" ]] || touch "\${FAKE_REMOTE_DELETE_MARKER}"
 elif [[ "$args" == pull\\ * || "$args" == *" pull "* ]]; then
   destination="\${@: -1}"
   [[ -f "$destination" && ! -L "$destination" ]] || exit 42
@@ -89,7 +94,20 @@ elif [[ "$args" == pull\\ * || "$args" == *" pull "* ]]; then
 fi
 `,
   );
+  writeFileSync(
+    ffmpeg,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${FAKE_TERMINATE_CONVERSION:-0}" == "1" ]]; then
+  touch "\${FAKE_CONVERSION_MARKER}"
+  kill -TERM "$PPID"
+  sleep 0.2
+fi
+exit 1
+`,
+  );
   chmodSync(adb, 0o755);
+  chmodSync(ffmpeg, 0o755);
   mkdirSync(runtimeDirectory, { mode: 0o700 });
   return {
     root,
@@ -99,6 +117,8 @@ fi
     script,
     killMarker,
     pullMarker,
+    remoteDeleteMarker,
+    conversionMarker,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -176,6 +196,7 @@ test('Android stop finalizes without signaling a reused remote PID', () => {
           ...process.env,
           PATH: `${state.root}:${process.env.PATH}`,
           FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
           FAKE_STAT: stat,
         },
       },
@@ -209,6 +230,7 @@ test('Android stop treats disappearance during identity capture as absence', () 
           ...process.env,
           PATH: `${state.root}:${process.env.PATH}`,
           FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
           FAKE_STAT: stat,
           FAKE_READLINK_FAIL: '1',
           FAKE_PROC_PRESENT: '0',
@@ -319,6 +341,43 @@ test('Android pull removes its private partial file when stop is terminated', ()
     assert.notEqual(result.status, 0);
     const pullDestination = readFileSync(state.pullMarker, 'utf8').trim();
     assert.equal(existsSync(pullDestination), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android remote capture remains available when conversion is interrupted', () => {
+  const state = fixture();
+  try {
+    const output = join(state.root, 'proof.mp4');
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.path`, output);
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_PULL_MARKER: state.pullMarker,
+          FAKE_REMOTE_DELETE_MARKER: state.remoteDeleteMarker,
+          FAKE_CONVERSION_MARKER: state.conversionMarker,
+          FAKE_STAT: '',
+          FAKE_TERMINATE_CONVERSION: '1',
+        },
+      },
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.equal(existsSync(state.remoteDeleteMarker), false);
+    assert.equal(existsSync(state.conversionMarker), true);
+    const abandonedPull = readFileSync(state.pullMarker, 'utf8').trim();
+    assert.equal(existsSync(abandonedPull), false);
+    assert.equal(existsSync(`${state.prefix}-${scope}.device-path`), true);
   } finally {
     state.cleanup();
   }
