@@ -19,7 +19,8 @@ export function renderMetroIntegrationAdapter() {
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, createHmac } = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const childProcess = require('node:child_process');
+const { execFileSync } = childProcess;
 const moduleApi = require('node:module');
 const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
@@ -64,6 +65,61 @@ function recordLoaderViolation(value) {
   accumulatedViolations.add(value);
   loaderEpoch += 1;
   persistLoaderObservation('violation', value);
+}
+const authorityEnvironment = Object.entries(process.env).filter(
+  ([key]) => key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_'),
+);
+function authenticatedChildEnvironment(environment) {
+  const nextEnvironment = {};
+  for (const [key, value] of Object.entries(environment || process.env)) {
+    const normalizedKey = key.toUpperCase();
+    if (normalizedKey === 'NODE_OPTIONS' || normalizedKey.startsWith('RN_DEV_AGENT_')) continue;
+    nextEnvironment[key] = value;
+  }
+  for (const [key, value] of authorityEnvironment) nextEnvironment[key] = value;
+  return nextEnvironment;
+}
+function authenticatedChildArguments(args, optionsIndex) {
+  const nextArgs = [...args];
+  const candidate = nextArgs[optionsIndex];
+  const options = candidate && typeof candidate === 'object' ? candidate : {};
+  const authenticatedOptions = {
+    ...options,
+    env: authenticatedChildEnvironment(options.env),
+  };
+  if (typeof candidate === 'function') {
+    nextArgs.splice(optionsIndex, 0, authenticatedOptions);
+  } else {
+    nextArgs[optionsIndex] = authenticatedOptions;
+  }
+  return nextArgs;
+}
+function fenceChildProcessMethod(name, optionsIndex) {
+  const original = childProcess[name];
+  Object.defineProperty(childProcess, name, {
+    configurable: false,
+    enumerable: true,
+    value(...args) {
+      const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
+      return Reflect.apply(original, this, authenticatedChildArguments(args, index));
+    },
+    writable: false,
+  });
+}
+const optionalArgsIndex = (args) => (Array.isArray(args[1]) ? 2 : 1);
+const canAuthenticateChildProcesses =
+  Boolean(process.env.NODE_OPTIONS) &&
+  Boolean(process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD) &&
+  Boolean(process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY) &&
+  Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS);
+if (canAuthenticateChildProcesses) {
+  fenceChildProcessMethod('spawn', optionalArgsIndex);
+  fenceChildProcessMethod('spawnSync', optionalArgsIndex);
+  fenceChildProcessMethod('execFile', optionalArgsIndex);
+  fenceChildProcessMethod('execFileSync', optionalArgsIndex);
+  fenceChildProcessMethod('fork', optionalArgsIndex);
+  fenceChildProcessMethod('exec', 1);
+  fenceChildProcessMethod('execSync', 1);
 }
 const rejectNativeAddonLoad = () => {
   recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');

@@ -447,7 +447,7 @@ test('Metro preload records child-process and worker-thread module loads', () =>
       process.execPath,
       [
         '-e',
-        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const { spawnSync } = require('node:child_process'); const child = spawnSync(process.execPath, ['-e', ${JSON.stringify(`require(${JSON.stringify(childModule)})`)}], { env: process.env }); if (child.status !== 0) process.exit(child.status || 1); const { Worker } = require('node:worker_threads'); const worker = new Worker(${JSON.stringify(`require(${JSON.stringify(threadModule)})`)}, { eval: true }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const { spawnSync } = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); const child = spawnSync(process.execPath, ['-e', ${JSON.stringify(`require(${JSON.stringify(childModule)})`)}], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const { Worker } = require('node:worker_threads'); const worker = new Worker(${JSON.stringify(`require(${JSON.stringify(threadModule)})`)}, { eval: true }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
       ],
       {
         cwd: root,
