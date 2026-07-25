@@ -562,8 +562,60 @@ export function createSessionHandler(
         }
         const adopted = registry.getSessionStatus(session.sessionId);
         const cleanup = adopted?.bindings.handoffCleanup as
-          | { metro?: Record<string, unknown> }
+          | {
+              metro?: Record<string, unknown>;
+              runner?: Record<string, unknown>;
+              observe?: Record<string, unknown>;
+            }
           | undefined;
+        if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
+          const runnerCleanup = registry.beginHandoffCleanupResource(
+            session,
+            current.worker.instanceId,
+            'runner',
+          );
+          if (!runnerCleanup) {
+            throw new SessionAuthorityError(
+              'RUNNER_ADOPTION_REQUIRED',
+              'stale runner cleanup binding disappeared while fenced',
+            );
+          }
+          if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(runnerCleanup);
+          } else {
+            await stopHandoffRunner(
+              runnerCleanup,
+              dependencies.probeProcessBirth,
+              dependencies.signalProcess,
+              dependencies.cleanupTimeoutMs,
+            );
+          }
+          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'runner');
+        }
+        if (cleanup?.observe && typeof cleanup.observe.completedAt !== 'number') {
+          const observeCleanup = registry.beginHandoffCleanupResource(
+            session,
+            current.worker.instanceId,
+            'observe',
+          );
+          if (!observeCleanup) {
+            throw new SessionAuthorityError(
+              'OBSERVE_AUTHORITY_MISMATCH',
+              'stale Observe cleanup binding disappeared while fenced',
+            );
+          }
+          if (dependencies.stopHandoffObserve) {
+            await dependencies.stopHandoffObserve(observeCleanup);
+          } else {
+            await stopHandoffObserve(
+              observeCleanup,
+              dependencies.probeListener,
+              dependencies.probeProcessBirth,
+              dependencies.cleanupTimeoutMs,
+            );
+          }
+          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'observe');
+        }
         if (cleanup?.metro && typeof cleanup.metro.completedAt !== 'number') {
           const metroCleanup = registry.beginHandoffCleanupResource(
             session,

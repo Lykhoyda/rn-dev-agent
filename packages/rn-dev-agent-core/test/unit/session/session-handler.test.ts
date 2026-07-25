@@ -299,8 +299,16 @@ test('handoff cleanup resumes after a later resource fails', async () => {
   assert.equal(finished, 1);
 });
 
-test('stale adoption stops durable Metro cleanup before becoming operational', async () => {
+test('stale adoption stops every durable cleanup resource before becoming operational', async () => {
   const calls: string[] = [];
+  const runnerCleanup = {
+    stopRequestedAt: null as number | null,
+    completedAt: null as number | null,
+  };
+  const observeCleanup = {
+    stopRequestedAt: null as number | null,
+    completedAt: null as number | null,
+  };
   const metroCleanup = {
     mode: 'managed',
     port: 8193,
@@ -326,16 +334,36 @@ test('stale adoption stops durable Metro cleanup before becoming operational', a
     getSessionStatus: () => status,
     adoptStaleWithHandle: () => {
       status.state = 'handoff_cleanup';
-      status.bindings = { handoffCleanup: { metro: metroCleanup } };
+      status.bindings = {
+        handoffCleanup: {
+          runner: runnerCleanup,
+          observe: observeCleanup,
+          metro: metroCleanup,
+        },
+      };
       calls.push('adopt');
     },
-    beginHandoffCleanupResource: () => {
-      metroCleanup.stopRequestedAt = Date.now();
-      return metroCleanup;
+    beginHandoffCleanupResource: (
+      _session: unknown,
+      _worker: unknown,
+      resource: 'runner' | 'observe' | 'metro',
+    ) => {
+      const cleanup = { runner: runnerCleanup, observe: observeCleanup, metro: metroCleanup }[
+        resource
+      ];
+      cleanup.stopRequestedAt = Date.now();
+      return cleanup;
     },
-    completeHandoffCleanupResource: () => {
-      metroCleanup.completedAt = Date.now();
-      calls.push('complete');
+    completeHandoffCleanupResource: (
+      _session: unknown,
+      _worker: unknown,
+      resource: 'runner' | 'observe' | 'metro',
+    ) => {
+      const cleanup = { runner: runnerCleanup, observe: observeCleanup, metro: metroCleanup }[
+        resource
+      ];
+      cleanup.completedAt = Date.now();
+      calls.push(`complete-${resource}`);
     },
     finishHandoffCleanup: () => {
       status.state = 'source_bound';
@@ -354,6 +382,12 @@ test('stale adoption stops durable Metro cleanup before becoming operational', a
       },
     },
     {
+      stopHandoffRunner: async () => {
+        calls.push('stop-runner');
+      },
+      stopHandoffObserve: async () => {
+        calls.push('stop-observe');
+      },
       getSignerCapability: (sessionId) => {
         assert.equal(sessionId, 'prior-session');
         return 'prior-signer';
@@ -363,7 +397,7 @@ test('stale adoption stops durable Metro cleanup before becoming operational', a
           sessionId: 'prior-session',
           signerCapability: 'prior-signer',
         });
-        calls.push('stop');
+        calls.push('stop-metro');
         return true;
       },
     },
@@ -372,7 +406,16 @@ test('stale adoption stops durable Metro cleanup before becoming operational', a
   const result = await handler({ action: 'adopt_stale', adoptionHandle: 'handle' });
 
   assert.equal(result.isError, undefined);
-  assert.deepEqual(calls, ['adopt', 'stop', 'complete', 'finish']);
+  assert.deepEqual(calls, [
+    'adopt',
+    'stop-runner',
+    'complete-runner',
+    'stop-observe',
+    'complete-observe',
+    'stop-metro',
+    'complete-metro',
+    'finish',
+  ]);
 });
 
 test('Metro rebinding clears the prior bundle and releases its target claim', async () => {

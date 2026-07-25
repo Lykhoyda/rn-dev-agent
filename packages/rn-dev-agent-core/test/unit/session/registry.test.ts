@@ -471,6 +471,77 @@ test('stale adoption transfers managed Metro cleanup before fencing the prior ow
   assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'source_bound');
 });
 
+test('stale adoption preserves closing runner and Observe cleanup authority', () => {
+  const { registry, create, ownerStates } = fixture();
+  const prior = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.claimResources(prior, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'observe-port', key: '7333' },
+    { type: 'runner', key: 'ios:device-a:9100' },
+  ]);
+  const runner = {
+    platform: 'ios',
+    deviceId: 'device-a',
+    port: 9100,
+    pid: 301,
+    processBirth: 'runner-birth',
+    instanceId: 'runner-a',
+    capability: 'runner-capability',
+  };
+  const observe = {
+    port: 7333,
+    pid: 302,
+    processBirth: 'observe-birth',
+    instanceId: 'observe-a',
+    cleanupCapability: 'observe-capability',
+  };
+  registry.updateBindings(prior, {
+    state: 'ready',
+    bindings: { observePort: 7333, runner, observe },
+  });
+  registry.beginSessionClose(prior);
+  registry.bindWorker(target, {
+    instanceId: 'recovery-worker',
+    pid: 202,
+    token: 'recovery-birth',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { observePort: 7333, recoveryCapabilityHash: 'recovery-target' },
+  });
+  ownerStates.set(prior.sessionId, 'mismatch');
+
+  registry.adoptStaleIntoBlocked(target, prior.sessionId, 'recovery-worker');
+
+  const status = registry.getSessionStatus(target.sessionId);
+  const cleanup = status?.bindings.handoffCleanup as {
+    runner?: Record<string, unknown>;
+    observe?: Record<string, unknown>;
+  };
+  assert.equal(status?.state, 'handoff_cleanup');
+  assert.deepEqual(cleanup.runner, {
+    ...runner,
+    claimKey: 'ios:device-a:9100',
+    stopRequestedAt: null,
+    completedAt: null,
+  });
+  assert.deepEqual(cleanup.observe, {
+    ...observe,
+    stopRequestedAt: null,
+    completedAt: null,
+  });
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, target.sessionId);
+  assert.equal(registry.getClaim('observe-port', '7333')?.sessionId, target.sessionId);
+  registry.beginHandoffCleanupResource(target, 'recovery-worker', 'runner');
+  registry.completeHandoffCleanupResource(target, 'recovery-worker', 'runner');
+  registry.beginHandoffCleanupResource(target, 'recovery-worker', 'observe');
+  registry.completeHandoffCleanupResource(target, 'recovery-worker', 'observe');
+  registry.finishHandoffCleanup(target, 'recovery-worker');
+  assert.equal(registry.getClaim('runner', 'ios:device-a:9100'), null);
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'source_bound');
+});
+
 test('stale adoption retains an unpublished managed Metro transition', () => {
   const { registry, create, ownerStates } = fixture();
   const prior = create('a', 'shared-worktree');
@@ -705,6 +776,7 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
   registry.claimResources(owner, [
     { type: 'source', key: 'shared-worktree' },
     { type: 'metro-port', key: '8341' },
+    { type: 'observe-port', key: '7333' },
     { type: 'device', key: 'ios:device-1' },
     { type: 'target', key: '8341:target-1' },
     { type: 'runner', key: 'ios:device-1:9100' },
@@ -713,6 +785,7 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
     state: 'ready',
     bindings: {
       metro: { port: 8341 },
+      observePort: 7333,
       device: { platform: 'ios', deviceId: 'device-1' },
       install: { artifactDigest: 'artifact-1' },
       bundle: { targetId: 'target-1' },
@@ -723,7 +796,7 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
         instanceId: 'runner-1',
         capability: 'runner-capability',
       },
-      observe: { instanceId: 'observe-1' },
+      observe: { port: 7333, instanceId: 'observe-1' },
       proof: { runId: 'proof-1' },
     },
   });

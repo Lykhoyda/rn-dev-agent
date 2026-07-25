@@ -9038,6 +9038,12 @@ var SessionRegistry = class {
           throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "handoff Metro cleanup claim no longer matches the authenticated binding");
         }
       }
+      if (resource === "observe") {
+        const claim = this.#findClaim("observe-port", String(binding.port));
+        if (binding.port !== bindings.observePort || claim?.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
+          throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "handoff Observe cleanup claim no longer matches the authenticated binding");
+        }
+      }
       const requested = {
         ...binding,
         stopRequestedAt: typeof binding.stopRequestedAt === "number" ? binding.stopRequestedAt : now
@@ -9215,28 +9221,48 @@ var SessionRegistry = class {
       if (prior.state === "handoff_cleanup") {
         throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption cannot discard an incomplete handoff cleanup plan");
       }
-      this.#database.prepare(`DELETE FROM claims
-           WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
-      this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
       const priorBindings = JSON.parse(prior.bindings_json);
       const targetBindings = JSON.parse(targetRow.bindings_json);
       const activeOperation = this.#database.prepare(`SELECT profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(prior.session_id, prior.claim_epoch);
       const priorMetro = priorBindings.metro && typeof priorBindings.metro === "object" ? priorBindings.metro : null;
       const metroCleanup = priorBindings.metroCleanup && typeof priorBindings.metroCleanup === "object" ? priorBindings.metroCleanup : priorMetro?.mode === "managed" ? priorMetro : null;
+      const runnerCleanup = priorBindings.runner && typeof priorBindings.runner === "object" ? priorBindings.runner : null;
+      const observeCleanup = priorBindings.observe && typeof priorBindings.observe === "object" ? priorBindings.observe : null;
       if (activeOperation?.profile === "transition:ensure-metro" && !metroCleanup && !priorBindings.metro) {
         throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "stale Metro transition has not published exact cleanup authority");
       }
+      let runnerClaimKey = null;
+      if (runnerCleanup) {
+        runnerClaimKey = `${String(runnerCleanup.platform)}:${String(runnerCleanup.deviceId)}:${String(runnerCleanup.port)}`;
+        const runnerClaim = this.#findClaim("runner", runnerClaimKey);
+        if (runnerClaim?.session_id !== prior.session_id || runnerClaim.claim_epoch !== prior.claim_epoch) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner cleanup claim no longer matches the authenticated binding");
+        }
+      }
+      if (observeCleanup) {
+        const observePort = String(observeCleanup.port);
+        const observeClaim = this.#findClaim("observe-port", observePort);
+        if (priorBindings.observePort !== observeCleanup.port || observeClaim?.session_id !== prior.session_id || observeClaim.claim_epoch !== prior.claim_epoch) {
+          throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup claim no longer matches the authenticated binding");
+        }
+      }
+      this.#database.prepare(runnerCleanup ? `DELETE FROM claims
+               WHERE session_id = ? AND claim_epoch = ?
+                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner')` : `DELETE FROM claims
+               WHERE session_id = ? AND claim_epoch = ?
+                 AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device')`).run(prior.session_id, prior.claim_epoch);
+      this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
+      const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup);
       const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
       this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(metroCleanup ? "handoff_cleanup" : sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(cleanupRequired ? "handoff_cleanup" : sameMetro && priorBindings.device ? "device_bound" : "source_bound", JSON.stringify({
         ...targetBindings,
         adoptionRequired: null,
-        recoveryHandles: metroCleanup ? targetBindings.recoveryHandles : null,
+        recoveryHandles: cleanupRequired ? targetBindings.recoveryHandles : null,
         metro: metroCleanup ? null : sameMetro ? priorBindings.metro : null,
         metroCleanup: null,
         device: priorBindings.device ?? null,
@@ -9245,13 +9271,24 @@ var SessionRegistry = class {
         runner: null,
         observe: null,
         proof: null,
-        handoffCleanup: metroCleanup ? {
-          metro: {
+        handoffCleanup: cleanupRequired ? {
+          metro: metroCleanup ? {
             ...metroCleanup,
             sourceSessionId: prior.session_id,
             stopRequestedAt: null,
             completedAt: null
-          }
+          } : null,
+          runner: runnerCleanup ? {
+            ...runnerCleanup,
+            claimKey: runnerClaimKey,
+            stopRequestedAt: null,
+            completedAt: null
+          } : null,
+          observe: observeCleanup ? {
+            ...observeCleanup,
+            stopRequestedAt: null,
+            completedAt: null
+          } : null
         } : null
       }), now, target.sessionId, target.claimEpoch);
       this.#fenceSession(prior.session_id, now);
