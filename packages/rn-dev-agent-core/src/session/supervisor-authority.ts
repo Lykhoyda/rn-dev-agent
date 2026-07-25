@@ -216,20 +216,13 @@ export function createSupervisorAuthority(
       if (heartbeat) clearInterval(heartbeat);
       try {
         let status = registry.getSessionStatus(session.sessionId);
+        if (status && RELEASABLE_SESSION_STATES.has(status.state)) {
+          status = registry.beginSessionClose(session);
+        }
         if (status) {
-          const isReleasable = RELEASABLE_SESSION_STATES.has(status.state);
-          const activeOperation = isReleasable ? registry.getActiveOperation(session) : null;
-          if (isReleasable) {
-            status = registry.getSessionStatus(session.sessionId) ?? status;
-          }
           const metro = (status.bindings.metroCleanup ?? status.bindings.metro) as
             | Partial<ManagedMetroBinding>
             | undefined;
-          if (activeOperation?.profile === 'transition:ensure-metro' && metro?.mode !== 'managed') {
-            throw new Error(
-              'SESSION_OPERATION_ACTIVE: managed Metro transition has not published exact cleanup authority',
-            );
-          }
           if (
             metro?.mode === 'managed' &&
             !(await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
@@ -241,14 +234,11 @@ export function createSupervisorAuthority(
               'METRO_AUTHORITY_MISMATCH: managed Metro could not be stopped with exact process authority',
             );
           }
-          if (RELEASABLE_SESSION_STATES.has(status.state)) {
-            registry.cancelActiveOperationForSession(session);
-          }
         }
         if (status?.state === 'blocked') {
           registry.discardBlockedSession(session);
-        } else if (status && RELEASABLE_SESSION_STATES.has(status.state)) {
-          registry.releaseSession(session);
+        } else if (status?.state === 'closing') {
+          registry.completeSessionClose(session);
         }
       } finally {
         registry.close();

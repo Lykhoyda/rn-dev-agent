@@ -170,6 +170,29 @@ test('active operations prevent release and stale operation epochs cannot comple
   assert.throws(() => registry.endOperation(operation), /AUTHORITY_LOST_DURING_OPERATION/);
 });
 
+test('session close reservation atomically blocks new operations while retaining claims', () => {
+  const { registry, create } = fixture();
+  const session = create('a');
+  registry.claimResources(session, [{ type: 'metro-port', key: '8341' }]);
+
+  const closing = registry.beginSessionClose(session);
+
+  assert.equal(closing.state, 'closing');
+  assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, session.sessionId);
+  assert.throws(
+    () =>
+      registry.beginOperation(session, {
+        operationId: 'late-operation',
+        tool: 'rn-session ensure-metro',
+        profile: 'transition:ensure-metro',
+      }),
+    /SESSION_OWNER_LOST/,
+  );
+  registry.completeSessionClose(session);
+  assert.equal(registry.getSessionStatus(session.sessionId)?.state, 'released');
+  assert.equal(registry.getClaim('metro-port', '8341'), null);
+});
+
 test('deterministic port allocation persists collision resolution per worktree', () => {
   const { registry } = fixture();
   const first = registry.allocatePort({

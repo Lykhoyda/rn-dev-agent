@@ -56524,16 +56524,6 @@ var SessionRegistry = class {
       }
     };
   }
-  getActiveOperation(session) {
-    this.#requireSession(session);
-    const row = this.#database.prepare(`SELECT operation_id, tool, profile FROM operations
-         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
-    return row ? {
-      operationId: String(row.operation_id),
-      tool: String(row.tool),
-      profile: String(row.profile)
-    } : null;
-  }
   countOtherOperationalSessions(sessionId) {
     const rows = this.#database.prepare(`SELECT state FROM sessions
          WHERE session_id <> ?`).all(sessionId);
@@ -56565,6 +56555,48 @@ var SessionRegistry = class {
         token: row.worker_birth
       }
     };
+  }
+  beginSessionClose(session) {
+    const now = this.#now();
+    const operationIds = this.#transaction(() => {
+      const current = this.#requireSession(session);
+      const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+      const bindings = JSON.parse(current.bindings_json);
+      const metro = bindings.metroCleanup ?? bindings.metro;
+      if (active?.profile === "transition:ensure-metro" && metro?.mode !== "managed") {
+        throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "managed Metro transition has not published exact cleanup authority");
+      }
+      const rows = this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
+      this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'closing', authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+      return rows.map((row) => String(row.operation_id));
+    });
+    for (const operationId of operationIds) {
+      this.#pendingPlatformReceipts.delete(operationId);
+    }
+    const status = this.getSessionStatus(session.sessionId);
+    if (!status || status.state !== "closing") {
+      throw new SessionAuthorityError("SESSION_OWNER_LOST", "session close reservation did not persist");
+    }
+    return status;
+  }
+  completeSessionClose(session) {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+      if (!row || row.state !== "closing" || row.claim_epoch !== session.claimEpoch) {
+        throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may be released");
+      }
+      this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+      this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`).run(now, session.sessionId, session.claimEpoch);
+    });
   }
   releaseSession(session) {
     const now = this.#now();

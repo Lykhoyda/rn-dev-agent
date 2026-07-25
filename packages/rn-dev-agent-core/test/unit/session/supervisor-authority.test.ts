@@ -189,6 +189,68 @@ test('supervisor close cancels an interrupted operation before releasing claims'
   }
 });
 
+test('supervisor close atomically blocks operation admission before Metro teardown', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  let signalStopStarted: (() => void) | undefined;
+  let finishStop: ((stopped: boolean) => void) | undefined;
+  const stopStarted = new Promise<void>((resolve) => {
+    signalStopStarted = resolve;
+  });
+  const stopResult = new Promise<boolean>((resolve) => {
+    finishStop = resolve;
+  });
+  const authority = createSupervisorAuthority(
+    {
+      stateDir,
+      source: {
+        kind: 'git',
+        contentRoot: '/repo',
+        appRoot: '/repo',
+        sourceKey: 'source-key',
+        worktreeKey: 'worktree-key',
+        appRootKey: 'app-key',
+        head: 'abc123',
+      },
+      supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+      uid: '501',
+      startHeartbeat: false,
+      ownerStatus: () => 'match',
+    },
+    {
+      stopManagedMetro: async () => {
+        signalStopStarted?.();
+        return stopResult;
+      },
+    },
+  );
+  authority.registry.updateBindings(authority.session, {
+    bindings: {
+      metro: {
+        mode: 'managed',
+        port: authority.metroPort,
+      },
+    },
+  });
+
+  const close = authority.close();
+  await stopStarted;
+
+  assert.equal(authority.registry.getSessionStatus(authority.session.sessionId)?.state, 'closing');
+  assert.throws(
+    () =>
+      authority.registry.beginOperation(authority.session, {
+        operationId: 'late-operation',
+        tool: 'rn-session ensure-metro',
+        profile: 'transition:ensure-metro',
+      }),
+    /SESSION_OWNER_LOST/,
+  );
+
+  finishStop?.(true);
+  await assert.doesNotReject(close);
+});
+
 test('supervisor close retains an unpublished managed Metro transition', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
@@ -292,7 +354,7 @@ test('supervisor close retains authority when durable Metro cleanup is unproven'
   });
   try {
     const status = registry.getSessionStatus(authority.session.sessionId);
-    assert.equal(status?.state, 'source_bound');
+    assert.equal(status?.state, 'closing');
     assert.deepEqual(status?.bindings.metroCleanup, metroCleanup);
     assert.throws(
       () =>
@@ -301,7 +363,7 @@ test('supervisor close retains authority when durable Metro cleanup is unproven'
           tool: 'device_snapshot',
           profile: 'CSIMDR',
         }),
-      /OPERATION_ALREADY_IN_PROGRESS/,
+      /SESSION_OWNER_LOST/,
     );
   } finally {
     registry.close();
