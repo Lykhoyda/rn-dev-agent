@@ -64,6 +64,15 @@ test('stop closes the listening port while the process stays alive', async () =>
   await assert.rejects(fetch(`${url}/`, { signal: AbortSignal.timeout(2000) }));
 });
 
+test('HTTP stop clears the module-owned Observe lifecycle', async () => {
+  const start = parse(await observeHandler({ action: 'start' }));
+  const response = await fetch(`${new URL(start.data.url).origin}/api/stop`, { method: 'POST' });
+  assert.equal(response.status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const status = parse(await observeHandler({ action: 'status' }));
+  assert.equal(status.data.running, false);
+});
+
 test('stop racing a pending start closes the server instead of orphaning it', async () => {
   // Deliberately NOT awaited: stop is issued while start's listen() is pending.
   const startP = startObserveServer();

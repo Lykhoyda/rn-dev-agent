@@ -1396,7 +1396,6 @@ function restartWorker(directory: BoundDirectory): void {
     directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
   }
   for (const descendant of descendants) {
-    rmSync(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(
       directory,
       descendant.name!,
@@ -1416,7 +1415,6 @@ function stopDescendantWorkers(directory: BoundDirectory): void {
 
 function rebindDescendants(directory: BoundDirectory): void {
   for (const descendant of directory.children) {
-    rmSync(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(
       directory,
       descendant.name!,

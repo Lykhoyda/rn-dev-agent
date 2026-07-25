@@ -11,7 +11,7 @@ import { buildRunnerQuiescenceEnv } from './quiescence.js';
 import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
-import { readProcessBirth } from '../session/process-birth.js';
+import { processBirthMatches, readProcessBirth } from '../session/process-birth.js';
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
 // + attach the XCUITest runner (device-proven on GitHub macos runners).
@@ -677,11 +677,14 @@ export function stopFastRunner(deviceId) {
         runnerProcess = null;
     }
     else if (runnerState?.pid) {
-        try {
-            process.kill(runnerState.pid, 'SIGTERM');
-        }
-        catch {
-            /* already dead */
+        if (typeof runnerState.processBirth === 'string' &&
+            processBirthMatches({ pid: runnerState.pid, token: runnerState.processBirth })) {
+            try {
+                process.kill(runnerState.pid, 'SIGTERM');
+            }
+            catch {
+                /* already dead */
+            }
         }
     }
     clearStateFile();

@@ -45,7 +45,7 @@ export async function startObserveServer() {
     starting = (async () => {
         const resolved = authorityDeps?.resolve();
         if (!server) {
-            server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority);
+            server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority, stopObserveServer);
         }
         const port = resolved?.port ?? resolveObservePort().port;
         const res = await server.start(port);

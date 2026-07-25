@@ -65,7 +65,7 @@ const child = spawn(executable, args, {
 });
 child.once('error', () => process.exit(1));
 child.once('exit', (code, signal) => {
-  if (signal || (typeof code === 'number' && code !== 0)) process.exit(code || 1);
+  process.exit(signal ? 1 : (code ?? 1));
 });
 setInterval(() => {}, 1 << 30);
 `;

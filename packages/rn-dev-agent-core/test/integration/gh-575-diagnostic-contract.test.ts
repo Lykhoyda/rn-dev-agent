@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, stat, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,6 +55,8 @@ test(
     await mkdir(daemon, { recursive: true });
     await mkdir(requests, { recursive: true });
     await writeFile(join(project, 'package.json'), '{"name":"fixture"}\n');
+    const gitInit = spawnSync('git', ['init', '--quiet'], { cwd: project, encoding: 'utf8' });
+    assert.equal(gitInit.status, 0, gitInit.stderr);
     await writeFile(join(daemon, 'daemon.json'), '{"pid":99999999}\n');
     await writeFile(join(daemon, 'daemon.lock'), 'canary\n');
     await writeFile(

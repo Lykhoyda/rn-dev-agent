@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -35,6 +35,59 @@ test('authority store refuses to open when SQLite is unavailable', () => {
       error instanceof AuthorityStoreUnavailableError &&
       error.code === 'AUTHORITY_STORE_UNAVAILABLE',
   );
+});
+
+test('authority store closes the database when initialization fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-authority-store-'));
+  roots.push(root);
+  let closed = false;
+  class FailingDatabase {
+    close() {
+      closed = true;
+    }
+    exec() {
+      throw new Error('initialization failed');
+    }
+    prepare() {
+      throw new Error('not reached');
+    }
+  }
+
+  assert.throws(
+    () =>
+      openAuthorityStore(join(root, 'registry.sqlite3'), {
+        sqliteCtor: FailingDatabase,
+      }),
+    (error) =>
+      error instanceof AuthorityStoreUnavailableError &&
+      (error.cause as Error).message === 'initialization failed',
+  );
+  assert.equal(closed, true);
+});
+
+test('authority store closes the database when pre-close hardening fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-authority-store-'));
+  roots.push(root);
+  const path = join(root, 'registry.sqlite3');
+  let closed = false;
+  class TrackingDatabase {
+    constructor(databasePath: string) {
+      writeFileSync(databasePath, '');
+    }
+    close() {
+      closed = true;
+    }
+    exec() {}
+    prepare() {
+      return { all: () => [], get: () => undefined, run: () => undefined };
+    }
+  }
+  const store = openAuthorityStore(path, { sqliteCtor: TrackingDatabase });
+  rmSync(path);
+  mkdirSync(path);
+
+  assert.throws(() => store.close(), /authority database path is not a regular file/);
+  assert.equal(closed, true);
 });
 
 test('authority store opens a transactional registry with private permissions', () => {

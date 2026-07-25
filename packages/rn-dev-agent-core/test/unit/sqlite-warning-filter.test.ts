@@ -23,7 +23,8 @@ test('SQLite warning filter suppresses only the known warning', () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
+  assert.match(result.stderr, /\(node:\d+\) ExperimentalWarning: unrelated experimental/);
   assert.match(result.stderr, /ExperimentalWarning: unrelated experimental/);
   assert.match(result.stderr, /Warning: ordinary warning/);
-  assert.doesNotMatch(result.stderr, /\n\s+at /);
+  assert.match(result.stderr, /Use `node --trace-warnings/);
 });

@@ -125,6 +125,7 @@ export function openAuthorityStore(
     );
   }
 
+  let database: AuthorityDatabase | null = null;
   try {
     assertPrivateDirectory(dirname(path));
     try {
@@ -135,10 +136,11 @@ export function openAuthorityStore(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    const database = new ctor(path);
+    const openedDatabase = new ctor(path);
+    database = openedDatabase;
     secureDatabaseFiles(path);
     runInitialization(() =>
-      database.exec(`
+      openedDatabase.exec(`
         PRAGMA busy_timeout=5;
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS authority_meta (
@@ -152,15 +154,32 @@ export function openAuthorityStore(
     );
     secureDatabaseFiles(path);
     return {
-      database,
+      database: openedDatabase,
       secureFiles: () => secureDatabaseFiles(path),
       close: () => {
-        secureDatabaseFiles(path);
-        database.close();
-        secureDatabaseFiles(path);
+        let failure: unknown;
+        try {
+          secureDatabaseFiles(path);
+        } catch (error) {
+          failure = error;
+        }
+        try {
+          openedDatabase.close();
+        } catch (error) {
+          failure ??= error;
+        }
+        try {
+          secureDatabaseFiles(path);
+        } catch (error) {
+          failure ??= error;
+        }
+        if (failure) throw failure;
       },
     };
   } catch (cause) {
+    try {
+      database?.close();
+    } catch {}
     throw new AuthorityStoreUnavailableError('authority registry could not be opened', { cause });
   }
 }

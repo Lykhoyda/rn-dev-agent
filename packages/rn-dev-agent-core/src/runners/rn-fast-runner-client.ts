@@ -48,7 +48,7 @@ import {
   isAmbiguousTransportFailure,
   parseStatusProbeReply,
 } from './transport-recovery.js';
-import { readProcessBirth } from '../session/process-birth.js';
+import { processBirthMatches, readProcessBirth } from '../session/process-birth.js';
 
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
@@ -843,10 +843,15 @@ export function stopFastRunner(deviceId?: string): void {
     runnerProcess.kill('SIGTERM');
     runnerProcess = null;
   } else if (runnerState?.pid) {
-    try {
-      process.kill(runnerState.pid, 'SIGTERM');
-    } catch {
-      /* already dead */
+    if (
+      typeof runnerState.processBirth === 'string' &&
+      processBirthMatches({ pid: runnerState.pid, token: runnerState.processBirth })
+    ) {
+      try {
+        process.kill(runnerState.pid, 'SIGTERM');
+      } catch {
+        /* already dead */
+      }
     }
   }
   clearStateFile();

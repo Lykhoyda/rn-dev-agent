@@ -1246,7 +1246,6 @@ function restartWorker(directory) {
         directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
     }
     for (const descendant of descendants) {
-        rmSync(descendant.worker.controlPath, { force: true, recursive: true });
         descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
         rebindDescendants(descendant);
     }
@@ -1259,7 +1258,6 @@ function stopDescendantWorkers(directory) {
 }
 function rebindDescendants(directory) {
     for (const descendant of directory.children) {
-        rmSync(descendant.worker.controlPath, { force: true, recursive: true });
         descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
         rebindDescendants(descendant);
     }

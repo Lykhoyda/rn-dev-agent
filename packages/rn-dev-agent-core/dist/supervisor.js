@@ -47,6 +47,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
 else {
     const workerPath = process.env.RN_BRIDGE_WORKER_PATH ?? join(here, 'index.js');
     const noLock = process.argv.includes('--no-lock');
+    const diagnosticContractProbe = process.argv.includes('--diagnostic-contract-probe');
     let lockfile = null;
     if (!noLock) {
         const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
@@ -61,6 +62,8 @@ else {
     let authority = null;
     let authorityError = null;
     try {
+        if (diagnosticContractProbe)
+            throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
         const declaredManifests = process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(',')
             .map((entry) => entry.trim())
             .filter(Boolean);
@@ -82,7 +85,9 @@ else {
             error instanceof Error
                 ? error.message
                 : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized';
-        process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}\n`);
+        if (!diagnosticContractProbe) {
+            process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}\n`);
+        }
     }
     const core = new SupervisorCore({
         maxRespawns: Number(process.env.RN_BRIDGE_MAX_RESPAWNS ?? '3') || 3,

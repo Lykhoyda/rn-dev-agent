@@ -11,15 +11,17 @@ export class ObservabilityServer {
     mirror;
     state;
     authority;
+    stopOwner;
     server = null;
     port = 0;
     streams = new Set();
-    constructor(recorder, e2e, mirror, state, authority) {
+    constructor(recorder, e2e, mirror, state, authority, stopOwner) {
         this.recorder = recorder;
         this.e2e = e2e;
         this.mirror = mirror;
         this.state = state;
         this.authority = authority;
+        this.stopOwner = stopOwner;
     }
     async start(preferredPort) {
         if (this.server)
@@ -67,7 +69,14 @@ export class ObservabilityServer {
         }
     }
     url() {
-        return `http://${HOST}:${this.port}`;
+        const base = `http://${HOST}:${this.port}`;
+        if (!this.authority)
+            return base;
+        const fragment = new URLSearchParams({
+            instance: this.authority.instanceId,
+            capability: this.authority.capability,
+        });
+        return `${base}/#${fragment}`;
     }
     handle(req, res) {
         if (!this.guard(req, res))
@@ -85,7 +94,7 @@ export class ObservabilityServer {
             res.writeHead(202, { 'content-type': 'application/json' });
             res.end('{"stopping":true}');
             queueMicrotask(() => {
-                void this.stop();
+                void (this.stopOwner?.() ?? this.stop());
             });
             return;
         }
@@ -176,7 +185,6 @@ export class ObservabilityServer {
         const site = req.headers['sec-fetch-site'];
         const okSite = site === undefined || site === 'same-origin' || site === 'none';
         const path = new URL(req.url ?? '/', `http://${HOST}:${this.port}`).pathname;
-        const rootNavigation = path === '/' && (site === undefined || site === 'none');
         const staticAsset = !path.startsWith('/api/') && path !== '/events';
         const requestUrl = new URL(req.url ?? '/', `http://${HOST}:${this.port}`);
         const authorization = req.headers.authorization ??
@@ -185,7 +193,6 @@ export class ObservabilityServer {
                 : undefined);
         const instance = req.headers['x-rn-observe-instance'] ?? requestUrl.searchParams.get('instance') ?? undefined;
         const authorized = !this.authority ||
-            rootNavigation ||
             staticAsset ||
             (authorization === `Bearer ${this.authority.capability}` &&
                 instance === this.authority.instanceId);
@@ -256,13 +263,6 @@ export class ObservabilityServer {
             // __dir is dist/observability/; the SPA bundle ships at
             // dist/observability/web-dist/index.html (vite outDir).
             let html = readFileSync(join(__dir, 'web-dist', 'index.html'), 'utf8');
-            if (this.authority) {
-                const authorityJs = JSON.stringify({
-                    capability: this.authority.capability,
-                    instanceId: this.authority.instanceId,
-                }).replace(/</g, '\\u003c');
-                html = html.replace('</head>', `<script>window.__RN_OBSERVE_AUTHORITY__=${authorityJs}</script></head>`);
-            }
             if (this.e2e) {
                 // JSON.stringify + \u003c escaping: a token containing quotes or
                 // </script> must never break out of the inline tag (GH #438 review).

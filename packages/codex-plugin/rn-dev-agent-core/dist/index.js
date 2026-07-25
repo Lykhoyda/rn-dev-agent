@@ -20673,6 +20673,10 @@ function probeProcessBirth(pid, dependencies = {}) {
   }
   return { status: "unknown" };
 }
+function processBirthMatches(expected, dependencies = {}) {
+  const observed = readProcessBirth(expected.pid, dependencies);
+  return observed !== null && observed.token === expected.token;
+}
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
@@ -21205,9 +21209,11 @@ function stopFastRunner(deviceId) {
     runnerProcess.kill("SIGTERM");
     runnerProcess = null;
   } else if (runnerState?.pid) {
-    try {
-      process.kill(runnerState.pid, "SIGTERM");
-    } catch {
+    if (typeof runnerState.processBirth === "string" && processBirthMatches({ pid: runnerState.pid, token: runnerState.processBirth })) {
+      try {
+        process.kill(runnerState.pid, "SIGTERM");
+      } catch {
+      }
     }
   }
   clearStateFile();
@@ -51037,7 +51043,6 @@ function restartWorker(directory) {
     directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
   }
   for (const descendant of descendants) {
-    rmSync8(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
     rebindDescendants(descendant);
   }
@@ -51050,7 +51055,6 @@ function stopDescendantWorkers(directory) {
 }
 function rebindDescendants(directory) {
   for (const descendant of directory.children) {
-    rmSync8(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
     rebindDescendants(descendant);
   }
@@ -56058,6 +56062,7 @@ function openAuthorityStore(path, options = {}) {
   if (!ctor) {
     throw new AuthorityStoreUnavailableError("node:sqlite could not be loaded by this Node runtime");
   }
+  let database = null;
   try {
     assertPrivateDirectory(dirname13(path));
     try {
@@ -56069,9 +56074,10 @@ function openAuthorityStore(path, options = {}) {
       if (error2.code !== "ENOENT")
         throw error2;
     }
-    const database = new ctor(path);
+    const openedDatabase = new ctor(path);
+    database = openedDatabase;
     secureDatabaseFiles(path);
-    runInitialization(() => database.exec(`
+    runInitialization(() => openedDatabase.exec(`
         PRAGMA busy_timeout=5;
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS authority_meta (
@@ -56084,15 +56090,34 @@ function openAuthorityStore(path, options = {}) {
       `));
     secureDatabaseFiles(path);
     return {
-      database,
+      database: openedDatabase,
       secureFiles: () => secureDatabaseFiles(path),
       close: () => {
-        secureDatabaseFiles(path);
-        database.close();
-        secureDatabaseFiles(path);
+        let failure;
+        try {
+          secureDatabaseFiles(path);
+        } catch (error2) {
+          failure = error2;
+        }
+        try {
+          openedDatabase.close();
+        } catch (error2) {
+          failure ??= error2;
+        }
+        try {
+          secureDatabaseFiles(path);
+        } catch (error2) {
+          failure ??= error2;
+        }
+        if (failure)
+          throw failure;
       }
     };
   } catch (cause) {
+    try {
+      database?.close();
+    } catch {
+    }
     throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
   }
 }
@@ -65768,15 +65793,17 @@ var ObservabilityServer = class {
   mirror;
   state;
   authority;
+  stopOwner;
   server = null;
   port = 0;
   streams = /* @__PURE__ */ new Set();
-  constructor(recorder2, e2e, mirror, state, authority) {
+  constructor(recorder2, e2e, mirror, state, authority, stopOwner) {
     this.recorder = recorder2;
     this.e2e = e2e;
     this.mirror = mirror;
     this.state = state;
     this.authority = authority;
+    this.stopOwner = stopOwner;
   }
   async start(preferredPort) {
     if (this.server)
@@ -65813,7 +65840,14 @@ var ObservabilityServer = class {
     }
   }
   url() {
-    return `http://${HOST}:${this.port}`;
+    const base = `http://${HOST}:${this.port}`;
+    if (!this.authority)
+      return base;
+    const fragment = new URLSearchParams({
+      instance: this.authority.instanceId,
+      capability: this.authority.capability
+    });
+    return `${base}/#${fragment}`;
   }
   handle(req, res) {
     if (!this.guard(req, res))
@@ -65831,7 +65865,7 @@ var ObservabilityServer = class {
       res.writeHead(202, { "content-type": "application/json" });
       res.end('{"stopping":true}');
       queueMicrotask(() => {
-        void this.stop();
+        void (this.stopOwner?.() ?? this.stop());
       });
       return;
     }
@@ -65917,12 +65951,11 @@ var ObservabilityServer = class {
     const site = req.headers["sec-fetch-site"];
     const okSite = site === void 0 || site === "same-origin" || site === "none";
     const path = new URL(req.url ?? "/", `http://${HOST}:${this.port}`).pathname;
-    const rootNavigation = path === "/" && (site === void 0 || site === "none");
     const staticAsset = !path.startsWith("/api/") && path !== "/events";
     const requestUrl = new URL(req.url ?? "/", `http://${HOST}:${this.port}`);
     const authorization = req.headers.authorization ?? (requestUrl.searchParams.get("capability") ? `Bearer ${requestUrl.searchParams.get("capability")}` : void 0);
     const instance = req.headers["x-rn-observe-instance"] ?? requestUrl.searchParams.get("instance") ?? void 0;
-    const authorized = !this.authority || rootNavigation || staticAsset || authorization === `Bearer ${this.authority.capability}` && instance === this.authority.instanceId;
+    const authorized = !this.authority || staticAsset || authorization === `Bearer ${this.authority.capability}` && instance === this.authority.instanceId;
     if (!okHost || !okSite || !authorized) {
       res.writeHead(403);
       res.end("forbidden");
@@ -65984,13 +66017,6 @@ var ObservabilityServer = class {
   index(res) {
     try {
       let html = readFileSync29(join43(__dir, "web-dist", "index.html"), "utf8");
-      if (this.authority) {
-        const authorityJs = JSON.stringify({
-          capability: this.authority.capability,
-          instanceId: this.authority.instanceId
-        }).replace(/</g, "\\u003c");
-        html = html.replace("</head>", `<script>window.__RN_OBSERVE_AUTHORITY__=${authorityJs}</script></head>`);
-      }
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -66236,7 +66262,7 @@ async function startObserveServer() {
   starting = (async () => {
     const resolved = authorityDeps?.resolve();
     if (!server) {
-      server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority);
+      server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority, stopObserveServer);
     }
     const port = resolved?.port ?? resolveObservePort().port;
     const res = await server.start(port);
@@ -68675,7 +68701,7 @@ const child = spawn(executable, args, {
 });
 child.once('error', () => process.exit(1));
 child.once('exit', (code, signal) => {
-  if (signal || (typeof code === 'number' && code !== 0)) process.exit(code || 1);
+  process.exit(signal ? 1 : (code ?? 1));
 });
 setInterval(() => {}, 1 << 30);
 `;

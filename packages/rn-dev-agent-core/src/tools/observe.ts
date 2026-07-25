@@ -75,6 +75,7 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
         mirrorManager,
         stateDeps,
         resolved?.authority,
+        stopObserveServer,
       );
     }
     const port = resolved?.port ?? resolveObservePort().port;

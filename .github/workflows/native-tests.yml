@@ -98,8 +98,14 @@ jobs:
         if: ${{ needs.changes.outputs.ios != 'true' }}
         run: echo "No rn-fast-runner changes in this PR — skipping the simulator unit tests. Push-to-main runs them unconditionally."
       - name: Checkout
-        if: ${{ needs.changes.outputs.ios == 'true' }}
         uses: actions/checkout@v4
+      - name: Verify Darwin process-birth helper provenance
+        run: |
+          set -euo pipefail
+          node scripts/build-darwin-process-birth-helper.ts
+          git diff --exit-code -- \
+            packages/rn-dev-agent-core/native/darwin-process-birth \
+            packages/rn-dev-agent-core/native/darwin-process-birth.json
       # De-flake: codeql.yml only ever BUILDS for the simulator SDK; this is the
       # first workflow to BOOT a simulator on CI, where cold-boot timeouts are a
       # documented macos-15 image issue (runner-images #12862, #12777). Pre-boot

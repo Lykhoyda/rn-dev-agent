@@ -17,7 +17,7 @@ function headers(value = authority) {
   };
 }
 
-test('Observe bootstraps one capability but protects every API by session instance', async () => {
+test('Observe bootstraps authority in the URL fragment and protects every API', async () => {
   const server = new ObservabilityServer(
     new Recorder(),
     undefined,
@@ -27,22 +27,24 @@ test('Observe bootstraps one capability but protects every API by session instan
   );
   const { url } = await server.start();
   try {
-    const root = await fetch(url);
+    const launchUrl = new URL(url);
+    assert.equal(launchUrl.hash, '#instance=observe-a&capability=capability-a');
+    const root = await fetch(launchUrl.origin);
     assert.equal(root.status, 200);
     assert.equal(root.headers.get('cache-control'), 'no-store');
     assert.match(root.headers.get('content-security-policy') ?? '', /default-src 'self'/);
-    assert.match(await root.text(), /__RN_OBSERVE_AUTHORITY__/);
+    assert.doesNotMatch(await root.text(), /capability-a/);
 
-    assert.equal((await fetch(`${url}/api/authority`)).status, 403);
+    assert.equal((await fetch(`${launchUrl.origin}/api/authority`)).status, 403);
     assert.equal(
       (
-        await fetch(`${url}/api/authority`, {
+        await fetch(`${launchUrl.origin}/api/authority`, {
           headers: headers({ ...authority, instanceId: 'observe-old' }),
         })
       ).status,
       403,
     );
-    const response = await fetch(`${url}/api/authority`, { headers: headers() });
+    const response = await fetch(`${launchUrl.origin}/api/authority`, { headers: headers() });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       sessionId: 'session-a',
@@ -51,7 +53,7 @@ test('Observe bootstraps one capability but protects every API by session instan
     });
 
     const queryResponse = await fetch(
-      `${url}/api/authority?instance=${authority.instanceId}&capability=${authority.capability}`,
+      `${launchUrl.origin}/api/authority?instance=${authority.instanceId}&capability=${authority.capability}`,
     );
     assert.equal(queryResponse.status, 200);
   } finally {

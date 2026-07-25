@@ -7838,7 +7838,7 @@ const child = spawn(executable, args, {
 });
 child.once('error', () => process.exit(1));
 child.once('exit', (code, signal) => {
-  if (signal || (typeof code === 'number' && code !== 0)) process.exit(code || 1);
+  process.exit(signal ? 1 : (code ?? 1));
 });
 setInterval(() => {}, 1 << 30);
 `;
@@ -8218,6 +8218,7 @@ function openAuthorityStore(path, options = {}) {
   if (!ctor) {
     throw new AuthorityStoreUnavailableError("node:sqlite could not be loaded by this Node runtime");
   }
+  let database = null;
   try {
     assertPrivateDirectory(dirname2(path));
     try {
@@ -8229,9 +8230,10 @@ function openAuthorityStore(path, options = {}) {
       if (error.code !== "ENOENT")
         throw error;
     }
-    const database = new ctor(path);
+    const openedDatabase = new ctor(path);
+    database = openedDatabase;
     secureDatabaseFiles(path);
-    runInitialization(() => database.exec(`
+    runInitialization(() => openedDatabase.exec(`
         PRAGMA busy_timeout=5;
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS authority_meta (
@@ -8244,15 +8246,34 @@ function openAuthorityStore(path, options = {}) {
       `));
     secureDatabaseFiles(path);
     return {
-      database,
+      database: openedDatabase,
       secureFiles: () => secureDatabaseFiles(path),
       close: () => {
-        secureDatabaseFiles(path);
-        database.close();
-        secureDatabaseFiles(path);
+        let failure;
+        try {
+          secureDatabaseFiles(path);
+        } catch (error) {
+          failure = error;
+        }
+        try {
+          openedDatabase.close();
+        } catch (error) {
+          failure ??= error;
+        }
+        try {
+          secureDatabaseFiles(path);
+        } catch (error) {
+          failure ??= error;
+        }
+        if (failure)
+          throw failure;
       }
     };
   } catch (cause) {
+    try {
+      database?.close();
+    } catch {
+    }
     throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
   }
 }
@@ -11196,7 +11217,6 @@ function restartWorker(directory) {
     directory.worker = startWorker(directory.path, directory.identity, directory.realPath);
   }
   for (const descendant of descendants) {
-    rmSync2(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
     rebindDescendants(descendant);
   }
@@ -11209,7 +11229,6 @@ function stopDescendantWorkers(directory) {
 }
 function rebindDescendants(directory) {
   for (const descendant of directory.children) {
-    rmSync2(descendant.worker.controlPath, { force: true, recursive: true });
     descendant.worker = startSubdirectoryWorker(directory, descendant.name, descendant.identity, descendant.realPath);
     rebindDescendants(descendant);
   }

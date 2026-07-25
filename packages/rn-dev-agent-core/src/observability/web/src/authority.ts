@@ -5,6 +5,13 @@ declare global {
 }
 
 function authority(): { capability: string; instanceId: string } {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const capability = fragment.get('capability');
+  const instanceId = fragment.get('instance');
+  if (capability && instanceId) {
+    window.__RN_OBSERVE_AUTHORITY__ = { capability, instanceId };
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+  }
   const value = window.__RN_OBSERVE_AUTHORITY__;
   if (!value?.capability || !value.instanceId) {
     throw new Error('Observe authority bootstrap is unavailable');

@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { afterEach, test } from 'node:test';
 import {
+  _setFastRunnerStateForTest,
   _setFetchForTest,
   buildRunnerAuthorityEnv,
   probeFastRunnerAuthority,
+  stopFastRunner,
 } from '../../../dist/runners/rn-fast-runner-client.js';
+import { readProcessBirth } from '../../../dist/session/process-birth.js';
 import {
   androidHealthMatchesAuthority,
   buildInstrumentAuthorityArgs,
@@ -12,6 +16,7 @@ import {
 
 afterEach(() => {
   _setFetchForTest(globalThis.fetch);
+  _setFastRunnerStateForTest(null);
 });
 
 test('iOS forwards one runner capability and fenced identity through xcodebuild', () => {
@@ -112,4 +117,34 @@ test('retained iOS authority probe authenticates capability and exact tuple', as
     true,
   );
   assert.equal(authorization, 'Bearer secret');
+});
+
+test('persisted iOS teardown never signals a reused PID', async () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  try {
+    const birth = readProcessBirth(child.pid!);
+    assert.ok(birth);
+    _setFastRunnerStateForTest({
+      schemaVersion: 1,
+      port: 12345,
+      pid: child.pid!,
+      deviceId: 'device-1',
+      bundleId: 'dev.example',
+      startedAt: new Date().toISOString(),
+      protocolVersion: 1,
+      processBirth: `${birth.token}-reused`,
+    });
+
+    stopFastRunner('device-1');
+
+    assert.doesNotThrow(() => process.kill(child.pid!, 0));
+  } finally {
+    child.kill('SIGKILL');
+  }
 });
