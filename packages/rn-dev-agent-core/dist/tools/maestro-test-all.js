@@ -8,7 +8,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
-import { assembleMaestroArgs, executeMaestroAuthorityStages, planMaestroAuthorityStages, runFlowParked, } from './maestro-run.js';
+import { assembleMaestroArgs, executeMaestroAuthorityStages, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
@@ -51,6 +51,7 @@ export function createMaestroTestAllHandler() {
             return failResult('Cannot determine platform. Pass platform or open a device session first.');
         }
         const session = getActiveSession();
+        const boundAppId = args.appId ?? (session?.platform === platform ? session.appId : undefined);
         const matchingSessionDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : undefined;
         if (args.deviceId &&
             matchingSessionDeviceId &&
@@ -100,14 +101,14 @@ export function createMaestroTestAllHandler() {
                 const parsed = parseAndValidateFlow(yamlText);
                 planMaestroAuthorityStages(parsed.commands);
                 parsedCommands = parsed.commands;
-                parsedAppId = parsed.appId;
+                parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
                 flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
-                const canonical = buildMaestroFlow(parsed.appId !== undefined ? { appId: parsed.appId } : {}, parsed.commands);
+                const canonical = buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, parsed.commands);
                 safeFlowFile = join(tmpdir(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
                 writeFileSync(safeFlowFile, canonical, 'utf-8');
                 // GH#201 parity with maestro_run: an iOS clearState flow must reinstall
                 // the app, which maestro-runner can only do given --app-file.
-                const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, undefined);
+                const appFileResolution = resolveAppFileForClearState(platform, canonical, parsedAppId, undefined);
                 if (!appFileResolution.ok) {
                     results.push({
                         name,

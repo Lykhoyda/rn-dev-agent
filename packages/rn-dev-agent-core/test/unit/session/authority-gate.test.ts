@@ -29,7 +29,12 @@ function fixture() {
         appId: 'dev.example',
       },
       metro: { instanceId: 'metro', port: 8193 },
-      bundle: { authorityScope: 'initial-bundle', sourceFidelity: 'not-proven' },
+      bundle: {
+        targetId: 'old-target',
+        connectionGeneration: 1,
+        authorityScope: 'initial-bundle',
+        sourceFidelity: 'not-proven',
+      },
       device: { platform: 'ios', deviceId: 'device', appId: 'dev.example' },
       runner: { instanceId: 'runner' },
       observe: { instanceId: 'observe' },
@@ -117,13 +122,30 @@ test('postflight drift rejects the result instead of returning a false success',
   assert.equal(envelope.data, undefined);
 });
 
-test('origin-disrupting lifecycle tools prove origin at successful completion', async () => {
-  const { runtime, calls } = fixture();
+test('origin-disrupting lifecycle tools replace bundle authority at successful completion', async () => {
+  const { runtime, registry, calls, status } = fixture();
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push('replace-binding');
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
   const gate = createAuthorityGate(runtime, {
-    probe: async ({ axis, phase }) => {
+    probe: async ({ axis, phase, status: probeStatus }) => {
       calls.push(`${phase}:${axis}`);
-      return { axis, identity: `${axis}-identity` };
+      return {
+        axis,
+        identity:
+          axis === 'B'
+            ? `${probeStatus.bindings.bundle.targetId}:${probeStatus.bindings.bundle.connectionGeneration}`
+            : `${axis}-identity`,
+      };
     },
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'new-target',
+      connectionGeneration: 2,
+    }),
   });
 
   const result = await gate.wrap('device_reset_state', async (args) => {
@@ -135,10 +157,34 @@ test('origin-disrupting lifecycle tools prove origin at successful completion', 
   assert.equal(envelope.ok, true);
   assert.equal(calls.includes('preflight:A'), false);
   assert.equal(calls.includes('postflight:A'), true);
+  assert.equal(calls.includes('postflight:B'), true);
+  assert.equal(status.bindings.bundle.targetId, 'new-target');
   assert.equal(
     envelope.meta.authorityReceipt.nativeAppOrigin.authorityScope,
     'live-metro-target-device',
   );
+});
+
+test('origin-disrupting lifecycle tools invalidate bundle authority when no target remains', async () => {
+  const { runtime, registry, status } = fixture();
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('maestro_run', async (args) => {
+    await completeManagedNativeOriginAuthority(args, false);
+    return okResult({ stopped: true });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(status.bindings.bundle, null);
+  assert.equal(envelope.meta.authorityReceipt.nativeAppOrigin, undefined);
 });
 
 test('reload atomically replaces target authority and permits only B-axis identity change', async () => {

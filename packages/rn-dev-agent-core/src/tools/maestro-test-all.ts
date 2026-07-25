@@ -21,6 +21,7 @@ import {
   assembleMaestroArgs,
   executeMaestroAuthorityStages,
   planMaestroAuthorityStages,
+  resolveMaestroFlowAppId,
   runFlowParked,
 } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
@@ -47,6 +48,7 @@ const execFile = promisify(execFileCb);
 
 interface MaestroTestAllArgs {
   platform?: 'ios' | 'android';
+  appId?: string;
   deviceId?: string;
   flowDir?: string;
   pattern?: string;
@@ -100,6 +102,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       return failResult('Cannot determine platform. Pass platform or open a device session first.');
     }
     const session = getActiveSession();
+    const boundAppId = args.appId ?? (session?.platform === platform ? session.appId : undefined);
     const matchingSessionDeviceId =
       session?.platform === platform && session.deviceId ? session.deviceId : undefined;
     if (
@@ -164,10 +167,10 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         const parsed = parseAndValidateFlow(yamlText);
         planMaestroAuthorityStages(parsed.commands);
         parsedCommands = parsed.commands;
-        parsedAppId = parsed.appId;
+        parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(
-          parsed.appId !== undefined ? { appId: parsed.appId } : {},
+          parsedAppId !== undefined ? { appId: parsedAppId } : {},
           parsed.commands,
         );
         safeFlowFile = join(
@@ -180,7 +183,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         const appFileResolution = resolveAppFileForClearState(
           platform,
           canonical,
-          parsed.appId,
+          parsedAppId,
           undefined,
         );
         if (!appFileResolution.ok) {

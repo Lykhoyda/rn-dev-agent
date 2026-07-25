@@ -49099,7 +49099,7 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
   const oldTargetId = priorBundle?.targetId;
   const newTargetId = bundle.targetId;
   const metroPort = metro?.port;
-  if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+  if (typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
     throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
   }
   const runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
@@ -49109,7 +49109,7 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
   const nextOperation = registry2.replaceBindingsDuringOperation(operation, {
     state: "ready",
     bindings: { bundle },
-    releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+    releaseResources: typeof oldTargetId === "string" && oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
     claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
   });
   const refreshedStatus = runtime.status();
@@ -49333,7 +49333,10 @@ function createAuthorityGate(runtime, dependencies) {
         const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
         const optionalBefore = [];
         const managedOriginObservations = [];
+        const managedBundleObservations = [];
+        let managedOriginCompleted = false;
         let managedOriginCompletedWithTarget = false;
+        let managedRuntimeTargetChanged = false;
         let optionalBundleClaimed = false;
         let optionalBundleRecoveryFailed = false;
         if (profile.optionalAxes?.includes("B")) {
@@ -49444,24 +49447,77 @@ function createAuthorityGate(runtime, dependencies) {
               throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
             }
             registry2.verifyOperation(operation);
-            managedOriginObservations.push(await dependencies.probe({
+            const originObservation = await dependencies.probe({
               axis: "A",
               phase: "postflight",
               tool,
               profile,
               status: currentStatus,
               args
-            }));
-            registry2.verifyOperation(operation);
+            });
+            if (!dependencies.refreshRuntimeBinding) {
+              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "managed lifecycle cannot commit without a binding refresh");
+            }
+            let bundleObservation;
+            try {
+              const bundle = await dependencies.refreshRuntimeBinding(currentStatus);
+              bundleObservation = await dependencies.probe({
+                axis: "B",
+                phase: "postflight",
+                tool,
+                profile,
+                status: {
+                  ...currentStatus,
+                  bindings: { ...currentStatus.bindings, bundle }
+                },
+                args
+              });
+              registry2.verifyOperation(operation);
+              const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, currentStatus, currentStatus.bindings.bundle, currentStatus.bindings.metro, bundle);
+              operation = reconciliation.operation;
+              status = reconciliation.status;
+              managedRuntimeTargetChanged ||= reconciliation.runtimeTargetChanged;
+            } catch (error2) {
+              const failedStatus = runtime.status();
+              if (failedStatus.available && failedStatus.bindings.bundle) {
+                try {
+                  registry2.verifyOperation(operation);
+                  operation = invalidateRuntimeBundle(registry2, operation, failedStatus);
+                  const invalidatedStatus = runtime.status();
+                  if (invalidatedStatus.available)
+                    status = invalidatedStatus;
+                } catch {
+                }
+              }
+              throw error2;
+            }
+            managedOriginObservations.push(originObservation);
+            managedBundleObservations.push(bundleObservation);
           };
           Object.defineProperty(args, managedNativeOrigin, {
             configurable: true,
             value: {
               claim: claimOrigin,
               complete: async (targetExpected) => {
+                managedOriginCompleted = true;
                 managedOriginCompletedWithTarget = targetExpected;
-                if (targetExpected)
+                if (targetExpected) {
                   await claimOrigin();
+                  return;
+                }
+                const currentStatus = runtime.status();
+                if (!currentStatus.available) {
+                  throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                }
+                registry2.verifyOperation(operation);
+                if (currentStatus.bindings.bundle) {
+                  operation = invalidateRuntimeBundle(registry2, operation, currentStatus);
+                  const invalidatedStatus = runtime.status();
+                  if (!invalidatedStatus.available) {
+                    throw new SessionAuthorityError(invalidatedStatus.code, invalidatedStatus.reason);
+                  }
+                  status = invalidatedStatus;
+                }
               }
             }
           });
@@ -49520,9 +49576,11 @@ function createAuthorityGate(runtime, dependencies) {
         }
         const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;
         const allBefore = [...before, ...optionalBefore];
+        const managedTargetAbsent = managedOriginCompleted && !managedOriginCompletedWithTarget;
+        const optionalPostflightAxes = managedTargetAbsent ? [] : optionalBefore.map(({ axis }) => axis);
         const postflightAxes = [
           ...profile.postflightAxes ?? profile.axes,
-          ...optionalBefore.map(({ axis }) => axis)
+          ...optionalPostflightAxes
         ];
         const after = await Promise.all(postflightAxes.map((axis) => dependencies.probe({
           axis,
@@ -49533,11 +49591,24 @@ function createAuthorityGate(runtime, dependencies) {
           args
         })));
         const finalOrigin = managedOriginCompletedWithTarget ? managedOriginObservations.at(-1) : void 0;
-        const receiptObservations = finalOrigin ? [...after, finalOrigin] : after;
-        const receiptProfile = finalOrigin ? { ...effectiveProfile, axes: [...effectiveProfile.axes, "A"] } : effectiveProfile;
+        const finalManagedBundle = managedOriginCompletedWithTarget ? managedBundleObservations.at(-1) : void 0;
+        const receiptObservations = finalOrigin ? [...after, finalOrigin, ...finalManagedBundle ? [finalManagedBundle] : []] : after;
+        const receiptBaseProfile = managedTargetAbsent ? {
+          ...effectiveProfile,
+          axes: effectiveProfile.axes.filter((axis) => axis !== "B")
+        } : effectiveProfile;
+        const receiptProfile = finalOrigin ? {
+          ...receiptBaseProfile,
+          axes: [
+            ...receiptBaseProfile.axes,
+            "A",
+            ...finalManagedBundle ? ["B"] : []
+          ]
+        } : receiptBaseProfile;
         for (const observation of allBefore) {
-          if (runtimeTargetChanged && observation.axis === "B")
+          if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === "B") {
             continue;
+          }
           if (!postflightAxes.includes(observation.axis))
             continue;
           const postflight = after.find((candidate) => candidate.axis === observation.axis);
@@ -49668,6 +49739,44 @@ function nestedLifecycleCommandOrSelf(command) {
   const name = commandName(command);
   return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
 }
+function lifecycleTargetExpected(command) {
+  const name = commandName(command);
+  if (name !== null && lifecycleCommands.has(name))
+    return name === "launchApp";
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return null;
+  const runFlow = command.runFlow;
+  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
+    return null;
+  const commands = runFlow.commands;
+  if (!Array.isArray(commands))
+    return null;
+  let expected = null;
+  for (const nested of commands) {
+    const nestedExpected = lifecycleTargetExpected(nested);
+    if (nestedExpected !== null)
+      expected = nestedExpected;
+  }
+  return expected;
+}
+function nestedLifecycleMixesMutation(command) {
+  if (!command || typeof command !== "object" || Array.isArray(command))
+    return false;
+  const runFlow = command.runFlow;
+  if (!runFlow || typeof runFlow !== "object" || Array.isArray(runFlow))
+    return false;
+  const commands = runFlow.commands;
+  if (!Array.isArray(commands))
+    return false;
+  return commands.some((nested) => {
+    const name = commandName(nested);
+    if (name !== null && lifecycleCommands.has(name))
+      return false;
+    if (nestedLifecycleCommand(nested))
+      return nestedLifecycleMixesMutation(nested);
+    return true;
+  });
+}
 function planMaestroAuthorityStages(commands) {
   const stages = [];
   let pending2 = [];
@@ -49681,6 +49790,12 @@ function planMaestroAuthorityStages(commands) {
   for (const command of commands) {
     const name = commandName(command);
     if (nestedLifecycleCommand(command)) {
+      if (!nestedLifecycleMixesMutation(command)) {
+        flushPending();
+        stages.push({ commands: [command], requiresOrigin: false });
+        targetExpected = lifecycleTargetExpected(command) ?? false;
+        continue;
+      }
       throw new MaestroValidationError("conditional runFlow commands cannot mix app lifecycle transitions with UI mutations");
     }
     if (name !== null && lifecycleCommands.has(name)) {
@@ -49704,6 +49819,15 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   }
   await completeOrigin(plan.targetExpected);
   return results;
+}
+function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
+  if (boundAppId !== void 0 && !isValidBundleId(boundAppId)) {
+    throw new MaestroValidationError(`Invalid bundle ID for authority-bound app: ${JSON.stringify(boundAppId).slice(0, 80)}`);
+  }
+  if (boundAppId && parsedAppId && parsedAppId !== boundAppId) {
+    throw new MaestroValidationError(`Flow appId ${parsedAppId} does not match authority-bound appId ${boundAppId}`);
+  }
+  return boundAppId ?? parsedAppId;
 }
 function resolvePlatform(override) {
   if (override === "ios" || override === "android")
@@ -49780,10 +49904,7 @@ function createMaestroRunHandler(deps = {}) {
       validatedCommands = parsed.commands;
       flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
       const rawAppId = resolveAppId(args.appId, platform);
-      headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : void 0);
-      if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
-        return failResult(`Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`);
-      }
+      headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
       flowFile = join24(tmpdir7(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
       writeFileSync9(flowFile, validatedContent, "utf-8");
@@ -63316,6 +63437,7 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
     let reconnected = false;
     let helpersInjected = false;
     let reconnectAttempted = false;
+    let launchSucceeded = false;
     if (permissions.length > 0) {
       const permResults = await runPermissionSteps(permissions, args.appId, platform, lifecycleDeviceId);
       steps.push(...permResults);
@@ -63357,6 +63479,7 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
     if (relaunch) {
       const launchResult = await runLaunchStep(args.appId, platform, lifecycleDeviceId, launch);
       steps.push(launchResult);
+      launchSucceeded = launchResult.ok;
       if (launchResult.ok && waitForReady) {
         const client2 = getClient2();
         reconnectAttempted = true;
@@ -63374,7 +63497,7 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
         }
       }
     }
-    await completeNativeOrigin(args, relaunch);
+    await completeNativeOrigin(args, launchSucceeded && waitForReady && reconnected);
     const skipped = steps.filter((s) => s.code === "CDP_NOT_CONNECTED").length;
     const okCount = steps.filter((s) => s.ok).length;
     const failed = steps.filter((s) => !s.ok).length - skipped;
@@ -68167,6 +68290,7 @@ function createMaestroTestAllHandler() {
       return failResult("Cannot determine platform. Pass platform or open a device session first.");
     }
     const session = getActiveSession();
+    const boundAppId = args.appId ?? (session?.platform === platform ? session.appId : void 0);
     const matchingSessionDeviceId = session?.platform === platform && session.deviceId ? session.deviceId : void 0;
     if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
       return failResult(`Refusing Maestro suite target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
@@ -68203,12 +68327,12 @@ function createMaestroTestAllHandler() {
         const parsed = parseAndValidateFlow(yamlText);
         planMaestroAuthorityStages(parsed.commands);
         parsedCommands = parsed.commands;
-        parsedAppId = parsed.appId;
+        parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
-        const canonical = buildMaestroFlow(parsed.appId !== void 0 ? { appId: parsed.appId } : {}, parsed.commands);
+        const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
         safeFlowFile = join42(tmpdir12(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync18(safeFlowFile, canonical, "utf-8");
-        const appFileResolution = resolveAppFileForClearState(platform, canonical, parsed.appId, void 0);
+        const appFileResolution = resolveAppFileForClearState(platform, canonical, parsedAppId, void 0);
         if (!appFileResolution.ok) {
           results.push({
             name,

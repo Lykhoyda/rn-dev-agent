@@ -148,6 +148,36 @@ function nestedLifecycleCommandOrSelf(command: unknown): boolean {
   return (name !== null && lifecycleCommands.has(name)) || nestedLifecycleCommand(command);
 }
 
+function lifecycleTargetExpected(command: unknown): boolean | null {
+  const name = commandName(command);
+  if (name !== null && lifecycleCommands.has(name)) return name === 'launchApp';
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
+  const runFlow = (command as Record<string, unknown>).runFlow;
+  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return null;
+  const commands = (runFlow as Record<string, unknown>).commands;
+  if (!Array.isArray(commands)) return null;
+  let expected: boolean | null = null;
+  for (const nested of commands) {
+    const nestedExpected = lifecycleTargetExpected(nested);
+    if (nestedExpected !== null) expected = nestedExpected;
+  }
+  return expected;
+}
+
+function nestedLifecycleMixesMutation(command: unknown): boolean {
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return false;
+  const runFlow = (command as Record<string, unknown>).runFlow;
+  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return false;
+  const commands = (runFlow as Record<string, unknown>).commands;
+  if (!Array.isArray(commands)) return false;
+  return commands.some((nested) => {
+    const name = commandName(nested);
+    if (name !== null && lifecycleCommands.has(name)) return false;
+    if (nestedLifecycleCommand(nested)) return nestedLifecycleMixesMutation(nested);
+    return true;
+  });
+}
+
 export function planMaestroAuthorityStages(commands: readonly unknown[]): {
   stages: AuthorityStage[];
   targetExpected: boolean;
@@ -164,6 +194,12 @@ export function planMaestroAuthorityStages(commands: readonly unknown[]): {
   for (const command of commands) {
     const name = commandName(command);
     if (nestedLifecycleCommand(command)) {
+      if (!nestedLifecycleMixesMutation(command)) {
+        flushPending();
+        stages.push({ commands: [command], requiresOrigin: false });
+        targetExpected = lifecycleTargetExpected(command) ?? false;
+        continue;
+      }
       throw new MaestroValidationError(
         'conditional runFlow commands cannot mix app lifecycle transitions with UI mutations',
       );
@@ -194,6 +230,23 @@ export async function executeMaestroAuthorityStages<T>(
   }
   await completeOrigin(plan.targetExpected);
   return results;
+}
+
+export function resolveMaestroFlowAppId(
+  boundAppId: string | undefined,
+  parsedAppId: string | undefined,
+): string | undefined {
+  if (boundAppId !== undefined && !isValidBundleId(boundAppId)) {
+    throw new MaestroValidationError(
+      `Invalid bundle ID for authority-bound app: ${JSON.stringify(boundAppId).slice(0, 80)}`,
+    );
+  }
+  if (boundAppId && parsedAppId && parsedAppId !== boundAppId) {
+    throw new MaestroValidationError(
+      `Flow appId ${parsedAppId} does not match authority-bound appId ${boundAppId}`,
+    );
+  }
+  return boundAppId ?? parsedAppId;
 }
 
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
@@ -351,12 +404,7 @@ export function createMaestroRunHandler(
       validatedCommands = parsed.commands;
       flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
       const rawAppId = resolveAppId(args.appId, platform);
-      headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
-      if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
-        return failResult(
-          `Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`,
-        );
-      }
+      headerAppId = resolveMaestroFlowAppId(rawAppId || undefined, parsed.appId);
       validatedContent = buildMaestroFlow(
         headerAppId ? { appId: headerAppId } : {},
         parsed.commands,

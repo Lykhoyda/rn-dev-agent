@@ -304,6 +304,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
         let reconnected = false;
         let helpersInjected = false;
         let reconnectAttempted = false;
+        let launchSucceeded = false;
         // Step 1: permissions (no CDP needed).
         if (permissions.length > 0) {
             const permResults = await runPermissionSteps(permissions, args.appId, platform, lifecycleDeviceId);
@@ -354,6 +355,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
         if (relaunch) {
             const launchResult = await runLaunchStep(args.appId, platform, lifecycleDeviceId, launch);
             steps.push(launchResult);
+            launchSucceeded = launchResult.ok;
             if (launchResult.ok && waitForReady) {
                 // Re-fetch client AFTER launch in case anything swapped it. (No swap
                 // currently happens in this orchestrator, but defensive against
@@ -374,7 +376,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
                 }
             }
         }
-        await completeNativeOrigin(args, relaunch);
+        await completeNativeOrigin(args, launchSucceeded && waitForReady && reconnected);
         const skipped = steps.filter((s) => s.code === 'CDP_NOT_CONNECTED').length;
         const okCount = steps.filter((s) => s.ok).length;
         const failed = steps.filter((s) => !s.ok).length - skipped;

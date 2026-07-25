@@ -146,3 +146,33 @@ test('a session bound to another app is refused before lifecycle mutation', asyn
 
   assert.equal(result.code, 'TARGET_SESSION_MISMATCH');
 });
+
+test('failed launch preserves its structured reset result without requiring target authority', async () => {
+  const completions = [];
+  const run = createDeviceResetStateHandler(() => client(), {
+    getSession: () => ({
+      platform: 'ios',
+      deviceId: DEVICE_ID,
+      appId: 'com.example.app',
+    }),
+    terminateApp: async () => {},
+    launchApp: async () => {
+      throw new Error('launch failed');
+    },
+    completeNativeOrigin: async (_args, targetExpected) => {
+      completions.push(targetExpected);
+    },
+  });
+
+  const result = parsed(
+    await run({
+      appId: 'com.example.app',
+      platform: 'ios',
+      deviceId: DEVICE_ID,
+    }),
+  );
+
+  assert.equal(result.meta.code, 'DEVICE_RESET_STATE_PARTIAL');
+  assert.match(result.data.steps.find((step) => step.step === 'launch').error, /launch failed/);
+  assert.deepEqual(completions, [false]);
+});

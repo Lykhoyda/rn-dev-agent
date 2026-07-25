@@ -321,11 +321,7 @@ function reconcileRuntimeBundleReplacement(
   const oldTargetId = priorBundle?.targetId;
   const newTargetId = bundle.targetId;
   const metroPort = metro?.port;
-  if (
-    typeof oldTargetId !== 'string' ||
-    typeof newTargetId !== 'string' ||
-    !Number.isSafeInteger(metroPort)
-  ) {
+  if (typeof newTargetId !== 'string' || !Number.isSafeInteger(metroPort)) {
     throw new SessionAuthorityError(
       'CDP_TARGET_AUTHORITY_MISMATCH',
       'runtime reset did not produce an exact target replacement',
@@ -341,7 +337,7 @@ function reconcileRuntimeBundleReplacement(
     state: 'ready',
     bindings: { bundle },
     releaseResources:
-      oldTargetId !== newTargetId
+      typeof oldTargetId === 'string' && oldTargetId !== newTargetId
         ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
         : [],
     claimResources:
@@ -667,7 +663,10 @@ export function createAuthorityGate(
           );
           const optionalBefore: AuthorityObservation[] = [];
           const managedOriginObservations: AuthorityObservation[] = [];
+          const managedBundleObservations: AuthorityObservation[] = [];
+          let managedOriginCompleted = false;
           let managedOriginCompletedWithTarget = false;
+          let managedRuntimeTargetChanged = false;
           let optionalBundleClaimed = false;
           let optionalBundleRecoveryFailed = false;
           if (profile.optionalAxes?.includes('B')) {
@@ -788,25 +787,89 @@ export function createAuthorityGate(
                 throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
               }
               registry!.verifyOperation(operation!);
-              managedOriginObservations.push(
-                await dependencies.probe({
-                  axis: 'A',
+              const originObservation = await dependencies.probe({
+                axis: 'A',
+                phase: 'postflight',
+                tool,
+                profile,
+                status: currentStatus,
+                args,
+              });
+              if (!dependencies.refreshRuntimeBinding) {
+                throw new SessionAuthorityError(
+                  'BUNDLE_HANDSHAKE_UNAVAILABLE',
+                  'managed lifecycle cannot commit without a binding refresh',
+                );
+              }
+              let bundleObservation: AuthorityObservation;
+              try {
+                const bundle = await dependencies.refreshRuntimeBinding(currentStatus);
+                bundleObservation = await dependencies.probe({
+                  axis: 'B',
                   phase: 'postflight',
                   tool,
                   profile,
-                  status: currentStatus,
+                  status: {
+                    ...currentStatus,
+                    bindings: { ...currentStatus.bindings, bundle },
+                  },
                   args,
-                }),
-              );
-              registry!.verifyOperation(operation!);
+                });
+                registry!.verifyOperation(operation!);
+                const reconciliation = reconcileRuntimeBundleReplacement(
+                  runtime,
+                  registry!,
+                  operation!,
+                  currentStatus,
+                  currentStatus.bindings.bundle as Record<string, unknown> | undefined,
+                  currentStatus.bindings.metro as Record<string, unknown> | undefined,
+                  bundle,
+                );
+                operation = reconciliation.operation;
+                status = reconciliation.status;
+                managedRuntimeTargetChanged ||= reconciliation.runtimeTargetChanged;
+              } catch (error) {
+                const failedStatus = runtime.status();
+                if (failedStatus.available && failedStatus.bindings.bundle) {
+                  try {
+                    registry!.verifyOperation(operation!);
+                    operation = invalidateRuntimeBundle(registry!, operation!, failedStatus);
+                    const invalidatedStatus = runtime.status();
+                    if (invalidatedStatus.available) status = invalidatedStatus;
+                  } catch {}
+                }
+                throw error;
+              }
+              managedOriginObservations.push(originObservation);
+              managedBundleObservations.push(bundleObservation);
             };
             Object.defineProperty(args, managedNativeOrigin, {
               configurable: true,
               value: {
                 claim: claimOrigin,
                 complete: async (targetExpected: boolean) => {
+                  managedOriginCompleted = true;
                   managedOriginCompletedWithTarget = targetExpected;
-                  if (targetExpected) await claimOrigin();
+                  if (targetExpected) {
+                    await claimOrigin();
+                    return;
+                  }
+                  const currentStatus = runtime.status();
+                  if (!currentStatus.available) {
+                    throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                  }
+                  registry!.verifyOperation(operation!);
+                  if (currentStatus.bindings.bundle) {
+                    operation = invalidateRuntimeBundle(registry!, operation!, currentStatus);
+                    const invalidatedStatus = runtime.status();
+                    if (!invalidatedStatus.available) {
+                      throw new SessionAuthorityError(
+                        invalidatedStatus.code,
+                        invalidatedStatus.reason,
+                      );
+                    }
+                    status = invalidatedStatus;
+                  }
                 },
               },
             });
@@ -887,9 +950,13 @@ export function createAuthorityGate(
               ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] }
               : profile;
           const allBefore = [...before, ...optionalBefore];
+          const managedTargetAbsent = managedOriginCompleted && !managedOriginCompletedWithTarget;
+          const optionalPostflightAxes = managedTargetAbsent
+            ? []
+            : optionalBefore.map(({ axis }) => axis);
           const postflightAxes = [
             ...(profile.postflightAxes ?? profile.axes),
-            ...optionalBefore.map(({ axis }) => axis),
+            ...optionalPostflightAxes,
           ];
           const after = await Promise.all(
             postflightAxes.map((axis) =>
@@ -906,12 +973,32 @@ export function createAuthorityGate(
           const finalOrigin = managedOriginCompletedWithTarget
             ? managedOriginObservations.at(-1)
             : undefined;
-          const receiptObservations = finalOrigin ? [...after, finalOrigin] : after;
-          const receiptProfile = finalOrigin
-            ? { ...effectiveProfile, axes: [...effectiveProfile.axes, 'A' as const] }
+          const finalManagedBundle = managedOriginCompletedWithTarget
+            ? managedBundleObservations.at(-1)
+            : undefined;
+          const receiptObservations = finalOrigin
+            ? [...after, finalOrigin, ...(finalManagedBundle ? [finalManagedBundle] : [])]
+            : after;
+          const receiptBaseProfile = managedTargetAbsent
+            ? {
+                ...effectiveProfile,
+                axes: effectiveProfile.axes.filter((axis) => axis !== 'B'),
+              }
             : effectiveProfile;
+          const receiptProfile = finalOrigin
+            ? {
+                ...receiptBaseProfile,
+                axes: [
+                  ...receiptBaseProfile.axes,
+                  'A' as const,
+                  ...(finalManagedBundle ? (['B'] as const) : []),
+                ],
+              }
+            : receiptBaseProfile;
           for (const observation of allBefore) {
-            if (runtimeTargetChanged && observation.axis === 'B') continue;
+            if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === 'B') {
+              continue;
+            }
             if (!postflightAxes.includes(observation.axis)) continue;
             const postflight = after.find((candidate) => candidate.axis === observation.axis);
             if (observation.identity !== postflight?.identity) {

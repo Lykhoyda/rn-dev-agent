@@ -4,6 +4,7 @@ import {
   createMaestroRunHandler,
   executeMaestroAuthorityStages,
   planMaestroAuthorityStages,
+  resolveMaestroFlowAppId,
 } from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import {
@@ -70,6 +71,55 @@ test('lifecycle stages re-prove origin before subsequent UI mutation', async () 
       ]),
     /cannot mix app lifecycle transitions/,
   );
+  assert.deepEqual(
+    planMaestroAuthorityStages([
+      { runFlow: { when: { visible: 'Continue' }, commands: ['launchApp'] } },
+      { tapOn: { id: 'submit' } },
+    ]),
+    {
+      stages: [
+        {
+          commands: [{ runFlow: { when: { visible: 'Continue' }, commands: ['launchApp'] } }],
+          requiresOrigin: false,
+        },
+        { commands: [{ tapOn: { id: 'submit' } }], requiresOrigin: true },
+      ],
+      targetExpected: true,
+    },
+  );
+});
+
+test('flow headers cannot override the authority-bound app', async () => {
+  assert.equal(resolveMaestroFlowAppId(APP_ID, APP_ID), APP_ID);
+  assert.throws(
+    () => resolveMaestroFlowAppId(APP_ID, 'com.foreign.app'),
+    /does not match authority-bound appId/,
+  );
+
+  let dispatched = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    execFile: async () => {
+      dispatched = true;
+      return { stdout: runnerLog(EXACT), stderr: '' };
+    },
+  });
+  const result = await handler({
+    inlineYaml: 'appId: com.foreign.app\n---\n- launchApp',
+    platform: 'ios',
+    appId: APP_ID,
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(envelope(result).error, /does not match authority-bound appId/);
+  assert.equal(dispatched, false);
 });
 
 function envelope(result: { content: Array<{ text: string }> }): Record<string, any> {
