@@ -70307,11 +70307,53 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHmac } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const { registerHooks } = require('node:module');
+const { fileURLToPath } = require('node:url');
 const accumulatedRuntimeInputs = new Set();
 const accumulatedViolations = new Set();
+const observedLoaderUrls = new Set();
 let cachedSourceRoot;
 let sourceRootResolved = false;
 let lastPolicyPayload;
+let initialCacheCaptured = false;
+let loaderEpoch = 0;
+function recordLoaderViolation(value) {
+  if (accumulatedViolations.has(value)) return;
+  accumulatedViolations.add(value);
+  loaderEpoch += 1;
+}
+function recordLoaderUrl(url) {
+  if (url.startsWith('node:') || observedLoaderUrls.has(url)) return;
+  observedLoaderUrls.add(url);
+  if (!url.startsWith('file:')) {
+    recordLoaderViolation('Metro runtime module URL scheme is unsupported');
+    return;
+  }
+  try {
+    const resolved = fs.realpathSync(fileURLToPath(url));
+    if (accumulatedRuntimeInputs.has(resolved)) return;
+    accumulatedRuntimeInputs.add(resolved);
+    loaderEpoch += 1;
+  } catch {
+    recordLoaderViolation('Metro runtime module cannot be resolved');
+  }
+}
+if (typeof registerHooks === 'function') {
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      try {
+        const result = nextResolve(specifier, context);
+        recordLoaderUrl(result.url);
+        return result;
+      } catch (error) {
+        recordLoaderViolation('Metro runtime module resolution failed');
+        throw error;
+      }
+    },
+  });
+} else {
+  recordLoaderViolation('Metro runtime module loading requires Node.js 22.15 or newer');
+}
 function sourceRoot() {
   if (sourceRootResolved) return cachedSourceRoot;
   try {
@@ -70365,21 +70407,8 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       entry.includes('/' + excluded + '/')
     );
   }
-  function isLocalDependencyStore(candidate) {
-    if (!isContained(candidate)) return false;
-    const entry = path.relative(root, candidate).split(path.sep).join('/');
-    return [
-      'node_modules',
-      '.yarn/cache',
-      '.yarn/unplugged',
-    ].some((dependencyRoot) =>
-      entry === dependencyRoot ||
-      entry.startsWith(dependencyRoot + '/') ||
-      entry.includes('/' + dependencyRoot + '/')
-    );
-  }
   function addPath(value, field) {
-    if (value === undefined) return;
+    if (value == null) return;
     if (typeof value !== 'string') {
       violations.push(field + ' must be a path');
       return;
@@ -70391,7 +70420,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     }
   }
   function addPaths(values, field) {
-    if (values === undefined) return;
+    if (values == null) return;
     if (!Array.isArray(values)) {
       violations.push(field + ' must contain paths');
       return;
@@ -70399,7 +70428,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     values.forEach((value) => addPath(value, field));
   }
   function addModule(value, field) {
-    if (value === undefined) return;
+    if (value == null) return null;
     if (typeof value !== 'string') {
       violations.push(field + ' must identify a module');
       return null;
@@ -70416,12 +70445,25 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       return null;
     }
   }
-  function addExecutableModule(value, field) {
-    if (value === undefined) return;
+  function addSupportedExecutableModule(value, field, supportedModules) {
+    if (value == null) return;
     const resolved = addModule(value, field);
-    if (resolved && !isLocalDependencyStore(resolved)) {
-      violations.push(field + ' executable closure must resolve inside a local dependency store');
+    if (!resolved) return;
+    const supported = supportedModules.flatMap((moduleName) => {
+      try {
+        return [fs.realpathSync(require.resolve(moduleName, { paths: [process.cwd()] }))];
+      } catch {
+        return [];
+      }
+    });
+    if (!supported.includes(resolved)) {
+      violations.push(field + ' custom executable closure is unsupported');
     }
+  }
+  function addUnsupportedExecutableModule(value, field) {
+    if (value == null) return;
+    addModule(value, field);
+    violations.push(field + ' custom executable closure is unsupported');
   }
   addPath(config.projectRoot, 'projectRoot');
   addPaths(config.watchFolders, 'watchFolders');
@@ -70435,30 +70477,45 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       Object.values(resolver.extraNodeModules).forEach((value) => addPath(value, 'extraNodeModules'));
     }
   }
-  if (resolver.resolveRequest !== undefined) {
+  if (resolver.resolveRequest != null) {
     violations.push('custom Metro resolvers are unsupported');
   }
-  if (serializer.customSerializer !== undefined || serializer.experimentalSerializerHook !== undefined) {
+  if (serializer.customSerializer != null) {
     violations.push('custom Metro serializers are unsupported');
   }
-  addExecutableModule(config.transformerPath, 'transformerPath');
-  addExecutableModule(resolver.dependencyExtractor, 'dependencyExtractor');
-  addExecutableModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
+  addSupportedExecutableModule(config.transformerPath, 'transformerPath', ['metro-transform-worker']);
+  addUnsupportedExecutableModule(resolver.dependencyExtractor, 'dependencyExtractor');
+  addUnsupportedExecutableModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
   addModule(resolver.emptyModulePath, 'emptyModulePath');
   addModule(transformer.asyncRequireModulePath, 'asyncRequireModulePath');
-  addExecutableModule(transformer.babelTransformerPath, 'babelTransformerPath');
-  addExecutableModule(transformer.minifierPath, 'minifierPath');
-  if (transformer.assetPlugins !== undefined) {
+  addModule(transformer.assetRegistryPath, 'assetRegistryPath');
+  addSupportedExecutableModule(
+    transformer.babelTransformerPath,
+    'babelTransformerPath',
+    ['metro-babel-transformer'],
+  );
+  addSupportedExecutableModule(transformer.minifierPath, 'minifierPath', ['metro-minify-terser']);
+  if (transformer.assetPlugins != null) {
     if (!Array.isArray(transformer.assetPlugins)) {
       violations.push('assetPlugins must identify modules');
     } else {
-      transformer.assetPlugins.forEach((value) => addExecutableModule(value, 'assetPlugins'));
+      transformer.assetPlugins.forEach((value) => addUnsupportedExecutableModule(value, 'assetPlugins'));
+    }
+  }
+  if (serializer.polyfillModuleNames != null) {
+    if (!Array.isArray(serializer.polyfillModuleNames)) {
+      violations.push('polyfillModuleNames must identify modules');
+    } else {
+      serializer.polyfillModuleNames.forEach((value) => addModule(value, 'polyfillModuleNames'));
     }
   }
   if (/(?:^|\\s)(?:--(?:require|import|loader|experimental-loader)\\b|-r\\b)/.test(process.env.NODE_OPTIONS || '')) {
     violations.push('NODE_OPTIONS loaders are unsupported');
   }
-  Object.keys(require.cache).forEach((value) => addPath(value, 'loaded Metro config module'));
+  if (!initialCacheCaptured) {
+    Object.keys(require.cache).forEach((value) => addPath(value, 'loaded Metro config module'));
+    initialCacheCaptured = true;
+  }
   runtimeInputs.forEach((value) => accumulatedRuntimeInputs.add(value));
   violations.forEach((value) => accumulatedViolations.add(value));
   const payload = {
@@ -70484,18 +70541,29 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
 }
 function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
   return function (...args) {
-    const cacheEntriesBefore = Object.keys(require.cache).length;
-    const finish = (value) => {
-      const returnedPaths = includeReturnedPaths && Array.isArray(value) ? value : [];
-      if (returnedPaths.length > 0 || Object.keys(require.cache).length !== cacheEntriesBefore) {
+    const loaderEpochBefore = loaderEpoch;
+    const refresh = (returnedPaths) => {
+      if (returnedPaths.length > 0 || loaderEpoch !== loaderEpochBefore) {
         runtimePolicy(getConfig(), returnedPaths);
       }
+    };
+    const finish = (value) => {
+      const returnedPaths = includeReturnedPaths && Array.isArray(value) ? value : [];
+      refresh(returnedPaths);
       return typeof value === 'function'
         ? withPolicyRefresh(value, getConfig, false)
         : value;
     };
-    const result = callback.apply(this, args);
-    return result && typeof result.then === 'function' ? result.then(finish) : finish(result);
+    const fail = (error) => {
+      refresh([]);
+      throw error;
+    };
+    try {
+      const result = callback.apply(this, args);
+      return result && typeof result.then === 'function' ? result.then(finish, fail) : finish(result);
+    } catch (error) {
+      return fail(error);
+    }
   };
 }
 function withPolicyCallbacks(config, names, getConfig) {
@@ -70542,6 +70610,7 @@ module.exports = function withRnDevAgentAuthority(config) {
           'processModuleFilter',
           'getRunModuleStatement',
           'isThirdPartyModule',
+          'experimentalSerializerHook',
         ],
         () => finalConfig,
       ),

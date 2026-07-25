@@ -168,9 +168,7 @@ test('Metro integration records external and custom resolver inputs', () => {
     const receipt = JSON.parse(
       readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
     );
-    assert.ok(
-      receipt.violations.some((entry: string) => entry.includes('custom Metro resolvers')),
-    );
+    assert.ok(receipt.violations.some((entry: string) => entry.includes('custom Metro resolvers')));
     assert.ok(receipt.runtimeInputs.includes(realpathSync(tmpdir())));
     assert.match(receipt.signature, /^[a-f0-9]{64}$/);
   } finally {
@@ -230,8 +228,110 @@ test('Metro integration rejects unbounded executable module closures', () => {
   }
 });
 
-test('Metro integration accepts executable modules in a local dependency store', () => {
+test('Metro integration accepts supported Metro executable modules', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-local-worker-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const modulePaths = Object.fromEntries(
+      ['metro-transform-worker', 'metro-babel-transformer', 'metro-minify-terser'].map((name) => {
+        const moduleRoot = join(root, 'node_modules', name);
+        const modulePath = join(moduleRoot, 'index.cjs');
+        mkdirSync(moduleRoot, { recursive: true });
+        writeFileSync(
+          join(moduleRoot, 'package.json'),
+          JSON.stringify({ name, main: 'index.cjs' }),
+        );
+        writeFileSync(modulePath, 'module.exports = {};\n');
+        return [name, modulePath];
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ transformerPath: ${JSON.stringify(modulePaths['metro-transform-worker'])}, transformer: { babelTransformerPath: ${JSON.stringify(modulePaths['metro-babel-transformer'])}, minifierPath: ${JSON.stringify(modulePaths['metro-minify-terser'])} } });`,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_SESSION_ID: 'session',
+          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
+          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
+        },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(
+      readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
+    );
+    assert.equal(
+      receipt.violations.some((entry: string) => entry.includes('executable closure')),
+      false,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro integration preserves standard null defaults and authenticates bundle modules', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-defaults-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    const moduleRoot = join(root, 'node_modules', 'fixture-runtime');
+    mkdirSync(integration, { recursive: true });
+    mkdirSync(moduleRoot, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const assetRegistryPath = join(moduleRoot, 'asset-registry.cjs');
+    const polyfillPath = join(moduleRoot, 'polyfill.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(assetRegistryPath, 'module.exports = {};\n');
+    writeFileSync(polyfillPath, 'module.exports = {};\n');
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); const config = compose({ resolver: { resolveRequest: null }, transformer: { assetRegistryPath: ${JSON.stringify(assetRegistryPath)} }, serializer: { customSerializer: null, experimentalSerializerHook() {}, polyfillModuleNames: [${JSON.stringify(polyfillPath)}] } }); config.serializer.experimentalSerializerHook({});`,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_SESSION_ID: 'session',
+          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
+          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
+        },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(
+      readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
+    );
+    assert.equal(
+      receipt.violations.some(
+        (entry: string) =>
+          entry.includes('custom Metro resolvers') || entry.includes('custom Metro serializers'),
+      ),
+      false,
+    );
+    assert.ok(receipt.runtimeInputs.includes(realpathSync(assetRegistryPath)));
+    assert.ok(receipt.runtimeInputs.includes(realpathSync(polyfillPath)));
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro integration rejects custom dependency-store executable closures', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-custom-worker-'));
   try {
     execFileSync('git', ['init', '-q', root]);
     const integration = join(root, '.rn-agent', 'integration');
@@ -264,9 +364,11 @@ test('Metro integration accepts executable modules in a local dependency store',
     const receipt = JSON.parse(
       readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
     );
-    assert.equal(
-      receipt.violations.some((entry: string) => entry.includes('transformerPath')),
-      false,
+    assert.ok(
+      receipt.violations.some(
+        (entry: string) =>
+          entry.includes('transformerPath') && entry.includes('custom executable closure'),
+      ),
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -289,6 +391,46 @@ test('Metro integration refreshes policy after executable callbacks', () => {
       [
         '-e',
         `const compose = require(${JSON.stringify(adapterPath)}); const config = compose({ transformer: { async getTransformOptions() { require(${JSON.stringify(callbackModule)}); return {}; } } }); config.transformer.getTransformOptions();`,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_SESSION_ID: 'session',
+          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
+          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
+        },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(
+      readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
+    );
+    assert.ok(receipt.runtimeInputs.includes(realpathSync(callbackModule)));
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+    rmSync(external, { force: true, recursive: true });
+  }
+});
+
+test('Metro integration records ESM loader evidence when a callback rejects', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-rejected-callback-'));
+  const external = mkdtempSync(join(tmpdir(), 'rn-session-metro-esm-input-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const callbackModule = join(external, 'callback.mjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(callbackModule, 'export default {};\n');
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); let first = true; const config = compose({ transformer: { async getTransformOptions() { await import(${JSON.stringify(pathToFileURL(callbackModule).href)}); if (first) { first = false; throw new Error('expected'); } return {}; } } }); (async () => { try { await config.transformer.getTransformOptions(); } catch (error) { if (error.message !== 'expected') throw error; } await config.transformer.getTransformOptions(); })().catch((error) => { console.error(error); process.exitCode = 1; });`,
       ],
       {
         cwd: root,
@@ -355,9 +497,7 @@ test('Metro integration accumulates callback evidence monotonically', () => {
     assert.ok(receipt.runtimeInputs.includes(realpathSync(beforeMain)));
     assert.ok(receipt.runtimeInputs.includes(realpathSync(laterCallbackModule)));
     assert.ok(
-      receipt.violations.some((entry: string) =>
-        entry.includes('Metro callback runtime input'),
-      ),
+      receipt.violations.some((entry: string) => entry.includes('Metro callback runtime input')),
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -405,6 +545,12 @@ test('Metro integration refreshes every supported serializer callback', () => {
     rmSync(root, { force: true, recursive: true });
     rmSync(external, { force: true, recursive: true });
   }
+});
+
+test('Metro callback refresh uses a constant-time loader epoch', () => {
+  const adapter = renderMetroIntegrationAdapter();
+  assert.equal(adapter.match(/Object\.keys\(require\.cache\)/g)?.length, 1);
+  assert.match(adapter, /loaderEpochBefore/);
 });
 
 test('Metro integration preserves non-Git development configs', () => {
