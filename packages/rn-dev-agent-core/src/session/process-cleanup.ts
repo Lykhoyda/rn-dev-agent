@@ -4,18 +4,17 @@ import { SessionAuthorityError } from './registry.js';
 
 async function waitForExactStopped(
   probe: () => 'running' | 'stopped' | 'unknown',
-  timeoutMs: number,
+  deadlineMs: number,
   code: string,
   message: string,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
   while (true) {
     const status = probe();
     if (status === 'stopped') return;
     if (status === 'unknown') {
       throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
     }
-    if (Date.now() >= deadline) {
+    if (Date.now() >= deadlineMs) {
       throw new SessionAuthorityError(code, message);
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
@@ -27,7 +26,9 @@ export async function stopBoundObserve(
   listenerProbe: (port: number) => ManagedMetroListenerProbe = probeManagedMetroListener,
   processProbe: (pid: number) => ProcessBirthProbe = probeProcessBirth,
   timeoutMs = 2_000,
+  request: typeof fetch = fetch,
 ): Promise<void> {
+  const deadlineMs = Date.now() + timeoutMs;
   const port = Number(binding.port);
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? '');
@@ -72,13 +73,33 @@ export async function stopBoundObserve(
       'Observe listener PID was reused before cleanup completed',
     );
   }
-  const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${capability}`,
-      'x-rn-observe-instance': instanceId,
-    },
-  });
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'Observe cleanup timed out before the stop request',
+    );
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), remainingMs);
+  let response: Response;
+  try {
+    response = await request(`http://127.0.0.1:${port}/api/stop`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${capability}`,
+        'x-rn-observe-instance': instanceId,
+      },
+      signal: controller.signal,
+    });
+  } catch {
+    throw new SessionAuthorityError(
+      'OBSERVE_AUTHORITY_MISMATCH',
+      'Observe cleanup request failed or timed out',
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new SessionAuthorityError(
       'OBSERVE_AUTHORITY_MISMATCH',
@@ -91,7 +112,7 @@ export async function stopBoundObserve(
       if (observed.status === 'unknown') return 'unknown';
       return observed.status === 'listening' && observed.pid === pid ? 'running' : 'stopped';
     },
-    timeoutMs,
+    deadlineMs,
     'OBSERVE_AUTHORITY_MISMATCH',
     'Observe listener did not stop before the cleanup deadline',
   );
@@ -103,6 +124,7 @@ export async function stopBoundRunner(
   signalProcess: (pid: number, signal: NodeJS.Signals) => void = process.kill,
   timeoutMs = 2_000,
 ): Promise<void> {
+  const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? '');
   const instanceId = String(binding.instanceId ?? '');
@@ -130,7 +152,7 @@ export async function stopBoundRunner(
         ? 'running'
         : 'stopped';
     },
-    timeoutMs,
+    deadlineMs,
     'RUNNER_ADOPTION_REQUIRED',
     'runner process did not stop before the cleanup deadline',
   );

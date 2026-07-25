@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
 import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
 import { writeSessionSecret } from '../../../dist/session/state-root.js';
+import { readProcessBirth } from '../../../dist/session/process-birth.js';
 
 const cliPath = new URL('../../../dist/rn-session.js', import.meta.url).pathname;
 
@@ -225,4 +226,98 @@ test('package-local CLI retains claims when managed Metro cleanup is unproven', 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /METRO_AUTHORITY_MISMATCH/);
   assert.equal(status?.state, 'source_bound');
+});
+
+test('package-local CLI reserves build and release operations before runner cleanup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-operation-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  const runner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  await new Promise<void>((resolve, reject) => {
+    runner.once('spawn', resolve);
+    runner.once('error', reject);
+  });
+  try {
+    execFileSync('git', ['init', '-q', appRoot]);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+    writeFileSync(join(appRoot, 'package.json'), '{}\n');
+    execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+    execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+
+    const runnerPid = runner.pid;
+    const runnerBirth = runnerPid === undefined ? null : readProcessBirth(runnerPid);
+    assert.ok(runnerPid);
+    assert.ok(runnerBirth);
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    let registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const session = registry.createSession({
+      sessionId: 'session-operation',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'fixture' },
+      source: { ...source },
+      bindings: {
+        metroPort: 8193,
+        device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+        metro: { instanceId: 'metro-a', buildGeneration: 1 },
+        runner: {
+          platform: 'ios',
+          deviceId: 'SIM-1',
+          port: 9100,
+          pid: runnerPid,
+          processBirth: runnerBirth.token,
+          instanceId: 'runner-a',
+          capability: 'runner-capability',
+        },
+      },
+    });
+    registry.claimResources(session, [{ type: 'runner', key: 'ios:SIM-1:9100' }]);
+    registry.updateBindings(session, { state: 'device_claimed', bindings: {} });
+    const operation = registry.beginOperation(session, {
+      operationId: 'active-operation',
+      tool: 'device_interact',
+      profile: 'native',
+    });
+    registry.close();
+    writeSessionSecret(layout, session.sessionId, {
+      signerCapability: 'signer',
+      observeCapability: 'observe',
+      recoveryCapability: 'recovery',
+    });
+
+    for (const args of [
+      ['prepare-build', 'ios'],
+      ['release'],
+    ]) {
+      const result = spawnSync(process.execPath, [cliPath, ...args], {
+        cwd: appRoot,
+        env: {
+          ...process.env,
+          XDG_STATE_HOME: stateHome,
+          RN_DEV_AGENT_SESSION_ID: session.sessionId,
+          RN_DEV_AGENT_CLAIM_EPOCH: String(session.claimEpoch),
+        },
+        encoding: 'utf8',
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /OPERATION_ALREADY_IN_PROGRESS/);
+      assert.doesNotThrow(() => process.kill(runnerPid, 0));
+    }
+
+    registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    registry.cancelOperation(operation);
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    runner.kill('SIGKILL');
+    rmSync(root, { force: true, recursive: true });
+  }
 });

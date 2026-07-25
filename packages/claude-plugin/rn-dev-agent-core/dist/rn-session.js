@@ -11612,8 +11612,7 @@ function projectPublicAuthorityStatus(status) {
 }
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
-async function waitForExactStopped(probe, timeoutMs, code, message) {
-  const deadline = Date.now() + timeoutMs;
+async function waitForExactStopped(probe, deadlineMs, code, message) {
   while (true) {
     const status = probe();
     if (status === "stopped")
@@ -11621,13 +11620,14 @@ async function waitForExactStopped(probe, timeoutMs, code, message) {
     if (status === "unknown") {
       throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
     }
-    if (Date.now() >= deadline) {
+    if (Date.now() >= deadlineMs) {
       throw new SessionAuthorityError(code, message);
     }
     await new Promise((resolve3) => setTimeout(resolve3, 25));
   }
 }
-async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3) {
+async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request = fetch) {
+  const deadlineMs = Date.now() + timeoutMs;
   const port = Number(binding.port);
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
@@ -11652,13 +11652,27 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
   if (currentBirth.birth.token !== expectedBirth) {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener PID was reused before cleanup completed");
   }
-  const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${capability}`,
-      "x-rn-observe-instance": instanceId
-    }
-  });
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup timed out before the stop request");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), remainingMs);
+  let response;
+  try {
+    response = await request(`http://127.0.0.1:${port}/api/stop`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${capability}`,
+        "x-rn-observe-instance": instanceId
+      },
+      signal: controller.signal
+    });
+  } catch {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup request failed or timed out");
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe server refused fenced cleanup");
   }
@@ -11667,9 +11681,10 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     if (observed.status === "unknown")
       return "unknown";
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
-  }, timeoutMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
+  }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
 async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+  const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
   const instanceId = String(binding.instanceId ?? "");
@@ -11689,7 +11704,7 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
     if (observed.status === "unknown")
       return "unknown";
     return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
-  }, timeoutMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+  }, deadlineMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
 }
 
 // packages/rn-dev-agent-core/dist/rn-session.js
@@ -11723,6 +11738,14 @@ function readSigner(status) {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session build signer is unavailable");
   }
   return secret.signerCapability;
+}
+function beginCliOperation(status, tool, profile) {
+  const operation = status.registry.beginOperation({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { operationId: randomUUID3(), tool, profile });
+  if (operation.authorityVersion !== status.authorityVersion) {
+    status.registry.cancelOperation(operation);
+    throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority changed before CLI operation reservation");
+  }
+  return operation;
 }
 function writeMarker(status, input) {
   const appRoot = String(status.source.appRoot);
@@ -11855,6 +11878,8 @@ async function main() {
       if (platform !== "ios" && platform !== "android" || device?.platform !== platform || typeof device.deviceId !== "string" || typeof device.appId !== "string" || typeof metro?.instanceId !== "string") {
         throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "an exact device/app and live Metro binding are required before build");
       }
+      const appId = device.appId;
+      const metroInstanceId = metro.instanceId;
       const signerCapability = readSigner(status);
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
       const buildToken = randomUUID3();
@@ -11865,26 +11890,39 @@ async function main() {
         if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
         }
-        await stopBoundRunner(runner);
         releaseResources.push({ type: "runner", key: claimKey });
       }
-      writeMarker(status, {
-        platform,
-        appId: device.appId,
-        metroInstanceId: metro.instanceId,
-        buildGeneration,
-        signerCapability
-      });
-      status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, {
-        expectedAuthorityVersion: status.authorityVersion,
-        releaseResources,
-        bindings: {
-          metro: { ...metro, buildGeneration },
-          pendingBuild: { buildToken, platform, buildGeneration },
-          bundle: null,
-          runner: null
-        }
-      });
+      const operation = beginCliOperation(status, "rn-session prepare-build", "transition:prepare-build");
+      let currentOperation = operation;
+      try {
+        await status.registry.runWithOperation(operation, async () => {
+          if (runner) {
+            await stopBoundRunner(runner);
+            status.registry.verifyOperation(operation);
+          }
+          writeMarker(status, {
+            platform,
+            appId,
+            metroInstanceId,
+            buildGeneration,
+            signerCapability
+          });
+          status.registry.verifyOperation(operation);
+          currentOperation = status.registry.replaceBindingsDuringOperation(operation, {
+            releaseResources,
+            bindings: {
+              metro: { ...metro, buildGeneration },
+              pendingBuild: { buildToken, platform, buildGeneration },
+              bundle: null,
+              runner: null
+            }
+          });
+        });
+        status.registry.endOperation(currentOperation);
+      } catch (error) {
+        status.registry.cancelOperation(currentOperation);
+        throw error;
+      }
       process.stdout.write(`${JSON.stringify({
         platform,
         deviceId: device.deviceId,
@@ -11949,7 +11987,6 @@ async function main() {
         if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
         }
-        await stopBoundRunner(runner);
       }
       const observe = status.bindings.observe;
       if (observe) {
@@ -11957,16 +11994,34 @@ async function main() {
         if (status.bindings.observePort !== observe.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
           throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
         }
-        await stopBoundObserve(observe);
       }
       const metro = status.bindings.metro;
-      if (metro?.mode === "managed" && !await stopManagedMetro(metro, {
-        sessionId: status.sessionId,
-        signerCapability
-      })) {
-        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+      const operation = beginCliOperation(status, "rn-session release", "transition:release");
+      let released = false;
+      try {
+        await status.registry.runWithOperation(operation, async () => {
+          if (runner) {
+            await stopBoundRunner(runner);
+            status.registry.verifyOperation(operation);
+          }
+          if (observe) {
+            await stopBoundObserve(observe);
+            status.registry.verifyOperation(operation);
+          }
+          if (metro?.mode === "managed" && !await stopManagedMetro(metro, {
+            sessionId: status.sessionId,
+            signerCapability
+          })) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+          }
+          status.registry.verifyOperation(operation);
+          status.registry.releaseSession({ sessionId: status.sessionId, claimEpoch: epoch });
+          released = true;
+        });
+      } finally {
+        if (!released)
+          status.registry.cancelOperation(operation);
       }
-      status.registry.releaseSession({ sessionId: status.sessionId, claimEpoch: epoch });
       process.stdout.write(`${JSON.stringify({ released: true })}
 `);
       return;

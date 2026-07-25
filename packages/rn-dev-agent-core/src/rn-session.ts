@@ -12,7 +12,11 @@ import {
   type ManagedMetroBinding,
 } from './session/managed-metro.js';
 import { inspectSessionOwner } from './session/process-owner.js';
-import { openSessionRegistry, SessionAuthorityError } from './session/registry.js';
+import {
+  openSessionRegistry,
+  SessionAuthorityError,
+  type OperationRef,
+} from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
@@ -77,6 +81,25 @@ function readSigner(status: ReturnType<typeof resolveStatus>): string {
     );
   }
   return secret.signerCapability;
+}
+
+function beginCliOperation(
+  status: ReturnType<typeof resolveStatus>,
+  tool: string,
+  profile: string,
+): OperationRef {
+  const operation = status.registry.beginOperation(
+    { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
+    { operationId: randomUUID(), tool, profile },
+  );
+  if (operation.authorityVersion !== status.authorityVersion) {
+    status.registry.cancelOperation(operation);
+    throw new SessionAuthorityError(
+      'AUTHORITY_LOST_DURING_OPERATION',
+      'session authority changed before CLI operation reservation',
+    );
+  }
+  return operation;
 }
 
 function writeMarker(
@@ -300,6 +323,8 @@ async function main(): Promise<void> {
           'an exact device/app and live Metro binding are required before build',
         );
       }
+      const appId = device.appId;
+      const metroInstanceId = metro.instanceId;
       const signerCapability = readSigner(status);
       const buildGeneration =
         Math.max(
@@ -329,29 +354,43 @@ async function main(): Promise<void> {
             'runner cleanup claim no longer matches the authenticated binding',
           );
         }
-        await stopBoundRunner(runner);
         releaseResources.push({ type: 'runner', key: claimKey });
       }
-      writeMarker(status, {
-        platform,
-        appId: device.appId,
-        metroInstanceId: metro.instanceId,
-        buildGeneration,
-        signerCapability,
-      });
-      status.registry.updateBindings(
-        { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
-        {
-          expectedAuthorityVersion: status.authorityVersion,
-          releaseResources,
-          bindings: {
-            metro: { ...metro, buildGeneration },
-            pendingBuild: { buildToken, platform, buildGeneration },
-            bundle: null,
-            runner: null,
-          },
-        },
+      const operation = beginCliOperation(
+        status,
+        'rn-session prepare-build',
+        'transition:prepare-build',
       );
+      let currentOperation = operation;
+      try {
+        await status.registry.runWithOperation(operation, async () => {
+          if (runner) {
+            await stopBoundRunner(runner);
+            status.registry.verifyOperation(operation);
+          }
+          writeMarker(status, {
+            platform,
+            appId,
+            metroInstanceId,
+            buildGeneration,
+            signerCapability,
+          });
+          status.registry.verifyOperation(operation);
+          currentOperation = status.registry.replaceBindingsDuringOperation(operation, {
+            releaseResources,
+            bindings: {
+              metro: { ...metro, buildGeneration },
+              pendingBuild: { buildToken, platform, buildGeneration },
+              bundle: null,
+              runner: null,
+            },
+          });
+        });
+        status.registry.endOperation(currentOperation);
+      } catch (error) {
+        status.registry.cancelOperation(currentOperation);
+        throw error;
+      }
       process.stdout.write(
         `${JSON.stringify({
           platform,
@@ -466,7 +505,6 @@ async function main(): Promise<void> {
             'runner cleanup claim no longer matches the authenticated binding',
           );
         }
-        await stopBoundRunner(runner);
       }
       const observe = status.bindings.observe as Record<string, unknown> | null | undefined;
       if (observe) {
@@ -486,22 +524,39 @@ async function main(): Promise<void> {
             'Observe cleanup claim no longer matches the authenticated binding',
           );
         }
-        await stopBoundObserve(observe);
       }
       const metro = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
-      if (
-        metro?.mode === 'managed' &&
-        !(await stopManagedMetro(metro, {
-          sessionId: status.sessionId,
-          signerCapability,
-        }))
-      ) {
-        throw new SessionAuthorityError(
-          'METRO_AUTHORITY_MISMATCH',
-          'managed Metro could not be stopped with exact process authority',
-        );
+      const operation = beginCliOperation(status, 'rn-session release', 'transition:release');
+      let released = false;
+      try {
+        await status.registry.runWithOperation(operation, async () => {
+          if (runner) {
+            await stopBoundRunner(runner);
+            status.registry.verifyOperation(operation);
+          }
+          if (observe) {
+            await stopBoundObserve(observe);
+            status.registry.verifyOperation(operation);
+          }
+          if (
+            metro?.mode === 'managed' &&
+            !(await stopManagedMetro(metro, {
+              sessionId: status.sessionId,
+              signerCapability,
+            }))
+          ) {
+            throw new SessionAuthorityError(
+              'METRO_AUTHORITY_MISMATCH',
+              'managed Metro could not be stopped with exact process authority',
+            );
+          }
+          status.registry.verifyOperation(operation);
+          status.registry.releaseSession({ sessionId: status.sessionId, claimEpoch: epoch });
+          released = true;
+        });
+      } finally {
+        if (!released) status.registry.cancelOperation(operation);
       }
-      status.registry.releaseSession({ sessionId: status.sessionId, claimEpoch: epoch });
       process.stdout.write(`${JSON.stringify({ released: true })}\n`);
       return;
     }

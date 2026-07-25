@@ -1,8 +1,7 @@
 import { probeManagedMetroListener } from './managed-metro.js';
 import { probeProcessBirth } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
-async function waitForExactStopped(probe, timeoutMs, code, message) {
-    const deadline = Date.now() + timeoutMs;
+async function waitForExactStopped(probe, deadlineMs, code, message) {
     while (true) {
         const status = probe();
         if (status === 'stopped')
@@ -10,13 +9,14 @@ async function waitForExactStopped(probe, timeoutMs, code, message) {
         if (status === 'unknown') {
             throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
         }
-        if (Date.now() >= deadline) {
+        if (Date.now() >= deadlineMs) {
             throw new SessionAuthorityError(code, message);
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
     }
 }
-export async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2_000) {
+export async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2_000, request = fetch) {
+    const deadlineMs = Date.now() + timeoutMs;
     const port = Number(binding.port);
     const pid = Number(binding.pid);
     const expectedBirth = String(binding.processBirth ?? '');
@@ -45,13 +45,29 @@ export async function stopBoundObserve(binding, listenerProbe = probeManagedMetr
     if (currentBirth.birth.token !== expectedBirth) {
         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe listener PID was reused before cleanup completed');
     }
-    const response = await fetch(`http://127.0.0.1:${port}/api/stop`, {
-        method: 'POST',
-        headers: {
-            authorization: `Bearer ${capability}`,
-            'x-rn-observe-instance': instanceId,
-        },
-    });
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+        throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe cleanup timed out before the stop request');
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), remainingMs);
+    let response;
+    try {
+        response = await request(`http://127.0.0.1:${port}/api/stop`, {
+            method: 'POST',
+            headers: {
+                authorization: `Bearer ${capability}`,
+                'x-rn-observe-instance': instanceId,
+            },
+            signal: controller.signal,
+        });
+    }
+    catch {
+        throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe cleanup request failed or timed out');
+    }
+    finally {
+        clearTimeout(timeout);
+    }
     if (!response.ok) {
         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe server refused fenced cleanup');
     }
@@ -60,9 +76,10 @@ export async function stopBoundObserve(binding, listenerProbe = probeManagedMetr
         if (observed.status === 'unknown')
             return 'unknown';
         return observed.status === 'listening' && observed.pid === pid ? 'running' : 'stopped';
-    }, timeoutMs, 'OBSERVE_AUTHORITY_MISMATCH', 'Observe listener did not stop before the cleanup deadline');
+    }, deadlineMs, 'OBSERVE_AUTHORITY_MISMATCH', 'Observe listener did not stop before the cleanup deadline');
 }
 export async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2_000) {
+    const deadlineMs = Date.now() + timeoutMs;
     const pid = Number(binding.pid);
     const expectedBirth = String(binding.processBirth ?? '');
     const instanceId = String(binding.instanceId ?? '');
@@ -84,5 +101,5 @@ export async function stopBoundRunner(binding, processProbe = probeProcessBirth,
         return observed.status === 'present' && observed.birth.token === expectedBirth
             ? 'running'
             : 'stopped';
-    }, timeoutMs, 'RUNNER_ADOPTION_REQUIRED', 'runner process did not stop before the cleanup deadline');
+    }, deadlineMs, 'RUNNER_ADOPTION_REQUIRED', 'runner process did not stop before the cleanup deadline');
 }
