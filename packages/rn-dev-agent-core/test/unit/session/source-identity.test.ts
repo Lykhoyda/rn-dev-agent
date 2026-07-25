@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -415,6 +415,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     metroInstanceId: 'metro',
     kind: 'input',
     value: runtimeFile,
+    digest: createHash('sha256').update('module.exports = "first";').digest('hex'),
   };
   writeFileSync(
     join(integration, 'metro-runtime-loads.jsonl'),
@@ -449,9 +450,11 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
 
   const first = strictProofSourceIdentity(identity, { git, metroRuntimePolicy });
   writeFileSync(runtimeFile, 'module.exports = "second";');
-  const second = strictProofSourceIdentity(identity, { git, metroRuntimePolicy });
-
-  assert.notEqual(first.dirtyDigest, second.dirtyDigest);
+  assert.match(first.dirtyDigest, /^[a-f0-9]{64}$/);
+  assert.throws(
+    () => strictProofSourceIdentity(identity, { git, metroRuntimePolicy }),
+    /runtime input bytes changed after execution/,
+  );
   writeFileSync(
     join(integration, 'metro-runtime-loads.jsonl'),
     `${JSON.stringify({ ...runtimeLoadPayload, signature: '00'.repeat(32) })}\n`,

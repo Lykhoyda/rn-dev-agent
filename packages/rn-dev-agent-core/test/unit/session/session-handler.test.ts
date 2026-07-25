@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -997,5 +997,50 @@ test('integration preview rejects a symlinked .rn-agent before reading its manif
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test('integration restoration rejects active runtime authority', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-active-'));
+  try {
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ scripts: { ios: 'integrated', android: 'integrated' } }),
+    );
+    writeFileSync(join(root, 'metro.config.js'), 'module.exports = {};\n');
+    const manifestPath = join(integration, 'rn-session-integration.json');
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        originalScripts: { ios: ['expo', 'run:ios'], android: ['expo', 'run:android'] },
+      }),
+    );
+    const status = {
+      sessionId: 'session-a',
+      source: { appRoot: root },
+      bindings: { metro: { mode: 'managed' } },
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => assert.fail('active authority must not be changed'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    });
+
+    const result = await handler({ action: 'restore_integration', confirmed: true });
+
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /releasing active metro authority/);
+    assert.equal(existsSync(manifestPath), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

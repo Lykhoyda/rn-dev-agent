@@ -246,6 +246,10 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     if (!existing) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration manifest is unavailable for restoration');
                     }
+                    const activeBindings = ['metro', 'metroCleanup', 'runner', 'proof'].filter((binding) => status.bindings[binding] != null);
+                    if (activeBindings.length > 0) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `restore_integration requires releasing active ${activeBindings.join(', ')} authority`);
+                    }
                     restorePackageIntegrationFiles({ appRoot });
                     registry.updateBindings(session, {
                         bindings: { packageIntegration: null },

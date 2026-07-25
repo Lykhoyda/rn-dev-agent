@@ -1,12 +1,27 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  hasNodeLoaderOption,
   managedMetroListenerPid,
   probeManagedMetroListener,
   resolveManagedMetroCommand,
   startManagedMetro,
   stopManagedMetro,
 } from '../../../dist/session/managed-metro.js';
+
+test('managed Metro rejects every Node loader option alias', () => {
+  for (const option of [
+    '--require=loader.cjs',
+    '-r loader.cjs',
+    '--import loader.mjs',
+    '--loader=loader.mjs',
+    '--experimental-loader loader.mjs',
+    '--experimental_loader=loader.mjs',
+  ]) {
+    assert.equal(hasNodeLoaderOption(option), true, option);
+  }
+  assert.equal(hasNodeLoaderOption('--trace_warnings --title=\"metro worker\"'), false);
+});
 
 test('managed Metro discovers listener PIDs with platform-native commands', () => {
   const calls: Array<[string, string[]]> = [];

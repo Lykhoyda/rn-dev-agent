@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import {
   applyPackageIntegration,
@@ -243,28 +244,27 @@ test('Metro integration accepts React Native and Expo executable modules', () =>
     const adapterPath = join(integration, 'rn-session-metro.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     const modulePaths = Object.fromEntries(
-      [
-        'metro-transform-worker',
-        '@react-native/metro-babel-transformer',
-        '@expo/metro-transform-worker',
-        '@expo/metro-babel-transformer',
-      ].map((name) => {
+      ['metro-transform-worker', '@react-native/metro-babel-transformer'].map((name) => {
         const moduleRoot = join(root, 'node_modules', name);
         const modulePath = join(moduleRoot, 'index.cjs');
         mkdirSync(moduleRoot, { recursive: true });
-        writeFileSync(
-          join(moduleRoot, 'package.json'),
-          JSON.stringify({ name, main: 'index.cjs' }),
-        );
+        writeFileSync(join(moduleRoot, 'package.json'), JSON.stringify({ name }));
         writeFileSync(modulePath, 'module.exports = {};\n');
         return [name, modulePath];
       }),
     );
+    const expoRoot = join(root, 'node_modules', '@expo', 'metro-config');
+    mkdirSync(expoRoot, { recursive: true });
+    writeFileSync(join(expoRoot, 'package.json'), JSON.stringify({ name: '@expo/metro-config' }));
+    const expoTransformer = join(expoRoot, 'transform-worker.cjs');
+    const expoBabelTransformer = join(expoRoot, 'babel-transformer.cjs');
+    writeFileSync(expoTransformer, 'module.exports = {};\n');
+    writeFileSync(expoBabelTransformer, 'module.exports = {};\n');
     const result = spawnSync(
       process.execPath,
       [
         '-e',
-        `const compose = require(${JSON.stringify(adapterPath)}); compose({ transformerPath: ${JSON.stringify(modulePaths['metro-transform-worker'])}, transformer: { babelTransformerPath: ${JSON.stringify(modulePaths['@react-native/metro-babel-transformer'])} } }); compose({ transformerPath: ${JSON.stringify(modulePaths['@expo/metro-transform-worker'])}, transformer: { babelTransformerPath: ${JSON.stringify(modulePaths['@expo/metro-babel-transformer'])} } });`,
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ transformerPath: ${JSON.stringify(modulePaths['metro-transform-worker'])}, transformer: { babelTransformerPath: ${JSON.stringify(modulePaths['@react-native/metro-babel-transformer'])} } }); const customSerializer = Object.assign(() => 'bundle', { __originalSerializer: null }); const expo = compose({ transformerPath: ${JSON.stringify(expoTransformer)}, transformer: { babelTransformerPath: ${JSON.stringify(expoBabelTransformer)} }, serializer: { customSerializer } }); if (expo.serializer.customSerializer() !== 'bundle') process.exit(1);`,
       ],
       {
         cwd: root,
@@ -289,12 +289,18 @@ test('Metro integration preserves standard null defaults and authenticates bundl
     execFileSync('git', ['init', '-q', root]);
     const integration = join(root, '.rn-agent', 'integration');
     const moduleRoot = join(root, 'node_modules', 'fixture-runtime');
+    const assetRegistryRoot = join(root, 'node_modules', '@react-native', 'assets-registry');
     mkdirSync(integration, { recursive: true });
     mkdirSync(moduleRoot, { recursive: true });
+    mkdirSync(assetRegistryRoot, { recursive: true });
     const adapterPath = join(integration, 'rn-session-metro.cjs');
-    const assetRegistryPath = join(moduleRoot, 'asset-registry.cjs');
+    const assetRegistryPath = join(assetRegistryRoot, 'asset-registry.cjs');
     const polyfillPath = join(moduleRoot, 'polyfill.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(
+      join(assetRegistryRoot, 'package.json'),
+      JSON.stringify({ name: '@react-native/assets-registry' }),
+    );
     writeFileSync(assetRegistryPath, 'module.exports = {};\n');
     writeFileSync(polyfillPath, 'module.exports = {};\n');
     const result = spawnSync(
@@ -328,7 +334,7 @@ test('Metro integration preserves standard null defaults and authenticates bundl
   }
 });
 
-test('Metro integration accepts observable custom executable closures', () => {
+test('Metro integration rejects arbitrary executable closures', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-custom-worker-'));
   try {
     execFileSync('git', ['init', '-q', root]);
@@ -359,7 +365,7 @@ test('Metro integration accepts observable custom executable closures', () => {
     );
     assert.equal(
       receipt.violations.some((entry: string) => entry.includes('transformerPath')),
-      false,
+      true,
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -400,7 +406,10 @@ test('Metro preload records child-process and worker-thread module loads', () =>
       .map((line) => JSON.parse(line));
     assert.ok(
       observations.some(
-        (entry) => entry.kind === 'input' && entry.value === realpathSync(childModule),
+        (entry) =>
+          entry.kind === 'input' &&
+          entry.value === realpathSync(childModule) &&
+          entry.digest === createHash('sha256').update(readFileSync(childModule)).digest('hex'),
       ),
     );
     assert.ok(
@@ -411,6 +420,44 @@ test('Metro preload records child-process and worker-thread module loads', () =>
   } finally {
     rmSync(root, { force: true, recursive: true });
     rmSync(external, { force: true, recursive: true });
+  }
+});
+
+test('Metro preload ignores caught optional module misses', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-optional-module-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({}); try { require('absent-optional-package'); } catch {}`,
+      ],
+      {
+        cwd: root,
+        env: metroPolicyEnvironment(adapterPath),
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const observations = readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.equal(
+      observations.some(
+        (entry) => entry.kind === 'violation' && entry.value.includes('module resolution failed'),
+      ),
+      false,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 });
 

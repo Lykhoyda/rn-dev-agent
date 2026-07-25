@@ -23,6 +23,14 @@ child.once('exit', (code, signal) => {
 });
 setInterval(() => {}, 1 << 30);
 `;
+export function hasNodeLoaderOption(value) {
+    const tokens = value.match(/(?:[^\s"'\\]+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? [];
+    return tokens.some((token) => {
+        const equals = token.indexOf('=');
+        const option = equals < 0 ? token : token.slice(0, equals);
+        return ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(option.replaceAll('_', '-'));
+    });
+}
 function parentPid(pid) {
     try {
         const output = process.platform === 'win32'
@@ -134,7 +142,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         .update('metro-runtime-policy')
         .digest('base64url');
     const baseNodeOptions = (process.env.NODE_OPTIONS ?? '').trim();
-    if (/(?:^|\s)(?:--(?:require|import|loader|experimental-loader)\b|-r\b)/.test(baseNodeOptions)) {
+    if (hasNodeLoaderOption(baseNodeOptions)) {
         throw new Error('METRO_START_UNAVAILABLE: NODE_OPTIONS loaders are unsupported');
     }
     const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');

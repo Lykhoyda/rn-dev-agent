@@ -128,6 +128,40 @@ function updateFramedFile(hash: ReturnType<typeof createHash>, path: string, siz
   }
 }
 
+function fileDigest(path: string): string {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
+    throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded');
+  }
+  const hash = createHash('sha256');
+  const descriptor = openSync(path, 'r');
+  const buffer = Buffer.allocUnsafe(
+    Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(stat.size, 1)),
+  );
+  try {
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesRead = readSync(
+        descriptor,
+        buffer,
+        0,
+        Math.min(buffer.length, stat.size - offset),
+        offset,
+      );
+      if (bytesRead === 0) {
+        throw new Error(
+          'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing',
+        );
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash.digest('hex');
+}
+
 interface DependencyHashState {
   entries: number;
   totalBytes: number;
@@ -315,17 +349,18 @@ function metroRuntimeInputs(
       cause: error,
     });
   }
-  const runtimeLoads = runtimeLoadsRaw.split('\n').filter(Boolean);
-  if (runtimeLoads.length > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-    throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
-  }
-  for (const rawLoad of runtimeLoads) {
+  const runtimeLoads = new Map<
+    string,
+    { kind: 'input' | 'violation'; value: string; digest: string | null }
+  >();
+  for (const rawLoad of runtimeLoadsRaw.split('\n').filter(Boolean)) {
     let load: {
       version?: unknown;
       sessionId?: unknown;
       metroInstanceId?: unknown;
       kind?: unknown;
       value?: unknown;
+      digest?: unknown;
       signature?: unknown;
     };
     try {
@@ -335,6 +370,7 @@ function metroRuntimeInputs(
         metroInstanceId?: unknown;
         kind?: unknown;
         value?: unknown;
+        digest?: unknown;
         signature?: unknown;
       };
     } catch (error) {
@@ -348,6 +384,7 @@ function metroRuntimeInputs(
       metroInstanceId: load.metroInstanceId,
       kind: load.kind,
       value: load.value,
+      digest: load.digest,
     };
     const expectedLoad = createHmac('sha256', authority.capability)
       .update(JSON.stringify(loadPayload))
@@ -360,15 +397,41 @@ function metroRuntimeInputs(
       load.metroInstanceId !== authority.metroInstanceId ||
       (load.kind !== 'input' && load.kind !== 'violation') ||
       typeof load.value !== 'string' ||
+      (load.kind === 'input'
+        ? typeof load.digest !== 'string' || !/^[a-f0-9]{64}$/.test(load.digest)
+        : load.digest !== null) ||
       observedLoad.length !== expectedLoad.length ||
       !timingSafeEqual(observedLoad, expectedLoad)
     ) {
       throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
     }
+    const key = `${load.kind}\0${load.value}`;
+    const prior = runtimeLoads.get(key);
+    if (prior && prior.digest !== load.digest) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed between executions',
+      );
+    }
+    runtimeLoads.set(key, {
+      kind: load.kind,
+      value: load.value,
+      digest: load.digest as string | null,
+    });
+    if (runtimeLoads.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
+    }
+  }
+  for (const load of runtimeLoads.values()) {
     if (load.kind === 'violation') {
       throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
     }
-    runtimeInputs.add(load.value);
+    const candidate = realpathSync(load.value);
+    if (fileDigest(candidate) !== load.digest) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution',
+      );
+    }
+    runtimeInputs.add(candidate);
   }
   return [...runtimeInputs].sort().flatMap((entry) => {
     const candidate = realpathSync(entry);
