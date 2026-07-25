@@ -169,6 +169,7 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
   const operation = beginCliOperation(status, 'rn-session ensure-metro', 'transition:ensure-metro');
   let currentOperation = operation;
   let startedBinding: ManagedMetroBinding | null = null;
+  let cleanupBindingCommitted = false;
   let bindingCommitted = false;
   try {
     await status.registry.runWithOperation(operation, async () => {
@@ -236,11 +237,15 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
         buildGeneration,
         signerCapability,
       });
-      status.registry.verifyOperation(currentOperation);
+      currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+        bindings: { metroCleanup: startedBinding },
+      });
+      cleanupBindingCommitted = true;
       currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
         state: 'device_claimed',
-        bindings: { metro: startedBinding, bundle: null },
+        bindings: { metro: startedBinding, metroCleanup: null, bundle: null },
       });
+      cleanupBindingCommitted = false;
       bindingCommitted = true;
     });
     status.registry.endOperation(currentOperation);
@@ -265,6 +270,17 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
       } catch (cleanupError) {
         cleanupProven = false;
         failure = new AggregateError([failure, cleanupError]);
+      }
+    }
+    if (cleanupProven && cleanupBindingCommitted) {
+      try {
+        currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+          bindings: { metroCleanup: null },
+        });
+        cleanupBindingCommitted = false;
+      } catch (cleanupPersistenceError) {
+        cleanupProven = false;
+        failure = new AggregateError([failure, cleanupPersistenceError]);
       }
     }
     if (cleanupProven) status.registry.cancelOperation(currentOperation);

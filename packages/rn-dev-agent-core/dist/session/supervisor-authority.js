@@ -12,7 +12,7 @@ const RELEASABLE_SESSION_STATES = new Set([
     'runtime_bound',
     'ready',
 ]);
-export function createSupervisorAuthority(input) {
+export function createSupervisorAuthority(input, dependencies = {}) {
     if (!input.supervisorBirth) {
         throw new Error('PROCESS_BIRTH_UNAVAILABLE: supervisor process birth could not be proven conservatively');
     }
@@ -165,16 +165,16 @@ export function createSupervisorAuthority(input) {
             try {
                 const status = registry.getSessionStatus(session.sessionId);
                 if (status) {
-                    if (RELEASABLE_SESSION_STATES.has(status.state)) {
-                        registry.cancelActiveOperationForSession(session);
-                    }
-                    const metro = status.bindings.metro;
+                    const metro = (status.bindings.metroCleanup ?? status.bindings.metro);
                     if (metro?.mode === 'managed' &&
-                        !(await stopManagedMetro(metro, {
+                        !(await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
                             sessionId,
                             signerCapability,
                         }))) {
                         throw new Error('METRO_AUTHORITY_MISMATCH: managed Metro could not be stopped with exact process authority');
+                    }
+                    if (RELEASABLE_SESSION_STATES.has(status.state)) {
+                        registry.cancelActiveOperationForSession(session);
                     }
                 }
                 if (status?.state === 'blocked') {

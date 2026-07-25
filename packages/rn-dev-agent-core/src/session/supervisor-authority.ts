@@ -34,16 +34,21 @@ export interface SupervisorAuthority {
   close(): Promise<void>;
 }
 
-export function createSupervisorAuthority(input: {
-  stateDir?: string;
-  source: SourceIdentity;
-  supervisorBirth: ProcessBirth | null;
-  uid: string;
-  sessionId?: string;
-  heartbeatMs?: number;
-  startHeartbeat?: boolean;
-  ownerStatus: (owner: { sessionId: string; pid: number; token: string }) => OwnerStatus;
-}): SupervisorAuthority {
+export function createSupervisorAuthority(
+  input: {
+    stateDir?: string;
+    source: SourceIdentity;
+    supervisorBirth: ProcessBirth | null;
+    uid: string;
+    sessionId?: string;
+    heartbeatMs?: number;
+    startHeartbeat?: boolean;
+    ownerStatus: (owner: { sessionId: string; pid: number; token: string }) => OwnerStatus;
+  },
+  dependencies: {
+    stopManagedMetro?: typeof stopManagedMetro;
+  } = {},
+): SupervisorAuthority {
   if (!input.supervisorBirth) {
     throw new Error(
       'PROCESS_BIRTH_UNAVAILABLE: supervisor process birth could not be proven conservatively',
@@ -212,13 +217,12 @@ export function createSupervisorAuthority(input: {
       try {
         const status = registry.getSessionStatus(session.sessionId);
         if (status) {
-          if (RELEASABLE_SESSION_STATES.has(status.state)) {
-            registry.cancelActiveOperationForSession(session);
-          }
-          const metro = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
+          const metro = (status.bindings.metroCleanup ?? status.bindings.metro) as
+            | Partial<ManagedMetroBinding>
+            | undefined;
           if (
             metro?.mode === 'managed' &&
-            !(await stopManagedMetro(metro, {
+            !(await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
               sessionId,
               signerCapability,
             }))
@@ -226,6 +230,9 @@ export function createSupervisorAuthority(input: {
             throw new Error(
               'METRO_AUTHORITY_MISMATCH: managed Metro could not be stopped with exact process authority',
             );
+          }
+          if (RELEASABLE_SESSION_STATES.has(status.state)) {
+            registry.cancelActiveOperationForSession(session);
           }
         }
         if (status?.state === 'blocked') {

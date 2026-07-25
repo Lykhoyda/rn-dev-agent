@@ -189,6 +189,79 @@ test('supervisor close cancels an interrupted operation before releasing claims'
   }
 });
 
+test('supervisor close retains authority when durable Metro cleanup is unproven', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  const stoppedBindings = [];
+  const authority = createSupervisorAuthority(
+    {
+      stateDir,
+      source: {
+        kind: 'git',
+        contentRoot: '/repo',
+        appRoot: '/repo',
+        sourceKey: 'source-key',
+        worktreeKey: 'worktree-key',
+        appRootKey: 'app-key',
+        head: 'abc123',
+      },
+      supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+      uid: '501',
+      startHeartbeat: false,
+      ownerStatus: () => 'match',
+    },
+    {
+      stopManagedMetro: async (binding) => {
+        stoppedBindings.push(binding);
+        return false;
+      },
+    },
+  );
+  let operation = authority.registry.beginOperation(authority.session, {
+    operationId: 'interrupted-metro-start',
+    tool: 'rn-session ensure-metro',
+    profile: 'transition:ensure-metro',
+  });
+  const metroCleanup = {
+    mode: 'managed',
+    port: authority.metroPort,
+    pid: 301,
+    birth: 'listener-birth',
+    launcherPid: 302,
+    launcherBirth: 'launcher-birth',
+    instanceId: 'metro-a',
+    managementProof: 'proof',
+  };
+  await authority.registry.runWithOperation(operation, async () => {
+    operation = authority.registry.replaceBindingsDuringOperation(operation, {
+      bindings: { metroCleanup },
+    });
+  });
+
+  await assert.rejects(authority.close(), /METRO_AUTHORITY_MISMATCH/);
+  assert.deepEqual(stoppedBindings, [metroCleanup]);
+
+  const registry = openSessionRegistry(authority.layout.registry, {
+    ownerStatus: () => 'match',
+  });
+  try {
+    const status = registry.getSessionStatus(authority.session.sessionId);
+    assert.equal(status?.state, 'source_bound');
+    assert.deepEqual(status?.bindings.metroCleanup, metroCleanup);
+    assert.throws(
+      () =>
+        registry.beginOperation(authority.session, {
+          operationId: 'replacement-operation',
+          tool: 'device_snapshot',
+          profile: 'CSIMDR',
+        }),
+      /OPERATION_ALREADY_IN_PROGRESS/,
+    );
+  } finally {
+    registry.close();
+  }
+});
+
 test('a supervisor without the source claim stays blocked and exposes the full adoption ID', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);
