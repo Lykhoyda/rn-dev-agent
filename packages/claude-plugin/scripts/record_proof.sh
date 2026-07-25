@@ -40,7 +40,10 @@ birth_file() { echo "${PID_PREFIX}-${1}.birth"; }
 remote_birth_file() { echo "${PID_PREFIX}-${1}.remote-birth"; }
 remote_command_file() { echo "${PID_PREFIX}-${1}.remote-command"; }
 remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
+raw_identity_file() { echo "${PID_PREFIX}-${1}.raw-identity"; }
 finalized_path_file() { echo "${PID_PREFIX}-${1}.finalized-path"; }
+finalized_identity_file() { echo "${PID_PREFIX}-${1}.finalized-identity"; }
+cleanup_pending_file() { echo "${PID_PREFIX}-${1}.cleanup-pending"; }
 incarnation_file() { echo "${PID_PREFIX}-${1}.incarnation"; }
 
 ensure_sidecar_temp_dir() {
@@ -192,7 +195,7 @@ PY
 scope_has_private_sidecars() {
   local scope="$1"
   local suffix
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     sidecar_exists "${PID_PREFIX}-${scope}.${suffix}" && return 0
   done
   return 1
@@ -202,7 +205,7 @@ scope_has_sidecars_at_prefix() {
   local prefix="$1"
   local scope="$2"
   local suffix
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     sidecar_exists "${prefix}-${scope}.${suffix}" && return 0
   done
   return 1
@@ -233,7 +236,7 @@ validate_private_scope() {
   local suffix
   local path
   local incarnation=""
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     path="${prefix}-${scope}.${suffix}"
     if sidecar_exists "$path"; then
       validate_legacy_sidecar "$path"
@@ -269,7 +272,7 @@ validate_legacy_scope() {
   LEGACY_SCOPE_PRESENT="false"
   local suffix
   local legacy_path
-  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path finalized-path incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     legacy_path="$(legacy_sidecar_file "$scope" "$suffix")"
     if sidecar_exists "$legacy_path"; then
       LEGACY_SCOPE_PRESENT="true"
@@ -344,6 +347,66 @@ validate_raw_capture_path() {
   fi
   echo "Error: recorder raw path is outside owned runtime storage" >&2
   return 1
+}
+
+capture_file_identity() {
+  python3 - "$1" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+metadata = os.lstat(path)
+if (
+    not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_uid != os.getuid()
+    or metadata.st_mode & 0o022
+    or metadata.st_size <= 0
+):
+    raise SystemExit(1)
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+descriptor = os.open(path, flags)
+try:
+    opened = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or opened.st_dev != metadata.st_dev
+        or opened.st_ino != metadata.st_ino
+    ):
+        raise SystemExit(1)
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+    after = os.fstat(descriptor)
+    if (
+        after.st_dev != opened.st_dev
+        or after.st_ino != opened.st_ino
+        or after.st_size != opened.st_size
+        or after.st_mtime_ns != opened.st_mtime_ns
+        or after.st_ctime_ns != opened.st_ctime_ns
+    ):
+        raise SystemExit(1)
+    print(
+        f"{opened.st_dev}:{opened.st_ino}:{opened.st_size}:"
+        f"{opened.st_mtime_ns}:{opened.st_ctime_ns}:{digest.hexdigest()}"
+    )
+finally:
+    os.close(descriptor)
+PY
+}
+
+validate_file_identity() {
+  local path="$1"
+  local expected="$2"
+  local actual
+  actual="$(capture_file_identity "$path")" || return 1
+  [[ "$actual" == "$expected" ]]
 }
 
 current_incarnation() {
@@ -423,9 +486,15 @@ remove_recording_sidecars() {
   local scope="$1"
   local incarnation="${2:-}"
   local path
-  for path in "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,finalized-path}; do
+  for path in "${PID_PREFIX}-${scope}".{path,platform,raw-path,raw-identity,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,finalized-path,finalized-identity}; do
     remove_owned_state_path "$path"
   done
+  local cleanup_path
+  cleanup_path="$(cleanup_pending_file "$scope")"
+  if [[ -s "$cleanup_path" ]]; then
+    remove_owned_state_path "$(birth_file "$scope")"
+    remove_owned_state_path "$(pid_file "$scope")"
+  fi
   for path in \
     "$(control_token_file "$scope" "$incarnation")" \
     "$(control_request_file "$scope" "$incarnation")" \
@@ -441,6 +510,11 @@ remove_recording_sidecars() {
   elif [[ -z "$incarnation" ]]; then
     remove_owned_state_path "$incarnation_path"
   fi
+  if [[ ! -s "$cleanup_path" ]]; then
+    remove_owned_state_path "$(birth_file "$scope")"
+    remove_owned_state_path "$(pid_file "$scope")"
+  fi
+  remove_owned_state_path "$cleanup_path"
 }
 
 is_alive() {
@@ -1019,8 +1093,12 @@ cmd_start() {
 
   local pf
   pf="$(pid_file "$scope")"
-  if [[ -f "$pf" ]] && is_alive "$(cat "$pf")"; then
-    echo "Error: Recording already in progress for $platform (PID $(cat "$pf"))" >&2
+  if scope_has_private_sidecars "$scope"; then
+    if [[ -f "$pf" ]] && is_alive "$(cat "$pf")"; then
+      echo "Error: Recording already in progress for $platform (PID $(cat "$pf"))" >&2
+    else
+      echo "Error: recorder state requires authenticated cleanup before restart" >&2
+    fi
     exit 1
   fi
   if [[ "$USING_LEGACY_SCOPE" == "true" ]]; then
@@ -1248,8 +1326,7 @@ validate_finalized_output_path() {
   local expected_mp4="${requested_output%.*}.mp4"
   local expected_mov="${expected_mp4%.mp4}.mov"
   [[
-    ( "$finalized_output" == "$expected_mp4" || "$finalized_output" == "$expected_mov" ) &&
-      -f "$finalized_output"
+    "$finalized_output" == "$expected_mp4" || "$finalized_output" == "$expected_mov"
   ]] || {
     echo "Error: finalized recording output is missing or invalid" >&2
     return 1
@@ -1267,6 +1344,41 @@ cmd_stop() {
   select_scope_state "$scope"
   local incarnation
   incarnation="$(current_incarnation "$scope")"
+  local cleanup_path
+  cleanup_path="$(cleanup_pending_file "$scope")"
+  if [[ -s "$cleanup_path" ]]; then
+    validate_legacy_sidecar "$cleanup_path"
+    local cleanup_version
+    local cleanup_pid
+    local cleanup_birth
+    local cleanup_output
+    local cleanup_identity
+    local cleanup_size
+    cleanup_version="$(sed -n '1p' "$cleanup_path")"
+    cleanup_pid="$(sed -n '2p' "$cleanup_path")"
+    cleanup_birth="$(sed -n '3p' "$cleanup_path")"
+    cleanup_output="$(sed -n '4p' "$cleanup_path")"
+    cleanup_identity="$(sed -n '5p' "$cleanup_path")"
+    cleanup_size="$(sed -n '6p' "$cleanup_path")"
+    [[
+      "$cleanup_version" == "v1" &&
+        "$cleanup_pid" == "$expected_pid" &&
+        "$cleanup_birth" == "$expected_birth" &&
+        "$cleanup_size" =~ ^[1-9][0-9]*$ &&
+        -n "$cleanup_output" &&
+        -n "$cleanup_identity"
+    ]] || {
+      echo "Error: pending recorder cleanup identity does not match scope" >&2
+      exit 1
+    }
+    validate_file_identity "$cleanup_output" "$cleanup_identity" || {
+      echo "Error: finalized recording output identity changed" >&2
+      exit 1
+    }
+    remove_recording_sidecars "$scope" "$incarnation"
+    echo "Saved: $cleanup_output ($cleanup_size bytes)"
+    return
+  fi
   local pf
   pf="$(pid_file "$scope")"
   [[ ! -f "$pf" ]] && { echo "No active recordings found"; return; }
@@ -1287,13 +1399,27 @@ cmd_stop() {
   local requested_output_path="$output_path"
   local finalized_pathf
   finalized_pathf="$(finalized_path_file "$scope")"
+  local finalized_identityf
+  finalized_identityf="$(finalized_identity_file "$scope")"
   local finalized_output=""
+  local finalized_identity=""
   if [[ "$platform" == "android" && -s "$finalized_pathf" ]]; then
     finalized_output="$(cat "$finalized_pathf")"
     validate_finalized_output_path "$finalized_output" "$requested_output_path"
+    [[ -s "$finalized_identityf" ]] || {
+      echo "Error: finalized recording output identity is missing" >&2
+      exit 1
+    }
+    finalized_identity="$(cat "$finalized_identityf")"
+    validate_file_identity "$finalized_output" "$finalized_identity" || {
+      echo "Error: finalized recording output identity changed" >&2
+      exit 1
+    }
     output_path="$finalized_output"
   fi
   local raw_pathf="${PID_PREFIX}-${scope}.raw-path"
+  local raw_identityf
+  raw_identityf="$(raw_identity_file "$scope")"
   local raw_file=""
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
   validate_raw_capture_path "$raw_file"
@@ -1406,13 +1532,34 @@ cmd_stop() {
         pull_file="$(create_private_capture_file)"
         PENDING_PULL_FILE="$pull_file"
         if adb "${adb_args[@]+"${adb_args[@]}"}" pull "$device_path" "$pull_file" >/dev/null 2>&1; then
-          raw_file="$pull_file"
+          local pulled_identity
+          pulled_identity="$(capture_file_identity "$pull_file")" || {
+            echo "Warning: Pulled recording is empty or unstable" >&2
+            pulled_identity=""
+          }
+          if [[ -n "$pulled_identity" ]]; then
+            remove_owned_state_path "$raw_identityf"
+            secure_write_sidecar "$raw_pathf" "$pull_file"
+            secure_write_sidecar "$raw_identityf" "$pulled_identity"
+            raw_file="$pull_file"
+            PENDING_PULL_FILE=""
+          else
+            rm -f "$pull_file"
+            raw_file="$prior_raw_file"
+          fi
         else
           rm -f "$pull_file"
           PENDING_PULL_FILE=""
           raw_file="$prior_raw_file"
-          if [[ -n "$raw_file" && -f "$raw_file" ]]; then
-            echo "Warning: Failed to pull replacement recording; using existing capture" >&2
+        fi
+        if [[ "$raw_file" == "$prior_raw_file" ]]; then
+          local prior_raw_identity=""
+          [[ -s "$raw_identityf" ]] && prior_raw_identity="$(cat "$raw_identityf")"
+          if [[
+            -n "$raw_file" &&
+              -n "$prior_raw_identity"
+          ]] && validate_file_identity "$raw_file" "$prior_raw_identity"; then
+            echo "Warning: Failed to pull replacement recording; using completed existing capture" >&2
           else
             android_pull_failed="true"
             echo "Warning: Failed to pull recording from device" >&2
@@ -1456,7 +1603,11 @@ cmd_stop() {
         if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$tmp_mp4" 2>/dev/null; then
           mv "$tmp_mp4" "$output_path"
         else
-          mv "$raw_file" "${output_path%.mp4}.mov"
+          if [[ "$platform" == "android" ]]; then
+            cp "$raw_file" "${output_path%.mp4}.mov"
+          else
+            mv "$raw_file" "${output_path%.mp4}.mov"
+          fi
           output_path="${output_path%.mp4}.mov"
           rm -f "$tmp_mp4"
         fi
@@ -1464,26 +1615,58 @@ cmd_stop() {
         mv "$raw_file" "${output_path%.mp4}.mov"
         output_path="${output_path%.mp4}.mov"
       else
-        mv "$raw_file" "$output_path"
+        cp "$raw_file" "$output_path"
       fi
-      rm -f "$raw_file"
-      PENDING_PULL_FILE=""
+      if [[ "$platform" != "android" ]]; then
+        rm -f "$raw_file"
+        PENDING_PULL_FILE=""
+      fi
     fi
     if [[ "$platform" == "android" ]]; then
       [[ -f "$output_path" ]] || {
         echo "Error: recording output was not finalized" >&2
         return 1
       }
+      finalized_identity="$(capture_file_identity "$output_path")" || {
+        echo "Error: finalized recording output identity is unsafe" >&2
+        return 1
+      }
+      remove_owned_state_path "$finalized_pathf"
+      secure_write_sidecar "$finalized_identityf" "$finalized_identity"
       secure_write_sidecar "$finalized_pathf" "$output_path"
       finalized_output="$output_path"
+      PENDING_PULL_FILE=""
     fi
   fi
 
   if [[ "$platform" == "android" && -n "$device_path" ]]; then
+    validate_file_identity "$output_path" "$finalized_identity" || {
+      echo "Error: finalized recording output identity changed" >&2
+      return 1
+    }
     remove_android_device_capture "$device_path" "${adb_args[@]+"${adb_args[@]}"}" || {
       echo "Error: failed to remove recording from device" >&2
       return 1
     }
+    validate_file_identity "$output_path" "$finalized_identity" || {
+      echo "Error: finalized recording output identity changed during device cleanup" >&2
+      return 1
+    }
+    [[ -n "$raw_file" ]] && remove_owned_state_path "$raw_file"
+    remove_owned_state_path "$raw_identityf"
+  fi
+  if [[ -n "$output_path" && -f "$output_path" ]]; then
+    local size
+    size="$(wc -c < "$output_path" | tr -d ' ')"
+    if [[ "$platform" == "android" ]]; then
+      [[ -n "$finalized_identity" ]] || {
+        echo "Error: finalized recording output identity is missing" >&2
+        return 1
+      }
+      secure_write_sidecar \
+        "$cleanup_path" \
+        $'v1\n'"$pid"$'\n'"$birth"$'\n'"$output_path"$'\n'"$finalized_identity"$'\n'"$size"
+    fi
   fi
   remove_recording_sidecars "$scope" "$incarnation"
   if [[ -n "$output_path" && -f "$output_path" ]]; then
@@ -1499,6 +1682,19 @@ cmd_status() {
   local scope="${1:-}"
   [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
   select_scope_state "$scope"
+  local cleanup_path
+  cleanup_path="$(cleanup_pending_file "$scope")"
+  if [[ -s "$cleanup_path" ]]; then
+    validate_legacy_sidecar "$cleanup_path"
+    local cleanup_pid
+    local cleanup_birth
+    local cleanup_output
+    cleanup_pid="$(sed -n '2p' "$cleanup_path")"
+    cleanup_birth="$(sed -n '3p' "$cleanup_path")"
+    cleanup_output="$(sed -n '4p' "$cleanup_path")"
+    echo "android: pid=$cleanup_pid birth=$cleanup_birth status=cleanup output=$cleanup_output"
+    return
+  fi
   local pf
   pf="$(pid_file "$scope")"
   [[ ! -f "$pf" ]] && { echo "No active recordings"; return; }
