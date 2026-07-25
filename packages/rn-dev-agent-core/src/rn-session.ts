@@ -246,14 +246,14 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
     status.registry.endOperation(currentOperation);
   } catch (error) {
     let failure = error;
+    let cleanupProven = startedBinding === null || bindingCommitted;
     if (startedBinding && !bindingCommitted) {
       try {
-        if (
-          !(await stopManagedMetro(startedBinding, {
-            sessionId: status.sessionId,
-            signerCapability,
-          }))
-        ) {
+        cleanupProven = await stopManagedMetro(startedBinding, {
+          sessionId: status.sessionId,
+          signerCapability,
+        });
+        if (!cleanupProven) {
           failure = new AggregateError([
             failure,
             new SessionAuthorityError(
@@ -263,10 +263,11 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
           ]);
         }
       } catch (cleanupError) {
+        cleanupProven = false;
         failure = new AggregateError([failure, cleanupError]);
       }
     }
-    status.registry.cancelOperation(currentOperation);
+    if (cleanupProven) status.registry.cancelOperation(currentOperation);
     throw failure;
   }
 }

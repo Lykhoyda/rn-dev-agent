@@ -165,12 +165,14 @@ async function ensureManagedMetro(status) {
     }
     catch (error) {
         let failure = error;
+        let cleanupProven = startedBinding === null || bindingCommitted;
         if (startedBinding && !bindingCommitted) {
             try {
-                if (!(await stopManagedMetro(startedBinding, {
+                cleanupProven = await stopManagedMetro(startedBinding, {
                     sessionId: status.sessionId,
                     signerCapability,
-                }))) {
+                });
+                if (!cleanupProven) {
                     failure = new AggregateError([
                         failure,
                         new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'uncommitted managed Metro replacement cleanup could not be proven'),
@@ -178,10 +180,12 @@ async function ensureManagedMetro(status) {
                 }
             }
             catch (cleanupError) {
+                cleanupProven = false;
                 failure = new AggregateError([failure, cleanupError]);
             }
         }
-        status.registry.cancelOperation(currentOperation);
+        if (cleanupProven)
+            status.registry.cancelOperation(currentOperation);
         throw failure;
     }
 }
