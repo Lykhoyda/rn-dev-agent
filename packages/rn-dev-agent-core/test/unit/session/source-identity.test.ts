@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -352,6 +360,92 @@ test('strict proof bounds dependency traversal depth', () => {
     () => strictProofSourceIdentity(identity, { git }),
     /STRICT_PROOF_DEPENDENCY_LIMIT/,
   );
+});
+
+test('strict proof rejects Metro config statements after session integration', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-metro-suffix-'));
+  roots.push(root);
+  writeFileSync(
+    join(root, 'metro.config.js'),
+    'module.exports = {};\n// rn-dev-agent session integration: end\nmodule.exports.watchFolders = [];\n',
+  );
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+
+  assert.throws(
+    () => strictProofSourceIdentity(identity),
+    /STRICT_PROOF_UNVERIFIED_METRO_CONFIG/,
+  );
+});
+
+test('strict proof authenticates signed external Metro runtime inputs', () => {
+  const rootInput = mkdtempSync(join(tmpdir(), 'rn-source-proof-metro-policy-'));
+  roots.push(rootInput);
+  const root = realpathSync(rootInput);
+  const externalInput = mkdtempSync(join(tmpdir(), 'rn-source-proof-metro-external-'));
+  roots.push(externalInput);
+  const external = realpathSync(externalInput);
+  const runtimeFile = join(external, 'transformer.js');
+  const integration = join(root, '.rn-agent', 'integration');
+  mkdirSync(integration, { recursive: true });
+  writeFileSync(runtimeFile, 'module.exports = "first";');
+  writeFileSync(
+    join(root, 'metro.config.js'),
+    'module.exports = {};\n// rn-dev-agent session integration: end\n',
+  );
+  const capability = 'policy-capability';
+  const payload = {
+    version: 1,
+    sessionId: 'session',
+    metroInstanceId: 'metro',
+    contentRoot: root,
+    appRoot: root,
+    runtimeInputs: [runtimeFile],
+    violations: [],
+  };
+  writeFileSync(
+    join(integration, 'metro-runtime-policy.json'),
+    `${JSON.stringify({
+      ...payload,
+      signature: createHmac('sha256', capability)
+        .update(JSON.stringify(payload))
+        .digest('hex'),
+    })}\n`,
+  );
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+  const git = (_root: string, args: readonly string[]) => {
+    if (args[0] === 'rev-parse') return 'abc123';
+    if (args.includes('--directory')) return '';
+    if (args[0] === 'diff' || args.includes('--stage') || args.includes('--ignored')) return '';
+    if (args[0] === 'ls-files') return '';
+    throw new Error('unexpected git command');
+  };
+  const metroRuntimePolicy = {
+    sessionId: 'session',
+    metroInstanceId: 'metro',
+    capability,
+  };
+
+  const first = strictProofSourceIdentity(identity, { git, metroRuntimePolicy });
+  writeFileSync(runtimeFile, 'module.exports = "second";');
+  const second = strictProofSourceIdentity(identity, { git, metroRuntimePolicy });
+
+  assert.notEqual(first.dirtyDigest, second.dirtyDigest);
 });
 
 test('strict proof rejects oversized untracked runtime inputs before buffering them', () => {

@@ -5,6 +5,7 @@ import { assertBoundDirectoryCurrent, casBoundDirectoryFiles, closeBoundDirector
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
 const AUTHORITY_MODULE = '.rn-agent/integration/authority-marker.js';
+const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
 const METRO_START = '// rn-dev-agent session integration: begin';
 const METRO_END = '// rn-dev-agent session integration: end';
 const SENTINELS = {
@@ -15,6 +16,7 @@ export function renderMetroIntegrationAdapter() {
     return `'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHmac } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 function sourceRoot() {
   try {
@@ -27,50 +29,126 @@ function sourceRoot() {
     throw error;
   }
 }
-function contained(root, candidate) {
-  const child = path.relative(root, candidate);
-  return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
-}
-function assertLocalPaths(root, values, field) {
-  if (values === undefined) return;
-  if (!Array.isArray(values) || values.some((value) => typeof value !== 'string')) {
-    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' must contain paths');
-  }
-  for (const value of values) {
-    const candidate = fs.realpathSync(path.resolve(process.cwd(), value));
-    if (!contained(root, candidate)) {
-      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' resolves outside the content root');
+function runtimePolicy(config) {
+  const root = sourceRoot();
+  const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+  if (root === null || !capability || !sessionId || !metroInstanceId) return;
+  const runtimeInputs = new Set();
+  const violations = [];
+  const resolver = config.resolver || {};
+  const transformer = config.transformer || {};
+  const serializer = config.serializer || {};
+  function addPath(value, field) {
+    if (value === undefined) return;
+    if (typeof value !== 'string') {
+      violations.push(field + ' must be a path');
+      return;
+    }
+    try {
+      runtimeInputs.add(fs.realpathSync(path.resolve(process.cwd(), value)));
+    } catch {
+      violations.push(field + ' cannot be resolved');
     }
   }
-}
-function validateResolverPolicy(config) {
-  const root = sourceRoot();
-  if (root === null) return;
-  const resolver = config.resolver || {};
-  if (resolver.resolveRequest !== undefined) {
-    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: custom Metro resolvers are unsupported');
+  function addPaths(values, field) {
+    if (values === undefined) return;
+    if (!Array.isArray(values)) {
+      violations.push(field + ' must contain paths');
+      return;
+    }
+    values.forEach((value) => addPath(value, field));
   }
-  assertLocalPaths(root, config.watchFolders, 'watchFolders');
-  assertLocalPaths(root, resolver.nodeModulesPaths, 'nodeModulesPaths');
+  function addModule(value, field) {
+    if (value === undefined) return;
+    if (typeof value !== 'string') {
+      violations.push(field + ' must identify a module');
+      return;
+    }
+    try {
+      runtimeInputs.add(fs.realpathSync(require.resolve(value, { paths: [process.cwd()] })));
+    } catch {
+      addPath(value, field);
+    }
+  }
+  addPath(config.projectRoot, 'projectRoot');
+  addPaths(config.watchFolders, 'watchFolders');
+  addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
+  addPaths((process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
   if (resolver.extraNodeModules !== undefined) {
     if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
-      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: extraNodeModules must be a path map');
+      violations.push('extraNodeModules must be a path map');
+    } else {
+      Object.values(resolver.extraNodeModules).forEach((value) => addPath(value, 'extraNodeModules'));
     }
-    assertLocalPaths(root, Object.values(resolver.extraNodeModules), 'extraNodeModules');
   }
-  assertLocalPaths(root, (process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
+  if (resolver.resolveRequest !== undefined) {
+    violations.push('custom Metro resolvers are unsupported');
+  }
+  if (serializer.customSerializer !== undefined || serializer.experimentalSerializerHook !== undefined) {
+    violations.push('custom Metro serializers are unsupported');
+  }
+  addModule(resolver.dependencyExtractor, 'dependencyExtractor');
+  addModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
+  addModule(resolver.emptyModulePath, 'emptyModulePath');
+  addModule(transformer.asyncRequireModulePath, 'asyncRequireModulePath');
+  addModule(transformer.babelTransformerPath, 'babelTransformerPath');
+  addModule(transformer.minifierPath, 'minifierPath');
+  if (transformer.assetPlugins !== undefined) {
+    if (!Array.isArray(transformer.assetPlugins)) {
+      violations.push('assetPlugins must identify modules');
+    } else {
+      transformer.assetPlugins.forEach((value) => addModule(value, 'assetPlugins'));
+    }
+  }
+  if (/(?:^|\\s)(?:--(?:require|import|loader|experimental-loader)\\b|-r\\b)/.test(process.env.NODE_OPTIONS || '')) {
+    violations.push('NODE_OPTIONS loaders are unsupported');
+  }
+  Object.keys(require.cache).forEach((value) => addPath(value, 'loaded Metro config module'));
+  const payload = {
+    version: 1,
+    sessionId,
+    metroInstanceId,
+    contentRoot: root,
+    appRoot: fs.realpathSync(process.cwd()),
+    runtimeInputs: [...runtimeInputs].sort(),
+    violations: [...new Set(violations)].sort(),
+  };
+  const receipt = {
+    ...payload,
+    signature: createHmac('sha256', capability).update(JSON.stringify(payload)).digest('hex'),
+  };
+  const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY)});
+  const temporary = policyPath + '.' + process.pid + '.tmp';
+  fs.writeFileSync(temporary, JSON.stringify(receipt) + '\\n', { mode: 0o600 });
+  fs.renameSync(temporary, policyPath);
 }
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
   const current = config || {};
-  validateResolverPolicy(current);
+  runtimePolicy(current);
+  const resolver = current.resolver || {};
+  const transformer = current.transformer || {};
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
   return {
     ...current,
+    ...(Array.isArray(current.watchFolders) ? { watchFolders: [...current.watchFolders] } : {}),
+    resolver: {
+      ...resolver,
+      ...(Array.isArray(resolver.nodeModulesPaths) ? { nodeModulesPaths: [...resolver.nodeModulesPaths] } : {}),
+      ...(resolver.extraNodeModules && typeof resolver.extraNodeModules === 'object'
+        ? { extraNodeModules: { ...resolver.extraNodeModules } }
+        : {}),
+    },
+    transformer: {
+      ...transformer,
+      ...(Array.isArray(transformer.assetPlugins) ? { assetPlugins: [...transformer.assetPlugins] } : {}),
+    },
     serializer: {
       ...serializer,
       getModulesRunBeforeMainModule(entryFile) {
@@ -506,6 +584,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
         'rn-session-adapter.cjs',
         'rn-session-metro.cjs',
         'authority-marker.js',
+        'metro-runtime-policy.json',
     ];
     const applied = [];
     let primaryError;
@@ -626,6 +705,7 @@ export function restorePackageIntegrationFiles(input, dependencies = {}) {
         'rn-session-adapter.cjs',
         'rn-session-metro.cjs',
         'authority-marker.js',
+        'metro-runtime-policy.json',
     ];
     const applied = [];
     let primaryError;

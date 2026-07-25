@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -23,21 +23,26 @@ const DEPENDENCY_STORE_PATHS = [
     ':(top,glob)**/.yarn/cache/**',
     ':(top,glob)**/.yarn/unplugged/**',
 ];
+const EXCLUDED_RUNTIME_DIRECTORIES = [
+    '.gradle',
+    '.expo',
+    '.cache',
+    'ios/Pods',
+    'ios/build',
+    'ios/DerivedData',
+    'android/build',
+    'android/app/build',
+    'android/app/.cxx',
+];
 const IGNORED_RUNTIME_INPUT_PATHS = [
     ':(top,glob)**',
     ':(top,exclude,glob)**/node_modules/**',
     ':(top,exclude,glob)**/.yarn/cache/**',
     ':(top,exclude,glob)**/.yarn/unplugged/**',
-    ':(top,exclude,glob)**/.gradle/**',
-    ':(top,exclude,glob)**/.expo/**',
-    ':(top,exclude,glob)**/.cache/**',
-    ':(top,exclude,glob)**/ios/Pods/**',
-    ':(top,exclude,glob)**/ios/build/**',
-    ':(top,exclude,glob)**/ios/DerivedData/**',
-    ':(top,exclude,glob)**/android/build/**',
-    ':(top,exclude,glob)**/android/app/build/**',
-    ':(top,exclude,glob)**/android/app/.cxx/**',
+    ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`),
 ];
+const METRO_INTEGRATION_END = '// rn-dev-agent session integration: end';
+const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
 function updateFramed(hash, part) {
     const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
     hash.update(`${bytes.byteLength}:`);
@@ -131,6 +136,67 @@ function isContained(root, candidate) {
         !child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
         !isAbsolute(child));
 }
+function isExcludedRuntimePath(root, candidate) {
+    const entry = relative(root, candidate).split('\\').join('/');
+    return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded ||
+        entry.startsWith(`${excluded}/`) ||
+        entry.endsWith(`/${excluded}`) ||
+        entry.includes(`/${excluded}/`));
+}
+function assertFinalMetroIntegration(identity) {
+    const candidates = ['metro.config.js', 'metro.config.cjs']
+        .map((entry) => join(identity.appRoot, entry))
+        .filter(existsSync);
+    if (candidates.length === 0)
+        return;
+    const source = readFileSync(candidates[0], 'utf8');
+    const end = source.lastIndexOf(METRO_INTEGRATION_END);
+    if (end < 0 || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be the final Metro config statement');
+    }
+}
+function metroRuntimeInputs(identity, authority) {
+    if (!authority)
+        return [];
+    const raw = readFileSync(join(identity.appRoot, METRO_RUNTIME_POLICY), 'utf8');
+    const receipt = JSON.parse(raw);
+    const payload = {
+        version: receipt.version,
+        sessionId: receipt.sessionId,
+        metroInstanceId: receipt.metroInstanceId,
+        contentRoot: receipt.contentRoot,
+        appRoot: receipt.appRoot,
+        runtimeInputs: receipt.runtimeInputs,
+        violations: receipt.violations,
+    };
+    const expected = createHmac('sha256', authority.capability)
+        .update(JSON.stringify(payload))
+        .digest();
+    const observed = typeof receipt.signature === 'string' ? Buffer.from(receipt.signature, 'hex') : Buffer.alloc(0);
+    if (receipt.version !== 1 ||
+        receipt.sessionId !== authority.sessionId ||
+        receipt.metroInstanceId !== authority.metroInstanceId ||
+        receipt.contentRoot !== identity.contentRoot ||
+        receipt.appRoot !== identity.appRoot ||
+        !Array.isArray(receipt.runtimeInputs) ||
+        receipt.runtimeInputs.some((entry) => typeof entry !== 'string') ||
+        !Array.isArray(receipt.violations) ||
+        receipt.violations.some((entry) => typeof entry !== 'string') ||
+        observed.length !== expected.length ||
+        !timingSafeEqual(observed, expected)) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid');
+    }
+    if (receipt.violations.length > 0) {
+        throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt.violations[0]}`);
+    }
+    return [...new Set(receipt.runtimeInputs)].flatMap((entry) => {
+        const candidate = realpathSync(entry);
+        return !isContained(identity.contentRoot, candidate) ||
+            isExcludedRuntimePath(identity.contentRoot, candidate)
+            ? [candidate]
+            : [];
+    });
+}
 function dependencyStoreRoots(identity, git, pathExists) {
     const entries = git(identity.contentRoot, [
         'ls-files',
@@ -184,7 +250,7 @@ function dependencyStoreRoots(identity, git, pathExists) {
     }
     return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
 }
-function updateDependencyStores(hash, identity, git, pathExists) {
+function updateDependencyStores(hash, identity, git, pathExists, runtimeInputs) {
     const roots = dependencyStoreRoots(identity, git, pathExists);
     const state = {
         entries: 0,
@@ -192,7 +258,7 @@ function updateDependencyStores(hash, identity, git, pathExists) {
         visitedDirectories: new Set(),
     };
     updateFramed(hash, 'dependency-stores-v1');
-    for (const root of roots) {
+    for (const root of [...new Set([...roots, ...runtimeInputs])].sort()) {
         if (!pathExists(root))
             continue;
         updateDependencyPath(hash, root, relative(identity.contentRoot, root), state);
@@ -287,6 +353,8 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
     }
     const git = dependencies.git ?? defaultGit;
     const pathExists = dependencies.exists ?? existsSync;
+    assertFinalMetroIntegration(identity);
+    const runtimeInputs = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy);
     const head = git(identity.contentRoot, ['rev-parse', 'HEAD']);
     const diff = git(identity.contentRoot, ['diff', '--binary', '--no-ext-diff', head, '--']);
     const untracked = git(identity.contentRoot, ['ls-files', '--others', '--exclude-standard', '-z'])
@@ -327,7 +395,7 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
     const dirtyHash = createHash('sha256');
     updateFramed(dirtyHash, 'git-dirty-v3');
     updateFramed(dirtyHash, diff);
-    updateDependencyStores(dirtyHash, identity, git, pathExists);
+    updateDependencyStores(dirtyHash, identity, git, pathExists, runtimeInputs);
     const sourceEntries = [
         ...untracked.map((entry) => ['untracked', entry]),
         ...ignored.map((entry) => ['ignored-runtime', entry]),

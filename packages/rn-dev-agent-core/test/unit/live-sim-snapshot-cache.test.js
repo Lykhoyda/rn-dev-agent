@@ -338,6 +338,10 @@ test('cache invalidation: snapshot open targets the requested platform', () => {
     resolveSnapshotInvalidationPlatform('device_snapshot', { action: 'open' }, 'android'),
     'android',
   );
+  assert.equal(
+    resolveSnapshotInvalidationPlatform('rn_session', { platform: 'android' }, 'ios'),
+    'android',
+  );
   assert.equal(resolveSnapshotInvalidationPlatform('cdp_reload', undefined, 'ios'), 'ios');
 });
 

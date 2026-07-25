@@ -1,5 +1,5 @@
 import './env-setup.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -1736,7 +1736,6 @@ function proofAuthority(runId) {
     if (!status)
         throw new Error('PROOF_AUTHORITY_MISMATCH: session is unavailable');
     const controller = registry.getControllerBinding(session);
-    const source = strictProofSourceIdentity(status.source);
     const install = status.bindings.install;
     const metro = status.bindings.metro;
     const bundle = status.bindings.bundle;
@@ -1752,6 +1751,21 @@ function proofAuthority(runId) {
         !controller.worker.token) {
         throw new Error('PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete');
     }
+    const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
+        ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
+        : null;
+    if (!secret?.signerCapability || typeof metro.instanceId !== 'string') {
+        throw new Error('PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable');
+    }
+    const source = strictProofSourceIdentity(status.source, {
+        metroRuntimePolicy: {
+            sessionId: status.sessionId,
+            metroInstanceId: metro.instanceId,
+            capability: createHmac('sha256', secret.signerCapability)
+                .update('metro-runtime-policy')
+                .digest('base64url'),
+        },
+    });
     const pendingProof = status.bindings.proof?.runId;
     return {
         sessionId: status.sessionId,

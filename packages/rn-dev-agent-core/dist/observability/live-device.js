@@ -88,10 +88,8 @@ export function toolInvalidatesSnapshotCache(tool, args) {
     return !SNAPSHOT_CACHE_READS.has(tool);
 }
 export function resolveSnapshotInvalidationPlatform(tool, args, activePlatform) {
-    if (tool === 'device_snapshot' && args?.action === 'open') {
-        if (args.platform === 'ios' || args.platform === 'android')
-            return args.platform;
-    }
+    if (args?.platform === 'ios' || args?.platform === 'android')
+        return args.platform;
     return activePlatform === 'ios' || activePlatform === 'android' ? activePlatform : undefined;
 }
 // Story 05 (#386): the exclusion is ONLY for single-action tools that leave a

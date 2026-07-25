@@ -128,6 +128,9 @@ export async function startManagedMetro(input, dependencies = {}) {
     const command = resolveManagedMetroCommand(input.appRoot, dependencies);
     const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
     const instanceId = input.instanceId;
+    const runtimePolicyCapability = createHmac('sha256', input.signerCapability)
+        .update('metro-runtime-policy')
+        .digest('base64url');
     const child = (dependencies.spawnProcess ?? spawn)(process.execPath, ['-e', METRO_LAUNCHER_SOURCE], {
         cwd: input.appRoot,
         env: {
@@ -137,6 +140,7 @@ export async function startManagedMetro(input, dependencies = {}) {
             RCT_METRO_PORT: String(input.port),
             RN_DEV_AGENT_SESSION_ID: input.sessionId,
             RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
+            RN_DEV_AGENT_METRO_POLICY_CAPABILITY: runtimePolicyCapability,
         },
         detached: true,
         stdio: ['ignore', log, log],

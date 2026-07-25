@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -137,22 +138,41 @@ test('Metro integration composes object and promise configs and is reversible', 
   }
 });
 
-test('Metro integration rejects external and custom resolver inputs', async () => {
+test('Metro integration records external and custom resolver inputs', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-policy-'));
   try {
     execFileSync('git', ['init', '-q', root]);
-    const adapterPath = join(root, 'rn-session-metro.cjs');
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
-    const compose = await import(`${pathToFileURL(adapterPath).href}?v=${Date.now()}`);
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ resolver: { resolveRequest() {}, nodeModulesPaths: [${JSON.stringify(tmpdir())}] } });`,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_SESSION_ID: 'session',
+          RN_DEV_AGENT_METRO_INSTANCE_ID: 'metro',
+          RN_DEV_AGENT_METRO_POLICY_CAPABILITY: 'capability',
+        },
+        encoding: 'utf8',
+      },
+    );
 
-    assert.throws(
-      () => compose.default({ resolver: { resolveRequest() {} } }),
-      /STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT/,
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(
+      readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
     );
-    assert.throws(
-      () => compose.default({ resolver: { nodeModulesPaths: [tmpdir()] } }),
-      /STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT/,
+    assert.ok(
+      receipt.violations.some((entry: string) => entry.includes('custom Metro resolvers')),
     );
+    assert.ok(receipt.runtimeInputs.includes(realpathSync(tmpdir())));
+    assert.match(receipt.signature, /^[a-f0-9]{64}$/);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

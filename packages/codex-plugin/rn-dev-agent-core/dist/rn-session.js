@@ -10805,6 +10805,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const command = resolveManagedMetroCommand(input.appRoot, dependencies);
   const log = openSync(join3(input.runtimeRoot, "metro.log"), "a", 384);
   const instanceId = input.instanceId;
+  const runtimePolicyCapability = createHmac3("sha256", input.signerCapability).update("metro-runtime-policy").digest("base64url");
   const child = (dependencies.spawnProcess ?? spawn)(process.execPath, ["-e", METRO_LAUNCHER_SOURCE], {
     cwd: input.appRoot,
     env: {
@@ -10813,7 +10814,8 @@ async function startManagedMetro(input, dependencies = {}) {
       RN_DEV_AGENT_METRO_ARGS: JSON.stringify([...command.args, "--port", String(input.port)]),
       RCT_METRO_PORT: String(input.port),
       RN_DEV_AGENT_SESSION_ID: input.sessionId,
-      RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId
+      RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
+      RN_DEV_AGENT_METRO_POLICY_CAPABILITY: runtimePolicyCapability
     },
     detached: true,
     stdio: ["ignore", log, log]
@@ -11004,7 +11006,7 @@ function inspectSessionOwner(owner, dependencies = {}) {
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash4, createHmac as createHmac4, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { closeSync as closeSync2, existsSync as existsSync3, lstatSync as lstatSync3, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync4, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
@@ -11021,6 +11023,24 @@ var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
 var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
 var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
+var EXCLUDED_RUNTIME_DIRECTORIES = [
+  ".gradle",
+  ".expo",
+  ".cache",
+  "ios/Pods",
+  "ios/build",
+  "ios/DerivedData",
+  "android/build",
+  "android/app/build",
+  "android/app/.cxx"
+];
+var IGNORED_RUNTIME_INPUT_PATHS = [
+  ":(top,glob)**",
+  ":(top,exclude,glob)**/node_modules/**",
+  ":(top,exclude,glob)**/.yarn/cache/**",
+  ":(top,exclude,glob)**/.yarn/unplugged/**",
+  ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
+];
 function defaultGit(root, args) {
   return execFileSync6("git", ["-C", root, ...args], {
     encoding: "utf8",

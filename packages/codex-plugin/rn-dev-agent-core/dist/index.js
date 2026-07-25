@@ -32171,7 +32171,7 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash16, createHmac as createHmac5, randomUUID as randomUUID8 } from "node:crypto";
 import { readFileSync as readFileSync37, rmSync as rmSync9 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
@@ -68108,10 +68108,8 @@ function toolInvalidatesSnapshotCache(tool, args) {
   return !SNAPSHOT_CACHE_READS.has(tool);
 }
 function resolveSnapshotInvalidationPlatform(tool, args, activePlatform) {
-  if (tool === "device_snapshot" && args?.action === "open") {
-    if (args.platform === "ios" || args.platform === "android")
-      return args.platform;
-  }
+  if (args?.platform === "ios" || args?.platform === "android")
+    return args.platform;
   return activePlatform === "ios" || activePlatform === "android" ? activePlatform : void 0;
 }
 var BASELINE_SELF_MANAGED_TOOLS = /* @__PURE__ */ new Set([
@@ -70296,6 +70294,7 @@ import { basename as basename6, isAbsolute as isAbsolute6, join as join51, relat
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
+var METRO_RUNTIME_POLICY = ".rn-agent/integration/metro-runtime-policy.json";
 var METRO_START = "// rn-dev-agent session integration: begin";
 var METRO_END = "// rn-dev-agent session integration: end";
 var SENTINELS = {
@@ -70306,6 +70305,7 @@ function renderMetroIntegrationAdapter() {
   return `'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHmac } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 function sourceRoot() {
   try {
@@ -70318,50 +70318,126 @@ function sourceRoot() {
     throw error;
   }
 }
-function contained(root, candidate) {
-  const child = path.relative(root, candidate);
-  return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
-}
-function assertLocalPaths(root, values, field) {
-  if (values === undefined) return;
-  if (!Array.isArray(values) || values.some((value) => typeof value !== 'string')) {
-    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' must contain paths');
-  }
-  for (const value of values) {
-    const candidate = fs.realpathSync(path.resolve(process.cwd(), value));
-    if (!contained(root, candidate)) {
-      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ' + field + ' resolves outside the content root');
+function runtimePolicy(config) {
+  const root = sourceRoot();
+  const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+  if (root === null || !capability || !sessionId || !metroInstanceId) return;
+  const runtimeInputs = new Set();
+  const violations = [];
+  const resolver = config.resolver || {};
+  const transformer = config.transformer || {};
+  const serializer = config.serializer || {};
+  function addPath(value, field) {
+    if (value === undefined) return;
+    if (typeof value !== 'string') {
+      violations.push(field + ' must be a path');
+      return;
+    }
+    try {
+      runtimeInputs.add(fs.realpathSync(path.resolve(process.cwd(), value)));
+    } catch {
+      violations.push(field + ' cannot be resolved');
     }
   }
-}
-function validateResolverPolicy(config) {
-  const root = sourceRoot();
-  if (root === null) return;
-  const resolver = config.resolver || {};
-  if (resolver.resolveRequest !== undefined) {
-    throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: custom Metro resolvers are unsupported');
+  function addPaths(values, field) {
+    if (values === undefined) return;
+    if (!Array.isArray(values)) {
+      violations.push(field + ' must contain paths');
+      return;
+    }
+    values.forEach((value) => addPath(value, field));
   }
-  assertLocalPaths(root, config.watchFolders, 'watchFolders');
-  assertLocalPaths(root, resolver.nodeModulesPaths, 'nodeModulesPaths');
+  function addModule(value, field) {
+    if (value === undefined) return;
+    if (typeof value !== 'string') {
+      violations.push(field + ' must identify a module');
+      return;
+    }
+    try {
+      runtimeInputs.add(fs.realpathSync(require.resolve(value, { paths: [process.cwd()] })));
+    } catch {
+      addPath(value, field);
+    }
+  }
+  addPath(config.projectRoot, 'projectRoot');
+  addPaths(config.watchFolders, 'watchFolders');
+  addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
+  addPaths((process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
   if (resolver.extraNodeModules !== undefined) {
     if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
-      throw new Error('STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: extraNodeModules must be a path map');
+      violations.push('extraNodeModules must be a path map');
+    } else {
+      Object.values(resolver.extraNodeModules).forEach((value) => addPath(value, 'extraNodeModules'));
     }
-    assertLocalPaths(root, Object.values(resolver.extraNodeModules), 'extraNodeModules');
   }
-  assertLocalPaths(root, (process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
+  if (resolver.resolveRequest !== undefined) {
+    violations.push('custom Metro resolvers are unsupported');
+  }
+  if (serializer.customSerializer !== undefined || serializer.experimentalSerializerHook !== undefined) {
+    violations.push('custom Metro serializers are unsupported');
+  }
+  addModule(resolver.dependencyExtractor, 'dependencyExtractor');
+  addModule(resolver.hasteImplModulePath, 'hasteImplModulePath');
+  addModule(resolver.emptyModulePath, 'emptyModulePath');
+  addModule(transformer.asyncRequireModulePath, 'asyncRequireModulePath');
+  addModule(transformer.babelTransformerPath, 'babelTransformerPath');
+  addModule(transformer.minifierPath, 'minifierPath');
+  if (transformer.assetPlugins !== undefined) {
+    if (!Array.isArray(transformer.assetPlugins)) {
+      violations.push('assetPlugins must identify modules');
+    } else {
+      transformer.assetPlugins.forEach((value) => addModule(value, 'assetPlugins'));
+    }
+  }
+  if (/(?:^|\\s)(?:--(?:require|import|loader|experimental-loader)\\b|-r\\b)/.test(process.env.NODE_OPTIONS || '')) {
+    violations.push('NODE_OPTIONS loaders are unsupported');
+  }
+  Object.keys(require.cache).forEach((value) => addPath(value, 'loaded Metro config module'));
+  const payload = {
+    version: 1,
+    sessionId,
+    metroInstanceId,
+    contentRoot: root,
+    appRoot: fs.realpathSync(process.cwd()),
+    runtimeInputs: [...runtimeInputs].sort(),
+    violations: [...new Set(violations)].sort(),
+  };
+  const receipt = {
+    ...payload,
+    signature: createHmac('sha256', capability).update(JSON.stringify(payload)).digest('hex'),
+  };
+  const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY)});
+  const temporary = policyPath + '.' + process.pid + '.tmp';
+  fs.writeFileSync(temporary, JSON.stringify(receipt) + '\\n', { mode: 0o600 });
+  fs.renameSync(temporary, policyPath);
 }
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
   const current = config || {};
-  validateResolverPolicy(current);
+  runtimePolicy(current);
+  const resolver = current.resolver || {};
+  const transformer = current.transformer || {};
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
   return {
     ...current,
+    ...(Array.isArray(current.watchFolders) ? { watchFolders: [...current.watchFolders] } : {}),
+    resolver: {
+      ...resolver,
+      ...(Array.isArray(resolver.nodeModulesPaths) ? { nodeModulesPaths: [...resolver.nodeModulesPaths] } : {}),
+      ...(resolver.extraNodeModules && typeof resolver.extraNodeModules === 'object'
+        ? { extraNodeModules: { ...resolver.extraNodeModules } }
+        : {}),
+    },
+    transformer: {
+      ...transformer,
+      ...(Array.isArray(transformer.assetPlugins) ? { assetPlugins: [...transformer.assetPlugins] } : {}),
+    },
     serializer: {
       ...serializer,
       getModulesRunBeforeMainModule(entryFile) {
@@ -70775,7 +70851,8 @@ function applyPackageIntegration(input, dependencies = {}) {
     "rn-session-integration.json",
     "rn-session-adapter.cjs",
     "rn-session-metro.cjs",
-    "authority-marker.js"
+    "authority-marker.js",
+    "metro-runtime-policy.json"
   ];
   const applied = [];
   let primaryError;
@@ -70893,7 +70970,8 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     "rn-session-integration.json",
     "rn-session-adapter.cjs",
     "rn-session-metro.cjs",
-    "authority-marker.js"
+    "authority-marker.js",
+    "metro-runtime-policy.json"
   ];
   const applied = [];
   let primaryError;
@@ -71557,7 +71635,7 @@ init_process_birth();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash14, createHmac as createHmac4, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
 import { closeSync as closeSync7, existsSync as existsSync35, lstatSync as lstatSync11, openSync as openSync7, readdirSync as readdirSync14, readFileSync as readFileSync36, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync7 } from "node:fs";
 import { dirname as dirname20, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve8 } from "node:path";
@@ -71582,21 +71660,26 @@ var DEPENDENCY_STORE_PATHS = [
   ":(top,glob)**/.yarn/cache/**",
   ":(top,glob)**/.yarn/unplugged/**"
 ];
+var EXCLUDED_RUNTIME_DIRECTORIES = [
+  ".gradle",
+  ".expo",
+  ".cache",
+  "ios/Pods",
+  "ios/build",
+  "ios/DerivedData",
+  "android/build",
+  "android/app/build",
+  "android/app/.cxx"
+];
 var IGNORED_RUNTIME_INPUT_PATHS = [
   ":(top,glob)**",
   ":(top,exclude,glob)**/node_modules/**",
   ":(top,exclude,glob)**/.yarn/cache/**",
   ":(top,exclude,glob)**/.yarn/unplugged/**",
-  ":(top,exclude,glob)**/.gradle/**",
-  ":(top,exclude,glob)**/.expo/**",
-  ":(top,exclude,glob)**/.cache/**",
-  ":(top,exclude,glob)**/ios/Pods/**",
-  ":(top,exclude,glob)**/ios/build/**",
-  ":(top,exclude,glob)**/ios/DerivedData/**",
-  ":(top,exclude,glob)**/android/build/**",
-  ":(top,exclude,glob)**/android/app/build/**",
-  ":(top,exclude,glob)**/android/app/.cxx/**"
+  ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
 ];
+var METRO_INTEGRATION_END = "// rn-dev-agent session integration: end";
+var METRO_RUNTIME_POLICY2 = ".rn-agent/integration/metro-runtime-policy.json";
 function updateFramed(hash, part) {
   const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
   hash.update(`${bytes.byteLength}:`);
@@ -71687,6 +71770,47 @@ function isContained(root, candidate) {
   const child = relative5(root, candidate);
   return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute7(child);
 }
+function isExcludedRuntimePath(root, candidate) {
+  const entry = relative5(root, candidate).split("\\").join("/");
+  return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded || entry.startsWith(`${excluded}/`) || entry.endsWith(`/${excluded}`) || entry.includes(`/${excluded}/`));
+}
+function assertFinalMetroIntegration(identity2) {
+  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join53(identity2.appRoot, entry)).filter(existsSync35);
+  if (candidates.length === 0)
+    return;
+  const source = readFileSync36(candidates[0], "utf8");
+  const end = source.lastIndexOf(METRO_INTEGRATION_END);
+  if (end < 0 || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be the final Metro config statement");
+  }
+}
+function metroRuntimeInputs(identity2, authority) {
+  if (!authority)
+    return [];
+  const raw = readFileSync36(join53(identity2.appRoot, METRO_RUNTIME_POLICY2), "utf8");
+  const receipt2 = JSON.parse(raw);
+  const payload = {
+    version: receipt2.version,
+    sessionId: receipt2.sessionId,
+    metroInstanceId: receipt2.metroInstanceId,
+    contentRoot: receipt2.contentRoot,
+    appRoot: receipt2.appRoot,
+    runtimeInputs: receipt2.runtimeInputs,
+    violations: receipt2.violations
+  };
+  const expected = createHmac4("sha256", authority.capability).update(JSON.stringify(payload)).digest();
+  const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
+  if (receipt2.version !== 1 || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual7(observed, expected)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
+  }
+  if (receipt2.violations.length > 0) {
+    throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
+  }
+  return [...new Set(receipt2.runtimeInputs)].flatMap((entry) => {
+    const candidate = realpathSync7(entry);
+    return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
+  });
+}
 function dependencyStoreRoots(identity2, git, pathExists) {
   const entries = git(identity2.contentRoot, [
     "ls-files",
@@ -71736,7 +71860,7 @@ function dependencyStoreRoots(identity2, git, pathExists) {
   }
   return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
 }
-function updateDependencyStores(hash, identity2, git, pathExists) {
+function updateDependencyStores(hash, identity2, git, pathExists, runtimeInputs) {
   const roots = dependencyStoreRoots(identity2, git, pathExists);
   const state = {
     entries: 0,
@@ -71744,7 +71868,7 @@ function updateDependencyStores(hash, identity2, git, pathExists) {
     visitedDirectories: /* @__PURE__ */ new Set()
   };
   updateFramed(hash, "dependency-stores-v1");
-  for (const root of roots) {
+  for (const root of [.../* @__PURE__ */ new Set([...roots, ...runtimeInputs])].sort()) {
     if (!pathExists(root))
       continue;
     updateDependencyPath(hash, root, relative5(identity2.contentRoot, root), state);
@@ -71831,6 +71955,8 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   }
   const git = dependencies.git ?? defaultGit;
   const pathExists = dependencies.exists ?? existsSync35;
+  assertFinalMetroIntegration(identity2);
+  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy);
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
@@ -71863,7 +71989,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   const dirtyHash = createHash14("sha256");
   updateFramed(dirtyHash, "git-dirty-v3");
   updateFramed(dirtyHash, diff);
-  updateDependencyStores(dirtyHash, identity2, git, pathExists);
+  updateDependencyStores(dirtyHash, identity2, git, pathExists, runtimeInputs);
   const sourceEntries = [
     ...untracked.map((entry) => ["untracked", entry]),
     ...ignored.map((entry) => ["ignored-runtime", entry])
@@ -73373,7 +73499,6 @@ function proofAuthority(runId) {
   if (!status)
     throw new Error("PROOF_AUTHORITY_MISMATCH: session is unavailable");
   const controller = registry2.getControllerBinding(session);
-  const source = strictProofSourceIdentity(status.source);
   const install = status.bindings.install;
   const metro = status.bindings.metro;
   const bundle = status.bindings.bundle;
@@ -73382,6 +73507,17 @@ function proofAuthority(runId) {
   if (!install || !metro || !bundle || !device || !runner || !controller.worker.instanceId || !controller.worker.pid || !controller.worker.token) {
     throw new Error("PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete");
   }
+  const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
+  if (!secret?.signerCapability || typeof metro.instanceId !== "string") {
+    throw new Error("PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable");
+  }
+  const source = strictProofSourceIdentity(status.source, {
+    metroRuntimePolicy: {
+      sessionId: status.sessionId,
+      metroInstanceId: metro.instanceId,
+      capability: createHmac5("sha256", secret.signerCapability).update("metro-runtime-policy").digest("base64url")
+    }
+  });
   const pendingProof = status.bindings.proof?.runId;
   return {
     sessionId: status.sessionId,

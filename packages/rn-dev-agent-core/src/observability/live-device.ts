@@ -94,9 +94,7 @@ export function resolveSnapshotInvalidationPlatform(
   args: Record<string, unknown> | undefined,
   activePlatform: string | undefined,
 ): 'ios' | 'android' | undefined {
-  if (tool === 'device_snapshot' && args?.action === 'open') {
-    if (args.platform === 'ios' || args.platform === 'android') return args.platform;
-  }
+  if (args?.platform === 'ios' || args?.platform === 'android') return args.platform;
   return activePlatform === 'ios' || activePlatform === 'android' ? activePlatform : undefined;
 }
 
