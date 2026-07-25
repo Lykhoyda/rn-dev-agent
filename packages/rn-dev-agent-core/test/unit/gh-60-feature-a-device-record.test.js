@@ -13,30 +13,36 @@ import {
   resolveRecordScript,
 } from '../../dist/tools/device-record.js';
 
+const processBirth = 'a'.repeat(64);
+
 // ── parseStartOutput ────────────────────────────────────────────────────
 
 test('parseStartOutput: extracts pid + output path on success', () => {
-  const stdout = 'Recording started: platform=ios pid=12345 output=/tmp/proof-ios.mp4\n';
+  const stdout = `Recording started: platform=ios pid=12345 birth=${processBirth} output=/tmp/proof-ios.mp4\n`;
   const parsed = parseStartOutput(stdout);
-  assert.deepEqual(parsed, { pid: 12345, output: '/tmp/proof-ios.mp4' });
+  assert.deepEqual(parsed, { pid: 12345, processBirth, output: '/tmp/proof-ios.mp4' });
 });
 
 test('parseStartOutput: handles android', () => {
-  const stdout = 'Recording started: platform=android pid=67890 output=/tmp/proof-android.mp4\n';
+  const stdout = `Recording started: platform=android pid=67890 birth=${processBirth} output=/tmp/proof-android.mp4\n`;
   const parsed = parseStartOutput(stdout);
-  assert.deepEqual(parsed, { pid: 67890, output: '/tmp/proof-android.mp4' });
+  assert.deepEqual(parsed, { pid: 67890, processBirth, output: '/tmp/proof-android.mp4' });
 });
 
 test('parseStartOutput: handles paths with spaces', () => {
-  const stdout = 'Recording started: platform=ios pid=42 output=/tmp/my proof file.mp4\n';
+  const stdout = `Recording started: platform=ios pid=42 birth=${processBirth} output=/tmp/my proof file.mp4\n`;
   const parsed = parseStartOutput(stdout);
-  assert.deepEqual(parsed, { pid: 42, output: '/tmp/my proof file.mp4' });
+  assert.deepEqual(parsed, { pid: 42, processBirth, output: '/tmp/my proof file.mp4' });
 });
 
 test('parseStartOutput: returns null when no match', () => {
   assert.equal(parseStartOutput(''), null);
   assert.equal(parseStartOutput('Error: No iOS simulator booted'), null);
   assert.equal(parseStartOutput('something unrelated'), null);
+  assert.equal(
+    parseStartOutput('Recording started: platform=ios pid=42 output=/tmp/proof.mp4'),
+    null,
+  );
 });
 
 // ── parseStopOutput ─────────────────────────────────────────────────────

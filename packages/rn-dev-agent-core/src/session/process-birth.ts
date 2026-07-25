@@ -33,7 +33,7 @@ function token(parts: readonly string[]): string {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
 
-function darwinProcessBirthHelperPath(): string {
+export function darwinProcessBirthHelperPath(): string {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const candidates = [
     join(moduleDirectory, 'native', 'darwin-process-birth'),

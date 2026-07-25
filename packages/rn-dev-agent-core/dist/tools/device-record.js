@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
-import { probeProcessBirth } from '../session/process-birth.js';
+import { darwinProcessBirthHelperPath, probeProcessBirth, } from '../session/process-birth.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { stopBoundRecorder } from '../session/process-cleanup.js';
 // Safe by construction: only execFile (argv-based, no shell), never exec.
@@ -148,10 +148,10 @@ function defaultOutputPath(platform) {
     return `/tmp/rn-dev-agent-proof-${platform}-${Date.now()}.mp4`;
 }
 export function parseStartOutput(stdout) {
-    const match = stdout.match(/Recording started: platform=(?:ios|android) pid=(\d+) output=(.+?)\s*$/m);
+    const match = stdout.match(/Recording started: platform=(?:ios|android) pid=(\d+) birth=([a-f0-9]{64}) output=(.+?)\s*$/m);
     if (!match)
         return null;
-    return { pid: Number(match[1]), output: match[2].trim() };
+    return { pid: Number(match[1]), processBirth: match[2], output: match[3].trim() };
 }
 export function parseStopOutput(stdout) {
     const saved = [];
@@ -284,16 +284,20 @@ async function runStart(args, runtime) {
         });
         const { stdout } = await execFileAsync(script, scriptArgs, {
             timeout: START_TIMEOUT_MS,
+            env: {
+                ...process.env,
+                RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath(),
+            },
         });
         const parsed = parseStartOutput(stdout);
         if (!parsed) {
             throw new Error(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
         }
         const processIdentity = probeProcessBirth(parsed.pid);
-        if (processIdentity.status !== 'present') {
+        if (processIdentity.status !== 'present' ||
+            processIdentity.birth.token !== parsed.processBirth) {
             throw new Error('Recording started but its process identity could not be proven');
         }
-        await execFileAsync(script, ['bind-identity', scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
         authority.registry.updateBindings(authority.session, {
             bindings: {
                 recorder: {
@@ -303,7 +307,7 @@ async function runStart(args, runtime) {
                     output: parsed.output,
                     scope,
                     pid: parsed.pid,
-                    processBirth: processIdentity.birth.token,
+                    processBirth: parsed.processBirth,
                     script,
                     claimKey,
                     sessionId: authority.status.sessionId,
@@ -318,7 +322,7 @@ async function runStart(args, runtime) {
             autoSelected: resolution.autoSelected,
             output: parsed.output,
             pid: parsed.pid,
-            processBirth: processIdentity.birth.token,
+            processBirth: parsed.processBirth,
             note: 'Call device_record action=stop to finalize. Android caps at 180s; iOS has no inherent cap but xcrun simctl io may stall on long captures.',
         });
     }

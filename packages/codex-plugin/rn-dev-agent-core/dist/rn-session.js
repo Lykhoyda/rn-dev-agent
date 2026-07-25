@@ -13028,7 +13028,15 @@ ${instrumentation.stderr}`;
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
-async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile15(script, args, { timeout: 6e4, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 })) {
+async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile15(script, args, {
+  timeout: 6e4,
+  encoding: "utf8",
+  maxBuffer: 8 * 1024 * 1024,
+  env: {
+    ...process.env,
+    RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath()
+  }
+})) {
   const script = String(binding.script ?? "");
   const scope = String(binding.scope ?? "");
   const pid = Number(binding.pid);

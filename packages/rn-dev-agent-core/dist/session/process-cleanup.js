@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { OWNED_PACKAGES } from '../runners/release-android-slot.js';
 import { probeManagedMetroListener } from './managed-metro.js';
-import { probeProcessBirth } from './process-birth.js';
+import { darwinProcessBirthHelperPath, probeProcessBirth, } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 const execFile = promisify(execFileCb);
 async function waitForExactStopped(probe, deadlineMs, code, message) {
@@ -140,7 +140,15 @@ export async function stopBoundRunner(binding, processProbe = probeProcessBirth,
         throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', `Android device-side runner termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
-export async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile(script, args, { timeout: 60_000, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 })) {
+export async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile(script, args, {
+    timeout: 60_000,
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+    env: {
+        ...process.env,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath(),
+    },
+})) {
     const script = String(binding.script ?? '');
     const scope = String(binding.scope ?? '');
     const pid = Number(binding.pid);

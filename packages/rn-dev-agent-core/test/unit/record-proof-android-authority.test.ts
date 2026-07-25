@@ -48,13 +48,16 @@ elif [[ "$args" == *"pidof screenrecord"* ]]; then
 elif [[ "$args" == *"/proc/sys/kernel/random/boot_id"* ]]; then
   echo "${bootId}"
 elif [[ "$args" == *"readlink /proc/777/exe"* ]]; then
+  [[ "\${FAKE_READLINK_FAIL:-0}" == "0" ]] || exit 1
   echo /system/bin/screenrecord
+elif [[ "$args" == *"cat /proc/777/cmdline"* ]]; then
+  printf '%s\\0%s\\0' /system/bin/screenrecord "\${FAKE_REMOTE_PATH:-/sdcard/proof.mp4}"
 elif [[ "$args" == *"cat /proc/777/stat"* ]]; then
   printf '%s\\n' "\${FAKE_STAT}"
 elif [[ "$args" == *"kill -2 777"* ]]; then
   touch "\${FAKE_KILL_MARKER}"
 elif [[ "$args" == *"test ! -e /proc/777"* ]]; then
-  exit 1
+  [[ "\${FAKE_PROC_PRESENT:-1}" == "0" ]]
 fi
 `,
   );
@@ -126,6 +129,11 @@ test('Android stop finalizes without signaling a reused remote PID', () => {
     writeFileSync(`${state.prefix}-${scope}.remote-pid`, '777');
     writeFileSync(`${state.prefix}-${scope}.remote-birth`, `${bootId}:123`);
     writeFileSync(`${state.prefix}-${scope}.remote-command`, '/system/bin/screenrecord');
+    writeFileSync(
+      `${state.prefix}-${scope}.remote-args`,
+      '/system/bin/screenrecord /sdcard/proof.mp4',
+    );
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
     const stat = ['777', '(screenrecord)', 'S', ...Array(18).fill('0'), '999'].join(' ');
     const result = spawnSync(
       'bash',
@@ -142,6 +150,77 @@ test('Android stop finalizes without signaling a reused remote PID', () => {
     );
     assert.equal(result.status, 0);
     assert.equal(existsSync(state.killMarker), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android stop treats disappearance during identity capture as absence', () => {
+  const state = fixture();
+  try {
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.remote-pid`, '777');
+    writeFileSync(`${state.prefix}-${scope}.remote-birth`, `${bootId}:123`);
+    writeFileSync(`${state.prefix}-${scope}.remote-command`, '/system/bin/screenrecord');
+    writeFileSync(
+      `${state.prefix}-${scope}.remote-args`,
+      '/system/bin/screenrecord /sdcard/proof.mp4',
+    );
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+    const stat = ['777', '(screenrecord)', 'S', ...Array(18).fill('0'), '123'].join(' ');
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_STAT: stat,
+          FAKE_READLINK_FAIL: '1',
+          FAKE_PROC_PRESENT: '0',
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(state.killMarker), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('Android stop refuses a same-birth recorder with different output arguments', () => {
+  const state = fixture();
+  try {
+    seedLocalBinding(state.prefix);
+    writeFileSync(`${state.prefix}-${scope}.remote-pid`, '777');
+    writeFileSync(`${state.prefix}-${scope}.remote-birth`, `${bootId}:123`);
+    writeFileSync(`${state.prefix}-${scope}.remote-command`, '/system/bin/screenrecord');
+    writeFileSync(
+      `${state.prefix}-${scope}.remote-args`,
+      '/system/bin/screenrecord /sdcard/proof.mp4',
+    );
+    writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+    const stat = ['777', '(screenrecord)', 'S', ...Array(18).fill('0'), '123'].join(' ');
+    const result = spawnSync(
+      'bash',
+      [state.script, 'stop', scope, '999999', 'local-birth'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${state.root}:${process.env.PATH}`,
+          FAKE_KILL_MARKER: state.killMarker,
+          FAKE_STAT: stat,
+          FAKE_REMOTE_PATH: '/sdcard/foreign.mp4',
+        },
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /command identity changed/);
+    assert.equal(existsSync(state.killMarker), false);
+    assert.equal(existsSync(`${state.prefix}-${scope}.pid`), true);
   } finally {
     state.cleanup();
   }

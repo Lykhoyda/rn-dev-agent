@@ -132,6 +132,9 @@ export function parseMaestroFailure(
   terminal?: MaestroTerminalClassification,
 ): MaestroFailure {
   const raw = typeof output === 'string' ? output : '';
+  if (terminal?.exitClass === 'timed-out') {
+    return { kind: 'TIMEOUT', selector: terminal.failureSelector ?? null, raw };
+  }
   // A terminal step classification, derived from the full uncapped stream,
   // always outranks an earlier WDA banner.
   if (terminal?.failureKind === 'SELECTOR_NOT_FOUND') {
@@ -147,9 +150,6 @@ export function parseMaestroFailure(
   }
   if (terminal?.failureKind === 'ASSERTION_FAILED') {
     return { kind: 'ASSERTION_FAILED', selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.exitClass === 'timed-out') {
-    return { kind: 'TIMEOUT', selector: terminal.failureSelector ?? null, raw };
   }
   if (terminal?.exitClass === 'before-first-step' && terminal.bootstrapEvidence) {
     return {

@@ -10,7 +10,6 @@ Usage: record_proof.sh <subcommand> [args]
 
 Subcommands:
   start <platform> <output-path> --scope <id>  Start a scoped recording
-  bind-identity <scope> <pid> <birth>          Bind process identity
   abort <scope>                                Abort an uncommitted start
   stop <scope> <pid> <birth>                   Stop one scoped recording
   status <scope>                               Show one scoped recording
@@ -32,10 +31,154 @@ platform_file() { echo "${PID_PREFIX}-${1}.platform"; }
 birth_file() { echo "${PID_PREFIX}-${1}.birth"; }
 remote_birth_file() { echo "${PID_PREFIX}-${1}.remote-birth"; }
 remote_command_file() { echo "${PID_PREFIX}-${1}.remote-command"; }
+remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
 
 is_alive() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null
+}
+
+hash_process_identity() {
+  {
+    local index=0
+    local part
+    for part in "$@"; do
+      [[ $index -gt 0 ]] && printf '\0'
+      printf '%s' "$part"
+      index=$((index + 1))
+    done
+  } |
+    if command -v shasum >/dev/null 2>&1; then
+      shasum -a 256
+    else
+      sha256sum
+    fi |
+    awk '{print $1}'
+}
+
+LOCAL_PROCESS_STATE="unknown"
+LOCAL_PROCESS_BIRTH=""
+
+probe_local_process() {
+  local pid="$1"
+  local marker="$2"
+  LOCAL_PROCESS_STATE="unknown"
+  LOCAL_PROCESS_BIRTH=""
+  if ! is_alive "$pid"; then
+    LOCAL_PROCESS_STATE="absent"
+    return 0
+  fi
+
+  local command
+  command="$(ps -ww -p "$pid" -o command= 2>/dev/null)" || {
+    is_alive "$pid" || {
+      LOCAL_PROCESS_STATE="absent"
+      return 0
+    }
+    echo "Error: recorder command identity is unavailable" >&2
+    return 1
+  }
+  [[ "$command" == *"$marker"* ]] || {
+    echo "Error: recorder command identity does not match its output" >&2
+    return 1
+  }
+
+  local platform
+  platform="$(uname -s)"
+  if [[ "$platform" == "Darwin" ]]; then
+    local helper="${RN_DEV_AGENT_PROCESS_BIRTH_HELPER:-}"
+    [[ -x "$helper" ]] || {
+      echo "Error: Darwin recorder process-birth helper is unavailable" >&2
+      return 1
+    }
+    local info_before
+    local info_after
+    local boot_session
+    info_before="$("$helper" "$pid" 2>/dev/null)" || {
+      is_alive "$pid" || {
+        LOCAL_PROCESS_STATE="absent"
+        return 0
+      }
+      echo "Error: recorder process birth is unavailable" >&2
+      return 1
+    }
+    boot_session="$(/usr/sbin/sysctl -n kern.bootsessionuuid 2>/dev/null)" || {
+      echo "Error: recorder boot identity is unavailable" >&2
+      return 1
+    }
+    info_after="$("$helper" "$pid" 2>/dev/null)" || {
+      is_alive "$pid" || {
+        LOCAL_PROCESS_STATE="absent"
+        return 0
+      }
+      echo "Error: recorder process changed during identity capture" >&2
+      return 1
+    }
+    [[ "$info_before" == "$info_after" && "$info_before" =~ ^${pid}:([0-9]+):([0-9]+)$ ]] || {
+      echo "Error: recorder process birth identity changed" >&2
+      return 1
+    }
+    LOCAL_PROCESS_BIRTH="$(
+      hash_process_identity "darwin" "$(printf '%s' "$boot_session" | tr '[:upper:]' '[:lower:]')" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    )"
+  elif [[ "$platform" == "Linux" ]]; then
+    local stat_before
+    local stat_after
+    local boot_id
+    stat_before="$(cat "/proc/$pid/stat" 2>/dev/null)" || {
+      [[ ! -e "/proc/$pid" ]] && {
+        LOCAL_PROCESS_STATE="absent"
+        return 0
+      }
+      echo "Error: recorder process birth is unavailable" >&2
+      return 1
+    }
+    boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" || {
+      echo "Error: recorder boot identity is unavailable" >&2
+      return 1
+    }
+    stat_after="$(cat "/proc/$pid/stat" 2>/dev/null)" || {
+      [[ ! -e "/proc/$pid" ]] && {
+        LOCAL_PROCESS_STATE="absent"
+        return 0
+      }
+      echo "Error: recorder process changed during identity capture" >&2
+      return 1
+    }
+    local before_tail="${stat_before##*) }"
+    local after_tail="${stat_after##*) }"
+    local start_before
+    local start_after
+    start_before="$(printf '%s\n' "$before_tail" | awk '{print $20}')"
+    start_after="$(printf '%s\n' "$after_tail" | awk '{print $20}')"
+    [[ "$start_before" =~ ^[0-9]+$ && "$start_before" == "$start_after" ]] || {
+      echo "Error: recorder process birth identity changed" >&2
+      return 1
+    }
+    LOCAL_PROCESS_BIRTH="$(hash_process_identity "linux" "$boot_id" "$start_before")"
+  else
+    echo "Error: recorder process birth is unsupported on $platform" >&2
+    return 1
+  fi
+
+  local command_after
+  command_after="$(ps -ww -p "$pid" -o command= 2>/dev/null)" || {
+    is_alive "$pid" || {
+      LOCAL_PROCESS_STATE="absent"
+      return 0
+    }
+    echo "Error: recorder command changed during identity capture" >&2
+    return 1
+  }
+  [[ "$command_after" == *"$marker"* ]] || {
+    echo "Error: recorder command identity changed" >&2
+    return 1
+  }
+  [[ "$LOCAL_PROCESS_BIRTH" =~ ^[a-f0-9]{64}$ ]] || {
+    echo "Error: recorder process birth token is invalid" >&2
+    return 1
+  }
+  LOCAL_PROCESS_STATE="present"
 }
 
 android_adb() {
@@ -80,6 +223,21 @@ read_android_screenrecord_pids() {
 ANDROID_PROCESS_STATE="unknown"
 ANDROID_PROCESS_BIRTH=""
 ANDROID_PROCESS_COMMAND=""
+ANDROID_PROCESS_ARGS=""
+
+classify_android_identity_failure() {
+  local serial="$1"
+  local pid="$2"
+  local message="$3"
+  require_android_device "$serial" || return 1
+  if android_adb "$serial" shell test ! -e "/proc/$pid" >/dev/null 2>&1; then
+    ANDROID_PROCESS_STATE="absent"
+    return 0
+  fi
+  require_android_device "$serial" || return 1
+  echo "Error: $message" >&2
+  return 1
+}
 
 probe_android_process() {
   local serial="$1"
@@ -87,17 +245,13 @@ probe_android_process() {
   ANDROID_PROCESS_STATE="unknown"
   ANDROID_PROCESS_BIRTH=""
   ANDROID_PROCESS_COMMAND=""
+  ANDROID_PROCESS_ARGS=""
   require_android_device "$serial" || return 1
 
   local stat_before
   if ! stat_before="$(android_adb "$serial" shell cat "/proc/$pid/stat" 2>/dev/null | tr -d '\r')"; then
-    require_android_device "$serial" || return 1
-    if android_adb "$serial" shell test ! -e "/proc/$pid" >/dev/null 2>&1; then
-      ANDROID_PROCESS_STATE="absent"
-      return 0
-    fi
-    echo "Error: Android process identity is unavailable" >&2
-    return 1
+    classify_android_identity_failure "$serial" "$pid" "Android process identity is unavailable"
+    return $?
   fi
 
   local boot_id
@@ -105,18 +259,23 @@ probe_android_process() {
     android_adb "$serial" shell cat /proc/sys/kernel/random/boot_id 2>/dev/null |
       tr -d '\r'
   )" || {
-    echo "Error: Android boot identity is unavailable" >&2
-    return 1
+    classify_android_identity_failure "$serial" "$pid" "Android boot identity is unavailable"
+    return $?
   }
   local command
   command="$(android_adb "$serial" shell readlink "/proc/$pid/exe" 2>/dev/null | tr -d '\r')" || {
-    echo "Error: Android process command identity is unavailable" >&2
-    return 1
+    classify_android_identity_failure "$serial" "$pid" "Android process command identity is unavailable"
+    return $?
+  }
+  local args
+  args="$(android_adb "$serial" shell cat "/proc/$pid/cmdline" 2>/dev/null | tr '\000\r' '  ')" || {
+    classify_android_identity_failure "$serial" "$pid" "Android process arguments are unavailable"
+    return $?
   }
   local stat_after
   stat_after="$(android_adb "$serial" shell cat "/proc/$pid/stat" 2>/dev/null | tr -d '\r')" || {
-    echo "Error: Android process changed during identity capture" >&2
-    return 1
+    classify_android_identity_failure "$serial" "$pid" "Android process changed during identity capture"
+    return $?
   }
   require_android_device "$serial" || return 1
 
@@ -137,6 +296,7 @@ probe_android_process() {
   ANDROID_PROCESS_STATE="present"
   ANDROID_PROCESS_BIRTH="${boot_id}:${start_before}"
   ANDROID_PROCESS_COMMAND="$command"
+  ANDROID_PROCESS_ARGS="$args"
 }
 
 cmd_start() {
@@ -230,8 +390,18 @@ cmd_start() {
   fi
 
   echo "$rec_pid" > "$pf"
+  local process_marker="$raw_file"
+  [[ "$platform" == "android" ]] && process_marker="$device_path"
+  probe_local_process "$rec_pid" "$process_marker"
+  [[ "$LOCAL_PROCESS_STATE" == "present" ]] || {
+    echo "Error: Recording process died before identity capture" >&2
+    exit 1
+  }
+  local rec_birth="$LOCAL_PROCESS_BIRTH"
+  echo "$rec_birth" > "$(birth_file "$scope")"
   sleep 0.5
-  if ! is_alive "$rec_pid"; then
+  probe_local_process "$rec_pid" "$process_marker"
+  if [[ "$LOCAL_PROCESS_STATE" != "present" || "$LOCAL_PROCESS_BIRTH" != "$rec_birth" ]]; then
     echo "Error: Recording process died immediately" >&2
     [[ -s "$recorder_log" ]] && sed -n '1,20p' "$recorder_log" >&2
     exit 1
@@ -242,30 +412,20 @@ cmd_start() {
     local remote_pid="$ANDROID_SCREENRECORD_PIDS"
     [[ ! "$remote_pid" =~ ^[0-9]+$ ]] && { echo "Error: Could not bind the device-side screenrecord PID" >&2; exit 1; }
     probe_android_process "$target_id" "$remote_pid"
-    [[ "$ANDROID_PROCESS_STATE" == "present" && "$ANDROID_PROCESS_COMMAND" == */screenrecord ]] || {
+    [[
+      "$ANDROID_PROCESS_STATE" == "present" &&
+        "$ANDROID_PROCESS_COMMAND" == */screenrecord &&
+        "$ANDROID_PROCESS_ARGS" == *"$device_path"*
+    ]] || {
       echo "Error: Could not prove the device-side screenrecord identity" >&2
       exit 1
     }
     echo "$remote_pid" > "${PID_PREFIX}-${scope}.remote-pid"
     echo "$ANDROID_PROCESS_BIRTH" > "$(remote_birth_file "$scope")"
     echo "$ANDROID_PROCESS_COMMAND" > "$(remote_command_file "$scope")"
+    echo "$ANDROID_PROCESS_ARGS" > "$(remote_args_file "$scope")"
   fi
-  echo "Recording started: platform=$platform pid=$rec_pid output=$output_path"
-}
-
-cmd_bind_identity() {
-  local scope="${1:-}"
-  local pid="${2:-}"
-  local birth="${3:-}"
-  [[ ! "$scope" =~ ^[a-f0-9]{64}$ || ! "$pid" =~ ^[0-9]+$ || -z "$birth" ]] && {
-    echo "Error: bind-identity requires valid <scope> <pid> <birth>" >&2
-    exit 1
-  }
-  [[ ! -f "$(pid_file "$scope")" || "$(cat "$(pid_file "$scope")")" != "$pid" ]] && {
-    echo "Error: recording PID does not match scope" >&2
-    exit 1
-  }
-  echo "$birth" > "$(birth_file "$scope")"
+  echo "Recording started: platform=$platform pid=$rec_pid birth=$rec_birth output=$output_path"
 }
 
 stop_android_recorder() {
@@ -290,16 +450,28 @@ stop_android_recorder() {
   }
   local expected_birth=""
   local expected_command=""
+  local expected_args=""
   [[ -f "$(remote_birth_file "$scope")" ]] && expected_birth="$(cat "$(remote_birth_file "$scope")")"
   [[ -f "$(remote_command_file "$scope")" ]] && expected_command="$(cat "$(remote_command_file "$scope")")"
-  [[ "$expected_birth" =~ ^[0-9a-fA-F-]{36}:[0-9]+$ && "$expected_command" == */screenrecord ]] || {
+  [[ -f "$(remote_args_file "$scope")" ]] && expected_args="$(cat "$(remote_args_file "$scope")")"
+  local device_path=""
+  [[ -f "${PID_PREFIX}-${scope}.device-path" ]] && device_path="$(cat "${PID_PREFIX}-${scope}.device-path")"
+  [[
+    "$expected_birth" =~ ^[0-9a-fA-F-]{36}:[0-9]+$ &&
+      "$expected_command" == */screenrecord &&
+      -n "$device_path" &&
+      "$expected_args" == *"$device_path"*
+  ]] || {
     echo "Error: device-side screenrecord identity is incomplete" >&2
     exit 1
   }
   probe_android_process "$serial" "$remote_pid"
   [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
   [[ "$ANDROID_PROCESS_BIRTH" != "$expected_birth" ]] && return
-  [[ "$ANDROID_PROCESS_COMMAND" == "$expected_command" ]] || {
+  [[
+    "$ANDROID_PROCESS_COMMAND" == "$expected_command" &&
+      "$ANDROID_PROCESS_ARGS" == "$expected_args"
+  ]] || {
     echo "Error: device-side screenrecord command identity changed" >&2
     exit 1
   }
@@ -346,7 +518,7 @@ cmd_abort() {
   if [[ -f "${PID_PREFIX}-${scope}.raw-path" ]]; then
     rm -f "$(cat "${PID_PREFIX}-${scope}.raw-path")"
   fi
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,device-path}
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}
 }
 
 cmd_stop() {
@@ -379,6 +551,15 @@ cmd_stop() {
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
 
   if is_alive "$pid"; then
+    local process_marker="$raw_file"
+    if [[ "$platform" == "android" && -f "${PID_PREFIX}-${scope}.device-path" ]]; then
+      process_marker="$(cat "${PID_PREFIX}-${scope}.device-path")"
+    fi
+    probe_local_process "$pid" "$process_marker"
+    [[ "$LOCAL_PROCESS_STATE" == "present" && "$LOCAL_PROCESS_BIRTH" == "$expected_birth" ]] || {
+      echo "Error: recorder process identity changed before stop" >&2
+      exit 1
+    }
     kill -INT "$pid"
     local waited=0
     while is_alive "$pid" && [[ $waited -lt 10 ]]; do
@@ -428,7 +609,7 @@ cmd_stop() {
     rm -f "$raw_file"
   fi
 
-  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,device-path}
+  rm -f "${PID_PREFIX}-${scope}".{pid,path,platform,birth,raw-path,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path}
   if [[ -n "$output_path" && -f "$output_path" ]]; then
     local size
     size="$(wc -c < "$output_path" | tr -d ' ')"
@@ -619,7 +800,6 @@ PYEOF
 
 case "${1:-}" in
   start)       shift; cmd_start "$@" ;;
-  bind-identity) shift; cmd_bind_identity "$@" ;;
   abort)       shift; cmd_abort "$@" ;;
   stop)        shift; cmd_stop "$@" ;;
   status)      shift; cmd_status "$@" ;;

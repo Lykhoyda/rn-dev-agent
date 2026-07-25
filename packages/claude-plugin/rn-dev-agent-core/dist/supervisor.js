@@ -12932,6 +12932,9 @@ var init_maestro_dispatch = __esm({
 // packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
 function parseMaestroFailure(output, terminal) {
   const raw = typeof output === "string" ? output : "";
+  if (terminal?.exitClass === "timed-out") {
+    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
+  }
   if (terminal?.failureKind === "SELECTOR_NOT_FOUND") {
     return {
       kind: "SELECTOR_NOT_FOUND",
@@ -12945,9 +12948,6 @@ function parseMaestroFailure(output, terminal) {
   }
   if (terminal?.failureKind === "ASSERTION_FAILED") {
     return { kind: "ASSERTION_FAILED", selector: terminal.failureSelector ?? null, raw };
-  }
-  if (terminal?.exitClass === "timed-out") {
-    return { kind: "TIMEOUT", selector: terminal.failureSelector ?? null, raw };
   }
   if (terminal?.exitClass === "before-first-step" && terminal.bootstrapEvidence) {
     return {
@@ -22269,7 +22269,15 @@ ${instrumentation.stderr}`;
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile15(script, args, { timeout: 6e4, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 })) {
+async function stopBoundRecorder(binding, processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile15(script, args, {
+  timeout: 6e4,
+  encoding: "utf8",
+  maxBuffer: 8 * 1024 * 1024,
+  env: {
+    ...process.env,
+    RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath()
+  }
+})) {
   const script = String(binding.script ?? "");
   const scope = String(binding.scope ?? "");
   const pid = Number(binding.pid);
@@ -64354,10 +64362,10 @@ function defaultOutputPath(platform) {
   return `/tmp/rn-dev-agent-proof-${platform}-${Date.now()}.mp4`;
 }
 function parseStartOutput(stdout) {
-  const match = stdout.match(/Recording started: platform=(?:ios|android) pid=(\d+) output=(.+?)\s*$/m);
+  const match = stdout.match(/Recording started: platform=(?:ios|android) pid=(\d+) birth=([a-f0-9]{64}) output=(.+?)\s*$/m);
   if (!match)
     return null;
-  return { pid: Number(match[1]), output: match[2].trim() };
+  return { pid: Number(match[1]), processBirth: match[2], output: match[3].trim() };
 }
 function parseStopOutput(stdout) {
   const saved = [];
@@ -64471,17 +64479,20 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
       claimResources: [{ type: "recorder", key: claimKey }]
     });
     const { stdout } = await execFileAsync5(script, scriptArgs, {
-      timeout: START_TIMEOUT_MS
+      timeout: START_TIMEOUT_MS,
+      env: {
+        ...process.env,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath()
+      }
     });
     const parsed = parseStartOutput(stdout);
     if (!parsed) {
       throw new Error(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
     }
     const processIdentity = probeProcessBirth(parsed.pid);
-    if (processIdentity.status !== "present") {
+    if (processIdentity.status !== "present" || processIdentity.birth.token !== parsed.processBirth) {
       throw new Error("Recording started but its process identity could not be proven");
     }
-    await execFileAsync5(script, ["bind-identity", scope, String(parsed.pid), processIdentity.birth.token], { timeout: STATUS_TIMEOUT_MS });
     authority.registry.updateBindings(authority.session, {
       bindings: {
         recorder: {
@@ -64491,7 +64502,7 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
           output: parsed.output,
           scope,
           pid: parsed.pid,
-          processBirth: processIdentity.birth.token,
+          processBirth: parsed.processBirth,
           script,
           claimKey,
           sessionId: authority.status.sessionId,
@@ -64506,7 +64517,7 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
       autoSelected: resolution.autoSelected,
       output: parsed.output,
       pid: parsed.pid,
-      processBirth: processIdentity.birth.token,
+      processBirth: parsed.processBirth,
       note: "Call device_record action=stop to finalize. Android caps at 180s; iOS has no inherent cap but xcrun simctl io may stall on long captures."
     });
   } catch (e) {

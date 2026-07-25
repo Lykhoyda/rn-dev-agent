@@ -88,9 +88,16 @@ test('synthetic staged deadlines classify as timeouts', () => {
 });
 
 test('synthetic staged deadlines remain timeouts in action failure parsing', () => {
-  assert.deepEqual(parseMaestroFailure('prior successful stage', { exitClass: 'timed-out' }), {
-    kind: 'TIMEOUT',
-    selector: null,
-    raw: 'prior successful stage',
-  });
+  assert.deepEqual(
+    parseMaestroFailure('prior successful stage', {
+      exitClass: 'timed-out',
+      failureKind: 'SELECTOR_NOT_FOUND',
+      failureSelector: 'stale-selector',
+    }),
+    {
+      kind: 'TIMEOUT',
+      selector: 'stale-selector',
+      raw: 'prior successful stage',
+    },
+  );
 });

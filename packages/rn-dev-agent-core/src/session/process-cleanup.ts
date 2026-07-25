@@ -2,7 +2,11 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { OWNED_PACKAGES } from '../runners/release-android-slot.js';
 import { probeManagedMetroListener, type ManagedMetroListenerProbe } from './managed-metro.js';
-import { probeProcessBirth, type ProcessBirthProbe } from './process-birth.js';
+import {
+  darwinProcessBirthHelperPath,
+  probeProcessBirth,
+  type ProcessBirthProbe,
+} from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 
 const execFile = promisify(execFileCb);
@@ -212,7 +216,15 @@ export async function stopBoundRecorder(
     script: string,
     args: string[],
   ) => Promise<{ stdout: string; stderr: string }> = async (script, args) =>
-    execFile(script, args, { timeout: 60_000, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }),
+    execFile(script, args, {
+      timeout: 60_000,
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+      env: {
+        ...process.env,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath(),
+      },
+    }),
 ): Promise<string> {
   const script = String(binding.script ?? '');
   const scope = String(binding.scope ?? '');
