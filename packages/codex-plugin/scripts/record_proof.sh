@@ -3,6 +3,7 @@ set -euo pipefail
 
 PID_PREFIX="/tmp/rn-dev-agent-record"
 RAW_PREFIX="/tmp/rn-dev-agent-raw"
+SIDECAR_TEMP_DIR="${PID_PREFIX}.private-$(id -u)"
 
 usage() {
   cat <<'EOF'
@@ -33,6 +34,48 @@ remote_birth_file() { echo "${PID_PREFIX}-${1}.remote-birth"; }
 remote_command_file() { echo "${PID_PREFIX}-${1}.remote-command"; }
 remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
 incarnation_file() { echo "${PID_PREFIX}-${1}.incarnation"; }
+
+ensure_sidecar_temp_dir() {
+  python3 - "$SIDECAR_TEMP_DIR" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+try:
+    os.mkdir(path, 0o700)
+except FileExistsError:
+    pass
+metadata = os.lstat(path)
+if (
+    not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.getuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+):
+    raise RuntimeError("recorder sidecar directory is not private")
+PY
+}
+
+secure_publish() {
+  local path="$1"
+  local value="$2"
+  ensure_sidecar_temp_dir
+  local temporary
+  temporary="$(mktemp "${SIDECAR_TEMP_DIR}/sidecar.XXXXXX")"
+  chmod 600 "$temporary"
+  if ! printf '%s' "$value" > "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  if ! mv -f "$temporary" "$path"; then
+    rm -f "$temporary"
+    return 1
+  fi
+}
+
+secure_write_sidecar() {
+  secure_publish "$1" "${2}"$'\n'
+}
 
 current_incarnation() {
   local file
@@ -260,36 +303,42 @@ start_supervised_recorder() {
   child_path="$(child_pid_file "$scope" "$incarnation")"
   token_path="$(control_token_file "$scope" "$incarnation")"
   rm -f "$token_path" "$request_path" "$response_path" "$state_path" "$child_path"
-  local incarnation_tmp
-  incarnation_tmp="$(incarnation_file "$scope").$$"
-  (umask 077; printf '%s\n' "$incarnation" > "$incarnation_tmp")
-  mv "$incarnation_tmp" "$(incarnation_file "$scope")"
+  secure_write_sidecar "$(incarnation_file "$scope")" "$incarnation"
   assert_current_incarnation "$scope" "$incarnation"
+  secure_publish "$recorder_log" ""
 
-  python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log") > "$recorder_log" 2>&1 <<'PY' &
+  python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$SIDECAR_TEMP_DIR") >> "$recorder_log" 2>&1 <<'PY' &
 import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 with os.fdopen(3, "rb") as config_file:
     config = config_file.read().split(b"\0")
 if config[-1] == b"":
     config.pop()
-if len(config) != 6:
+if len(config) != 7:
     raise RuntimeError("invalid recorder supervisor configuration")
-token, request_path, response_path, state_path, child_path, log_path = (
+token, request_path, response_path, state_path, child_path, log_path, temp_dir = (
     value.decode("utf-8") for value in config
 )
 command = sys.argv[1:]
 os.umask(0o077)
 
 def write_atomic(path, value):
-    temporary = f"{path}.{os.getpid()}.tmp"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        handle.write(value)
-    os.replace(temporary, path)
+    descriptor, temporary = tempfile.mkstemp(prefix="sidecar.", dir=temp_dir, text=True)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(value)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
 
 child = None
 terminal_state_written = False
@@ -394,21 +443,15 @@ PY
   SUPERVISOR_PID=$!
 
   assert_current_incarnation "$scope" "$incarnation"
-  local token_tmp="${token_path}.$$"
-  (umask 077; printf '%s\n' "$token" > "$token_tmp")
-  mv "$token_tmp" "$token_path"
-  local pid_tmp="${PID_PREFIX}-${scope}.pid.$$"
-  (umask 077; printf '%s\n' "$SUPERVISOR_PID" > "$pid_tmp")
-  mv "$pid_tmp" "$(pid_file "$scope")"
+  secure_write_sidecar "$token_path" "$token"
+  secure_write_sidecar "$(pid_file "$scope")" "$SUPERVISOR_PID"
   probe_local_process "$SUPERVISOR_PID" "$process_marker"
   [[ "$LOCAL_PROCESS_STATE" == "present" && "$LOCAL_PROCESS_MARKER_MATCH" == "true" ]] || {
     echo "Error: recorder supervisor died before identity capture" >&2
     return 1
   }
   SUPERVISOR_BIRTH="$LOCAL_PROCESS_BIRTH"
-  local birth_tmp="${PID_PREFIX}-${scope}.birth.$$"
-  (umask 077; printf '%s\n' "$SUPERVISOR_BIRTH" > "$birth_tmp")
-  mv "$birth_tmp" "$(birth_file "$scope")"
+  secure_write_sidecar "$(birth_file "$scope")" "$SUPERVISOR_BIRTH"
   assert_current_incarnation "$scope" "$incarnation"
   request_supervisor_signal "$scope" "START" "$incarnation"
 
@@ -470,12 +513,9 @@ request_supervisor_signal() {
   }
   local token
   local nonce
-  local request_tmp
   token="$(cat "$token_path")"
   nonce="$$-${RANDOM}-${RANDOM}"
-  request_tmp="${request_path}.$$"
-  (umask 077; printf '%s %s %s\n' "$token" "$nonce" "$action" > "$request_tmp")
-  mv "$request_tmp" "$request_path"
+  secure_write_sidecar "$request_path" "$token $nonce $action"
 
   local waited=0
   while [[ $waited -lt 100 ]]; do
@@ -679,7 +719,8 @@ cmd_start() {
   mkdir -p "$(dirname "$output_path")"
   output_path="$(cd "$(dirname "$output_path")" && pwd)/$(basename "$output_path")"
 
-  local raw_file="${RAW_PREFIX}-${platform}-$$.mov"
+  ensure_sidecar_temp_dir
+  local raw_file="${SIDECAR_TEMP_DIR}/raw-${platform}-$$.mov"
   local recorder_log="${PID_PREFIX}-${scope}.log"
   local rec_pid
   local -a recorder_command=()
@@ -690,12 +731,12 @@ cmd_start() {
       exit 1
     fi
     local ios_target="${target_id:-booted}"
-    echo "$platform" > "$(platform_file "$scope")"
-    echo "$output_path" > "$(path_file "$scope")"
-    echo "$raw_file" > "${PID_PREFIX}-${scope}.raw-path"
+    secure_write_sidecar "$(platform_file "$scope")" "$platform"
+    secure_write_sidecar "$(path_file "$scope")" "$output_path"
+    secure_write_sidecar "${PID_PREFIX}-${scope}.raw-path" "$raw_file"
     recorder_command=(xcrun simctl io "$ios_target" recordVideo --force "$raw_file")
   else
-    raw_file="${RAW_PREFIX}-${platform}-$$.mp4"
+    raw_file="${SIDECAR_TEMP_DIR}/raw-${platform}-$$.mp4"
     if ! adb devices 2>/dev/null | grep -q "device$"; then
       echo "Error: No Android device connected" >&2
       exit 1
@@ -706,12 +747,12 @@ cmd_start() {
       echo "Error: A screenrecord process already owns this device" >&2
       exit 1
     fi
-    echo "$platform" > "$(platform_file "$scope")"
-    echo "$output_path" > "$(path_file "$scope")"
-    echo "$raw_file" > "${PID_PREFIX}-${scope}.raw-path"
-    echo "$device_path" > "${PID_PREFIX}-${scope}.device-path"
+    secure_write_sidecar "$(platform_file "$scope")" "$platform"
+    secure_write_sidecar "$(path_file "$scope")" "$output_path"
+    secure_write_sidecar "${PID_PREFIX}-${scope}.raw-path" "$raw_file"
+    secure_write_sidecar "${PID_PREFIX}-${scope}.device-path" "$device_path"
     if [[ -n "$target_id" ]]; then
-      echo "$target_id" > "${PID_PREFIX}-${scope}.serial"
+      secure_write_sidecar "${PID_PREFIX}-${scope}.serial" "$target_id"
     else
       rm -f "${PID_PREFIX}-${scope}.serial"
     fi
@@ -752,10 +793,10 @@ cmd_start() {
       echo "Error: Could not prove the device-side screenrecord identity" >&2
       exit 1
     }
-    echo "$remote_pid" > "${PID_PREFIX}-${scope}.remote-pid"
-    echo "$ANDROID_PROCESS_BIRTH" > "$(remote_birth_file "$scope")"
-    echo "$ANDROID_PROCESS_COMMAND" > "$(remote_command_file "$scope")"
-    echo "$ANDROID_PROCESS_ARGS" > "$(remote_args_file "$scope")"
+    secure_write_sidecar "${PID_PREFIX}-${scope}.remote-pid" "$remote_pid"
+    secure_write_sidecar "$(remote_birth_file "$scope")" "$ANDROID_PROCESS_BIRTH"
+    secure_write_sidecar "$(remote_command_file "$scope")" "$ANDROID_PROCESS_COMMAND"
+    secure_write_sidecar "$(remote_args_file "$scope")" "$ANDROID_PROCESS_ARGS"
   fi
   echo "Recording started: platform=$platform pid=$rec_pid birth=$rec_birth output=$output_path"
 }

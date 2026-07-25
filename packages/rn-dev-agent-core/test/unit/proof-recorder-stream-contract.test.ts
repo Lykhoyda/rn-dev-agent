@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -23,14 +24,14 @@ test('the recorder supervisor releases start streams and owns child output', asy
 
   assert.ok(supervisorLaunch);
   assert.match(supervisorLaunch, /3< <\(printf/);
-  assert.match(supervisorLaunch, /> "\$recorder_log" 2>&1 <<'PY' &$/);
+  assert.match(supervisorLaunch, />> "\$recorder_log" 2>&1 <<'PY' &$/);
   assert.match(script, /stdout=log,\n\s+stderr=subprocess\.STDOUT,/);
   const supervisorPidIndex = script.indexOf('SUPERVISOR_PID=$!');
-  const tokenWriteIndex = script.indexOf('> "$token_tmp"');
+  const tokenWriteIndex = script.indexOf('secure_write_sidecar "$token_path" "$token"');
   const startActionIndex = script.indexOf('action == "START"');
   const recorderSpawnIndex = script.indexOf('subprocess.Popen(');
   const incarnationPublishIndex = script.indexOf(
-    'mv "$incarnation_tmp" "$(incarnation_file "$scope")"',
+    'secure_write_sidecar "$(incarnation_file "$scope")" "$incarnation"',
   );
   const supervisorLaunchIndex = script.indexOf('python3 - "$@"');
   assert.notEqual(supervisorPidIndex, -1);
@@ -43,11 +44,11 @@ test('the recorder supervisor releases start streams and owns child output', asy
   assert.ok(startActionIndex < recorderSpawnIndex);
   assert.ok(incarnationPublishIndex < supervisorLaunchIndex);
   assert.match(script, /\$\{PID_PREFIX\}-\$\{scope\}-\$\{incarnation\}\.\$\{suffix\}/);
+  assert.match(script, /mktemp "\$\{SIDECAR_TEMP_DIR\}\/sidecar\.XXXXXX"/);
+  assert.match(script, /tempfile\.mkstemp\(prefix="sidecar\.", dir=temp_dir, text=True\)/);
+  assert.doesNotMatch(script, /temporary = f"\{path\}\.\{os\.getpid\(\)\}\.tmp"/);
   assert.match(script, /else f"failed \{return_code\}\\n"/);
-  assert.match(
-    script,
-    /if \[\[ "\$supervisor_terminal" == "true" \]\]; then\n\s+:/,
-  );
+  assert.match(script, /if \[\[ "\$supervisor_terminal" == "true" \]\]; then\n\s+:/);
   assert.match(
     script,
     /sleep 1\n\n\s+if \[\[ -s "\$\(supervisor_state_file "\$scope" "\$incarnation"\)" \]\]; then/,
@@ -116,15 +117,74 @@ test('a spontaneous nonzero recorder exit is reported as failure', async () => {
     assert.ok(identity);
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000));
 
-    const stopped = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, identity[1], identity[2]],
-      { encoding: 'utf8' },
-    );
+    const stopped = spawnSync('bash', [state.script, 'stop', scope, identity[1], identity[2]], {
+      encoding: 'utf8',
+    });
     assert.equal(stopped.status, 0, stopped.stderr);
     assert.match(stopped.stdout, /Recorder failed:/);
     assert.doesNotMatch(stopped.stdout, /Saved:/);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('sidecar publication replaces hostile symlinks without following them', () => {
+  const state = fixture();
+  const scope = 'd'.repeat(64);
+  try {
+    const victim = join(state.root, 'victim');
+    const output = join(state.root, 'capture.mp4');
+    writeFileSync(victim, 'preserve-me');
+    for (const suffix of ['incarnation', 'platform', 'path', 'raw-path', 'log']) {
+      symlinkSync(victim, `${state.prefix}-${scope}.${suffix}`);
+    }
+
+    const started = spawnSync('bash', [state.script, 'start', 'ios', output, '--scope', scope], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: resolve(
+          import.meta.dirname,
+          '../../dist/native/darwin-process-birth',
+        ),
+      },
+    });
+
+    assert.equal(started.status, 0, started.stderr);
+    assert.equal(readFileSync(victim, 'utf8'), 'preserve-me');
+    assert.match(readFileSync(`${state.prefix}-${scope}.incarnation`, 'utf8'), /^[a-f0-9]{32}\n$/);
+    const aborted = spawnSync('bash', [state.script, 'abort', scope], {
+      encoding: 'utf8',
+    });
+    assert.equal(aborted.status, 0, aborted.stderr);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('sidecar publication rejects a hostile private-directory symlink', () => {
+  const state = fixture();
+  const scope = 'c'.repeat(64);
+  try {
+    const victimDirectory = join(state.root, 'victim-directory');
+    const output = join(state.root, 'capture.mp4');
+    const privateDirectory = `${state.prefix}.private-${process.getuid?.()}`;
+    writeFileSync(victimDirectory, 'preserve-me');
+    symlinkSync(victimDirectory, privateDirectory);
+
+    const started = spawnSync('bash', [state.script, 'start', 'ios', output, '--scope', scope], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+      },
+    });
+
+    assert.notEqual(started.status, 0);
+    assert.equal(readFileSync(victimDirectory, 'utf8'), 'preserve-me');
+    assert.match(started.stderr, /recorder sidecar directory is not private/);
   } finally {
     state.cleanup();
   }
@@ -146,17 +206,12 @@ test('terminal supervisor state takes precedence over a reused live PID', async 
     writeFileSync(`${state.prefix}-${scope}.path`, `${output}\n`);
     writeFileSync(`${state.prefix}-${scope}.raw-path`, `${raw}\n`);
     writeFileSync(`${state.prefix}-${scope}.incarnation`, `${incarnation}\n`);
-    writeFileSync(
-      `${state.prefix}-${scope}-${incarnation}.supervisor-state`,
-      'exited 0\n',
-    );
+    writeFileSync(`${state.prefix}-${scope}-${incarnation}.supervisor-state`, 'exited 0\n');
     writeFileSync(raw, 'recording');
 
-    const stopped = spawnSync(
-      'bash',
-      [state.script, 'stop', scope, `${replacement.pid}`, birth],
-      { encoding: 'utf8' },
-    );
+    const stopped = spawnSync('bash', [state.script, 'stop', scope, `${replacement.pid}`, birth], {
+      encoding: 'utf8',
+    });
     assert.equal(stopped.status, 0, stopped.stderr);
     const replacementState = spawnSync('ps', ['-p', `${replacement.pid}`, '-o', 'stat='], {
       encoding: 'utf8',
@@ -165,10 +220,7 @@ test('terminal supervisor state takes precedence over a reused live PID', async 
     assert.doesNotMatch(replacementState.stdout.trim(), /^Z/);
     assert.equal(existsSync(`${state.prefix}-${scope}.pid`), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.incarnation`), false);
-    assert.equal(
-      existsSync(`${state.prefix}-${scope}-${incarnation}.supervisor-state`),
-      false,
-    );
+    assert.equal(existsSync(`${state.prefix}-${scope}-${incarnation}.supervisor-state`), false);
   } finally {
     replacement.kill('SIGKILL');
     state.cleanup();
