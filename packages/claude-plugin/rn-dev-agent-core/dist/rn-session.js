@@ -11041,6 +11041,11 @@ var IGNORED_RUNTIME_INPUT_PATHS = [
   ":(top,exclude,glob)**/.yarn/unplugged/**",
   ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
 ];
+var METRO_INTEGRATION_START = "// rn-dev-agent session integration: begin";
+var METRO_INTEGRATION_END = "// rn-dev-agent session integration: end";
+var METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
+module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
+${METRO_INTEGRATION_END}`;
 function defaultGit(root, args) {
   return execFileSync6("git", ["-C", root, ...args], {
     encoding: "utf8",

@@ -29,7 +29,7 @@ function sourceRoot() {
     throw error;
   }
 }
-function runtimePolicy(config) {
+function runtimePolicy(config, callbackRuntimeInputs = []) {
   const root = sourceRoot();
   const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
@@ -37,9 +37,33 @@ function runtimePolicy(config) {
   if (root === null || !capability || !sessionId || !metroInstanceId) return;
   const runtimeInputs = new Set();
   const violations = [];
+  const excludedRuntimeDirectories = [
+    '.gradle',
+    '.expo',
+    '.cache',
+    'ios/Pods',
+    'ios/build',
+    'ios/DerivedData',
+    'android/build',
+    'android/app/build',
+    'android/app/.cxx',
+  ];
   const resolver = config.resolver || {};
   const transformer = config.transformer || {};
   const serializer = config.serializer || {};
+  function isContained(candidate) {
+    const child = path.relative(root, candidate);
+    return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
+  }
+  function isExcluded(candidate) {
+    const entry = path.relative(root, candidate).split(path.sep).join('/');
+    return excludedRuntimeDirectories.some((excluded) =>
+      entry === excluded ||
+      entry.startsWith(excluded + '/') ||
+      entry.endsWith('/' + excluded) ||
+      entry.includes('/' + excluded + '/')
+    );
+  }
   function addPath(value, field) {
     if (value === undefined) return;
     if (typeof value !== 'string') {
@@ -67,15 +91,20 @@ function runtimePolicy(config) {
       return;
     }
     try {
-      runtimeInputs.add(fs.realpathSync(require.resolve(value, { paths: [process.cwd()] })));
+      const resolved = fs.realpathSync(require.resolve(value, { paths: [process.cwd()] }));
+      runtimeInputs.add(resolved);
+      if (!isContained(resolved) || isExcluded(resolved)) {
+        violations.push(field + ' must resolve to Git-authenticated source or a local dependency store');
+      }
     } catch {
-      addPath(value, field);
+      violations.push(field + ' cannot be resolved as an authenticated module');
     }
   }
   addPath(config.projectRoot, 'projectRoot');
   addPaths(config.watchFolders, 'watchFolders');
   addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
   addPaths((process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
+  callbackRuntimeInputs.forEach((value) => addModule(value, 'Metro callback runtime input'));
   if (resolver.extraNodeModules !== undefined) {
     if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
       violations.push('extraNodeModules must be a path map');
@@ -124,18 +153,28 @@ function runtimePolicy(config) {
   fs.writeFileSync(temporary, JSON.stringify(receipt) + '\\n', { mode: 0o600 });
   fs.renameSync(temporary, policyPath);
 }
+function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
+  return function (...args) {
+    const finish = (value) => {
+      runtimePolicy(getConfig(), includeReturnedPaths && Array.isArray(value) ? value : []);
+      return value;
+    };
+    const result = callback.apply(this, args);
+    return result && typeof result.then === 'function' ? result.then(finish) : finish(result);
+  };
+}
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
   const current = config || {};
-  runtimePolicy(current);
   const resolver = current.resolver || {};
   const transformer = current.transformer || {};
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
-  return {
+  let finalConfig;
+  finalConfig = {
     ...current,
     ...(Array.isArray(current.watchFolders) ? { watchFolders: [...current.watchFolders] } : {}),
     resolver: {
@@ -148,14 +187,24 @@ module.exports = function withRnDevAgentAuthority(config) {
     transformer: {
       ...transformer,
       ...(Array.isArray(transformer.assetPlugins) ? { assetPlugins: [...transformer.assetPlugins] } : {}),
+      ...(typeof transformer.getTransformOptions === 'function'
+        ? { getTransformOptions: withPolicyRefresh(transformer.getTransformOptions, () => finalConfig, false) }
+        : {}),
     },
     serializer: {
       ...serializer,
+      ...(typeof serializer.getPolyfills === 'function'
+        ? { getPolyfills: withPolicyRefresh(serializer.getPolyfills, () => finalConfig, true) }
+        : {}),
       getModulesRunBeforeMainModule(entryFile) {
-        return [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+        const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+        runtimePolicy(finalConfig, result);
+        return result;
       },
     },
   };
+  runtimePolicy(finalConfig);
+  return finalConfig;
 };
 `;
 }

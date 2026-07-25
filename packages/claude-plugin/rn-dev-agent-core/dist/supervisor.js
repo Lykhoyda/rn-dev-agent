@@ -892,9 +892,10 @@ function assertFinalMetroIntegration(identity2) {
   if (candidates.length === 0)
     return;
   const source = readFileSync3(candidates[0], "utf8");
-  const end = source.lastIndexOf(METRO_INTEGRATION_END);
-  if (end < 0 || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be the final Metro config statement");
+  const start = source.indexOf(METRO_INTEGRATION_START);
+  const end = source.indexOf(METRO_INTEGRATION_END);
+  if (start < 0 || end < start || source.indexOf(METRO_INTEGRATION_START, start + METRO_INTEGRATION_START.length) >= 0 || source.indexOf(METRO_INTEGRATION_END, end + METRO_INTEGRATION_END.length) >= 0 || source.slice(start, end + METRO_INTEGRATION_END.length) !== METRO_INTEGRATION_BLOCK || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
   }
 }
 function metroRuntimeInputs(identity2, authority) {
@@ -1160,7 +1161,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     dirtyDigest: dirtyHash.digest("hex")
   };
 }
-var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_END, METRO_RUNTIME_POLICY;
+var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY;
 var init_source_identity = __esm({
   "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
     "use strict";
@@ -1195,7 +1196,11 @@ var init_source_identity = __esm({
       ":(top,exclude,glob)**/.yarn/unplugged/**",
       ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
     ];
+    METRO_INTEGRATION_START = "// rn-dev-agent session integration: begin";
     METRO_INTEGRATION_END = "// rn-dev-agent session integration: end";
+    METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
+module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
+${METRO_INTEGRATION_END}`;
     METRO_RUNTIME_POLICY = ".rn-agent/integration/metro-runtime-policy.json";
   }
 });
@@ -72448,7 +72453,7 @@ function sourceRoot() {
     throw error;
   }
 }
-function runtimePolicy(config) {
+function runtimePolicy(config, callbackRuntimeInputs = []) {
   const root = sourceRoot();
   const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
@@ -72456,9 +72461,33 @@ function runtimePolicy(config) {
   if (root === null || !capability || !sessionId || !metroInstanceId) return;
   const runtimeInputs = new Set();
   const violations = [];
+  const excludedRuntimeDirectories = [
+    '.gradle',
+    '.expo',
+    '.cache',
+    'ios/Pods',
+    'ios/build',
+    'ios/DerivedData',
+    'android/build',
+    'android/app/build',
+    'android/app/.cxx',
+  ];
   const resolver = config.resolver || {};
   const transformer = config.transformer || {};
   const serializer = config.serializer || {};
+  function isContained(candidate) {
+    const child = path.relative(root, candidate);
+    return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
+  }
+  function isExcluded(candidate) {
+    const entry = path.relative(root, candidate).split(path.sep).join('/');
+    return excludedRuntimeDirectories.some((excluded) =>
+      entry === excluded ||
+      entry.startsWith(excluded + '/') ||
+      entry.endsWith('/' + excluded) ||
+      entry.includes('/' + excluded + '/')
+    );
+  }
   function addPath(value, field) {
     if (value === undefined) return;
     if (typeof value !== 'string') {
@@ -72486,15 +72515,20 @@ function runtimePolicy(config) {
       return;
     }
     try {
-      runtimeInputs.add(fs.realpathSync(require.resolve(value, { paths: [process.cwd()] })));
+      const resolved = fs.realpathSync(require.resolve(value, { paths: [process.cwd()] }));
+      runtimeInputs.add(resolved);
+      if (!isContained(resolved) || isExcluded(resolved)) {
+        violations.push(field + ' must resolve to Git-authenticated source or a local dependency store');
+      }
     } catch {
-      addPath(value, field);
+      violations.push(field + ' cannot be resolved as an authenticated module');
     }
   }
   addPath(config.projectRoot, 'projectRoot');
   addPaths(config.watchFolders, 'watchFolders');
   addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
   addPaths((process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
+  callbackRuntimeInputs.forEach((value) => addModule(value, 'Metro callback runtime input'));
   if (resolver.extraNodeModules !== undefined) {
     if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
       violations.push('extraNodeModules must be a path map');
@@ -72543,18 +72577,28 @@ function runtimePolicy(config) {
   fs.writeFileSync(temporary, JSON.stringify(receipt) + '\\n', { mode: 0o600 });
   fs.renameSync(temporary, policyPath);
 }
+function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
+  return function (...args) {
+    const finish = (value) => {
+      runtimePolicy(getConfig(), includeReturnedPaths && Array.isArray(value) ? value : []);
+      return value;
+    };
+    const result = callback.apply(this, args);
+    return result && typeof result.then === 'function' ? result.then(finish) : finish(result);
+  };
+}
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
   const current = config || {};
-  runtimePolicy(current);
   const resolver = current.resolver || {};
   const transformer = current.transformer || {};
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
-  return {
+  let finalConfig;
+  finalConfig = {
     ...current,
     ...(Array.isArray(current.watchFolders) ? { watchFolders: [...current.watchFolders] } : {}),
     resolver: {
@@ -72567,14 +72611,24 @@ module.exports = function withRnDevAgentAuthority(config) {
     transformer: {
       ...transformer,
       ...(Array.isArray(transformer.assetPlugins) ? { assetPlugins: [...transformer.assetPlugins] } : {}),
+      ...(typeof transformer.getTransformOptions === 'function'
+        ? { getTransformOptions: withPolicyRefresh(transformer.getTransformOptions, () => finalConfig, false) }
+        : {}),
     },
     serializer: {
       ...serializer,
+      ...(typeof serializer.getPolyfills === 'function'
+        ? { getPolyfills: withPolicyRefresh(serializer.getPolyfills, () => finalConfig, true) }
+        : {}),
       getModulesRunBeforeMainModule(entryFile) {
-        return [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+        const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+        runtimePolicy(finalConfig, result);
+        return result;
       },
     },
   };
+  runtimePolicy(finalConfig);
+  return finalConfig;
 };
 `;
 }
@@ -74448,6 +74502,9 @@ function proofAuthority(runId) {
   const runner = status.bindings.runner;
   if (!install || !metro || !bundle || !device || !runner || !controller.worker.instanceId || !controller.worker.pid || !controller.worker.token) {
     throw new Error("PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete");
+  }
+  if (metro.mode !== "managed") {
+    throw new Error("PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher");
   }
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
   if (!secret?.signerCapability || typeof metro.instanceId !== "string") {

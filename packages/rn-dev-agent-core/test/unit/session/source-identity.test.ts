@@ -15,6 +15,7 @@ import {
   resolveSourceIdentity,
   strictProofSourceIdentity,
 } from '../../../dist/session/source-identity.js';
+import { previewMetroIntegration } from '../../../dist/session/package-integration.js';
 
 const roots = [];
 
@@ -362,12 +363,16 @@ test('strict proof bounds dependency traversal depth', () => {
   );
 });
 
-test('strict proof rejects Metro config statements after session integration', () => {
+test('strict proof requires one exact terminal Metro integration block', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-metro-suffix-'));
   roots.push(root);
+  const integrated = previewMetroIntegration('module.exports = {};\n');
   writeFileSync(
     join(root, 'metro.config.js'),
-    'module.exports = {};\n// rn-dev-agent session integration: end\nmodule.exports.watchFolders = [];\n',
+    integrated.replace(
+      '// rn-dev-agent session integration: end',
+      "module.exports.watchFolders = [];\n// rn-dev-agent session integration: end",
+    ),
   );
   const identity = {
     kind: 'git' as const,
@@ -398,7 +403,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   writeFileSync(runtimeFile, 'module.exports = "first";');
   writeFileSync(
     join(root, 'metro.config.js'),
-    'module.exports = {};\n// rn-dev-agent session integration: end\n',
+    previewMetroIntegration('module.exports = {};\n'),
   );
   const capability = 'policy-capability';
   const payload = {

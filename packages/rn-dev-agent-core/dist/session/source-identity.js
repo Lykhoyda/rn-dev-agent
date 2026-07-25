@@ -41,7 +41,11 @@ const IGNORED_RUNTIME_INPUT_PATHS = [
     ':(top,exclude,glob)**/.yarn/unplugged/**',
     ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`),
 ];
+const METRO_INTEGRATION_START = '// rn-dev-agent session integration: begin';
 const METRO_INTEGRATION_END = '// rn-dev-agent session integration: end';
+const METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
+module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
+${METRO_INTEGRATION_END}`;
 const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
 function updateFramed(hash, part) {
     const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
@@ -150,9 +154,15 @@ function assertFinalMetroIntegration(identity) {
     if (candidates.length === 0)
         return;
     const source = readFileSync(candidates[0], 'utf8');
-    const end = source.lastIndexOf(METRO_INTEGRATION_END);
-    if (end < 0 || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
-        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be the final Metro config statement');
+    const start = source.indexOf(METRO_INTEGRATION_START);
+    const end = source.indexOf(METRO_INTEGRATION_END);
+    if (start < 0 ||
+        end < start ||
+        source.indexOf(METRO_INTEGRATION_START, start + METRO_INTEGRATION_START.length) >= 0 ||
+        source.indexOf(METRO_INTEGRATION_END, end + METRO_INTEGRATION_END.length) >= 0 ||
+        source.slice(start, end + METRO_INTEGRATION_END.length) !== METRO_INTEGRATION_BLOCK ||
+        source.slice(end + METRO_INTEGRATION_END.length).trim()) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block');
     }
 }
 function metroRuntimeInputs(identity, authority) {

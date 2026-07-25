@@ -2362,6 +2362,11 @@ function proofAuthority(runId: string): ProofAuthority {
   ) {
     throw new Error('PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete');
   }
+  if (metro.mode !== 'managed') {
+    throw new Error(
+      'PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher',
+    );
+  }
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
     ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
     : null;
