@@ -33,6 +33,7 @@ function fixture() {
   const killMarker = join(root, 'kill-marker');
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(

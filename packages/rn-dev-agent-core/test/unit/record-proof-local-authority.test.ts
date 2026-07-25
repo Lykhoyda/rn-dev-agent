@@ -28,6 +28,17 @@ const processBirthHelper = join(
 const scope = 'd'.repeat(64);
 const execFileAsync = promisify(execFile);
 
+async function waitForDifferentBirth(pid: number, expectedBirth: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const observed = probeProcessBirth(pid);
+    const birth = observed.status === 'present' ? observed.birth.token : null;
+    if (birth !== expectedBirth) return birth;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const observed = probeProcessBirth(pid);
+  return observed.status === 'present' ? observed.birth.token : null;
+}
+
 test('recording start returns while its authenticated supervisor remains active', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'record-proof-local-authority-'));
   const prefix = join(root, 'record');
@@ -48,6 +59,7 @@ test('recording start returns while its authenticated supervisor remains active'
 
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -81,13 +93,16 @@ done
   const parsed = parseStartOutput(result.stdout);
   assert.ok(parsed);
   recorderPid = parsed.pid;
-  const token = readFileSync(`${prefix}-${scope}.control-token`, 'utf8').trim();
+  const incarnation = readFileSync(`${prefix}-${scope}.incarnation`, 'utf8').trim();
+  const tokenPath = `${prefix}-${scope}-${incarnation}.control-token`;
+  const requestPath = `${prefix}-${scope}-${incarnation}.control-request`;
+  const token = readFileSync(tokenPath, 'utf8').trim();
   const processRow = spawnSync('ps', ['-ww', '-p', String(parsed.pid), '-o', 'command='], {
     encoding: 'utf8',
   });
   assert.equal(processRow.status, 0, processRow.stderr);
   assert.equal(processRow.stdout.includes(token), false);
-  assert.equal(processRow.stdout.includes(`${prefix}-${scope}.control-request`), false);
+  assert.equal(processRow.stdout.includes(requestPath), false);
   assert.equal(readFileSync(`${prefix}-${scope}.birth`, 'utf8').trim(), parsed.processBirth);
   const observed = probeProcessBirth(parsed.pid);
   assert.equal(observed.status, 'present');
@@ -110,9 +125,8 @@ done
     },
   );
   assert.equal(abort.status, 0, abort.stderr);
-  assert.equal(existsSync(`${prefix}-${scope}.control-token`), false);
-  const afterAbort = probeProcessBirth(parsed.pid);
-  const afterAbortBirth = afterAbort.status === 'present' ? afterAbort.birth.token : null;
+  assert.equal(existsSync(tokenPath), false);
+  const afterAbortBirth = await waitForDifferentBirth(parsed.pid, parsed.processBirth);
   assert.notEqual(afterAbortBirth, parsed.processBirth);
   recorderPid = 0;
 });
@@ -137,6 +151,7 @@ test('recording supervisor force-stops its unreaped child after SIGINT is ignore
 
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -203,6 +218,7 @@ test('recording supervisor terminates its child when request handling fails', as
 
   const source = readFileSync(sourceScript, 'utf8')
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${root}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -233,21 +249,25 @@ done
   const parsed = parseStartOutput(start.stdout);
   assert.ok(parsed);
   supervisorPid = parsed.pid;
-  childPid = Number(readFileSync(`${prefix}-${scope}.child-pid`, 'utf8').trim());
+  const incarnation = readFileSync(`${prefix}-${scope}.incarnation`, 'utf8').trim();
+  const childPath = `${prefix}-${scope}-${incarnation}.child-pid`;
+  const requestPath = `${prefix}-${scope}-${incarnation}.control-request`;
+  const statePath = `${prefix}-${scope}-${incarnation}.supervisor-state`;
+  childPid = Number(readFileSync(childPath, 'utf8').trim());
   const childBefore = probeProcessBirth(childPid);
   assert.equal(childBefore.status, 'present');
-  writeFileSync(`${prefix}-${scope}.control-request`, Buffer.from([0xff]));
+  writeFileSync(requestPath, Buffer.from([0xff]));
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (readFileSync(`${prefix}-${scope}.supervisor-state`, 'utf8').trim() === 'failed') break;
+    if (readFileSync(statePath, 'utf8').trim().startsWith('failed')) break;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.equal(readFileSync(`${prefix}-${scope}.supervisor-state`, 'utf8').trim(), 'failed');
+  assert.match(readFileSync(statePath, 'utf8').trim(), /^failed(?: |$)/);
   assert.equal(existsSync(`${prefix}-${scope}.pid`), true);
-  const supervisorAfter = probeProcessBirth(supervisorPid);
-  const childAfter = probeProcessBirth(childPid);
-  const supervisorBirth =
-    supervisorAfter.status === 'present' ? supervisorAfter.birth.token : null;
-  const childBirth = childAfter.status === 'present' ? childAfter.birth.token : null;
+  const supervisorBirth = await waitForDifferentBirth(supervisorPid, parsed.processBirth);
+  const childBirth = await waitForDifferentBirth(
+    childPid,
+    childBefore.status === 'present' ? childBefore.birth.token : '',
+  );
   assert.notEqual(supervisorBirth, parsed.processBirth);
   assert.notEqual(
     childBirth,

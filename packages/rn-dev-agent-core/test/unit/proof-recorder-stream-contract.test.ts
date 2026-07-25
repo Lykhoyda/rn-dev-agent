@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -65,11 +66,13 @@ test('the recorder supervisor releases start streams and owns child output', asy
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'proof-recorder-supervisor-'));
-  const prefix = join(root, 'record');
+  const legacyPrefix = join(root, 'record');
+  const runtimeDirectory = `${legacyPrefix}.private-${process.getuid?.()}`;
+  const prefix = join(runtimeDirectory, 'record');
   const script = join(root, 'record_proof.sh');
   const xcrun = join(root, 'xcrun');
   const source = readFileSync(sourceScript, 'utf8')
-    .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${prefix}"`)
+    .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${legacyPrefix}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(root, 'raw')}"`);
   writeFileSync(script, source);
   writeFileSync(
@@ -89,8 +92,10 @@ fi
   chmodSync(script, 0o755);
   chmodSync(xcrun, 0o755);
   return {
+    legacyPrefix,
     root,
     prefix,
+    runtimeDirectory,
     script,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
@@ -129,50 +134,63 @@ test('a spontaneous nonzero recorder exit is reported as failure', async () => {
   }
 });
 
-test('sidecar publication replaces hostile symlinks without following them', () => {
+test('legacy sidecar symlinks cannot authorize raw-file deletion', () => {
   const state = fixture();
   const scope = 'd'.repeat(64);
   try {
     const victim = join(state.root, 'victim');
-    const output = join(state.root, 'capture.mp4');
     writeFileSync(victim, 'preserve-me');
-    for (const suffix of ['incarnation', 'platform', 'path', 'raw-path', 'log']) {
-      symlinkSync(victim, `${state.prefix}-${scope}.${suffix}`);
-    }
+    const attackerMetadata = join(state.root, 'attacker-metadata');
+    writeFileSync(attackerMetadata, `${victim}\n`);
+    mkdirSync(state.runtimeDirectory, { mode: 0o700 });
+    symlinkSync(attackerMetadata, `${state.legacyPrefix}-${scope}.raw-path`);
 
-    const started = spawnSync('bash', [state.script, 'start', 'ios', output, '--scope', scope], {
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: `${state.root}:${process.env.PATH}`,
-        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: resolve(
-          import.meta.dirname,
-          '../../dist/native/darwin-process-birth',
-        ),
-      },
-    });
-
-    assert.equal(started.status, 0, started.stderr);
-    assert.equal(readFileSync(victim, 'utf8'), 'preserve-me');
-    assert.match(readFileSync(`${state.prefix}-${scope}.incarnation`, 'utf8'), /^[a-f0-9]{32}\n$/);
     const aborted = spawnSync('bash', [state.script, 'abort', scope], {
       encoding: 'utf8',
     });
-    assert.equal(aborted.status, 0, aborted.stderr);
+
+    assert.notEqual(aborted.status, 0);
+    assert.equal(readFileSync(victim, 'utf8'), 'preserve-me');
+    assert.match(aborted.stderr, /legacy recorder sidecar is not owned regular state/);
   } finally {
     state.cleanup();
   }
 });
 
-test('sidecar publication rejects a hostile private-directory symlink', () => {
+test('legacy raw metadata cannot authorize arbitrary file deletion', () => {
+  const state = fixture();
+  const scope = 'b'.repeat(64);
+  try {
+    const victim = join(state.root, 'victim');
+    writeFileSync(victim, 'preserve-me');
+    mkdirSync(state.runtimeDirectory, { mode: 0o700 });
+    writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, `${victim}\n`, {
+      mode: 0o600,
+    });
+
+    const aborted = spawnSync('bash', [state.script, 'abort', scope], {
+      encoding: 'utf8',
+    });
+
+    assert.notEqual(aborted.status, 0);
+    assert.equal(readFileSync(victim, 'utf8'), 'preserve-me');
+    assert.match(aborted.stderr, /recorder raw path is outside owned runtime storage/);
+  } finally {
+    state.cleanup();
+  }
+});
+
+test('rollback ignores public sidecars when the private runtime is hostile', () => {
   const state = fixture();
   const scope = 'c'.repeat(64);
   try {
-    const victimDirectory = join(state.root, 'victim-directory');
+    const attackerDirectory = join(state.root, 'attacker-directory');
+    const victim = join(state.root, 'victim');
     const output = join(state.root, 'capture.mp4');
-    const privateDirectory = `${state.prefix}.private-${process.getuid?.()}`;
-    writeFileSync(victimDirectory, 'preserve-me');
-    symlinkSync(victimDirectory, privateDirectory);
+    mkdirSync(attackerDirectory);
+    writeFileSync(victim, 'preserve-me');
+    writeFileSync(`${state.legacyPrefix}-${scope}.raw-path`, `${victim}\n`);
+    symlinkSync(attackerDirectory, state.runtimeDirectory);
 
     const started = spawnSync('bash', [state.script, 'start', 'ios', output, '--scope', scope], {
       encoding: 'utf8',
@@ -181,10 +199,15 @@ test('sidecar publication rejects a hostile private-directory symlink', () => {
         PATH: `${state.root}:${process.env.PATH}`,
       },
     });
+    const aborted = spawnSync('bash', [state.script, 'abort', scope], {
+      encoding: 'utf8',
+    });
 
     assert.notEqual(started.status, 0);
-    assert.equal(readFileSync(victimDirectory, 'utf8'), 'preserve-me');
-    assert.match(started.stderr, /recorder sidecar directory is not private/);
+    assert.notEqual(aborted.status, 0);
+    assert.equal(readFileSync(victim, 'utf8'), 'preserve-me');
+    assert.match(started.stderr, /recorder runtime directory is not private/);
+    assert.match(aborted.stderr, /recorder runtime directory is not private/);
   } finally {
     state.cleanup();
   }
@@ -195,11 +218,12 @@ test('terminal supervisor state takes precedence over a reused live PID', async 
   const scope = 'f'.repeat(64);
   const replacement = spawn('sleep', ['30'], { stdio: 'ignore' });
   try {
+    mkdirSync(state.runtimeDirectory, { mode: 0o700 });
     assert.ok(replacement.pid);
     const birth = 'a'.repeat(64);
     const incarnation = 'b'.repeat(32);
     const output = join(state.root, 'capture.mp4');
-    const raw = join(state.root, 'capture.mov');
+    const raw = join(state.runtimeDirectory, 'raw-ios-123.mov');
     writeFileSync(`${state.prefix}-${scope}.pid`, `${replacement.pid}\n`);
     writeFileSync(`${state.prefix}-${scope}.birth`, `${birth}\n`);
     writeFileSync(`${state.prefix}-${scope}.platform`, 'ios\n');

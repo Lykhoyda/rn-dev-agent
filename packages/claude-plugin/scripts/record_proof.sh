@@ -3,7 +3,10 @@ set -euo pipefail
 
 PID_PREFIX="/tmp/rn-dev-agent-record"
 RAW_PREFIX="/tmp/rn-dev-agent-raw"
-SIDECAR_TEMP_DIR="${PID_PREFIX}.private-$(id -u)"
+LEGACY_PID_PREFIX="$PID_PREFIX"
+RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"
+PID_PREFIX="${RUNTIME_DIR}/record"
+SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
 
 usage() {
   cat <<'EOF'
@@ -36,23 +39,24 @@ remote_args_file() { echo "${PID_PREFIX}-${1}.remote-args"; }
 incarnation_file() { echo "${PID_PREFIX}-${1}.incarnation"; }
 
 ensure_sidecar_temp_dir() {
-  python3 - "$SIDECAR_TEMP_DIR" <<'PY'
+  python3 - "$RUNTIME_DIR" "$SIDECAR_TEMP_DIR" <<'PY'
 import os
 import stat
 import sys
 
-path = sys.argv[1]
-try:
-    os.mkdir(path, 0o700)
-except FileExistsError:
-    pass
-metadata = os.lstat(path)
-if (
-    not stat.S_ISDIR(metadata.st_mode)
-    or metadata.st_uid != os.getuid()
-    or stat.S_IMODE(metadata.st_mode) != 0o700
-):
-    raise RuntimeError("recorder sidecar directory is not private")
+for index, path in enumerate(sys.argv[1:]):
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        kind = "runtime" if index == 0 else "temporary"
+        raise RuntimeError(f"recorder {kind} directory is not private")
 PY
 }
 
@@ -75,6 +79,113 @@ secure_publish() {
 
 secure_write_sidecar() {
   secure_publish "$1" "${2}"$'\n'
+}
+
+legacy_sidecar_file() {
+  local scope="$1"
+  local suffix="$2"
+  local incarnation="${3:-}"
+  if [[ -n "$incarnation" ]]; then
+    echo "${LEGACY_PID_PREFIX}-${scope}-${incarnation}.${suffix}"
+  else
+    echo "${LEGACY_PID_PREFIX}-${scope}.${suffix}"
+  fi
+}
+
+sidecar_exists() {
+  [[ -e "$1" || -L "$1" ]]
+}
+
+validate_legacy_sidecar() {
+  python3 - "$1" <<'PY'
+import os
+import stat
+import sys
+
+metadata = os.lstat(sys.argv[1])
+if (
+    not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_uid != os.getuid()
+    or metadata.st_mode & 0o022
+):
+    raise RuntimeError("legacy recorder sidecar is not owned regular state")
+PY
+}
+
+scope_has_private_sidecars() {
+  local scope="$1"
+  local suffix
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+    sidecar_exists "${PID_PREFIX}-${scope}.${suffix}" && return 0
+  done
+  return 1
+}
+
+LEGACY_INCARNATION=""
+LEGACY_SCOPE_PRESENT="false"
+USING_LEGACY_SCOPE="false"
+
+validate_legacy_scope() {
+  local scope="$1"
+  LEGACY_INCARNATION=""
+  LEGACY_SCOPE_PRESENT="false"
+  local suffix
+  local legacy_path
+  for suffix in pid path platform birth raw-path log serial remote-pid remote-birth remote-command remote-args device-path incarnation; do
+    legacy_path="$(legacy_sidecar_file "$scope" "$suffix")"
+    if sidecar_exists "$legacy_path"; then
+      LEGACY_SCOPE_PRESENT="true"
+      validate_legacy_sidecar "$legacy_path"
+    fi
+  done
+  legacy_path="$(legacy_sidecar_file "$scope" "incarnation")"
+  if [[ -s "$legacy_path" ]]; then
+    LEGACY_INCARNATION="$(cat "$legacy_path")"
+    [[ "$LEGACY_INCARNATION" =~ ^[a-f0-9]{32}$ ]] || {
+      echo "Error: legacy recorder supervisor incarnation is invalid" >&2
+      return 1
+    }
+    for suffix in control-token control-request control-response supervisor-state child-pid; do
+      legacy_path="$(legacy_sidecar_file "$scope" "$suffix" "$LEGACY_INCARNATION")"
+      if sidecar_exists "$legacy_path"; then
+        LEGACY_SCOPE_PRESENT="true"
+        validate_legacy_sidecar "$legacy_path"
+      fi
+    done
+  fi
+}
+
+select_scope_state() {
+  local scope="$1"
+  ensure_sidecar_temp_dir
+  scope_has_private_sidecars "$scope" && return 0
+  validate_legacy_scope "$scope"
+  if [[ "$LEGACY_SCOPE_PRESENT" == "true" ]]; then
+    PID_PREFIX="$LEGACY_PID_PREFIX"
+    USING_LEGACY_SCOPE="true"
+  fi
+}
+
+validate_raw_capture_path() {
+  local raw_path="$1"
+  [[ -z "$raw_path" ]] && return 0
+  local private_tail="${raw_path#"$SIDECAR_TEMP_DIR"/}"
+  if [[ "$raw_path" == "$SIDECAR_TEMP_DIR/"* && "$private_tail" =~ ^raw-(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
+    return 0
+  fi
+  private_tail="${raw_path#"$RUNTIME_DIR"/}"
+  if [[ "$raw_path" == "$RUNTIME_DIR/"* && "$private_tail" =~ ^raw-(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
+    return 0
+  fi
+  local legacy_tail="${raw_path#"$RAW_PREFIX"-}"
+  if [[ "$raw_path" == "$RAW_PREFIX"-* && "$legacy_tail" =~ ^(ios|android)-[0-9]+\.(mov|mp4)$ ]]; then
+    if sidecar_exists "$raw_path"; then
+      validate_legacy_sidecar "$raw_path"
+    fi
+    return 0
+  fi
+  echo "Error: recorder raw path is outside owned runtime storage" >&2
+  return 1
 }
 
 current_incarnation() {
@@ -708,11 +819,16 @@ cmd_start() {
     esac
   done
   [[ -z "$scope" ]] && { echo "Error: start requires --scope" >&2; exit 1; }
+  select_scope_state "$scope"
 
   local pf
   pf="$(pid_file "$scope")"
   if [[ -f "$pf" ]] && is_alive "$(cat "$pf")"; then
     echo "Error: Recording already in progress for $platform (PID $(cat "$pf"))" >&2
+    exit 1
+  fi
+  if [[ "$USING_LEGACY_SCOPE" == "true" ]]; then
+    echo "Error: legacy recording state requires authenticated cleanup before restart" >&2
     exit 1
   fi
 
@@ -870,6 +986,7 @@ stop_android_recorder() {
 cmd_abort() {
   local scope="${1:-}"
   [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
+  select_scope_state "$scope"
   local incarnation
   incarnation="$(current_incarnation "$scope")"
   local pf
@@ -910,7 +1027,10 @@ cmd_abort() {
     fi
   fi
   if [[ -f "${PID_PREFIX}-${scope}.raw-path" ]]; then
-    rm -f "$(cat "${PID_PREFIX}-${scope}.raw-path")"
+    local raw_path
+    raw_path="$(cat "${PID_PREFIX}-${scope}.raw-path")"
+    validate_raw_capture_path "$raw_path"
+    rm -f "$raw_path"
   fi
   remove_recording_sidecars "$scope" "$incarnation"
 }
@@ -923,6 +1043,7 @@ cmd_stop() {
     echo "Error: stop requires valid <scope> <pid> <birth>" >&2
     exit 1
   }
+  select_scope_state "$scope"
   local incarnation
   incarnation="$(current_incarnation "$scope")"
   local pf
@@ -945,6 +1066,7 @@ cmd_stop() {
   local raw_pathf="${PID_PREFIX}-${scope}.raw-path"
   local raw_file=""
   [[ -f "$raw_pathf" ]] && raw_file="$(cat "$raw_pathf")"
+  validate_raw_capture_path "$raw_file"
   local supervisor_state=""
   [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]] && supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
   local supervisor_failed="false"
@@ -1093,6 +1215,7 @@ cmd_stop() {
 cmd_status() {
   local scope="${1:-}"
   [[ ! "$scope" =~ ^[a-f0-9]{64}$ ]] && { echo "Error: invalid recording scope" >&2; exit 1; }
+  select_scope_state "$scope"
   local pf
   pf="$(pid_file "$scope")"
   [[ ! -f "$pf" ]] && { echo "No active recordings"; return; }

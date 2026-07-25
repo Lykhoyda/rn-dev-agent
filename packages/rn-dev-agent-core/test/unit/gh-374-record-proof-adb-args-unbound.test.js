@@ -76,6 +76,7 @@ test('behavioral: stop survives a serial-less single-device Android state (repro
   const pidPrefix = join(base, 'rec');
   const hermetic = realSrc
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${pidPrefix}"`)
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${base}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(base, 'raw')}"`);
   const fakeAdb = join(base, 'adb');
   writeFileSync(
@@ -95,7 +96,7 @@ exit 0
     writeFileSync(`${pidPrefix}-${scope}.birth`, 'birth-token');
     writeFileSync(`${pidPrefix}-${scope}.platform`, 'android');
     writeFileSync(`${pidPrefix}-${scope}.path`, join(base, 'out.mp4'));
-    writeFileSync(`${pidPrefix}-${scope}.raw-path`, join(base, 'raw.mp4'));
+    writeFileSync(`${pidPrefix}-${scope}.raw-path`, join(base, 'raw-android-123.mp4'));
     writeFileSync(`${pidPrefix}-${scope}.device-path`, '/sdcard/gh374-nonexistent.mp4');
   };
   const runStop = (scriptText) => {
