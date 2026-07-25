@@ -20,6 +20,7 @@ const output = join(
   'native',
   'darwin-process-birth',
 );
+const manifestOutput = `${output}.json`;
 const temporaryOutput = `${output}.tmp-${process.pid}`;
 const temporarySource = `${output}.c.tmp-${process.pid}`;
 const source = `#include <errno.h>
@@ -54,7 +55,30 @@ int main(int argc, char **argv) {
 }
 `;
 
-function normalizeMachOUuids(path) {
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function verifyPackagedHelper() {
+  if (!existsSync(output) || !existsSync(manifestOutput)) {
+    throw new Error('build-darwin-process-birth-helper: packaged helper provenance is missing');
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestOutput, 'utf8'));
+  } catch {
+    throw new Error('build-darwin-process-birth-helper: helper provenance is invalid');
+  }
+  if (manifest.sourceSha256 !== sha256(source)) {
+    throw new Error('build-darwin-process-birth-helper: packaged helper source is stale');
+  }
+  if (manifest.binarySha256 !== sha256(readFileSync(output))) {
+    throw new Error('build-darwin-process-birth-helper: packaged helper binary is stale');
+  }
+  processMachOUuids(output, false);
+}
+
+function processMachOUuids(path, shouldNormalize) {
   const binary = readFileSync(path);
   if (binary.readUInt32BE(0) !== 0xcafebabe) {
     throw new Error('build-darwin-process-birth-helper: expected a universal Mach-O helper');
@@ -80,7 +104,11 @@ function normalizeMachOUuids(path) {
           .update(String(cpuType))
           .digest()
           .subarray(0, 16);
-        uuid.copy(binary, commandOffset + 8);
+        if (shouldNormalize) {
+          uuid.copy(binary, commandOffset + 8);
+        } else if (!binary.subarray(commandOffset + 8, commandOffset + 24).equals(uuid)) {
+          throw new Error('build-darwin-process-birth-helper: packaged helper source is stale');
+        }
         foundUuid = true;
       }
       commandOffset += commandSize;
@@ -92,12 +120,14 @@ function normalizeMachOUuids(path) {
       throw new Error('build-darwin-process-birth-helper: missing Mach-O UUID command');
     }
   }
-  writeFileSync(path, binary);
+  if (shouldNormalize) writeFileSync(path, binary);
 }
 
-if (process.platform !== 'darwin') {
-  if (!existsSync(output)) {
-    console.error(`build-darwin-process-birth-helper: missing packaged helper at ${output}`);
+if (process.platform !== 'darwin' || process.argv.includes('--verify-only')) {
+  try {
+    verifyPackagedHelper();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
   process.exit(0);
@@ -137,7 +167,7 @@ if (result.error || result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-normalizeMachOUuids(temporaryOutput);
+processMachOUuids(temporaryOutput, true);
 const signResult = spawnSync(
   '/usr/bin/codesign',
   [
@@ -160,3 +190,16 @@ if (signResult.error || signResult.status !== 0) {
 
 chmodSync(temporaryOutput, 0o755);
 renameSync(temporaryOutput, output);
+writeFileSync(
+  manifestOutput,
+  `${JSON.stringify(
+    {
+      sourceSha256: sha256(source),
+      binarySha256: sha256(readFileSync(output)),
+    },
+    null,
+    2,
+  )}\n`,
+  'utf8',
+);
+verifyPackagedHelper();

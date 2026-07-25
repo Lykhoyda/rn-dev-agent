@@ -27,6 +27,7 @@ const codexPluginRoot = join(repoRoot, 'packages', 'codex-plugin');
 const claudePluginRoot = join(repoRoot, 'packages', 'claude-plugin');
 const observeWebDistSource = join(coreRoot, 'dist', 'observability', 'web-dist');
 const darwinProcessBirthHelper = join(coreRoot, 'native', 'darwin-process-birth');
+const darwinProcessBirthManifest = `${darwinProcessBirthHelper}.json`;
 const sourceMapPath = join(repoRoot, 'packages', 'shared-agent-knowledge', 'source-map.json');
 const sourceMap = JSON.parse(readFileSync(sourceMapPath, 'utf8'));
 const codexAdaptation = sourceMap.hostAdaptations?.codex;
@@ -157,6 +158,7 @@ for (const runtimeRoot of [coreRoot, codexRuntimeRoot, claudeRuntimeRoot]) {
   const target = join(runtimeRoot, 'dist', 'native', 'darwin-process-birth');
   mkdirSync(dirname(target), { recursive: true });
   copyFileSync(darwinProcessBirthHelper, target);
+  copyFileSync(darwinProcessBirthManifest, `${target}.json`);
   chmodSync(target, 0o755);
 }
 
