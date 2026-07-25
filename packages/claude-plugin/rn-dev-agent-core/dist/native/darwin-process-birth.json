@@ -1,4 +1,6 @@
 {
   "sourceSha256": "54b3387a83580c5a782f3aedfb1984b62ed84faeadeca295fb90e533d9ecc137",
-  "binarySha256": "ddd597a11a4afef6fde02d1eaf2af685ebd2f650566a104d60785c353f02da57"
+  "recipeSha256": "90f2a2db8c6eb4b035e0e22b7fdbbd75793005ceaf1d4d8f2d10f323a6627e49",
+  "stableBinarySha256": "6603b813d04e5a76d5b4147dcb651f200ef9ee7fa536f3badca4453b00536605",
+  "binarySha256": "d91a815db8d60263f65ab8a5efdf5b4a8b8b0ebe6c34c1f4d83fce5bcc14fe6d"
 }

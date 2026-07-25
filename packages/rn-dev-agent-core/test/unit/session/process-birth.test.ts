@@ -155,6 +155,9 @@ test('Darwin process helper ships executable in core and both host runtimes', ()
     manifests[0].binarySha256,
     createHash('sha256').update(helpers[0]).digest('hex'),
   );
+  assert.match(manifests[0].sourceSha256, /^[a-f0-9]{64}$/);
+  assert.match(manifests[0].recipeSha256, /^[a-f0-9]{64}$/);
+  assert.match(manifests[0].stableBinarySha256, /^[a-f0-9]{64}$/);
   if (process.platform !== 'win32') {
     for (const url of helperUrls) {
       assert.notEqual(statSync(url).mode & 0o111, 0);
