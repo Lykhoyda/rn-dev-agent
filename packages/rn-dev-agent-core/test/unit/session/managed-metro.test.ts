@@ -17,6 +17,7 @@ test('managed Metro rejects every Node loader option alias', () => {
     '--loader=loader.mjs',
     '--experimental-loader loader.mjs',
     '--experimental_loader=loader.mjs',
+    '"--require=/path with spaces/loader.cjs"',
   ]) {
     assert.equal(hasNodeLoaderOption(option), true, option);
   }

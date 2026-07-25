@@ -1,4 +1,5 @@
 import { createBuildLaunchPlan } from './build-adapter.js';
+import { hasNodeLoaderOption, parseNodeOptions } from './managed-metro.js';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
@@ -48,8 +49,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, createHmac } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { registerHooks } = require('node:module');
-const { fileURLToPath, pathToFileURL } = require('node:url');
+const moduleApi = require('node:module');
+const { registerHooks } = moduleApi;
+const { fileURLToPath } = require('node:url');
+${parseNodeOptions.toString()}
+${hasNodeLoaderOption.toString()}
 const accumulatedRuntimeInputs = new Set();
 const accumulatedViolations = new Set();
 const observedLoaderDigests = new Map();
@@ -108,7 +112,25 @@ function digestRuntimeFile(file) {
     fs.closeSync(descriptor);
   }
 }
-function recordLoaderUrl(url, digestBefore) {
+function digestRuntimeSource(source) {
+  const bytes =
+    typeof source === 'string'
+      ? Buffer.from(source)
+      : Buffer.isBuffer(source)
+        ? source
+        : source instanceof ArrayBuffer
+          ? Buffer.from(source)
+          : typeof SharedArrayBuffer !== 'undefined' && source instanceof SharedArrayBuffer
+            ? Buffer.from(source)
+          : ArrayBuffer.isView(source)
+            ? Buffer.from(source.buffer, source.byteOffset, source.byteLength)
+            : null;
+  if (!bytes || bytes.byteLength > 128 * 1024 * 1024) {
+    throw new Error('unsupported runtime module source');
+  }
+  return createHash('sha256').update(bytes).digest('hex');
+}
+function recordLoaderResult(url, result) {
   if (url.startsWith('node:')) return;
   if (!url.startsWith('file:')) {
     recordLoaderViolation('Metro runtime module URL scheme is unsupported');
@@ -116,11 +138,7 @@ function recordLoaderUrl(url, digestBefore) {
   }
   try {
     const resolved = fs.realpathSync(fileURLToPath(url));
-    const digest = digestRuntimeFile(resolved);
-    if (digestBefore !== digest) {
-      recordLoaderViolation('Metro runtime module changed while loading');
-      return;
-    }
+    const digest = digestRuntimeSource(result && result.source);
     if (observedLoaderDigests.get(resolved) === digest) return;
     observedLoaderDigests.set(resolved, digest);
     accumulatedRuntimeInputs.add(resolved);
@@ -136,18 +154,27 @@ if (typeof registerHooks === 'function') {
       return nextResolve(specifier, context);
     },
     load(url, context, nextLoad) {
-      const digestBefore =
-        url.startsWith('file:') ? digestRuntimeFile(fs.realpathSync(fileURLToPath(url))) : null;
       const result = nextLoad(url, context);
-      recordLoaderUrl(url, digestBefore);
+      recordLoaderResult(url, result);
       return result;
     },
   });
+  const rejectHookRegistration = () => {
+    recordLoaderViolation('additional Metro runtime loader hooks are unsupported');
+    throw new Error('RN_DEV_AGENT_UNSUPPORTED_MODULE_HOOK');
+  };
+  moduleApi.register = rejectHookRegistration;
+  moduleApi.registerHooks = rejectHookRegistration;
+  moduleApi.syncBuiltinESMExports();
 } else {
   recordLoaderViolation('Metro runtime module loading requires Node.js 22.15 or newer');
 }
-const preloadUrl = pathToFileURL(fs.realpathSync(__filename)).href;
-recordLoaderUrl(preloadUrl, digestRuntimeFile(fs.realpathSync(__filename)));
+const preloadPath = fs.realpathSync(__filename);
+const preloadDigest = digestRuntimeFile(preloadPath);
+observedLoaderDigests.set(preloadPath, preloadDigest);
+accumulatedRuntimeInputs.add(preloadPath);
+loaderEpoch += 1;
+persistLoaderObservation('input', preloadPath, preloadDigest);
 function sourceRoot() {
   if (sourceRootResolved) return cachedSourceRoot;
   try {
@@ -190,6 +217,10 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   const serializer = config.serializer || {};
   function isContained(candidate) {
     const child = path.relative(root, candidate);
+    return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
+  }
+  function isWithin(parent, candidate) {
+    const child = path.relative(parent, candidate);
     return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
   }
   function isExcluded(candidate) {
@@ -239,12 +270,13 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
       return null;
     }
   }
-  function packageNameForModule(resolved) {
-    let cursor = path.dirname(resolved);
+  function canonicalPackageRoot(packageName) {
+    const entry = fs.realpathSync(require.resolve(packageName, { paths: [process.cwd()] }));
+    let cursor = path.dirname(entry);
     while (true) {
       try {
         const manifest = JSON.parse(fs.readFileSync(path.join(cursor, 'package.json'), 'utf8'));
-        if (typeof manifest.name === 'string') return manifest.name;
+        if (manifest.name === packageName) return fs.realpathSync(cursor);
       } catch {}
       const parent = path.dirname(cursor);
       if (parent === cursor) return null;
@@ -253,10 +285,20 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   }
   function addExecutableModule(value, field, supportedPackages) {
     const resolved = addModule(value, field);
-    if (resolved && !supportedPackages.includes(packageNameForModule(resolved))) {
+    if (!resolved) return null;
+    const packageName =
+      supportedPackages.find((candidate) => {
+        try {
+          const packageRoot = canonicalPackageRoot(candidate);
+          return packageRoot !== null && isWithin(packageRoot, resolved);
+        } catch {
+          return false;
+        }
+      }) || null;
+    if (packageName === null) {
       violations.push(field + ' is not a supported Metro executable module');
     }
-    return resolved;
+    return { resolved, packageName };
   }
   addPath(config.projectRoot, 'projectRoot');
   addPaths(config.watchFolders, 'watchFolders');
@@ -284,10 +326,8 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     ['metro-babel-transformer', '@react-native/metro-babel-transformer', '@expo/metro-config'],
   );
   const expoSerializerSupported =
-    (transformerPath !== null &&
-      packageNameForModule(transformerPath) === '@expo/metro-config') ||
-    (babelTransformerPath !== null &&
-      packageNameForModule(babelTransformerPath) === '@expo/metro-config');
+    transformerPath?.packageName === '@expo/metro-config' ||
+    babelTransformerPath?.packageName === '@expo/metro-config';
   const expoSerializer =
     typeof serializer.customSerializer === 'function' &&
     ('__originalSerializer' in serializer.customSerializer ||
@@ -327,14 +367,6 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + JSON.stringify(authorityPreload)]
     .filter(Boolean)
     .join(' ');
-  function hasNodeLoaderOption(value) {
-    const tokens = value.match(/(?:[^\\s"'\\\\]+|"(?:\\\\.|[^"])*"|'(?:\\\\.|[^'])*')+/g) || [];
-    return tokens.some((token) => {
-      const equals = token.indexOf('=');
-      const option = (equals < 0 ? token : token.slice(0, equals)).replaceAll('_', '-');
-      return ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(option);
-    });
-  }
   let authorityPreloadMatches = false;
   try {
     authorityPreloadMatches =

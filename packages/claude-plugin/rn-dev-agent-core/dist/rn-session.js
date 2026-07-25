@@ -10706,9 +10706,35 @@ child.once('exit', (code, signal) => {
 });
 setInterval(() => {}, 1 << 30);
 `;
+function parseNodeOptions(value) {
+  const tokens = [];
+  let token2 = "";
+  let quoted = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (character === "\\" && quoted && value[index + 1] === '"') {
+      token2 += '"';
+      index += 1;
+      continue;
+    }
+    if (/\s/.test(character) && !quoted) {
+      if (token2)
+        tokens.push(token2);
+      token2 = "";
+      continue;
+    }
+    token2 += character;
+  }
+  if (token2)
+    tokens.push(token2);
+  return tokens;
+}
 function hasNodeLoaderOption(value) {
-  const tokens = value.match(/(?:[^\s"'\\]+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? [];
-  return tokens.some((token2) => {
+  return parseNodeOptions(value).some((token2) => {
     const equals = token2.indexOf("=");
     const option = equals < 0 ? token2 : token2.slice(0, equals);
     return ["--require", "-r", "--import", "--loader", "--experimental-loader"].includes(option.replaceAll("_", "-"));

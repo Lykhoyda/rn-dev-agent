@@ -114,6 +114,28 @@ function sameMetroAuthority(
   );
 }
 
+function assertPackageIntegrationInactive(
+  bindings: Record<string, unknown>,
+  action: 'apply_integration' | 'restore_integration',
+): void {
+  const activeBindings = [
+    'metro',
+    'metroCleanup',
+    'runner',
+    'observe',
+    'recorder',
+    'proof',
+    'pendingBuild',
+    'handoffCleanup',
+  ].filter((binding) => bindings[binding] != null);
+  if (activeBindings.length > 0) {
+    throw new SessionAuthorityError(
+      'SESSION_AUTHORITY_REQUIRED',
+      `${action} requires releasing active ${activeBindings.join(', ')} authority`,
+    );
+  }
+}
+
 async function stopHandoffObserve(
   binding: Record<string, unknown>,
   listenerProbe?: Parameters<typeof stopBoundObserve>[1],
@@ -419,15 +441,7 @@ export function createSessionHandler(
               'integration manifest is unavailable for restoration',
             );
           }
-          const activeBindings = ['metro', 'metroCleanup', 'runner', 'proof'].filter(
-            (binding) => status.bindings[binding] != null,
-          );
-          if (activeBindings.length > 0) {
-            throw new SessionAuthorityError(
-              'SESSION_AUTHORITY_REQUIRED',
-              `restore_integration requires releasing active ${activeBindings.join(', ')} authority`,
-            );
-          }
+          assertPackageIntegrationInactive(status.bindings, input.action);
           restorePackageIntegrationFiles({ appRoot });
           registry.updateBindings(session, {
             bindings: { packageIntegration: null },
@@ -456,6 +470,7 @@ export function createSessionHandler(
             'apply_integration requires confirmed=true after reviewing preview_integration',
           );
         }
+        assertPackageIntegrationInactive(status.bindings, input.action);
         applyPackageIntegration({ appRoot, sessionCli });
         registry.updateBindings(session, {
           bindings: { packageIntegration: { applied: true } },

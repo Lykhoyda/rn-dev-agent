@@ -248,14 +248,21 @@ test('Metro integration accepts React Native and Expo executable modules', () =>
         const moduleRoot = join(root, 'node_modules', name);
         const modulePath = join(moduleRoot, 'index.cjs');
         mkdirSync(moduleRoot, { recursive: true });
-        writeFileSync(join(moduleRoot, 'package.json'), JSON.stringify({ name }));
+        writeFileSync(
+          join(moduleRoot, 'package.json'),
+          JSON.stringify({ name, main: 'index.cjs' }),
+        );
         writeFileSync(modulePath, 'module.exports = {};\n');
         return [name, modulePath];
       }),
     );
     const expoRoot = join(root, 'node_modules', '@expo', 'metro-config');
     mkdirSync(expoRoot, { recursive: true });
-    writeFileSync(join(expoRoot, 'package.json'), JSON.stringify({ name: '@expo/metro-config' }));
+    writeFileSync(
+      join(expoRoot, 'package.json'),
+      JSON.stringify({ name: '@expo/metro-config', main: 'index.cjs' }),
+    );
+    writeFileSync(join(expoRoot, 'index.cjs'), 'module.exports = {};\n');
     const expoTransformer = join(expoRoot, 'transform-worker.cjs');
     const expoBabelTransformer = join(expoRoot, 'babel-transformer.cjs');
     writeFileSync(expoTransformer, 'module.exports = {};\n');
@@ -299,7 +306,7 @@ test('Metro integration preserves standard null defaults and authenticates bundl
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(
       join(assetRegistryRoot, 'package.json'),
-      JSON.stringify({ name: '@react-native/assets-registry' }),
+      JSON.stringify({ name: '@react-native/assets-registry', main: 'asset-registry.cjs' }),
     );
     writeFileSync(assetRegistryPath, 'module.exports = {};\n');
     writeFileSync(polyfillPath, 'module.exports = {};\n');
@@ -366,6 +373,57 @@ test('Metro integration rejects arbitrary executable closures', () => {
     assert.equal(
       receipt.violations.some((entry: string) => entry.includes('transformerPath')),
       true,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro integration rejects spoofed supported package metadata', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-spoofed-worker-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    const canonicalRoot = join(root, 'node_modules', 'metro-transform-worker');
+    const spoofedRoot = join(root, 'spoofed-transformer');
+    mkdirSync(integration, { recursive: true });
+    mkdirSync(canonicalRoot, { recursive: true });
+    mkdirSync(spoofedRoot, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const canonicalPath = join(canonicalRoot, 'index.cjs');
+    const spoofedPath = join(spoofedRoot, 'index.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(
+      join(canonicalRoot, 'package.json'),
+      JSON.stringify({ name: 'metro-transform-worker', main: 'index.cjs' }),
+    );
+    writeFileSync(
+      join(spoofedRoot, 'package.json'),
+      JSON.stringify({ name: 'metro-transform-worker', main: 'index.cjs' }),
+    );
+    writeFileSync(canonicalPath, 'module.exports = {};\n');
+    writeFileSync(spoofedPath, 'module.exports = {};\n');
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ transformerPath: ${JSON.stringify(spoofedPath)} });`,
+      ],
+      {
+        cwd: root,
+        env: metroPolicyEnvironment(adapterPath),
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(
+      readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
+    );
+    assert.ok(
+      receipt.violations.some((entry: string) =>
+        entry.includes('not a supported Metro executable module'),
+      ),
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -455,6 +513,45 @@ test('Metro preload ignores caught optional module misses', () => {
         (entry) => entry.kind === 'violation' && entry.value.includes('module resolution failed'),
       ),
       false,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro preload rejects later module hook registration', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-late-hook-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({}); const moduleApi = require('node:module'); for (const method of ['registerHooks', 'register']) { try { moduleApi[method]({ load(url, context, nextLoad) { return nextLoad(url, context); } }); throw new Error('hook registration unexpectedly succeeded'); } catch (error) { if (error.message !== 'RN_DEV_AGENT_UNSUPPORTED_MODULE_HOOK') throw error; } }`,
+      ],
+      {
+        cwd: root,
+        env: metroPolicyEnvironment(adapterPath),
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const observations = readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.ok(
+      observations.some(
+        (entry) =>
+          entry.kind === 'violation' &&
+          entry.value.includes('additional Metro runtime loader hooks'),
+      ),
     );
   } finally {
     rmSync(root, { force: true, recursive: true });

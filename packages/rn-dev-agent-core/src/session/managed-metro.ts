@@ -73,9 +73,34 @@ child.once('exit', (code, signal) => {
 setInterval(() => {}, 1 << 30);
 `;
 
+export function parseNodeOptions(value: string): string[] {
+  const tokens: string[] = [];
+  let token = '';
+  let quoted = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (character === '\\' && quoted && value[index + 1] === '"') {
+      token += '"';
+      index += 1;
+      continue;
+    }
+    if (/\s/.test(character) && !quoted) {
+      if (token) tokens.push(token);
+      token = '';
+      continue;
+    }
+    token += character;
+  }
+  if (token) tokens.push(token);
+  return tokens;
+}
+
 export function hasNodeLoaderOption(value: string): boolean {
-  const tokens = value.match(/(?:[^\s"'\\]+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? [];
-  return tokens.some((token) => {
+  return parseNodeOptions(value).some((token) => {
     const equals = token.indexOf('=');
     const option = equals < 0 ? token : token.slice(0, equals);
     return ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(

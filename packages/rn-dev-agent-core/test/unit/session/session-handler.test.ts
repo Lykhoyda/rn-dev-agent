@@ -1000,7 +1000,7 @@ test('integration preview rejects a symlinked .rn-agent before reading its manif
   }
 });
 
-test('integration restoration rejects active runtime authority', async () => {
+test('integration restoration rejects active handoff cleanup authority', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-active-'));
   try {
     const integration = join(root, '.rn-agent', 'integration');
@@ -1022,7 +1022,7 @@ test('integration restoration rejects active runtime authority', async () => {
     const status = {
       sessionId: 'session-a',
       source: { appRoot: root },
-      bindings: { metro: { mode: 'managed' } },
+      bindings: { handoffCleanup: { metro: { mode: 'managed' } } },
     };
     const handler = createSessionHandler({
       status: () => ({ available: true, ...status }),
@@ -1038,8 +1038,46 @@ test('integration restoration rejects active runtime authority', async () => {
     const result = await handler({ action: 'restore_integration', confirmed: true });
 
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /releasing active metro authority/);
+    assert.match(result.content[0].text, /releasing active handoffCleanup authority/);
     assert.equal(existsSync(manifestPath), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('integration application rejects active runtime authority', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-active-'));
+  try {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        scripts: { ios: 'expo run:ios', android: 'expo run:android' },
+      }),
+    );
+    const metroPath = join(root, 'metro.config.js');
+    const metroBefore = 'module.exports = {};\n';
+    writeFileSync(metroPath, metroBefore);
+    const status = {
+      sessionId: 'session-a',
+      source: { appRoot: root },
+      bindings: { runner: { platform: 'ios' } },
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => assert.fail('active authority must not be changed'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    });
+
+    const result = await handler({ action: 'apply_integration', confirmed: true });
+
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /releasing active runner authority/);
+    assert.equal(existsSync(join(root, '.rn-agent')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

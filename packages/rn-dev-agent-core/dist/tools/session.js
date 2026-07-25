@@ -21,6 +21,21 @@ function sameMetroAuthority(current, next) {
         current.buildGeneration === next.buildGeneration &&
         current.mode === next.mode);
 }
+function assertPackageIntegrationInactive(bindings, action) {
+    const activeBindings = [
+        'metro',
+        'metroCleanup',
+        'runner',
+        'observe',
+        'recorder',
+        'proof',
+        'pendingBuild',
+        'handoffCleanup',
+    ].filter((binding) => bindings[binding] != null);
+    if (activeBindings.length > 0) {
+        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `${action} requires releasing active ${activeBindings.join(', ')} authority`);
+    }
+}
 async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2_000) {
     const stopRequestedAt = Number(binding.stopRequestedAt);
     if (!Number.isFinite(stopRequestedAt)) {
@@ -246,10 +261,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     if (!existing) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration manifest is unavailable for restoration');
                     }
-                    const activeBindings = ['metro', 'metroCleanup', 'runner', 'proof'].filter((binding) => status.bindings[binding] != null);
-                    if (activeBindings.length > 0) {
-                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `restore_integration requires releasing active ${activeBindings.join(', ')} authority`);
-                    }
+                    assertPackageIntegrationInactive(status.bindings, input.action);
                     restorePackageIntegrationFiles({ appRoot });
                     registry.updateBindings(session, {
                         bindings: { packageIntegration: null },
@@ -275,6 +287,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (input.confirmed !== true) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'apply_integration requires confirmed=true after reviewing preview_integration');
                 }
+                assertPackageIntegrationInactive(status.bindings, input.action);
                 applyPackageIntegration({ appRoot, sessionCli });
                 registry.updateBindings(session, {
                     bindings: { packageIntegration: { applied: true } },
