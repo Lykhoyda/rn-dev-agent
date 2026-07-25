@@ -22,7 +22,7 @@ Maestro's reliability comes from a small number of composable mechanisms: bypass
 | [09](09-android-parity-shared-core.md) | Android runner parity + shared client core | Symmetry, dedup, port-contention fix | M | 02 |
 | [10](10-text-input-reliability.md) | Text-input reliability recipes (both platforms) | Kills the worst remaining flake source | M | 04 |
 | [11](11-failure-evidence-and-debt.md) | Failure evidence, structured refusal reasons, agent-device debt | Repair quality + maintainability | S–M | — |
-| [12](12-tool-surface-consolidation.md) | MCP tool-surface consolidation + instructions budget | Agent ergonomics at 74 tools | L | 06 (Phase C) |
+| [12](12-tool-surface-consolidation.md) | MCP tool-surface consolidation + instructions budget | Agent ergonomics at scale | L | 06 (Phase C) |
 | [13](13-maestro-runner-seamless-integration.md) | Seamless maestro-runner (Go) integration — near-term replay direction (replaces 07 per D1291) | Version pinning, blind-probe fast-path, wider fallback grammar, keyboard seam, iteration speed | M | — (absorbs #334, #240) |
 
 ## Suggested sequencing

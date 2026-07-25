@@ -110,7 +110,12 @@ function detailValue(details, name) {
   const line = details
     .split('\n')
     .find((candidate) => candidate.startsWith(`${name}=`) || candidate.startsWith(`${name} `));
-  return line?.slice(name.length).replace(/^(?:=|\s+)/, '').trim() ?? null;
+  return (
+    line
+      ?.slice(name.length)
+      .replace(/^(?:=|\s+)/, '')
+      .trim() ?? null
+  );
 }
 
 function assignments(value) {
@@ -172,9 +177,7 @@ function hasExpectedArchitectureSignature(path, architecture) {
     path,
   ]);
   return (
-    !entitlements.error &&
-    entitlements.status === 0 &&
-    entitlements.stdout.trim().length === 0
+    !entitlements.error && entitlements.status === 0 && entitlements.stdout.trim().length === 0
   );
 }
 
