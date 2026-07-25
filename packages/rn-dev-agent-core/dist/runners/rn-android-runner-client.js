@@ -525,17 +525,24 @@ function classifyAndroidHealth(info) {
 // RUNNER_PROTOCOL_MISMATCH.
 export class AndroidCommandsStaleError extends Error {
     missing;
-    constructor(missing, bundleId) {
+    deviceId;
+    constructor(missing, bundleId, deviceId) {
         super(`RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands ` +
             `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
             `(device_snapshot action=open appId=${bundleId ?? '<your.app.id>'} platform=android) to rebuild it.`);
         this.missing = missing;
+        this.deviceId = deviceId;
     }
 }
 export class AndroidAuthorityStaleError extends Error {
-    constructor() {
+    deviceId;
+    constructor(deviceId) {
         super('RUNNER_OWNERSHIP_MISMATCH: installed Android runner lacks current authority identity');
+        this.deviceId = deviceId;
     }
+}
+export function androidRetryCleanupContext(state, error) {
+    return state ?? (error.deviceId ? { deviceId: error.deviceId } : null);
 }
 // GH #418: deleting the APKs is the artifact invalidation — apksExist flips
 // false, so resolveAndroidInstallAction returns 'build-then-install' (Gradle).
@@ -567,7 +574,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
     }
     catch (err) {
         if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-            await reapMismatchedAndroidRunner(runnerState);
+            await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
             const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
                 _forceReinstall: true,
             });
@@ -578,7 +585,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             // Killing the local adb child does NOT free the device-side
             // UiAutomation slot (#237) — reap through the slot-release path so the
             // rebuilt instrumentation can bind.
-            await reapMismatchedAndroidRunner(runnerState);
+            await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
             invalidateAndroidRunnerApks();
             const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
                 _forceReinstall: true,
@@ -628,7 +635,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                     // the SINGLE rebuild owner (one Gradle build even on a checkout whose
                     // fresh build still misses commands — multi-review advisory); mid-flow
                     // callers surface the typed refusal.
-                    throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+                    throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId, reusableState.deviceId);
                 }
                 // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
                 // state clear) and force-reinstalled so the fresh APK supersedes it.
@@ -759,7 +766,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                 })) {
                     resolved = true;
                     child.kill('SIGTERM');
-                    reject(new AndroidAuthorityStaleError());
+                    reject(new AndroidAuthorityStaleError(serial));
                     return;
                 }
                 const compat = classifyAndroidHealth(info);
@@ -770,7 +777,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                     if (compat.reason === 'missing-commands') {
                         // GH #418: typed — the wrapper's retry-once invalidates the APKs
                         // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
-                        reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId));
+                        reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
                         return;
                     }
                     reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +

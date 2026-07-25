@@ -45367,6 +45367,7 @@ __export(rn_android_runner_client_exports, {
   adoptPersistedAndroidState: () => adoptPersistedAndroidState,
   androidHealthMatchesAuthority: () => androidHealthMatchesAuthority,
   androidIsWindowUpdatingProbe: () => androidIsWindowUpdatingProbe,
+  androidRetryCleanupContext: () => androidRetryCleanupContext,
   androidRunnerApksExist: () => androidRunnerApksExist,
   androidSnapshotNodesViaProbe: () => androidSnapshotNodesViaProbe,
   androidStatePath: () => androidStatePath,
@@ -45764,6 +45765,9 @@ function classifyAndroidHealth(info) {
     ...info.commands !== void 0 ? { commands: info.commands } : {}
   }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS);
 }
+function androidRetryCleanupContext(state, error2) {
+  return state ?? (error2.deviceId ? { deviceId: error2.deviceId } : null);
+}
 function androidRunnerApksExist() {
   return RUNNER_APK_PATHS.every((p) => existsSync10(p));
 }
@@ -45783,7 +45787,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-      await reapMismatchedAndroidRunner(runnerState2);
+      await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err));
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true
       });
@@ -45791,7 +45795,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
       return state;
     }
     if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
-      await reapMismatchedAndroidRunner(runnerState2);
+      await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err));
       invalidateAndroidRunnerApks();
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
@@ -45833,7 +45837,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         if (compat.compatible)
           return runnerState2;
         if (compat.reason === "missing-commands") {
-          throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+          throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId, reusableState.deviceId);
         }
         pendingUpgradeNote = "runner upgraded (protocol/version mismatch)";
         forceReinstall = true;
@@ -45950,7 +45954,7 @@ ${diag.trim()}` : ""}`));
         })) {
           resolved = true;
           child.kill("SIGTERM");
-          reject(new AndroidAuthorityStaleError());
+          reject(new AndroidAuthorityStaleError(serial));
           return;
         }
         const compat = classifyAndroidHealth(info);
@@ -45959,7 +45963,7 @@ ${diag.trim()}` : ""}`));
           pendingUpgradeNote = void 0;
           child.kill("SIGTERM");
           if (compat.reason === "missing-commands") {
-            reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId));
+            reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
             return;
           }
           reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ${info.protocolVersion ?? "none"} (bridge expects ${RUNNER_PROTOCOL_VERSION}). Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`));
@@ -46262,14 +46266,18 @@ var init_rn_android_runner_client = __esm({
     lastKnownCapabilities2 = [];
     AndroidCommandsStaleError = class extends Error {
       missing;
-      constructor(missing, bundleId) {
+      deviceId;
+      constructor(missing, bundleId, deviceId) {
         super(`RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands (missing: ${missing.join(", ") || "unknown"}). Re-open the device session (device_snapshot action=open appId=${bundleId ?? "<your.app.id>"} platform=android) to rebuild it.`);
         this.missing = missing;
+        this.deviceId = deviceId;
       }
     };
     AndroidAuthorityStaleError = class extends Error {
-      constructor() {
+      deviceId;
+      constructor(deviceId) {
         super("RUNNER_OWNERSHIP_MISMATCH: installed Android runner lacks current authority identity");
+        this.deviceId = deviceId;
       }
     };
     RUNNER_APK_PATHS = [APK_APP, APK_TEST];
@@ -71288,6 +71296,33 @@ function receipt(status, profile, observations) {
     bundle: profile.axes.includes("B") ? { authorityScope: "initial-bundle", sourceFidelity: "not-proven" } : void 0
   };
 }
+function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle) {
+  const oldTargetId = priorBundle?.targetId;
+  const newTargetId = bundle.targetId;
+  const metroPort = metro?.port;
+  if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+    throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
+  }
+  const runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
+  if (!runtimeTargetChanged) {
+    return { operation, status, runtimeTargetChanged };
+  }
+  const nextOperation = registry2.replaceBindingsDuringOperation(operation, {
+    state: "ready",
+    bindings: { bundle },
+    releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+    claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+  });
+  const refreshedStatus = runtime.status();
+  if (!refreshedStatus.available) {
+    throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+  }
+  return {
+    operation: nextOperation,
+    status: refreshedStatus,
+    runtimeTargetChanged
+  };
+}
 function createAuthorityGate(runtime, dependencies) {
   return {
     wrap: (tool, handler) => async (...handlerArgs) => {
@@ -71322,8 +71357,12 @@ function createAuthorityGate(runtime, dependencies) {
         return authorityFailure2(new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery"));
       }
       if (runtimeStatus.available && tool === "cdp_restart" && args.hardReset === true) {
-        bindSessionArguments(runtimeStatus, profile, args);
-        profile = authorityProfileFor(tool, args);
+        try {
+          bindSessionArguments(runtimeStatus, profile, args);
+          profile = authorityProfileFor(tool, args);
+        } catch (error2) {
+          return authorityFailure2(error2);
+        }
       }
       if (profile.kind === "transition") {
         let operation2 = null;
@@ -71336,6 +71375,7 @@ function createAuthorityGate(runtime, dependencies) {
             throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
           }
           let status = initialStatus;
+          let runtimeTargetChanged = false;
           const initialAuthorityVersion = status.authorityVersion;
           bindSessionArguments(status, profile, args);
           if (tool === "device_snapshot")
@@ -71384,9 +71424,35 @@ function createAuthorityGate(runtime, dependencies) {
             }
             status = nextStatus;
           }
+          if (tool === "cdp_restart" && args.hardReset === true) {
+            const priorBundle = status.bindings.bundle;
+            const metro = status.bindings.metro;
+            if (!dependencies.refreshRuntimeBinding) {
+              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "runtime reset cannot commit without a binding refresh");
+            }
+            let bundle;
+            try {
+              bundle = await dependencies.refreshRuntimeBinding(status);
+            } catch (error2) {
+              const oldTargetId = priorBundle?.targetId;
+              const metroPort = metro?.port;
+              operation2 = registry3.replaceBindingsDuringOperation(operation2, {
+                state: "device_bound",
+                bindings: { bundle: null },
+                releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
+              });
+              throw error2;
+            }
+            const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry3, operation2, status, priorBundle, metro, bundle);
+            operation2 = reconciliation.operation;
+            status = reconciliation.status;
+            runtimeTargetChanged = reconciliation.runtimeTargetChanged;
+          }
           requireCompleteAxes(status, { ...profile, axes: transitionAxes.after });
           const after = await Promise.all(transitionAxes.after.map((axis) => dependencies.probe({ axis, phase: "postflight", tool, profile, status, args })));
           for (const observation of before) {
+            if (runtimeTargetChanged && observation.axis === "B")
+              continue;
             if (observation.axis === "C" || !transitionAxes.after.includes(observation.axis)) {
               continue;
             }
@@ -71616,26 +71682,10 @@ function createAuthorityGate(runtime, dependencies) {
             }
           }
           if (!authorityInvalidated && bundle) {
-            const oldTargetId = priorBundle?.targetId;
-            const newTargetId = bundle.targetId;
-            const metroPort = metro?.port;
-            if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
-              throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
-            }
-            runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
-            if (runtimeTargetChanged) {
-              operation = registry2.replaceBindingsDuringOperation(operation, {
-                state: "ready",
-                bindings: { bundle },
-                releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
-                claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
-              });
-              const refreshedStatus = runtime.status();
-              if (!refreshedStatus.available) {
-                throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
-              }
-              status = refreshedStatus;
-            }
+            const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle);
+            operation = reconciliation.operation;
+            status = reconciliation.status;
+            runtimeTargetChanged = reconciliation.runtimeTargetChanged;
           }
         }
         const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;

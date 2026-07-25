@@ -258,6 +258,61 @@ function receipt(
   };
 }
 
+function reconcileRuntimeBundleReplacement(
+  runtime: AuthorityGateRuntime,
+  registry: SessionRegistry,
+  operation: OperationRef,
+  status: SessionStatus,
+  priorBundle: Record<string, unknown> | undefined,
+  metro: Record<string, unknown> | undefined,
+  bundle: Record<string, unknown>,
+): {
+  operation: OperationRef;
+  status: SessionStatus;
+  runtimeTargetChanged: boolean;
+} {
+  const oldTargetId = priorBundle?.targetId;
+  const newTargetId = bundle.targetId;
+  const metroPort = metro?.port;
+  if (
+    typeof oldTargetId !== 'string' ||
+    typeof newTargetId !== 'string' ||
+    !Number.isSafeInteger(metroPort)
+  ) {
+    throw new SessionAuthorityError(
+      'CDP_TARGET_AUTHORITY_MISMATCH',
+      'runtime reset did not produce an exact target replacement',
+    );
+  }
+  const runtimeTargetChanged =
+    oldTargetId !== newTargetId ||
+    priorBundle?.connectionGeneration !== bundle.connectionGeneration;
+  if (!runtimeTargetChanged) {
+    return { operation, status, runtimeTargetChanged };
+  }
+  const nextOperation = registry.replaceBindingsDuringOperation(operation, {
+    state: 'ready',
+    bindings: { bundle },
+    releaseResources:
+      oldTargetId !== newTargetId
+        ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
+        : [],
+    claimResources:
+      oldTargetId !== newTargetId
+        ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
+        : [],
+  });
+  const refreshedStatus = runtime.status();
+  if (!refreshedStatus.available) {
+    throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+  }
+  return {
+    operation: nextOperation,
+    status: refreshedStatus,
+    runtimeTargetChanged,
+  };
+}
+
 export function createAuthorityGate(
   runtime: AuthorityGateRuntime,
   dependencies: AuthorityGateDependencies,
@@ -333,8 +388,12 @@ export function createAuthorityGate(
           );
         }
         if (runtimeStatus.available && tool === 'cdp_restart' && args.hardReset === true) {
-          bindSessionArguments(runtimeStatus, profile, args);
-          profile = authorityProfileFor(tool, args);
+          try {
+            bindSessionArguments(runtimeStatus, profile, args);
+            profile = authorityProfileFor(tool, args);
+          } catch (error) {
+            return authorityFailure(error);
+          }
         }
         if (profile.kind === 'transition') {
           let operation: OperationRef | null = null;
@@ -347,6 +406,7 @@ export function createAuthorityGate(
               throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
             }
             let status: SessionStatus = initialStatus;
+            let runtimeTargetChanged = false;
             const initialAuthorityVersion = status.authorityVersion;
             bindSessionArguments(status, profile, args);
             if (tool === 'device_snapshot') requireDeviceTransition(status, args);
@@ -416,6 +476,44 @@ export function createAuthorityGate(
               }
               status = nextStatus;
             }
+            if (tool === 'cdp_restart' && args.hardReset === true) {
+              const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
+              const metro = status.bindings.metro as Record<string, unknown> | undefined;
+              if (!dependencies.refreshRuntimeBinding) {
+                throw new SessionAuthorityError(
+                  'BUNDLE_HANDSHAKE_UNAVAILABLE',
+                  'runtime reset cannot commit without a binding refresh',
+                );
+              }
+              let bundle: Record<string, unknown>;
+              try {
+                bundle = await dependencies.refreshRuntimeBinding(status);
+              } catch (error) {
+                const oldTargetId = priorBundle?.targetId;
+                const metroPort = metro?.port;
+                operation = registry.replaceBindingsDuringOperation(operation, {
+                  state: 'device_bound',
+                  bindings: { bundle: null },
+                  releaseResources:
+                    typeof oldTargetId === 'string' && Number.isSafeInteger(metroPort)
+                      ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
+                      : [],
+                });
+                throw error;
+              }
+              const reconciliation = reconcileRuntimeBundleReplacement(
+                runtime,
+                registry,
+                operation,
+                status,
+                priorBundle,
+                metro,
+                bundle,
+              );
+              operation = reconciliation.operation;
+              status = reconciliation.status;
+              runtimeTargetChanged = reconciliation.runtimeTargetChanged;
+            }
             requireCompleteAxes(status, { ...profile, axes: transitionAxes.after });
             const after = await Promise.all(
               transitionAxes.after.map((axis) =>
@@ -423,6 +521,7 @@ export function createAuthorityGate(
               ),
             );
             for (const observation of before) {
+              if (runtimeTargetChanged && observation.axis === 'B') continue;
               if (observation.axis === 'C' || !transitionAxes.after.includes(observation.axis)) {
                 continue;
               }
@@ -690,41 +789,18 @@ export function createAuthorityGate(
               }
             }
             if (!authorityInvalidated && bundle) {
-              const oldTargetId = priorBundle?.targetId;
-              const newTargetId = bundle.targetId;
-              const metroPort = metro?.port;
-              if (
-                typeof oldTargetId !== 'string' ||
-                typeof newTargetId !== 'string' ||
-                !Number.isSafeInteger(metroPort)
-              ) {
-                throw new SessionAuthorityError(
-                  'CDP_TARGET_AUTHORITY_MISMATCH',
-                  'runtime reset did not produce an exact target replacement',
-                );
-              }
-              runtimeTargetChanged =
-                oldTargetId !== newTargetId ||
-                priorBundle?.connectionGeneration !== bundle.connectionGeneration;
-              if (runtimeTargetChanged) {
-                operation = registry.replaceBindingsDuringOperation(operation, {
-                  state: 'ready',
-                  bindings: { bundle },
-                  releaseResources:
-                    oldTargetId !== newTargetId
-                      ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
-                      : [],
-                  claimResources:
-                    oldTargetId !== newTargetId
-                      ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
-                      : [],
-                });
-                const refreshedStatus = runtime.status();
-                if (!refreshedStatus.available) {
-                  throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
-                }
-                status = refreshedStatus;
-              }
+              const reconciliation = reconcileRuntimeBundleReplacement(
+                runtime,
+                registry,
+                operation,
+                status,
+                priorBundle,
+                metro,
+                bundle,
+              );
+              operation = reconciliation.operation;
+              status = reconciliation.status;
+              runtimeTargetChanged = reconciliation.runtimeTargetChanged;
             }
           }
           const effectiveProfile =

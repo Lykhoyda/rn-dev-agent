@@ -776,6 +776,7 @@ export class AndroidCommandsStaleError extends Error {
   constructor(
     readonly missing: string[],
     bundleId?: string,
+    readonly deviceId?: string,
   ) {
     super(
       `RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands ` +
@@ -786,9 +787,16 @@ export class AndroidCommandsStaleError extends Error {
 }
 
 export class AndroidAuthorityStaleError extends Error {
-  constructor() {
+  constructor(readonly deviceId?: string) {
     super('RUNNER_OWNERSHIP_MISMATCH: installed Android runner lacks current authority identity');
   }
+}
+
+export function androidRetryCleanupContext(
+  state: { deviceId?: string } | null,
+  error: AndroidAuthorityStaleError | AndroidCommandsStaleError,
+): { deviceId?: string } | null {
+  return state ?? (error.deviceId ? { deviceId: error.deviceId } : null);
 }
 
 // GH #418: deleting the APKs is the artifact invalidation — apksExist flips
@@ -843,7 +851,7 @@ export async function startAndroidRunner(
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-      await reapMismatchedAndroidRunner(runnerState);
+      await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
       });
@@ -854,7 +862,7 @@ export async function startAndroidRunner(
       // Killing the local adb child does NOT free the device-side
       // UiAutomation slot (#237) — reap through the slot-release path so the
       // rebuilt instrumentation can bind.
-      await reapMismatchedAndroidRunner(runnerState);
+      await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
       invalidateAndroidRunnerApks();
       const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
         _forceReinstall: true,
@@ -913,7 +921,11 @@ async function startAndroidRunnerAttempt(
           // the SINGLE rebuild owner (one Gradle build even on a checkout whose
           // fresh build still misses commands — multi-review advisory); mid-flow
           // callers surface the typed refusal.
-          throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+          throw new AndroidCommandsStaleError(
+            compat.missing ?? [],
+            bundleId,
+            reusableState.deviceId,
+          );
         }
         // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
         // state clear) and force-reinstalled so the fresh APK supersedes it.
@@ -1066,7 +1078,7 @@ async function startAndroidRunnerAttempt(
           ) {
             resolved = true;
             child.kill('SIGTERM');
-            reject(new AndroidAuthorityStaleError());
+            reject(new AndroidAuthorityStaleError(serial));
             return;
           }
           const compat = classifyAndroidHealth(info);
@@ -1077,7 +1089,7 @@ async function startAndroidRunnerAttempt(
             if (compat.reason === 'missing-commands') {
               // GH #418: typed — the wrapper's retry-once invalidates the APKs
               // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
-              reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId));
+              reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
               return;
             }
             reject(

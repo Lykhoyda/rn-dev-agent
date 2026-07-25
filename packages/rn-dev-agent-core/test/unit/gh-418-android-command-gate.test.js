@@ -13,6 +13,7 @@ import {
   invalidateAndroidRunnerApks,
   _androidRunnerApkPathsForTest,
   AndroidCommandsStaleError,
+  androidRetryCleanupContext,
   _setFetchForTest,
 } from '../../dist/runners/rn-android-runner-client.js';
 import {
@@ -68,6 +69,21 @@ test('Android authority upgrades force-reinstall the current artifact once', () 
     runnerSource,
     /err instanceof AndroidAuthorityStaleError[\s\S]*?_forceReinstall: true[\s\S]*?return state/,
   );
+});
+
+test('Android retry cleanup preserves the attempted device before runner readiness', () => {
+  const authorityError = new AndroidAuthorityStaleError('serial-a');
+  const commandsError = new AndroidCommandsStaleError(
+    ['dismissKeyboard'],
+    'com.example',
+    'serial-b',
+  );
+
+  assert.deepEqual(androidRetryCleanupContext(null, authorityError), { deviceId: 'serial-a' });
+  assert.deepEqual(androidRetryCleanupContext(null, commandsError), { deviceId: 'serial-b' });
+  assert.deepEqual(androidRetryCleanupContext({ deviceId: 'persisted' }, authorityError), {
+    deviceId: 'persisted',
+  });
 });
 
 test('gh-418 android: invalidation deletes exactly the paths the apksExist check reads', () => {

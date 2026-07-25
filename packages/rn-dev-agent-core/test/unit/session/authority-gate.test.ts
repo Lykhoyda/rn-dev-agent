@@ -764,22 +764,62 @@ test('runner and Observe lifecycle transitions probe complete before and after a
 });
 
 test('iOS hard reset resolves its runner transition after session argument binding', async () => {
-  const { runtime, calls, status } = fixture();
+  const { runtime, registry, calls, status } = fixture();
+  status.bindings.bundle.targetId = 'old-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push('replace-binding');
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
   const gate = createAuthorityGate(runtime, {
-    probe: async ({ axis, phase }) => {
+    probe: async ({ axis, phase, status: probeStatus }) => {
       calls.push(`${phase}:${axis}`);
-      return { axis, identity: `${axis}-identity` };
+      const bundle = probeStatus.bindings.bundle;
+      return {
+        axis,
+        identity:
+          axis === 'B'
+            ? `${bundle.targetId}:${bundle.connectionGeneration}`
+            : `${axis}-identity`,
+      };
     },
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'new-target',
+      connectionGeneration: 2,
+    }),
   });
   const input: Record<string, unknown> = { hardReset: true };
 
-  await gate.wrap('cdp_restart', async () => {
+  const result = await gate.wrap('cdp_restart', async () => {
     status.bindings.runner = null;
     status.authorityVersion += 1;
     return okResult({ restarted: true });
   })(input);
+  const envelope = JSON.parse(result.content[0].text);
 
+  assert.equal(envelope.ok, true);
   assert.equal(input.platform, 'ios');
   assert.equal(calls.includes('preflight:R'), true);
   assert.equal(calls.includes('postflight:R'), false);
+  assert.equal(status.bindings.bundle.targetId, 'new-target');
+  assert.equal(calls.includes('replace-binding'), true);
+});
+
+test('iOS hard reset returns a typed failure for conflicting session arguments', async () => {
+  const { runtime } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('cdp_restart', async () => okResult({ restarted: true }))({
+    hardReset: true,
+    platform: 'android',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'DEVICE_AUTHORITY_MISMATCH');
 });
