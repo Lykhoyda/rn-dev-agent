@@ -50,7 +50,7 @@ Read/report without mutation:
 
 | Check | Passive evidence | Guidance only |
 |---|---|---|
-| Node | `node --version` | Node 22+ command if missing/old |
+| Node | `node --version` | Node 22.18+ LTS command if missing/old |
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |

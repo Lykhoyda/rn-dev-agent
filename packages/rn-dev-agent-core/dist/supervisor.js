@@ -13,7 +13,7 @@ import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { createSupervisorAuthority, } from './session/supervisor-authority.js';
-import { sqliteFlagForNode, supervisorRelaunchArgs, workerSpawnArgs } from './supervisor-args.js';
+import { sqliteFlagForNode, supervisorRelaunchArgs, unsupportedNodeVersionMessage, workerSpawnArgs, } from './supervisor-args.js';
 // GH#264 Phase 5: the component that owns stdio with Claude Code must hold
 // ZERO network sockets — `lsof -ti tcp:8081 | xargs kill -9` (a documented
 // Metro-recovery step) kills every pid on the port, which used to include
@@ -22,6 +22,11 @@ import { sqliteFlagForNode, supervisorRelaunchArgs, workerSpawnArgs } from './su
 // lock, and respawns the worker when it dies.
 const here = dirname(fileURLToPath(import.meta.url));
 const sqliteWarningFilterPath = join(here, 'sqlite-warning-filter.js');
+const unsupportedNode = unsupportedNodeVersionMessage();
+if (unsupportedNode) {
+    process.stderr.write(`${unsupportedNode}\n`);
+    process.exit(1);
+}
 const supervisorFlag = sqliteFlagForNode();
 if (supervisorFlag.length > 0 &&
     !process.execArgv.includes('--experimental-sqlite') &&

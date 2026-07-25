@@ -32,6 +32,20 @@ export function sqliteFlagForNode(version?: string): string[] {
   return requiresFlag ? ['--experimental-sqlite'] : [];
 }
 
+export function isSupportedNodeVersion(version?: string): boolean {
+  const [majorStr, minorStr] = (version ?? process.versions.node).split('.');
+  const major = parseInt(majorStr ?? '0', 10);
+  const minor = parseInt(minorStr ?? '0', 10);
+  return major > 22 || (major === 22 && minor >= 5);
+}
+
+export function unsupportedNodeVersionMessage(version?: string): string | null {
+  const actual = version ?? process.versions.node;
+  return isSupportedNodeVersion(actual)
+    ? null
+    : `rn-dev-agent requires Node.js >=22.5; current runtime is ${actual}`;
+}
+
 /**
  * Returns the full argument array to pass to `spawn(process.execPath, ...)`.
  * Node VM flags come first (so they are interpreted by Node, not the script),

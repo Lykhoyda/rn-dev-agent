@@ -902,12 +902,18 @@ export async function reapStaleFastRunner(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
     const processAlive = deps.processAlive ?? defaultProcessAlive;
     const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
+    const matchesProcessBirth = deps.matchesProcessBirth ?? processBirthMatches;
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     const clearState = deps.clearState ?? clearStateFile;
     const graceMs = deps.graceMs ?? 500;
     const state = getState();
     if (!state)
         return;
+    const expectedBirth = typeof state.processBirth === 'string' ? { pid: state.pid, token: state.processBirth } : null;
+    if (!expectedBirth || !matchesProcessBirth(expectedBirth)) {
+        clearState();
+        return;
+    }
     const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
     const spawnedExit = spawnedChild
         ? new Promise((resolve) => spawnedChild.once('exit', () => resolve()))
@@ -919,7 +925,7 @@ export async function reapStaleFastRunner(deps = {}) {
         /* already dead */
     }
     await sleep(graceMs);
-    if (processAlive(state.pid)) {
+    if (processAlive(state.pid) && matchesProcessBirth(expectedBirth)) {
         try {
             sendSignal(state.pid, 'SIGKILL');
         }

@@ -44722,12 +44722,18 @@ async function reapStaleFastRunner(deps = {}) {
   const getState = deps.getState ?? (() => runnerState);
   const processAlive = deps.processAlive ?? defaultProcessAlive2;
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
+  const matchesProcessBirth = deps.matchesProcessBirth ?? processBirthMatches;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const clearState = deps.clearState ?? clearStateFile;
   const graceMs = deps.graceMs ?? 500;
   const state = getState();
   if (!state)
     return;
+  const expectedBirth = typeof state.processBirth === "string" ? { pid: state.pid, token: state.processBirth } : null;
+  if (!expectedBirth || !matchesProcessBirth(expectedBirth)) {
+    clearState();
+    return;
+  }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
   const spawnedExit = spawnedChild ? new Promise((resolve9) => spawnedChild.once("exit", () => resolve9())) : null;
   try {
@@ -44735,7 +44741,7 @@ async function reapStaleFastRunner(deps = {}) {
   } catch {
   }
   await sleep6(graceMs);
-  if (processAlive(state.pid)) {
+  if (processAlive(state.pid) && matchesProcessBirth(expectedBirth)) {
     try {
       sendSignal(state.pid, "SIGKILL");
     } catch {
@@ -74477,6 +74483,16 @@ function sqliteFlagForNode(version2) {
   const requiresFlag = major === 22 && minor >= 5 || major === 23 && minor < 6;
   return requiresFlag ? ["--experimental-sqlite"] : [];
 }
+function isSupportedNodeVersion(version2) {
+  const [majorStr, minorStr] = (version2 ?? process.versions.node).split(".");
+  const major = parseInt(majorStr ?? "0", 10);
+  const minor = parseInt(minorStr ?? "0", 10);
+  return major > 22 || major === 22 && minor >= 5;
+}
+function unsupportedNodeVersionMessage(version2) {
+  const actual = version2 ?? process.versions.node;
+  return isSupportedNodeVersion(actual) ? null : `rn-dev-agent requires Node.js >=22.5; current runtime is ${actual}`;
+}
 function workerSpawnArgs(workerPath, sqliteWarningFilterPath2, version2, forwardedArgs = []) {
   const diagnosticArgs = forwardedArgs.includes("--diagnostic-contract-probe") ? ["--diagnostic-contract-probe"] : [];
   return [
@@ -74501,6 +74517,12 @@ function supervisorRelaunchArgs(supervisorPath, sqliteWarningFilterPath2, versio
 // packages/rn-dev-agent-core/dist/supervisor.js
 var here = dirname21(fileURLToPath7(import.meta.url));
 var sqliteWarningFilterPath = join56(here, "sqlite-warning-filter.js");
+var unsupportedNode = unsupportedNodeVersionMessage();
+if (unsupportedNode) {
+  process.stderr.write(`${unsupportedNode}
+`);
+  process.exit(1);
+}
 var supervisorFlag = sqliteFlagForNode();
 if (supervisorFlag.length > 0 && !process.execArgv.includes("--experimental-sqlite") && process.env.RN_DEV_AGENT_SQLITE_RELAUNCHED !== "1") {
   const child = spawn8(process.execPath, supervisorRelaunchArgs(fileURLToPath7(import.meta.url), sqliteWarningFilterPath, void 0, process.argv.slice(2)), {

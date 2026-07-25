@@ -10,7 +10,14 @@ import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
 // Mirrors the injectable-deps pattern from test/unit/lockfile.test.js so we
 // never touch a real process, the real state file, or a real HTTP server.
 
-const STATE = { pid: 12345, port: 22088, deviceId: 'sim-1', bundleId: 'com.example' };
+const STATE = {
+  pid: 12345,
+  port: 22088,
+  deviceId: 'sim-1',
+  bundleId: 'com.example',
+  processBirth: 'birth-12345',
+};
+const MATCHES_PROCESS_BIRTH = { matchesProcessBirth: () => true };
 
 // ── probe: dead paths ─────────────────────────────────────────────────
 
@@ -211,6 +218,7 @@ test('M7 reap: SIGTERM succeeds — does not escalate to SIGKILL', async () => {
   let clearCalls = 0;
   let processAliveCalls = 0;
   await reapStaleFastRunner({
+    ...MATCHES_PROCESS_BIRTH,
     getState: () => STATE,
     processAlive: () => {
       processAliveCalls++;
@@ -239,6 +247,7 @@ test('M7 reap: SIGTERM ignored → SIGKILL escalation', async () => {
   const signals = [];
   let clearCalls = 0;
   await reapStaleFastRunner({
+    ...MATCHES_PROCESS_BIRTH,
     getState: () => STATE,
     processAlive: () => true, // refuses to die after SIGTERM
     sendSignal: (pid, sig) => {
@@ -260,6 +269,7 @@ test('M7 reap: SIGTERM ignored → SIGKILL escalation', async () => {
 test('M7 reap: SIGTERM throws ESRCH (already dead) — clearState still called', async () => {
   let clearCalls = 0;
   await reapStaleFastRunner({
+    ...MATCHES_PROCESS_BIRTH,
     getState: () => STATE,
     processAlive: () => false, // already gone
     sendSignal: (_pid, _sig) => {
@@ -279,6 +289,7 @@ test('M7 reap: SIGTERM throws ESRCH (already dead) — clearState still called',
 test('M7 reap: graceMs override respected (fake sleep captures value)', async () => {
   let observedGrace = -1;
   await reapStaleFastRunner({
+    ...MATCHES_PROCESS_BIRTH,
     getState: () => STATE,
     processAlive: () => false,
     sendSignal: () => {},
@@ -294,6 +305,7 @@ test('M7 reap: graceMs override respected (fake sleep captures value)', async ()
 test('M7 reap: default graceMs is 500', async () => {
   let observedGrace = -1;
   await reapStaleFastRunner({
+    ...MATCHES_PROCESS_BIRTH,
     getState: () => STATE,
     processAlive: () => false,
     sendSignal: () => {},
@@ -303,4 +315,36 @@ test('M7 reap: default graceMs is 500', async () => {
     clearState: () => {},
   });
   assert.equal(observedGrace, 500);
+});
+
+test('M7 reap: reused PID clears state without sending a signal', async () => {
+  const signals = [];
+  let clearCalls = 0;
+  await reapStaleFastRunner({
+    getState: () => STATE,
+    matchesProcessBirth: () => false,
+    sendSignal: (pid, signal) => signals.push([pid, signal]),
+    sleep: async () => assert.fail('reused PID must not enter the grace period'),
+    clearState: () => {
+      clearCalls++;
+    },
+  });
+  assert.deepEqual(signals, []);
+  assert.equal(clearCalls, 1);
+});
+
+test('M7 reap: PID reuse during grace prevents SIGKILL escalation', async () => {
+  const signals = [];
+  let birthChecks = 0;
+  await reapStaleFastRunner({
+    getState: () => STATE,
+    matchesProcessBirth: () => ++birthChecks === 1,
+    processAlive: () => true,
+    sendSignal: (pid, signal) => signals.push([pid, signal]),
+    sleep: async () => {},
+    clearState: () => {},
+    graceMs: 0,
+  });
+  assert.deepEqual(signals, [[STATE.pid, 'SIGTERM']]);
+  assert.equal(birthChecks, 2);
 });

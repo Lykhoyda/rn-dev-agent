@@ -48,6 +48,32 @@ test('Codex launcher bypasses the process-wide bridge lock without changing app 
   }
 });
 
+test('Codex launcher enforces the authority runtime Node floor', async () => {
+  const launcher = await text('packages/codex-plugin/bin/cdp-supervisor.js');
+  assert.match(launcher, /nodeMajor === 22 && nodeMinor < 5/);
+  assert.match(launcher, /requires Node\.js >=22\.5/);
+});
+
+test('installed host packages declare and execute the authority runtime floor', async () => {
+  const manifests = await Promise.all(
+    [
+      'packages/claude-plugin/package.json',
+      'packages/codex-plugin/package.json',
+      'packages/claude-plugin/rn-dev-agent-core/package.json',
+      'packages/codex-plugin/rn-dev-agent-core/package.json',
+    ].map(async (path) => JSON.parse(await text(path))),
+  );
+  for (const manifest of manifests) {
+    assert.equal(manifest.engines.node, '>=22.5');
+  }
+  const [claudeSupervisor, codexSupervisor] = await Promise.all([
+    text('packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js'),
+    text('packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js'),
+  ]);
+  assert.match(claudeSupervisor, /requires Node\.js >=22\.5/);
+  assert.match(codexSupervisor, /requires Node\.js >=22\.5/);
+});
+
 test('Codex ships a discoverable feedback skill and package-local collector', async () => {
   const [canonicalSkill, codexSkill, canonicalCollector, codexCollector, claudeCollector, command] =
     await Promise.all([

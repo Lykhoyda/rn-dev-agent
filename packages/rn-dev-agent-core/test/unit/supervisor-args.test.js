@@ -1,8 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isSupportedNodeVersion,
   sqliteFlagForNode,
   supervisorRelaunchArgs,
+  unsupportedNodeVersionMessage,
   workerSpawnArgs,
 } from '../../dist/supervisor-args.js';
 
@@ -50,6 +52,17 @@ describe('sqliteFlagForNode', () => {
     const result = sqliteFlagForNode();
     assert.ok(Array.isArray(result));
   });
+});
+
+test('authority runtime rejects Node versions without node:sqlite', () => {
+  assert.equal(isSupportedNodeVersion('22.4.1'), false);
+  assert.equal(isSupportedNodeVersion('22.5.0'), true);
+  assert.equal(isSupportedNodeVersion('24.0.0'), true);
+  assert.equal(
+    unsupportedNodeVersionMessage('22.4.1'),
+    'rn-dev-agent requires Node.js >=22.5; current runtime is 22.4.1',
+  );
+  assert.equal(unsupportedNodeVersionMessage('22.5.0'), null);
 });
 
 // ── workerSpawnArgs ───────────────────────────────────────────────────────────

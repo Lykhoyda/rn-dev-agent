@@ -263,6 +263,7 @@ for (const [runtimeRoot, runtimeName] of [
         version: corePackage.version,
         private: true,
         type: 'module',
+        engines: corePackage.engines,
       },
       null,
       2,
