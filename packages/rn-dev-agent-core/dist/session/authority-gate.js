@@ -272,7 +272,12 @@ export function createAuthorityGate(runtime, dependencies) {
                                 }
                             : tool === 'rn_session' && args.action === 'prepare_handoff'
                                 ? { before: [...profile.axes], after: [] }
-                                : { before: [...profile.axes], after: [...profile.axes] };
+                                : tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios'
+                                    ? {
+                                        before: [...profile.axes],
+                                        after: profile.axes.filter((axis) => axis !== 'R'),
+                                    }
+                                    : { before: [...profile.axes], after: [...profile.axes] };
                     requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
                     operation = registry.beginOperation(available.session, {
                         operationId: randomUUID(),
@@ -282,7 +287,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                     registry.verifyOperation(operation);
                     const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
-                    if (!resultIsCanonicalSuccess(result)) {
+                    if (!resultSucceeded(result)) {
                         return addMeta(result, { authoritative: false });
                     }
                     if (tool === 'rn_session' && args.action === 'release') {

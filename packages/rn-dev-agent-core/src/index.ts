@@ -2861,7 +2861,9 @@ trackedTool(
         'Compatibility alias for the authority-bound appId; conflicting values are refused.',
       ),
   },
-  createRestartHandler(getClient, setClient, createClient),
+  createRestartHandler(getClient, setClient, createClient, {
+    unbindRunner: () => unbindNativeRunner(authorityRuntime),
+  }),
 );
 
 trackedTool(

@@ -20,6 +20,7 @@ export interface RestartHandlerDeps {
     opts?: { timeout?: number },
   ) => Promise<{ stdout: string; stderr: string }>;
   stopFastRunner?: (deviceId?: string) => void;
+  unbindRunner?: () => void;
   sleep?: (ms: number) => Promise<void>;
   probeAppInstalled?: (udid: string, appId: string) => Promise<boolean | null>;
   snapshotHint?: (appId: string) => SnapshotHint | null;
@@ -57,6 +58,7 @@ export function createRestartHandler(
 ) {
   const execFile = deps.execFile ?? defaultExecFile;
   const stopFastRunner = deps.stopFastRunner ?? defaultStopFastRunner;
+  const unbindRunner = deps.unbindRunner ?? (() => {});
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
@@ -94,14 +96,15 @@ export function createRestartHandler(
           );
         }
 
-        try {
-          stopFastRunner(args.deviceId);
-          hardResetSteps.push('stopFastRunner:ok');
-        } catch (err) {
-          hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
-        }
-
         if (bundleId && targetPlatform === 'ios') {
+          try {
+            stopFastRunner(args.deviceId);
+            hardResetSteps.push('stopFastRunner:ok');
+          } catch (err) {
+            hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
+          } finally {
+            unbindRunner();
+          }
           const targetUdid = safeSimctlTarget(args.deviceId);
           if (!targetUdid) {
             return failResult(

@@ -531,6 +531,14 @@ export function shouldReuseAndroidRunner(
   return typeof deviceId === 'string' && state.deviceId === deviceId;
 }
 
+export function shouldReapAndroidRunnerBeforeStart(
+  state: AndroidRunnerState | null,
+  deviceId: string,
+  isAvailable: boolean,
+): boolean {
+  return isAvailable && !shouldReuseAndroidRunner(state, deviceId);
+}
+
 /**
  * GH#243: HTTP-truthful readiness. The runner logs RN_ANDROID_RUNNER_LISTENER_READY,
  * but `adb logcat` replays the ring buffer — a prior runner's ready line (same tag +
@@ -848,6 +856,10 @@ async function startAndroidRunnerAttempt(
   const authority = androidRunnerAuthority(serial, bundleId ?? '');
   adoptPersistedAndroidState(serial);
   let forceReinstall = opts._forceReinstall === true;
+  if (shouldReapAndroidRunnerBeforeStart(runnerState, serial, isAndroidRunnerAvailable())) {
+    await reapMismatchedAndroidRunner(serial);
+    forceReinstall = true;
+  }
   if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, serial)) {
     const info = await probeAndroidRunnerHealthInfo(runnerState!.hostPort);
     if (info.reachable && info.ok) {

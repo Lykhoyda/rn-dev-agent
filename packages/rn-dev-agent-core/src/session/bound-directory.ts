@@ -707,15 +707,6 @@ function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
   }
 }
 
-function allReplacementsPresent(writes) {
-  return writes.every((write) => {
-    const target = readRegularFile(write.name);
-    return write.replacement === null
-      ? target === null
-      : sameContentsAndMode(target, write.replacement, write.mode);
-  });
-}
-
 function recoverTransaction(
   journalName,
   requestedWrites,
@@ -725,13 +716,7 @@ function recoverTransaction(
 ) {
   const journal = readJournal(journalName);
   if (journal === null) {
-    const committed = allReplacementsPresent(requestedWrites);
-    assertBoundDirectory(ancestryGuard, true);
-    if (releaseLock) {
-      releaseTransactionLock();
-      assertBoundDirectory(ancestryGuard, true);
-    }
-    return { committed };
+    throw new Error('bound-directory transaction outcome is unknown');
   }
   if (
     journal.version !== 1 ||
@@ -2012,6 +1997,14 @@ export function retryBoundDirectoryCleanup(
   try {
     result = runBoundOperation(directory, request, dependencies);
   } catch (error) {
+    if (
+      transaction.knownCommitted &&
+      error instanceof Error &&
+      error.message.includes('bound-directory transaction outcome is unknown')
+    ) {
+      directory.pendingCleanups.delete(obligation.transactionId);
+      return;
+    }
     if (!(error instanceof Error) || error.message !== 'SESSION_INTEGRATION_WORKER_TIMEOUT') {
       throw error;
     }

@@ -50,6 +50,7 @@ test('authority store opens a transactional registry with private permissions', 
         .value,
       '1',
     );
+    assert.equal(store.database.prepare('PRAGMA busy_timeout').get().timeout, 5);
     assert.equal(statSync(path).mode & 0o777, 0o600);
   } finally {
     store.close();

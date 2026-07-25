@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldReuseAndroidRunner } from '../../dist/runners/rn-android-runner-client.js';
+import {
+  shouldReapAndroidRunnerBeforeStart,
+  shouldReuseAndroidRunner,
+} from '../../dist/runners/rn-android-runner-client.js';
 
 // Audit H4: parity with iOS shouldReuseRunner. A live Android runner bound to
 // emulator-A must NOT be reused to drive emulator-B (its adb forward + port
@@ -43,6 +46,21 @@ test('H4: runner with no recorded device + a specific target requested → do no
 test('H4: sibling claim epoch cannot reuse the runner', () => {
   assert.equal(
     shouldReuseAndroidRunner({ ...stateFor('emulator-5554'), claimEpoch: 6 }, 'emulator-5554'),
+    false,
+  );
+});
+
+test('a live non-reusable runner is reaped before replacement', () => {
+  assert.equal(
+    shouldReapAndroidRunnerBeforeStart(
+      { ...stateFor('emulator-5554'), claimEpoch: 6 },
+      'emulator-5554',
+      true,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldReapAndroidRunnerBeforeStart(stateFor('emulator-5554'), 'emulator-5554', true),
     false,
   );
 });

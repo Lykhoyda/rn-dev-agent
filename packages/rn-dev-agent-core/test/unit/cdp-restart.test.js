@@ -96,6 +96,7 @@ test('iOS hard reset addresses only the exact simulator and app', async () => {
       return { stdout: '', stderr: '' };
     },
     stopFastRunner: (deviceId) => calls.push(['stopFastRunner', deviceId]),
+    unbindRunner: () => calls.push(['unbindRunner']),
     sleep: async () => {},
   })({
     hardReset: true,
@@ -106,8 +107,9 @@ test('iOS hard reset addresses only the exact simulator and app', async () => {
   });
 
   assert.equal(envelope(result).ok, true);
-  assert.deepEqual(calls.slice(0, 3), [
+  assert.deepEqual(calls.slice(0, 4), [
     ['stopFastRunner', 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3'],
+    ['unbindRunner'],
     ['xcrun', 'simctl', 'terminate', 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3', 'com.example.app'],
     ['xcrun', 'simctl', 'launch', 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3', 'com.example.app'],
   ]);
@@ -115,6 +117,7 @@ test('iOS hard reset addresses only the exact simulator and app', async () => {
 
 test('Android hard reset uses adb -s for force-stop and launch', async () => {
   const calls = [];
+  let unbound = false;
   const old = client({
     target: {
       id: 'android-target',
@@ -136,6 +139,9 @@ test('Android hard reset uses adb -s for force-stop and launch', async () => {
       return { stdout: '', stderr: '' };
     },
     stopFastRunner: () => {},
+    unbindRunner: () => {
+      unbound = true;
+    },
     sleep: async () => {},
   })({
     hardReset: true,
@@ -159,6 +165,7 @@ test('Android hard reset uses adb -s for force-stop and launch', async () => {
   assert.equal(calls[1][1], '-s');
   assert.equal(calls[1][2], 'emulator-5556');
   assert.ok(calls[1].includes('com.example.app'));
+  assert.equal(unbound, false);
 });
 
 test('hard reset refuses missing authority and literal booted without side effects', async () => {

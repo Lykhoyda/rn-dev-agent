@@ -923,6 +923,24 @@ function secureDatabaseFiles(path) {
     }
   }
 }
+function runInitialization(operation) {
+  const deadline = Date.now() + INITIALIZATION_TIMEOUT_MS;
+  for (; ; ) {
+    try {
+      operation();
+      return;
+    } catch (error2) {
+      const code = error2.code;
+      const message = error2 instanceof Error ? error2.message : "";
+      if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+        throw error2;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0)
+        throw error2;
+      Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
+    }
+  }
+}
 function openAuthorityStore(path, options = {}) {
   const ctor = options.sqliteCtor === void 0 ? loadAuthoritySqlite() : options.sqliteCtor;
   if (!ctor) {
@@ -941,17 +959,17 @@ function openAuthorityStore(path, options = {}) {
     }
     const database = new ctor(path);
     secureDatabaseFiles(path);
-    database.exec(`
-      PRAGMA busy_timeout=5;
-      PRAGMA journal_mode=WAL;
-      CREATE TABLE IF NOT EXISTS authority_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      INSERT INTO authority_meta(key, value)
-      VALUES ('schema_version', '1')
-      ON CONFLICT(key) DO NOTHING;
-    `);
+    runInitialization(() => database.exec(`
+        PRAGMA busy_timeout=5;
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS authority_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO authority_meta(key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT(key) DO NOTHING;
+      `));
     secureDatabaseFiles(path);
     return {
       database,
@@ -966,11 +984,13 @@ function openAuthorityStore(path, options = {}) {
     throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
   }
 }
-var require2, AuthorityStoreUnavailableError;
+var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
 var init_authority_store = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
     "use strict";
     require2 = createRequire(import.meta.url);
+    INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+    INITIALIZATION_TIMEOUT_MS = 1e3;
     AuthorityStoreUnavailableError = class extends Error {
       code = "AUTHORITY_STORE_UNAVAILABLE";
       constructor(reason, options) {
@@ -1039,11 +1059,12 @@ function openSessionRegistry(path, dependencies) {
     throw error2;
   }
 }
-var SessionAuthorityError, errorAxes, conflictCodes, SessionRegistry;
+var INITIALIZATION_WAIT2, SessionAuthorityError, errorAxes, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
+    INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     SessionAuthorityError = class extends Error {
       code;
       holder;
@@ -1104,7 +1125,7 @@ var init_registry = __esm({
         this.#now = dependencies.now ?? Date.now;
         this.#ownerStatus = dependencies.ownerStatus;
         this.#leaseMs = dependencies.leaseMs ?? 3e4;
-        this.#initialize();
+        this.#initializeWithRetry();
       }
       close() {
         this.#close();
@@ -2087,6 +2108,25 @@ var init_registry = __esm({
              VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, port);
             return port;
           }
+          const orphan = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
+           FROM allocations allocation
+           WHERE allocation.service = ?
+             AND allocation.port >= ?
+             AND allocation.port < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions session
+               WHERE session.worktree_key = allocation.worktree_key
+                 AND session.state NOT IN ('released', 'stale')
+             )
+           ORDER BY allocation.generation ASC, allocation.worktree_key ASC
+           LIMIT 1`).get(input.service, input.base, input.base + input.span);
+          if (orphan) {
+            this.#database.prepare(`DELETE FROM allocations
+             WHERE service = ? AND worktree_key = ? AND port = ?`).run(input.service, orphan.worktree_key, orphan.port);
+            this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
+             VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, orphan.port);
+            return orphan.port;
+          }
           throw new SessionAuthorityError("PORT_RANGE_EXHAUSTED", `no ${input.service} port is available in the configured range`);
         });
       }
@@ -2180,6 +2220,24 @@ var init_registry = __esm({
           throw error2;
         }
         this.#secureFiles();
+      }
+      #initializeWithRetry() {
+        const deadline = Date.now() + 1e3;
+        for (; ; ) {
+          try {
+            this.#initialize();
+            return;
+          } catch (error2) {
+            const code = error2.code;
+            const message = error2 instanceof Error ? error2.message : "";
+            if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+              throw error2;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0)
+              throw error2;
+            Atomics.wait(INITIALIZATION_WAIT2, 0, 0, Math.min(25, remaining));
+          }
+        }
       }
       #probeClaimOwners(session, resources) {
         const owners = /* @__PURE__ */ new Map();
@@ -45334,6 +45392,7 @@ __export(rn_android_runner_client_exports, {
   resolveAndroidInstallAction: () => resolveAndroidInstallAction,
   resolveAndroidSerial: () => resolveAndroidSerial,
   runAndroid: () => runAndroid,
+  shouldReapAndroidRunnerBeforeStart: () => shouldReapAndroidRunnerBeforeStart,
   shouldRecoverAndroidAccessibility: () => shouldRecoverAndroidAccessibility,
   shouldReuseAndroidRunner: () => shouldReuseAndroidRunner,
   startAndroidRunner: () => startAndroidRunner,
@@ -45595,6 +45654,9 @@ function shouldReuseAndroidRunner(state, deviceId) {
   }
   return typeof deviceId === "string" && state.deviceId === deviceId;
 }
+function shouldReapAndroidRunnerBeforeStart(state, deviceId, isAvailable) {
+  return isAvailable && !shouldReuseAndroidRunner(state, deviceId);
+}
 async function waitForAndroidRunnerHealth(port, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? READY_TIMEOUT_MS2;
   const intervalMs = opts.intervalMs ?? HEALTH_POLL_INTERVAL_MS;
@@ -45733,6 +45795,10 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
   const authority = androidRunnerAuthority(serial, bundleId ?? "");
   adoptPersistedAndroidState(serial);
   let forceReinstall = opts._forceReinstall === true;
+  if (shouldReapAndroidRunnerBeforeStart(runnerState2, serial, isAndroidRunnerAvailable())) {
+    await reapMismatchedAndroidRunner(serial);
+    forceReinstall = true;
+  }
   if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState2, serial)) {
     const info = await probeAndroidRunnerHealthInfo(runnerState2.hostPort);
     if (info.reachable && info.ok) {
@@ -53661,6 +53727,10 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
   try {
     result = runBoundOperation(directory, request2, dependencies);
   } catch (error2) {
+    if (transaction.knownCommitted && error2 instanceof Error && error2.message.includes("bound-directory transaction outcome is unknown")) {
+      directory.pendingCleanups.delete(obligation.transactionId);
+      return;
+    }
     if (!(error2 instanceof Error) || error2.message !== "SESSION_INTEGRATION_WORKER_TIMEOUT") {
       throw error2;
     }
@@ -54280,15 +54350,6 @@ function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
   }
 }
 
-function allReplacementsPresent(writes) {
-  return writes.every((write) => {
-    const target = readRegularFile(write.name);
-    return write.replacement === null
-      ? target === null
-      : sameContentsAndMode(target, write.replacement, write.mode);
-  });
-}
-
 function recoverTransaction(
   journalName,
   requestedWrites,
@@ -54298,13 +54359,7 @@ function recoverTransaction(
 ) {
   const journal = readJournal(journalName);
   if (journal === null) {
-    const committed = allReplacementsPresent(requestedWrites);
-    assertBoundDirectory(ancestryGuard, true);
-    if (releaseLock) {
-      releaseTransactionLock();
-      assertBoundDirectory(ancestryGuard, true);
-    }
-    return { committed };
+    throw new Error('bound-directory transaction outcome is unknown');
   }
   if (
     journal.version !== 1 ||
@@ -63349,7 +63404,7 @@ function readProofCandidateRuntime(candidateRoot) {
   const remote = execFileSync11("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
-  if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
+  if (!isOfficialProofCandidateRemote(remote)) {
     throw new Error("CANDIDATE_REPOSITORY_MISMATCH");
   }
   const argv = [...process.argv];
@@ -63375,6 +63430,18 @@ function readProofCandidateRuntime(candidateRoot) {
     runnerManifestSha256: hashBytes(artifacts[1]),
     mcp: { pid: process.pid, argv, cwd: process.cwd() }
   });
+}
+function isOfficialProofCandidateRemote(remote) {
+  const scp = remote.match(/^(?:[^@/]+@)?([^/:]+):(.+)$/);
+  if (scp && !remote.includes("://")) {
+    return scp[1]?.toLowerCase() === "github.com" && scp[2]?.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "") === "Lykhoyda/rn-dev-agent";
+  }
+  try {
+    const url = new URL(remote);
+    return url.hostname.toLowerCase() === "github.com" && url.pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "") === "Lykhoyda/rn-dev-agent";
+  } catch {
+    return false;
+  }
 }
 function sameCandidateRuntime(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -66335,6 +66402,8 @@ function safeSimctlTarget(deviceId) {
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
   const execFile27 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
+  const unbindRunner = deps.unbindRunner ?? (() => {
+  });
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
@@ -66355,13 +66424,15 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
         if (!args.deviceId || !targetPlatform) {
           return failResult("cdp_restart hardReset requires the exact authority-bound device and platform", "DEVICE_AUTHORITY_MISMATCH");
         }
-        try {
-          stopFastRunner2(args.deviceId);
-          hardResetSteps.push("stopFastRunner:ok");
-        } catch (err) {
-          hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
-        }
         if (bundleId && targetPlatform === "ios") {
+          try {
+            stopFastRunner2(args.deviceId);
+            hardResetSteps.push("stopFastRunner:ok");
+          } catch (err) {
+            hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
+          } finally {
+            unbindRunner();
+          }
           const targetUdid = safeSimctlTarget(args.deviceId);
           if (!targetUdid) {
             return failResult("cdp_restart refused a non-exact iOS simulator identifier", "DEVICE_AUTHORITY_MISMATCH");
@@ -69831,6 +69902,9 @@ function previewPackageIntegration(packageJson, existing, sessionCli) {
   };
 }
 function restorePackageIntegration(packageJson, manifest) {
+  if (packageJson.scripts?.ios !== SENTINELS.ios || packageJson.scripts?.android !== SENTINELS.android) {
+    throw new Error("SESSION_INTEGRATION_CONFLICT: package scripts changed after integration was installed");
+  }
   return {
     ...packageJson,
     scripts: {
@@ -70875,6 +70949,14 @@ function add(names, profile) {
   }
 }
 function authorityProfileFor(tool, args = {}) {
+  if (tool === "cdp_restart" && args.hardReset === true && args.platform === "ios") {
+    return {
+      kind: "transition",
+      axes: ["C", "S", "I", "M", "B", "D", "R"],
+      mutation: true,
+      liveBundleProbe: true
+    };
+  }
   if (tool === "cdp_nav_graph" && (args.action === "scan" || args.action === "go")) {
     return profiles.get("cdp_interact");
   }
@@ -71244,7 +71326,10 @@ function createAuthorityGate(runtime, dependencies) {
           } : {
             before: ["C", "S", "I", "M", "B", "D", "R"],
             after: ["C", "S", "I", "M", "B", "D", "R", "O"]
-          } : tool === "rn_session" && args.action === "prepare_handoff" ? { before: [...profile.axes], after: [] } : { before: [...profile.axes], after: [...profile.axes] };
+          } : tool === "rn_session" && args.action === "prepare_handoff" ? { before: [...profile.axes], after: [] } : tool === "cdp_restart" && args.hardReset === true && args.platform === "ios" ? {
+            before: [...profile.axes],
+            after: profile.axes.filter((axis) => axis !== "R")
+          } : { before: [...profile.axes], after: [...profile.axes] };
           requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
           operation2 = registry3.beginOperation(available.session, {
             operationId: randomUUID8(),
@@ -71254,7 +71339,7 @@ function createAuthorityGate(runtime, dependencies) {
           const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
           registry3.verifyOperation(operation2);
           const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
-          if (!resultIsCanonicalSuccess(result)) {
+          if (!resultSucceeded(result)) {
             return addMeta2(result, { authoritative: false });
           }
           if (tool === "rn_session" && args.action === "release") {
@@ -73401,7 +73486,9 @@ var init_index = __esm({
       appId: external_exports.string().optional().describe("Authority-bound exact app identifier; normally injected by the session"),
       hardReset: external_exports.boolean().optional().describe("Relaunch the exact session app on its claimed iOS or Android device before reconnecting."),
       bundleId: external_exports.string().optional().describe("Compatibility alias for the authority-bound appId; conflicting values are refused.")
-    }, createRestartHandler(getClient, setClient, createClient));
+    }, createRestartHandler(getClient, setClient, createClient, {
+      unbindRunner: () => unbindNativeRunner(authorityRuntime)
+    }));
     trackedTool("cross_platform_verify", "Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.", {
       elements: external_exports.array(external_exports.string()).optional().describe("List of testIDs or labels to check on both platforms. Optional if scanDir is provided."),
       scanDir: external_exports.string().optional().describe('Directory to scan for testID="..." props in .tsx/.jsx/.ts/.js files. Auto-discovers elements. Merges with elements[] if both provided.'),

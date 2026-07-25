@@ -837,6 +837,35 @@ test('bounded CAS recovery restores a file captured during worker timeout', () =
   }
 });
 
+test('bounded CAS recovery refuses a journal-less timeout outcome', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-unknown-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n', { mode: 0o600 });
+  const directory = openBoundDirectory(root);
+  try {
+    assert.throws(
+      () =>
+        casBoundDirectoryFiles(
+          directory,
+          [
+            {
+              expected: Buffer.from('before\n'),
+              mode: 0o600,
+              name: 'authority-marker.js',
+              replacement: Buffer.from('after\n'),
+            },
+          ],
+          { afterLockReleaseDelayMs: 1_000, timeoutMs: 100 },
+        ),
+      /transaction outcome is unknown/,
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('bounded CAS recovery leaves untouched later writes absent', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-untouched-'));
   const firstPath = join(root, 'first.js');
@@ -1614,6 +1643,22 @@ test('confirmed integration can be transactionally restored through its public f
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+test('restoration refuses package scripts edited after integration', () => {
+  const preview = previewPackageIntegration(packageJson);
+  const edited = {
+    ...preview.packageJson,
+    scripts: {
+      ...preview.packageJson.scripts,
+      ios: 'expo run:ios --device',
+    },
+  };
+
+  assert.throws(
+    () => restorePackageIntegration(edited, preview.manifest),
+    /SESSION_INTEGRATION_CONFLICT/,
+  );
 });
 
 test('confirmed restoration rejects a manifest Metro path outside the app root', () => {

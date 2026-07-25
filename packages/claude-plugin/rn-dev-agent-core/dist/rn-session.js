@@ -8138,6 +8138,8 @@ import { chmodSync, lstatSync, mkdirSync, statSync as statSync2 } from "node:fs"
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 var require2 = createRequire(import.meta.url);
+var INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+var INITIALIZATION_TIMEOUT_MS = 1e3;
 var AuthorityStoreUnavailableError = class extends Error {
   code = "AUTHORITY_STORE_UNAVAILABLE";
   constructor(reason, options) {
@@ -8184,6 +8186,24 @@ function secureDatabaseFiles(path) {
     }
   }
 }
+function runInitialization(operation) {
+  const deadline = Date.now() + INITIALIZATION_TIMEOUT_MS;
+  for (; ; ) {
+    try {
+      operation();
+      return;
+    } catch (error) {
+      const code = error.code;
+      const message = error instanceof Error ? error.message : "";
+      if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+        throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0)
+        throw error;
+      Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
+    }
+  }
+}
 function openAuthorityStore(path, options = {}) {
   const ctor = options.sqliteCtor === void 0 ? loadAuthoritySqlite() : options.sqliteCtor;
   if (!ctor) {
@@ -8202,17 +8222,17 @@ function openAuthorityStore(path, options = {}) {
     }
     const database = new ctor(path);
     secureDatabaseFiles(path);
-    database.exec(`
-      PRAGMA busy_timeout=5;
-      PRAGMA journal_mode=WAL;
-      CREATE TABLE IF NOT EXISTS authority_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      INSERT INTO authority_meta(key, value)
-      VALUES ('schema_version', '1')
-      ON CONFLICT(key) DO NOTHING;
-    `);
+    runInitialization(() => database.exec(`
+        PRAGMA busy_timeout=5;
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS authority_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO authority_meta(key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT(key) DO NOTHING;
+      `));
     secureDatabaseFiles(path);
     return {
       database,
@@ -8229,6 +8249,7 @@ function openAuthorityStore(path, options = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/registry.js
+var INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
 var SessionAuthorityError = class extends Error {
   code;
   holder;
@@ -8297,7 +8318,7 @@ var SessionRegistry = class {
     this.#now = dependencies.now ?? Date.now;
     this.#ownerStatus = dependencies.ownerStatus;
     this.#leaseMs = dependencies.leaseMs ?? 3e4;
-    this.#initialize();
+    this.#initializeWithRetry();
   }
   close() {
     this.#close();
@@ -9280,6 +9301,25 @@ var SessionRegistry = class {
              VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, port);
         return port;
       }
+      const orphan = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
+           FROM allocations allocation
+           WHERE allocation.service = ?
+             AND allocation.port >= ?
+             AND allocation.port < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions session
+               WHERE session.worktree_key = allocation.worktree_key
+                 AND session.state NOT IN ('released', 'stale')
+             )
+           ORDER BY allocation.generation ASC, allocation.worktree_key ASC
+           LIMIT 1`).get(input.service, input.base, input.base + input.span);
+      if (orphan) {
+        this.#database.prepare(`DELETE FROM allocations
+             WHERE service = ? AND worktree_key = ? AND port = ?`).run(input.service, orphan.worktree_key, orphan.port);
+        this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
+             VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, orphan.port);
+        return orphan.port;
+      }
       throw new SessionAuthorityError("PORT_RANGE_EXHAUSTED", `no ${input.service} port is available in the configured range`);
     });
   }
@@ -9373,6 +9413,24 @@ var SessionRegistry = class {
       throw error;
     }
     this.#secureFiles();
+  }
+  #initializeWithRetry() {
+    const deadline = Date.now() + 1e3;
+    for (; ; ) {
+      try {
+        this.#initialize();
+        return;
+      } catch (error) {
+        const code = error.code;
+        const message = error instanceof Error ? error.message : "";
+        if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
+          throw error;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0)
+          throw error;
+        Atomics.wait(INITIALIZATION_WAIT2, 0, 0, Math.min(25, remaining));
+      }
+    }
   }
   #probeClaimOwners(session, resources) {
     const owners = /* @__PURE__ */ new Map();
@@ -10365,15 +10423,6 @@ function rollbackOwnedWrites(writes, recoveryDelayAfterUnlinkMs) {
   }
 }
 
-function allReplacementsPresent(writes) {
-  return writes.every((write) => {
-    const target = readRegularFile(write.name);
-    return write.replacement === null
-      ? target === null
-      : sameContentsAndMode(target, write.replacement, write.mode);
-  });
-}
-
 function recoverTransaction(
   journalName,
   requestedWrites,
@@ -10383,13 +10432,7 @@ function recoverTransaction(
 ) {
   const journal = readJournal(journalName);
   if (journal === null) {
-    const committed = allReplacementsPresent(requestedWrites);
-    assertBoundDirectory(ancestryGuard, true);
-    if (releaseLock) {
-      releaseTransactionLock();
-      assertBoundDirectory(ancestryGuard, true);
-    }
-    return { committed };
+    throw new Error('bound-directory transaction outcome is unknown');
   }
   if (
     journal.version !== 1 ||
@@ -11432,6 +11475,10 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
   try {
     result = runBoundOperation(directory, request, dependencies);
   } catch (error) {
+    if (transaction.knownCommitted && error instanceof Error && error.message.includes("bound-directory transaction outcome is unknown")) {
+      directory.pendingCleanups.delete(obligation.transactionId);
+      return;
+    }
     if (!(error instanceof Error) || error.message !== "SESSION_INTEGRATION_WORKER_TIMEOUT") {
       throw error;
     }

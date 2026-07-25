@@ -19,6 +19,7 @@ export function _resetRestartHandlerStateForTest() {
 export function createRestartHandler(getClient, setClient, createClient, deps = {}) {
     const execFile = deps.execFile ?? defaultExecFile;
     const stopFastRunner = deps.stopFastRunner ?? defaultStopFastRunner;
+    const unbindRunner = deps.unbindRunner ?? (() => { });
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
     const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
@@ -41,14 +42,17 @@ export function createRestartHandler(getClient, setClient, createClient, deps = 
                 if (!args.deviceId || !targetPlatform) {
                     return failResult('cdp_restart hardReset requires the exact authority-bound device and platform', 'DEVICE_AUTHORITY_MISMATCH');
                 }
-                try {
-                    stopFastRunner(args.deviceId);
-                    hardResetSteps.push('stopFastRunner:ok');
-                }
-                catch (err) {
-                    hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
-                }
                 if (bundleId && targetPlatform === 'ios') {
+                    try {
+                        stopFastRunner(args.deviceId);
+                        hardResetSteps.push('stopFastRunner:ok');
+                    }
+                    catch (err) {
+                        hardResetSteps.push(`stopFastRunner:warn(${err instanceof Error ? err.message : err})`);
+                    }
+                    finally {
+                        unbindRunner();
+                    }
                     const targetUdid = safeSimctlTarget(args.deviceId);
                     if (!targetUdid) {
                         return failResult('cdp_restart refused a non-exact iOS simulator identifier', 'DEVICE_AUTHORITY_MISMATCH');

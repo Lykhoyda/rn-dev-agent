@@ -3,6 +3,8 @@ import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 
 const require = createRequire(import.meta.url);
+const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+const INITIALIZATION_TIMEOUT_MS = 1_000;
 
 interface PreparedStatement {
   get(...params: unknown[]): Record<string, unknown> | undefined;
@@ -82,6 +84,23 @@ function secureDatabaseFiles(path: string): void {
   }
 }
 
+function runInitialization(operation: () => void): void {
+  const deadline = Date.now() + INITIALIZATION_TIMEOUT_MS;
+  for (;;) {
+    try {
+      operation();
+      return;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      const message = error instanceof Error ? error.message : '';
+      if (code !== 'SQLITE_BUSY' && !/database is (?:locked|busy)/i.test(message)) throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw error;
+      Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
+    }
+  }
+}
+
 export function probeAuthorityStore(
   options: { sqliteCtor?: AuthorityDatabaseCtor | null } = {},
 ): AuthorityStoreDiagnostic {
@@ -118,17 +137,19 @@ export function openAuthorityStore(
     }
     const database = new ctor(path);
     secureDatabaseFiles(path);
-    database.exec(`
-      PRAGMA busy_timeout=5;
-      PRAGMA journal_mode=WAL;
-      CREATE TABLE IF NOT EXISTS authority_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      INSERT INTO authority_meta(key, value)
-      VALUES ('schema_version', '1')
-      ON CONFLICT(key) DO NOTHING;
-    `);
+    runInitialization(() =>
+      database.exec(`
+        PRAGMA busy_timeout=5;
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS authority_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO authority_meta(key, value)
+        VALUES ('schema_version', '1')
+        ON CONFLICT(key) DO NOTHING;
+      `),
+    );
     secureDatabaseFiles(path);
     return {
       database,

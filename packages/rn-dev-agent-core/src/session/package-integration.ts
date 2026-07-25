@@ -164,6 +164,14 @@ export function restorePackageIntegration(
   packageJson: PackageJson,
   manifest: PackageIntegrationManifest,
 ): PackageJson {
+  if (
+    packageJson.scripts?.ios !== SENTINELS.ios ||
+    packageJson.scripts?.android !== SENTINELS.android
+  ) {
+    throw new Error(
+      'SESSION_INTEGRATION_CONFLICT: package scripts changed after integration was installed',
+    );
+  }
   return {
     ...packageJson,
     scripts: {

@@ -6,6 +6,8 @@ import {
   type AuthorityDatabaseCtor,
 } from './authority-store.js';
 
+const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
+
 export type OwnerStatus = 'match' | 'mismatch' | 'unknown';
 
 export interface SessionRef {
@@ -96,6 +98,7 @@ interface ClaimRow {
 
 interface AllocationRow {
   port: number;
+  worktree_key: string;
 }
 
 export interface SessionStatus {
@@ -276,7 +279,7 @@ export class SessionRegistry {
     this.#now = dependencies.now ?? Date.now;
     this.#ownerStatus = dependencies.ownerStatus;
     this.#leaseMs = dependencies.leaseMs ?? 30_000;
-    this.#initialize();
+    this.#initializeWithRetry();
   }
 
   close(): void {
@@ -2290,6 +2293,37 @@ export class SessionRegistry {
           .run(input.service, input.worktreeKey, port);
         return port;
       }
+      const orphan = this.#database
+        .prepare(
+          `SELECT allocation.worktree_key, allocation.port
+           FROM allocations allocation
+           WHERE allocation.service = ?
+             AND allocation.port >= ?
+             AND allocation.port < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions session
+               WHERE session.worktree_key = allocation.worktree_key
+                 AND session.state NOT IN ('released', 'stale')
+             )
+           ORDER BY allocation.generation ASC, allocation.worktree_key ASC
+           LIMIT 1`,
+        )
+        .get(input.service, input.base, input.base + input.span) as AllocationRow | undefined;
+      if (orphan) {
+        this.#database
+          .prepare(
+            `DELETE FROM allocations
+             WHERE service = ? AND worktree_key = ? AND port = ?`,
+          )
+          .run(input.service, orphan.worktree_key, orphan.port);
+        this.#database
+          .prepare(
+            `INSERT INTO allocations(service, worktree_key, port, generation)
+             VALUES (?, ?, ?, 1)`,
+          )
+          .run(input.service, input.worktreeKey, orphan.port);
+        return orphan.port;
+      }
       throw new SessionAuthorityError(
         'PORT_RANGE_EXHAUSTED',
         `no ${input.service} port is available in the configured range`,
@@ -2396,6 +2430,23 @@ export class SessionRegistry {
       throw error;
     }
     this.#secureFiles();
+  }
+
+  #initializeWithRetry(): void {
+    const deadline = Date.now() + 1_000;
+    for (;;) {
+      try {
+        this.#initialize();
+        return;
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        const message = error instanceof Error ? error.message : '';
+        if (code !== 'SQLITE_BUSY' && !/database is (?:locked|busy)/i.test(message)) throw error;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw error;
+        Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
+      }
+    }
   }
 
   #probeClaimOwners(

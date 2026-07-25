@@ -182,6 +182,14 @@ export function authorityProfileFor(
   tool: string,
   args: Record<string, unknown> = {},
 ): AuthorityProfile {
+  if (tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios') {
+    return {
+      kind: 'transition',
+      axes: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
+      mutation: true,
+      liveBundleProbe: true,
+    };
+  }
   if (tool === 'cdp_nav_graph' && (args.action === 'scan' || args.action === 'go')) {
     return profiles.get('cdp_interact')!;
   }

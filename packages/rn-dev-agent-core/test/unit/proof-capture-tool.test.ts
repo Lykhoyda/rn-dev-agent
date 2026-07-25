@@ -15,6 +15,7 @@ import {
 } from '../../dist/domain/proof-receipt.js';
 import {
   createProofCaptureHandler,
+  isOfficialProofCandidateRemote,
   proofCaptureInputSchema,
   proofCapturePublishedInputSchema,
   writeProofReceiptAtomic,
@@ -27,6 +28,23 @@ import type { MediaProcess, MediaValidationInput } from '../../dist/tools/proof-
 import type { DeviceRecordArgs } from '../../dist/tools/device-record.js';
 import { redact } from '../../dist/util/redact.js';
 import { failResult, okResult, type ToolResult } from '../../dist/utils.js';
+
+test('strict proof accepts only the exact GitHub repository remote', () => {
+  for (const remote of [
+    'https://github.com/Lykhoyda/rn-dev-agent.git',
+    'git@github.com:Lykhoyda/rn-dev-agent.git',
+    'ssh://git@github.com/Lykhoyda/rn-dev-agent.git',
+  ]) {
+    assert.equal(isOfficialProofCandidateRemote(remote), true);
+  }
+  for (const remote of [
+    'https://evilgithub.com/Lykhoyda/rn-dev-agent.git',
+    'git@evilgithub.com:Lykhoyda/rn-dev-agent.git',
+    'https://github.com/other/rn-dev-agent.git',
+  ]) {
+    assert.equal(isOfficialProofCandidateRemote(remote), false);
+  }
+});
 
 const CORE_ROOT = resolve(import.meta.dirname, '../..');
 const SCHEMA_PATH = resolve(CORE_ROOT, 'schemas/proof-receipt.schema.json');

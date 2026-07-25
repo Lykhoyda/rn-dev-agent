@@ -201,6 +201,31 @@ test('deterministic port allocation persists collision resolution per worktree',
   );
 });
 
+test('exhausted port spans reclaim only terminal worktree allocations', () => {
+  const { registry, create } = fixture();
+  const terminal = create('terminal', 'worktree-terminal');
+  registry.allocatePort({
+    service: 'metro',
+    worktreeKey: 'worktree-terminal',
+    uid: '501',
+    base: 8300,
+    span: 1,
+  });
+  registry.releaseSession(terminal);
+  create('active', 'worktree-active');
+
+  assert.equal(
+    registry.allocatePort({
+      service: 'metro',
+      worktreeKey: 'worktree-active',
+      uid: '501',
+      base: 8300,
+      span: 1,
+    }),
+    8300,
+  );
+});
+
 test('graceful handoff is one-time, transfers every claim epoch, and fences the old owner', () => {
   const { registry, create } = fixture();
   const owner = create('a');

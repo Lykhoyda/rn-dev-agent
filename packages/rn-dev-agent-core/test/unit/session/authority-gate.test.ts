@@ -693,6 +693,32 @@ test('warning results never receive an authoritative receipt', async () => {
   assert.equal(envelope.meta.authorityReceipt, undefined);
 });
 
+test('warning lifecycle transitions reconcile and commit staged platform receipts', async () => {
+  const { runtime, status, calls } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('device_snapshot', async () => {
+    status.authorityVersion += 1;
+    return okResult({ opened: true }, { meta: { warning: 'snapshot is partial' } });
+  })({
+    action: 'open',
+    platform: 'ios',
+    deviceId: 'device',
+    appId: 'dev.example',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.meta.warning, 'snapshot is partial');
+  assert.equal(envelope.meta.authorityTransition, true);
+  assert.equal(calls.includes('postflight:R'), true);
+  assert.equal(calls.includes('commit-receipts'), true);
+});
+
 test('runner and Observe lifecycle transitions probe complete before and after axes', async () => {
   const { runtime, calls, status } = fixture();
   const gate = createAuthorityGate(runtime, {

@@ -493,7 +493,7 @@ export function readProofCandidateRuntime(candidateRoot: string): ProofCandidate
   const remote = execFileSync('git', ['-C', root, 'remote', 'get-url', 'origin'], {
     encoding: 'utf8',
   }).trim();
-  if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
+  if (!isOfficialProofCandidateRemote(remote)) {
     throw new Error('CANDIDATE_REPOSITORY_MISMATCH');
   }
 
@@ -520,6 +520,25 @@ export function readProofCandidateRuntime(candidateRoot: string): ProofCandidate
     runnerManifestSha256: hashBytes(artifacts[1]!),
     mcp: { pid: process.pid, argv, cwd: process.cwd() },
   });
+}
+
+export function isOfficialProofCandidateRemote(remote: string): boolean {
+  const scp = remote.match(/^(?:[^@/]+@)?([^/:]+):(.+)$/);
+  if (scp && !remote.includes('://')) {
+    return (
+      scp[1]?.toLowerCase() === 'github.com' &&
+      scp[2]?.replace(/^\/+|\/+$/g, '').replace(/\.git$/, '') === 'Lykhoyda/rn-dev-agent'
+    );
+  }
+  try {
+    const url = new URL(remote);
+    return (
+      url.hostname.toLowerCase() === 'github.com' &&
+      url.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/, '') === 'Lykhoyda/rn-dev-agent'
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sameCandidateRuntime(left: ProofCandidateRuntime, right: ProofCandidateRuntime): boolean {

@@ -58,3 +58,10 @@ test('diagnostics are explicitly non-verdict and arbitrary evaluate is mutating'
   assert.equal(authorityProfileFor('cdp_evaluate').kind, 'authoritative');
   assert.equal(authorityProfileFor('cdp_evaluate').mutation, true);
 });
+
+test('iOS hard reset transitions through runner authority', () => {
+  const profile = authorityProfileFor('cdp_restart', { hardReset: true, platform: 'ios' });
+
+  assert.equal(profile.kind, 'transition');
+  assert.equal(profile.axes.includes('R'), true);
+});
