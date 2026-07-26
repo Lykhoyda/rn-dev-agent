@@ -62423,9 +62423,16 @@ evidence.on('data', (chunk) => {
         payload.version !== 1 ||
         payload.sessionId !== sessionId ||
         payload.metroInstanceId !== metroInstanceId ||
-        !['input', 'violation', 'launch', 'attestation', 'semantics', 'barrier'].includes(
-          payload.kind,
-        ) ||
+        ![
+          'input',
+          'violation',
+          'launch',
+          'attestation',
+          'semantics',
+          'pending',
+          'completion',
+          'barrier',
+        ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
           ? typeof payload.digest !== 'string'
@@ -70587,6 +70594,7 @@ const path = require('node:path');
 const { createHash, createHmac, randomBytes } = require('node:crypto');
 const childProcess = require('node:child_process');
 const { execFileSync } = childProcess;
+const diagnosticsChannel = require('node:diagnostics_channel');
 const moduleApi = require('node:module');
 const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
@@ -70895,7 +70903,8 @@ const workerMessageContexts = new WeakMap();
 const workerLifecycleContexts = new WeakMap();
 const portMessageContexts = new WeakMap();
 const processLifecycleTargets = new Map();
-let childSpawnDepth = 0;
+const authorizedChildSpawnEnvironments = new WeakMap();
+let activeChildSpawnAuthorization;
 function authenticatedMessage(context, value) {
   const snapshot = snapshotInvocation(value);
   context.sequence += 1;
@@ -70948,16 +70957,40 @@ function authenticatedIpcSend(
     nextOptions = undefined;
   }
   if (sendHandle !== undefined && sendHandle !== null) throw descendantError();
+  if (primitive && nextCallback === undefined && nextOptions?.swallowErrors !== false) {
+    throw descendantError();
+  }
   const authenticated = authenticatedMessage(context, { message, options: nextOptions });
+  const completionId = randomBytes(16).toString('hex');
+  persistLoaderObservation('pending', completionId);
+  let completionRecorded = false;
+  const recordCompletion = (callbackArgs) => {
+    if (completionRecorded) throw descendantError();
+    const normalizedCallbackArgs = callbackArgs.map((entry) => {
+      if (!(entry instanceof Error)) return snapshotInvocation(entry).value;
+      const normalized = {};
+      for (const name of ['name', 'message', 'code', 'errno', 'syscall', 'path', 'dest']) {
+        const descriptor = Object.getOwnPropertyDescriptor(entry, name);
+        if (descriptor && 'value' in descriptor) normalized[name] = descriptor.value;
+      }
+      return normalized;
+    });
+    authenticatedMessage(context, {
+      status: 'completed',
+      callbackArgs: normalizedCallbackArgs,
+    });
+    persistLoaderObservation('completion', completionId);
+    completionRecorded = true;
+  };
   const completionCallback =
     nextCallback === undefined || typeof nextCallback === 'function'
       ? function (...callbackArgs) {
-          const authenticatedCompletion = authenticatedMessage(context, {
-            status: 'completed',
-            callbackArgs,
-          });
+          recordCompletion(callbackArgs);
           if (typeof nextCallback === 'function') {
-            return Reflect.apply(nextCallback, this, authenticatedCompletion.callbackArgs);
+            return Reflect.apply(nextCallback, this, callbackArgs);
+          }
+          if (callbackArgs[0] !== null && callbackArgs[0] !== undefined) {
+            return receiver.emit('error', callbackArgs[0]);
           }
         }
       : nextCallback;
@@ -70980,6 +71013,9 @@ function authenticatedIpcSend(
       result,
     }).result;
   } catch (error) {
+    if (!completionRecorded) {
+      recordCompletion([error]);
+    }
     authenticatedMessage(context, {
       status: 'rejected',
       error,
@@ -71010,8 +71046,16 @@ function fenceNativeChannel(handle, context, allowedOwnControls = new Set()) {
     fencedNativeChannelPrototypes.add(owner);
     for (const name of Object.getOwnPropertyNames(owner)) {
       const isWrite = name.startsWith('write');
-      const isControl = ['close', 'readStart', 'readStop', 'shutdown'].includes(name);
-      if ((!isWrite && !isControl) || (owner === handle && allowedOwnControls.has(name))) {
+      const isSupportedControl = [
+        'close',
+        'hasRef',
+        'readStart',
+        'readStop',
+        'ref',
+        'setBlocking',
+        'unref',
+      ].includes(name);
+      if (name === 'constructor' || (owner === handle && allowedOwnControls.has(name))) {
         continue;
       }
       const descriptor = Object.getOwnPropertyDescriptor(owner, name);
@@ -71025,13 +71069,18 @@ function fenceNativeChannel(handle, context, allowedOwnControls = new Set()) {
           if (channelContext && isWrite && channelContext.nativeWriteDepth <= 0) {
             throw descendantError();
           }
-          if (channelContext && isControl && channelContext.nativeControlDepth <= 0) {
-            if (name === 'shutdown') throw descendantError();
+          if (
+            channelContext &&
+            !isWrite &&
+            channelContext.nativeControlDepth <= 0
+          ) {
+            if (!isSupportedControl) throw descendantError();
             return authenticatedLifecycleResult(
               channelContext.nativeControlContext,
               name,
-              undefined,
-              () => Reflect.apply(implementation, this, args),
+              { args },
+              (authenticated) =>
+                Reflect.apply(implementation, this, authenticated.args),
             );
           }
           return Reflect.apply(implementation, this, args);
@@ -71294,11 +71343,23 @@ function authenticatedLifecyclePromise(context, action, value, run) {
 function installMessageFences() {
   const childPrototype = childProcess.ChildProcess.prototype;
   const originalChildSpawn = childPrototype.spawn;
+  diagnosticsChannel.subscribe('child_process', ({ process: spawnedProcess }) => {
+    const authorization = activeChildSpawnAuthorization;
+    if (!authorization || authorization.receiver) return;
+    authorization.receiver = spawnedProcess;
+    authorizedChildSpawnEnvironments.set(spawnedProcess, authorization.environment);
+  });
   Object.defineProperty(childPrototype, 'spawn', {
     configurable: false,
     enumerable: true,
     value(options) {
-      if (childSpawnDepth <= 0) throw descendantError();
+      if (
+        !authorizedChildSpawnEnvironments.has(this) ||
+        authorizedChildSpawnEnvironments.get(this) !== options?.env
+      ) {
+        throw descendantError();
+      }
+      authorizedChildSpawnEnvironments.delete(this);
       return Reflect.apply(originalChildSpawn, this, [options]);
     },
     writable: false,
@@ -71634,12 +71695,27 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       if (mode === 'fork') {
         options.execPath = nodeExecutable;
       }
-      childSpawnDepth += 1;
+      if (mode !== 'sync' && activeChildSpawnAuthorization) throw descendantError();
+      const spawnAuthorization =
+        mode === 'sync'
+          ? undefined
+          : {
+              environment: options.env,
+              receiver: undefined,
+            };
+      if (spawnAuthorization) {
+        activeChildSpawnAuthorization = spawnAuthorization;
+      }
       let child;
       try {
         child = Reflect.apply(original, this, authenticatedArgs);
       } finally {
-        childSpawnDepth -= 1;
+        if (spawnAuthorization) {
+          activeChildSpawnAuthorization = undefined;
+          if (spawnAuthorization.receiver) {
+            authorizedChildSpawnEnvironments.delete(spawnAuthorization.receiver);
+          }
+        }
       }
       if (mode === 'sync') {
         recordChildLaunch(nonce, child, semantics);
@@ -71695,6 +71771,20 @@ function rejectChildProcessMethod(name) {
     writable: false,
   });
 }
+function fenceNativeProcessLaunchBindings() {
+  const originalBinding = process.binding;
+  Object.defineProperty(process, 'binding', {
+    configurable: false,
+    enumerable: false,
+    value(name) {
+      if (name === 'process_wrap' || name === 'spawn_sync') {
+        throw descendantError();
+      }
+      return Reflect.apply(originalBinding, process, [name]);
+    },
+    writable: false,
+  });
+}
 function fenceWorkers() {
   const OriginalWorker = workerThreads.Worker;
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
@@ -71735,18 +71825,24 @@ function fenceWorkers() {
         options: authenticatedInvocationOptions,
       },
     );
-    const worker = Reflect.construct(OriginalWorker, [
-      entrypoint,
-      {
-        ...authenticatedInvocationOptions,
-        env: authenticatedChildEnvironment(
-          Object.entries(authenticatedInvocationOptions.env),
-          nonce,
-          semantics,
-        ),
-        execArgv: ['--require', authorityPreload, ...requestedExecArgv],
-      },
-    ]);
+    const workerNewTarget =
+      new.target === AuthenticatedWorker ? OriginalWorker : new.target;
+    const worker = Reflect.construct(
+      OriginalWorker,
+      [
+        entrypoint,
+        {
+          ...authenticatedInvocationOptions,
+          env: authenticatedChildEnvironment(
+            Object.entries(authenticatedInvocationOptions.env),
+            nonce,
+            semantics,
+          ),
+          execArgv: ['--require', authorityPreload, ...requestedExecArgv],
+        },
+      ],
+      workerNewTarget,
+    );
     workerMessageContexts.set(worker, {
       mode: 'worker-message',
       recipient: nonce,
@@ -71785,6 +71881,7 @@ const canAuthenticateChildProcesses =
   (Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD) ||
     (Boolean(metroPolicyCapability) && Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS)));
 if (canAuthenticateChildProcesses) {
+  fenceNativeProcessLaunchBindings();
   installMessageFences();
   if (descendantNonce) {
     if (typeof process.send === 'function') {
@@ -73693,6 +73790,8 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   const descendantLaunches = /* @__PURE__ */ new Set();
   const descendantAttestations = /* @__PURE__ */ new Set();
   const descendantSemanticDigests = /* @__PURE__ */ new Set();
+  const pendingIpcCompletions = /* @__PURE__ */ new Set();
+  const completedIpcCompletions = /* @__PURE__ */ new Set();
   const runtimeSemantics = /* @__PURE__ */ new Set();
   const orderedRuntimeSemantics = [];
   const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
@@ -73720,7 +73819,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     };
     const expectedLoad = createHmac4("sha256", authority.capability).update(JSON.stringify(loadPayload)).digest();
     const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual7(observedLoad, expectedLoad)) {
+    if (load.version !== 1 || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual7(observedLoad, expectedLoad)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
     }
     evidenceSequence = load.sequence;
@@ -73748,6 +73847,13 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
       }
       runtimeSemantics.add(load.value);
       orderedRuntimeSemantics.push(load.value);
+      continue;
+    }
+    if (load.kind === "pending" || load.kind === "completion") {
+      if (!/^[a-f0-9]{32}$/.test(load.value)) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      (load.kind === "pending" ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
       continue;
     }
     const prior = runtimeLoads.get(key);
@@ -73793,6 +73899,16 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   for (const attestation of descendantAttestations) {
     if (!descendantLaunches.has(attestation)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch");
+    }
+  }
+  for (const pending2 of pendingIpcCompletions) {
+    if (!completedIpcCompletions.has(pending2)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion is pending");
+    }
+  }
+  for (const completion of completedIpcCompletions) {
+    if (!pendingIpcCompletions.has(completion)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
     }
   }
   const observedSemanticDigests = new Set([...runtimeSemantics].map((value) => createHash14("sha256").update(value).digest("hex")));

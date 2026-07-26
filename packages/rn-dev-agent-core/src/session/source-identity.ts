@@ -383,6 +383,8 @@ function metroRuntimeInputs(
   const descendantLaunches = new Set<string>();
   const descendantAttestations = new Set<string>();
   const descendantSemanticDigests = new Set<string>();
+  const pendingIpcCompletions = new Set<string>();
+  const completedIpcCompletions = new Set<string>();
   const runtimeSemantics = new Set<string>();
   const orderedRuntimeSemantics: string[] = [];
   const runtimeEvidenceKeys = new Set<string>();
@@ -441,7 +443,9 @@ function metroRuntimeInputs(
         load.kind !== 'violation' &&
         load.kind !== 'launch' &&
         load.kind !== 'attestation' &&
-        load.kind !== 'semantics') ||
+        load.kind !== 'semantics' &&
+        load.kind !== 'pending' &&
+        load.kind !== 'completion') ||
       typeof load.value !== 'string' ||
       !Number.isSafeInteger(load.sequence) ||
       load.sequence !== evidenceSequence + 1 ||
@@ -479,6 +483,13 @@ function metroRuntimeInputs(
       }
       runtimeSemantics.add(load.value);
       orderedRuntimeSemantics.push(load.value);
+      continue;
+    }
+    if (load.kind === 'pending' || load.kind === 'completion') {
+      if (!/^[a-f0-9]{32}$/.test(load.value)) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
+      }
+      (load.kind === 'pending' ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
       continue;
     }
     const prior = runtimeLoads.get(key);
@@ -548,6 +559,16 @@ function metroRuntimeInputs(
   for (const attestation of descendantAttestations) {
     if (!descendantLaunches.has(attestation)) {
       throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch');
+    }
+  }
+  for (const pending of pendingIpcCompletions) {
+    if (!completedIpcCompletions.has(pending)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion is pending');
+    }
+  }
+  for (const completion of completedIpcCompletions) {
+    if (!pendingIpcCompletions.has(completion)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request');
     }
   }
   const observedSemanticDigests = new Set(

@@ -265,6 +265,8 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     const descendantLaunches = new Set();
     const descendantAttestations = new Set();
     const descendantSemanticDigests = new Set();
+    const pendingIpcCompletions = new Set();
+    const completedIpcCompletions = new Set();
     const runtimeSemantics = new Set();
     const orderedRuntimeSemantics = [];
     const runtimeEvidenceKeys = new Set();
@@ -302,7 +304,9 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
                 load.kind !== 'violation' &&
                 load.kind !== 'launch' &&
                 load.kind !== 'attestation' &&
-                load.kind !== 'semantics') ||
+                load.kind !== 'semantics' &&
+                load.kind !== 'pending' &&
+                load.kind !== 'completion') ||
             typeof load.value !== 'string' ||
             !Number.isSafeInteger(load.sequence) ||
             load.sequence !== evidenceSequence + 1 ||
@@ -339,6 +343,13 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
             }
             runtimeSemantics.add(load.value);
             orderedRuntimeSemantics.push(load.value);
+            continue;
+        }
+        if (load.kind === 'pending' || load.kind === 'completion') {
+            if (!/^[a-f0-9]{32}$/.test(load.value)) {
+                throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
+            }
+            (load.kind === 'pending' ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
             continue;
         }
         const prior = runtimeLoads.get(key);
@@ -394,6 +405,16 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     for (const attestation of descendantAttestations) {
         if (!descendantLaunches.has(attestation)) {
             throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch');
+        }
+    }
+    for (const pending of pendingIpcCompletions) {
+        if (!completedIpcCompletions.has(pending)) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion is pending');
+        }
+    }
+    for (const completion of completedIpcCompletions) {
+        if (!pendingIpcCompletions.has(completion)) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request');
         }
     }
     const observedSemanticDigests = new Set([...runtimeSemantics].map((value) => createHash('sha256').update(value).digest('hex')));

@@ -531,6 +531,35 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   const attestationPayload = { ...launchPayload, kind: 'attestation' };
   publishRuntimeLoads([runtimeLoadPayload, semanticsPayload, launchPayload, attestationPayload]);
   assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
+  const pendingPayload = {
+    version: 1,
+    sessionId: 'session',
+    metroInstanceId: 'metro',
+    kind: 'pending',
+    value: 'cd'.repeat(16),
+    digest: null,
+  };
+  const completionPayload = { ...pendingPayload, kind: 'completion' };
+  publishRuntimeLoads([
+    runtimeLoadPayload,
+    semanticsPayload,
+    launchPayload,
+    attestationPayload,
+    pendingPayload,
+  ]);
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /IPC completion is pending/,
+  );
+  publishRuntimeLoads([
+    runtimeLoadPayload,
+    semanticsPayload,
+    launchPayload,
+    attestationPayload,
+    pendingPayload,
+    completionPayload,
+  ]);
+  assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
   publishRuntimeLoads([runtimeLoadPayload, launchPayload, attestationPayload]);
   assert.throws(
     () => strictProofSourceIdentity(identity, dependencies),

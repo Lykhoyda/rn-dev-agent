@@ -211,9 +211,16 @@ evidence.on('data', (chunk) => {
         payload.version !== 1 ||
         payload.sessionId !== sessionId ||
         payload.metroInstanceId !== metroInstanceId ||
-        !['input', 'violation', 'launch', 'attestation', 'semantics', 'barrier'].includes(
-          payload.kind,
-        ) ||
+        ![
+          'input',
+          'violation',
+          'launch',
+          'attestation',
+          'semantics',
+          'pending',
+          'completion',
+          'barrier',
+        ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
           ? typeof payload.digest !== 'string'
