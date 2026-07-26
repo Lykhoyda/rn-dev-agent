@@ -135,6 +135,13 @@ function recordLoaderViolation(value) {
   persistLoaderObservation('violation', value);
 }
 const descendantNonce = process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+const descendantMessageContext = descendantNonce
+  ? {
+      mode: workerThreads.isMainThread ? 'fork-message' : 'worker-message',
+      recipient: 'parent:' + descendantNonce,
+      sequence: 0,
+    }
+  : undefined;
 if (descendantNonce) {
   const descendantSemantics = process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
   const identity = workerThreads.isMainThread
@@ -158,13 +165,57 @@ if (descendantNonce) {
     if (processDisconnectImplementation) {
       const processDisconnectDelegate = process._disconnect;
       const processHandleQueue = process._handleQueue;
-      if (typeof processDisconnectDelegate !== 'function' || processHandleQueue) {
+      const processChannelHandleSymbol = Object.getOwnPropertySymbols(process).find(
+        (symbol) => symbol.description === 'kChannelHandle',
+      );
+      const processChannelHandle = process[processChannelHandleSymbol];
+      const processChannelClose = processChannelHandle?.close;
+      if (
+        typeof processDisconnectDelegate !== 'function' ||
+        processHandleQueue ||
+        typeof processChannelClose !== 'function'
+      ) {
         throw descendantError();
       }
+      let authorityDisconnectRequested = false;
+      Object.defineProperty(processChannelHandle, 'close', {
+        configurable: false,
+        enumerable: false,
+        value() {
+          return authenticatedLifecycleResult(
+            descendantLifecycleContext,
+            'disconnect',
+            undefined,
+            () => {
+              const result = Reflect.apply(processChannelClose, processChannelHandle, []);
+              authorityDisconnectRequested = true;
+              process.connected = false;
+              return result;
+            },
+          );
+        },
+        writable: false,
+      });
       Object.defineProperty(process, '_disconnect', {
         configurable: false,
         enumerable: false,
-        value: processDisconnectDelegate,
+        value() {
+          if (authorityDisconnectRequested) {
+            return Reflect.apply(
+              processDisconnectImplementation,
+              {
+                connected: false,
+                emit(...args) {
+                  return Reflect.apply(process.emit, process, args);
+                },
+              },
+              [],
+            );
+          }
+          authorityDisconnectRequested = true;
+          process.connected = false;
+          return Reflect.apply(processDisconnectDelegate, process, []);
+        },
         writable: false,
       });
       Object.defineProperty(process, '_handleQueue', {
@@ -173,18 +224,12 @@ if (descendantNonce) {
         value: processHandleQueue,
         writable: false,
       });
-      const authenticatedProcessDisconnect = function () {
-        return authenticatedLifecycleResult(
-          descendantLifecycleContext,
-          'disconnect',
-          undefined,
-          () => Reflect.apply(processDisconnectImplementation, process, []),
-        );
-      };
       Object.defineProperty(process, 'disconnect', {
         configurable: false,
         enumerable: true,
-        value: authenticatedProcessDisconnect,
+        value() {
+          return Reflect.apply(process._disconnect, process, []);
+        },
         writable: false,
       });
     } else {
@@ -192,6 +237,25 @@ if (descendantNonce) {
         configurable: false,
         enumerable: true,
         value: undefined,
+        writable: false,
+      });
+    }
+    if (typeof process._send === 'function') {
+      const processSendPrimitive = process._send;
+      Object.defineProperty(process, '_send', {
+        configurable: false,
+        enumerable: false,
+        value(message, sendHandle, options, callback) {
+          return authenticatedIpcSend(
+            processSendPrimitive,
+            process,
+            descendantMessageContext,
+            message,
+            sendHandle,
+            options,
+            callback,
+          );
+        },
         writable: false,
       });
     }
@@ -264,6 +328,7 @@ function digestInvocation(value) {
 }
 const childMessageContexts = new WeakMap();
 const childSendImplementations = new WeakMap();
+const childSendPrimitiveImplementations = new WeakMap();
 const childDisconnectImplementations = new WeakMap();
 const childLifecycleContexts = new WeakMap();
 const childLifecycleTargets = new WeakMap();
@@ -574,15 +639,9 @@ function authenticatedLifecyclePromise(context, action, value, run) {
 function installMessageFences() {
   const childPrototype = childProcess.ChildProcess.prototype;
   const authenticatedChildSend = function (message, sendHandle, options, callback) {
-    return authenticatedIpcSend(
-      childSendImplementations.get(this),
-      this,
-      childMessageContexts.get(this),
-      message,
-      sendHandle,
-      options,
-      callback,
-    );
+    const implementation = childSendImplementations.get(this);
+    if (!implementation || !childMessageContexts.has(this)) throw descendantError();
+    return Reflect.apply(implementation, this, [message, sendHandle, options, callback]);
   };
   Object.defineProperty(childPrototype, 'send', {
     configurable: false,
@@ -597,8 +656,40 @@ function installMessageFences() {
       return authenticatedChildSend;
     },
     set(value) {
-      if (typeof value !== 'function') throw descendantError();
+      if (typeof value !== 'function' || childSendImplementations.has(this)) {
+        throw descendantError();
+      }
       childSendImplementations.set(this, value);
+    },
+  });
+  const authenticatedChildSendPrimitive = function (message, sendHandle, options, callback) {
+    return authenticatedIpcSend(
+      childSendPrimitiveImplementations.get(this),
+      this,
+      childMessageContexts.get(this),
+      message,
+      sendHandle,
+      options,
+      callback,
+    );
+  };
+  Object.defineProperty(childPrototype, '_send', {
+    configurable: false,
+    enumerable: false,
+    get() {
+      if (
+        this !== childPrototype &&
+        (!childSendPrimitiveImplementations.has(this) || !childMessageContexts.has(this))
+      ) {
+        return undefined;
+      }
+      return authenticatedChildSendPrimitive;
+    },
+    set(value) {
+      if (typeof value !== 'function' || childSendPrimitiveImplementations.has(this)) {
+        throw descendantError();
+      }
+      childSendPrimitiveImplementations.set(this, value);
     },
   });
   const workerPrototype = workerThreads.Worker.prototype;
@@ -989,26 +1080,13 @@ const canAuthenticateChildProcesses =
 if (canAuthenticateChildProcesses) {
   installMessageFences();
   if (descendantNonce) {
-    const descendantMessageContext = {
-      mode: workerThreads.isMainThread ? 'fork-message' : 'worker-message',
-      recipient: 'parent:' + descendantNonce,
-      sequence: 0,
-    };
     if (typeof process.send === 'function') {
       const originalSend = process.send;
       Object.defineProperty(process, 'send', {
         configurable: false,
         enumerable: true,
         value(message, sendHandle, options, callback) {
-          return authenticatedIpcSend(
-            originalSend,
-            this,
-            descendantMessageContext,
-            message,
-            sendHandle,
-            options,
-            callback,
-          );
+          return Reflect.apply(originalSend, process, [message, sendHandle, options, callback]);
         },
         writable: false,
       });
