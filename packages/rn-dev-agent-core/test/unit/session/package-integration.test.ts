@@ -781,7 +781,30 @@ test('Metro seals native process handles and IPC read callbacks', () => {
         '-e',
         `(async () => {
           const compose = require(${JSON.stringify(adapterPath)});
-          compose({});
+          const arrayMethods = {
+            forEach: Array.prototype.forEach,
+            push: Array.prototype.push,
+            sort: Array.prototype.sort,
+          };
+          try {
+            Array.prototype.forEach = function (callback, thisArg) {
+              if (this.length === 1 && this[0] === false) return;
+              return Reflect.apply(arrayMethods.forEach, this, [callback, thisArg]);
+            };
+            Array.prototype.push = function (...values) {
+              if (values.includes('watchFolders must be a path')) return this.length;
+              return Reflect.apply(arrayMethods.push, this, values);
+            };
+            Array.prototype.sort = function (compare) {
+              if (this.includes('watchFolders must be a path')) return [];
+              return Reflect.apply(arrayMethods.sort, this, [compare]);
+            };
+            compose({ watchFolders: [false] });
+          } finally {
+            Array.prototype.forEach = arrayMethods.forEach;
+            Array.prototype.push = arrayMethods.push;
+            Array.prototype.sort = arrayMethods.sort;
+          }
           const childProcess = require('node:child_process');
           const diagnosticsChannel = require('node:diagnostics_channel');
           const unsupported = (run) => {
@@ -794,11 +817,17 @@ test('Metro seals native process handles and IPC read callbacks', () => {
           };
           const rawChild = new childProcess.ChildProcess();
           const rawHandle = rawChild._handle;
-          const rawPrototype = Object.getPrototypeOf(rawHandle);
+          if (Object.getPrototypeOf(rawHandle) !== null) {
+            throw new Error('native process prototype remained exposed');
+          }
           unsupported(() => rawHandle.spawn({ file: process.execPath, args: [process.execPath, ${JSON.stringify(probeEntry)}] }));
-          unsupported(() => rawPrototype.spawn.call(rawHandle, { file: process.execPath, args: [process.execPath, ${JSON.stringify(probeEntry)}] }));
           unsupported(() => rawHandle.kill(0));
           unsupported(() => new rawHandle.constructor());
+          unsupported(() => rawHandle.onexit(0, 0));
+          unsupported(() => {
+            rawHandle.onexit = () => {};
+          });
+          unsupported(() => Object.getOwnPropertyDescriptor(rawHandle, 'onexit').value(0, 0));
           for (const name of ['close', 'hasRef', 'ref', 'unref']) {
             let owner = rawHandle;
             while (owner && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner);
@@ -822,6 +851,29 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             WeakMap.prototype.get = weakMapMethods.get;
             WeakMap.prototype.delete = weakMapMethods.delete;
           }
+          const reflectionMethods = {
+            getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,
+            getOwnPropertyNames: Object.getOwnPropertyNames,
+            getOwnPropertySymbols: Object.getOwnPropertySymbols,
+            getPrototypeOf: Object.getPrototypeOf,
+          };
+          let reflectionProbe;
+          try {
+            Object.getOwnPropertyDescriptor = () => undefined;
+            Object.getOwnPropertyNames = () => [];
+            Object.getOwnPropertySymbols = () => [];
+            Object.getPrototypeOf = () => null;
+            reflectionProbe = childProcess.spawn(process.execPath, [${JSON.stringify(probeEntry)}]);
+          } finally {
+            Object.getOwnPropertyDescriptor = reflectionMethods.getOwnPropertyDescriptor;
+            Object.getOwnPropertyNames = reflectionMethods.getOwnPropertyNames;
+            Object.getOwnPropertySymbols = reflectionMethods.getOwnPropertySymbols;
+            Object.getPrototypeOf = reflectionMethods.getPrototypeOf;
+          }
+          await new Promise((resolve, reject) => {
+            reflectionProbe.once('error', reject);
+            reflectionProbe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('captured reflection spawn failed')));
+          });
           let receiverSealed = false;
           diagnosticsChannel.subscribe('child_process', ({ process: constructed }) => {
             try {
@@ -847,9 +899,43 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             probe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn failed')));
           });
           if (!receiverSealed) throw new Error('spawn receiver was mutable');
+          let injectDuplicateChannel = true;
+          diagnosticsChannel.subscribe('child_process', ({ process: constructed }) => {
+            if (!injectDuplicateChannel) return;
+            Object.defineProperty(constructed, Symbol('kChannelHandle'), {
+              configurable: true,
+              value: {},
+            });
+          });
+          unsupported(() => childProcess.fork(${JSON.stringify(probeEntry)}, [], { execArgv: ['--no-warnings'] }));
+          injectDuplicateChannel = false;
           const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'] });
           const channelSymbol = Object.getOwnPropertySymbols(child).find((symbol) => symbol.description === 'kChannelHandle');
           const channel = child[channelSymbol];
+          if (Object.getPrototypeOf(channel) !== null) {
+            throw new Error('native channel prototype remained exposed');
+          }
+          let streamBase = process.stdout?._handle;
+          while (streamBase && !Object.hasOwn(streamBase, 'onread')) {
+            streamBase = Object.getPrototypeOf(streamBase);
+          }
+          const inheritedRead = Object.getOwnPropertyDescriptor(streamBase, 'onread');
+          for (const invoke of [
+            () => inheritedRead.get.call(channel),
+            () => inheritedRead.set.call(channel, () => {}),
+          ]) {
+            let rejected = false;
+            try {
+              invoke();
+            } catch {
+              rejected = true;
+            }
+            if (!rejected) throw new Error('inherited native read accessor remained callable');
+          }
+          unsupported(() => child._handle.onexit(0, 0));
+          unsupported(() => {
+            child._handle.onexit = () => {};
+          });
           unsupported(() => channel.onread(new ArrayBuffer(0)));
           const acknowledged = new Promise((resolve, reject) => {
             child.once('error', reject);
@@ -926,6 +1012,10 @@ test('Metro seals native process handles and IPC read callbacks', () => {
     );
 
     assert.equal(result.status, 0, result.stderr);
+    const policy = JSON.parse(
+      readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
+    );
+    assert.ok(policy.violations.includes('watchFolders must be a path'));
     const evidence = readFileSync(runtimeLoads, 'utf8')
       .trim()
       .split('\n')

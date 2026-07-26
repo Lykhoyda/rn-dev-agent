@@ -72947,20 +72947,32 @@ const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
 const { deserialize, serialize } = require('node:v8');
 const workerThreads = require('node:worker_threads');
+const IntrinsicObject = Object;
 const IntrinsicMap = Map;
+const IntrinsicProxy = Proxy;
 const IntrinsicSet = Set;
 const IntrinsicWeakMap = WeakMap;
 const IntrinsicWeakSet = WeakSet;
+const intrinsicArrayForEach = Array.prototype.forEach;
+const intrinsicArrayPush = Array.prototype.push;
+const intrinsicArraySort = Array.prototype.sort;
 const intrinsicDefineProperty = Object.defineProperty;
+const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
+const intrinsicGetOwnPropertySymbols = Object.getOwnPropertySymbols;
+const intrinsicGetPrototypeOf = Object.getPrototypeOf;
 const intrinsicMapDelete = Map.prototype.delete;
 const intrinsicMapForEach = Map.prototype.forEach;
 const intrinsicMapGet = Map.prototype.get;
 const intrinsicMapHas = Map.prototype.has;
 const intrinsicMapSet = Map.prototype.set;
 const intrinsicReflectApply = Reflect.apply;
+const intrinsicReflectGet = Reflect.get;
+const intrinsicReflectSet = Reflect.set;
 const intrinsicSetAdd = Set.prototype.add;
 const intrinsicSetForEach = Set.prototype.forEach;
 const intrinsicSetHas = Set.prototype.has;
+const intrinsicSymbolToString = Symbol.prototype.toString;
 const intrinsicWeakMapDelete = WeakMap.prototype.delete;
 const intrinsicWeakMapGet = WeakMap.prototype.get;
 const intrinsicWeakMapHas = WeakMap.prototype.has;
@@ -72982,6 +72994,34 @@ function privateMapHas(map, key) {
 function privateMapSet(map, key, value) {
   return intrinsicReflectApply(intrinsicMapSet, map, [key, value]);
 }
+function privateArrayForEach(array, callback) {
+  return intrinsicReflectApply(intrinsicArrayForEach, array, [callback]);
+}
+function privateArrayPush(array, ...values) {
+  return intrinsicReflectApply(intrinsicArrayPush, array, values);
+}
+function privateArraySort(array, compare) {
+  return intrinsicReflectApply(
+    intrinsicArraySort,
+    array,
+    compare === undefined ? [] : [compare],
+  );
+}
+function privateGetOwnPropertyDescriptor(value, property) {
+  return intrinsicReflectApply(intrinsicGetOwnPropertyDescriptor, IntrinsicObject, [
+    value,
+    property,
+  ]);
+}
+function privateGetOwnPropertyNames(value) {
+  return intrinsicReflectApply(intrinsicGetOwnPropertyNames, IntrinsicObject, [value]);
+}
+function privateGetOwnPropertySymbols(value) {
+  return intrinsicReflectApply(intrinsicGetOwnPropertySymbols, IntrinsicObject, [value]);
+}
+function privateGetPrototypeOf(value) {
+  return intrinsicReflectApply(intrinsicGetPrototypeOf, IntrinsicObject, [value]);
+}
 function privateSetAdd(set, value) {
   return intrinsicReflectApply(intrinsicSetAdd, set, [value]);
 }
@@ -72993,7 +73033,7 @@ function privateSetHas(set, value) {
 }
 function privateSetValues(set) {
   const values = [];
-  privateSetForEach(set, (value) => values.push(value));
+  privateSetForEach(set, (value) => privateArrayPush(values, value));
   return values;
 }
 function privateWeakMapDelete(map, key) {
@@ -73141,10 +73181,9 @@ if (descendantNonce) {
     if (processDisconnectImplementation) {
       const processDisconnectDelegate = process._disconnect;
       const processHandleQueue = process._handleQueue;
-      const processChannelHandleSymbol = Object.getOwnPropertySymbols(process).find(
-        (symbol) => symbol.description === 'kChannelHandle',
-      );
-      const processChannelHandle = process[processChannelHandleSymbol];
+      const processChannel = requireNativeChannelHandle(process);
+      const processChannelHandleSymbol = processChannel.symbol;
+      const processChannelHandle = processChannel.handle;
       const processChannelClose = processChannelHandle?.close;
       if (
         typeof processDisconnectDelegate !== 'function' ||
@@ -73228,6 +73267,10 @@ if (descendantNonce) {
         descendantMessageContext,
         new IntrinsicSet(['close']),
       );
+      process[processChannelHandleSymbol] = nativeHandleFacade(
+        processChannelHandle,
+        'onread',
+      );
     } else {
       Object.defineProperty(process, 'disconnect', {
         configurable: false,
@@ -73278,9 +73321,9 @@ function normalizedInvocationEnvironment(environment) {
   for (const [key, value] of Object.entries(environment || process.env)) {
     const normalizedKey = key.toUpperCase();
     if (normalizedKey === 'NODE_OPTIONS' || normalizedKey.startsWith('RN_DEV_AGENT_')) continue;
-    entries.push([key, value]);
+    privateArrayPush(entries, [key, value]);
   }
-  return entries.sort(([left], [right]) => left.localeCompare(right));
+  return privateArraySort(entries, ([left], [right]) => left.localeCompare(right));
 }
 function authenticatedChildEnvironment(entries, nonce, semantics) {
   const nextEnvironment = Object.fromEntries(entries);
@@ -73308,14 +73351,16 @@ function snapshotInvocation(value) {
     }
     privateWeakSetAdd(seen, candidate);
     if (candidate instanceof IntrinsicMap) {
-      privateMapForEach(candidate, (entry, key) => pending.push(key, entry));
+      privateMapForEach(candidate, (entry, key) =>
+        privateArrayPush(pending, key, entry)
+      );
       continue;
     }
     if (candidate instanceof IntrinsicSet) {
-      privateSetForEach(candidate, (entry) => pending.push(entry));
+      privateSetForEach(candidate, (entry) => privateArrayPush(pending, entry));
       continue;
     }
-    pending.push(...Object.values(candidate));
+    privateArrayPush(pending, ...Object.values(candidate));
   }
   return {
     digest: createHash('sha256').update(bytes).digest('hex'),
@@ -73331,6 +73376,7 @@ const childSendPrimitiveImplementations = new IntrinsicWeakMap();
 const childDisconnectImplementations = new IntrinsicWeakMap();
 const childLifecycleContexts = new IntrinsicWeakMap();
 const childLifecycleTargets = new IntrinsicWeakMap();
+const childNativeProcessHandles = new IntrinsicWeakMap();
 const workerMessageContexts = new IntrinsicWeakMap();
 const workerLifecycleContexts = new IntrinsicWeakMap();
 const portMessageContexts = new IntrinsicWeakMap();
@@ -73404,7 +73450,7 @@ function authenticatedIpcSend(
       if (!(entry instanceof Error)) return snapshotInvocation(entry).value;
       const normalized = {};
       for (const name of ['name', 'message', 'code', 'errno', 'syscall', 'path', 'dest']) {
-        const descriptor = Object.getOwnPropertyDescriptor(entry, name);
+        const descriptor = privateGetOwnPropertyDescriptor(entry, name);
         if (descriptor && 'value' in descriptor) normalized[name] = descriptor.value;
       }
       return normalized;
@@ -73468,6 +73514,65 @@ function withNativeChannelControl(context, run) {
     context.nativeControlDepth -= 1;
   }
 }
+function nativeHandleFacade(handle, hiddenCallback) {
+  const blockedCallback = function () {
+    throw descendantError();
+  };
+  return new IntrinsicProxy(handle, {
+    defineProperty(target, property, descriptor) {
+      if (property === hiddenCallback) throw descendantError();
+      return intrinsicDefineProperty(target, property, descriptor);
+    },
+    deleteProperty(target, property) {
+      if (property === hiddenCallback) throw descendantError();
+      return delete target[property];
+    },
+    get(target, property) {
+      if (property === hiddenCallback) return blockedCallback;
+      const value = intrinsicReflectGet(target, property, target);
+      if (typeof value !== 'function') return value;
+      return function (...args) {
+        return intrinsicReflectApply(value, target, args);
+      };
+    },
+    getOwnPropertyDescriptor(target, property) {
+      const descriptor = privateGetOwnPropertyDescriptor(target, property);
+      if (property !== hiddenCallback || !descriptor) return descriptor;
+      if (!descriptor.configurable) return descriptor;
+      return {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        value: blockedCallback,
+        writable: false,
+      };
+    },
+    getPrototypeOf() {
+      return null;
+    },
+    set(target, property, value) {
+      if (property === hiddenCallback) throw descendantError();
+      return intrinsicReflectSet(target, property, value, target);
+    },
+  });
+}
+function requireNativeChannelHandle(owner) {
+  const candidates = [];
+  privateArrayForEach(privateGetOwnPropertySymbols(owner), (symbol) => {
+    if (
+      intrinsicReflectApply(intrinsicSymbolToString, symbol, []) ===
+      'Symbol(kChannelHandle)'
+    ) {
+      privateArrayPush(candidates, symbol);
+    }
+  });
+  if (candidates.length !== 1) throw descendantError();
+  const symbol = candidates[0];
+  const descriptor = privateGetOwnPropertyDescriptor(owner, symbol);
+  if (!descriptor || !descriptor.value || typeof descriptor.value !== 'object') {
+    throw descendantError();
+  }
+  return { handle: descriptor.value, symbol };
+}
 function fenceNativeReadCallback(handle, descriptor) {
   const blockedRead = function () {
     throw descendantError();
@@ -73486,14 +73591,14 @@ function fenceNativeReadCallback(handle, descriptor) {
 function fenceNativeHandleOwner(owner, handle, allowedOwnControls) {
   if (privateWeakSetHas(fencedNativeHandlePrototypes, owner)) return;
   privateWeakSetAdd(fencedNativeHandlePrototypes, owner);
-  for (const name of Object.getOwnPropertyNames(owner)) {
+  for (const name of privateGetOwnPropertyNames(owner)) {
     if (
       name === 'constructor' ||
       (owner === handle && privateSetHas(allowedOwnControls, name))
     ) {
       continue;
     }
-    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    const descriptor = privateGetOwnPropertyDescriptor(owner, name);
     if (typeof descriptor?.value !== 'function') continue;
     const implementation = descriptor.value;
     const isWrite = name.startsWith('write');
@@ -73541,7 +73646,7 @@ function fenceNativeChannel(
 ) {
   if (!handle || !context) throw descendantError();
   privateWeakMapSet(nativeChannelContexts, handle, context);
-  const readDescriptor = Object.getOwnPropertyDescriptor(handle, 'onread');
+  const readDescriptor = privateGetOwnPropertyDescriptor(handle, 'onread');
   const readCallback = handle.onread;
   if (typeof readCallback === 'function') {
     if (readDescriptor && !readDescriptor.configurable) throw descendantError();
@@ -73553,7 +73658,7 @@ function fenceNativeChannel(
   for (
     let owner = handle;
     owner && owner !== Object.prototype;
-    owner = Object.getPrototypeOf(owner)
+    owner = privateGetPrototypeOf(owner)
   ) {
     fenceNativeHandleOwner(owner, handle, allowedOwnControls);
   }
@@ -73562,9 +73667,9 @@ function fenceNativeProcessHandle(handle, context) {
   if (!handle) throw descendantError();
   privateWeakSetAdd(nativeProcessHandles, handle);
   if (context) privateWeakMapSet(nativeProcessContexts, handle, context);
-  const prototype = Object.getPrototypeOf(handle);
+  const prototype = privateGetPrototypeOf(handle);
   if (!privateWeakSetHas(fencedNativeProcessPrototypes, prototype)) {
-    const spawn = Object.getOwnPropertyDescriptor(prototype, 'spawn')?.value;
+    const spawn = privateGetOwnPropertyDescriptor(prototype, 'spawn')?.value;
     if (typeof spawn !== 'function') throw descendantError();
     privateWeakSetAdd(fencedNativeProcessPrototypes, prototype);
     intrinsicDefineProperty(prototype, 'spawn', {
@@ -73597,9 +73702,9 @@ function fenceNativeProcessHandle(handle, context) {
     });
   }
   for (
-    let owner = Object.getPrototypeOf(prototype);
+    let owner = privateGetPrototypeOf(prototype);
     owner && owner !== Object.prototype;
-    owner = Object.getPrototypeOf(owner)
+    owner = privateGetPrototypeOf(owner)
   ) {
     fenceNativeHandleOwner(owner, handle, new IntrinsicSet());
   }
@@ -73646,7 +73751,7 @@ function authenticatedChildStdio(stdio, mode, silent, input) {
     throw descendantError();
   }
   if (hasEvidenceDescriptor) {
-    while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
+    while (normalized.length <= evidenceDescriptor) privateArrayPush(normalized, 'ignore');
   }
   for (let index = 3; index < normalized.length; index += 1) {
     const value = normalized[index];
@@ -73749,7 +73854,7 @@ function requireFileBackedNodeArguments(args, cwd) {
       break;
     }
     const normalized = normalizeSafeNodeOption(args, index);
-    execArgv.push(normalized.value);
+    privateArrayPush(execArgv, normalized.value);
     index = normalized.index;
   }
   return {
@@ -73780,7 +73885,7 @@ function requireSafeExecArgv(execArgv) {
   const normalized = [];
   for (let index = 0; index < execArgv.length; index += 1) {
     const option = normalizeSafeNodeOption(execArgv, index);
-    normalized.push(option.value);
+    privateArrayPush(normalized, option.value);
     index = option.index;
   }
   return normalized;
@@ -73859,14 +73964,14 @@ function installMessageFences() {
   const originalChildSpawn = childPrototype.spawn;
   const childProcessChannel = diagnosticsChannel.channel('child_process');
   if (childProcessChannel.hasSubscribers) throw descendantError();
-  const channelPrototype = Object.getPrototypeOf(childProcessChannel);
+  const channelPrototype = privateGetPrototypeOf(childProcessChannel);
   const channelSubscribe = channelPrototype.subscribe;
   intrinsicReflectApply(channelSubscribe, childProcessChannel, [({ process: spawnedProcess }) => {
     const authorization = activeChildSpawnAuthorization;
-    fenceNativeProcessHandle(
-      spawnedProcess._handle,
-      authorization?.lifecycleContext,
-    );
+    const nativeHandle = spawnedProcess._handle;
+    fenceNativeProcessHandle(nativeHandle, authorization?.lifecycleContext);
+    privateWeakMapSet(childNativeProcessHandles, spawnedProcess, nativeHandle);
+    spawnedProcess._handle = nativeHandleFacade(nativeHandle, 'onexit');
     if (!authorization || authorization.receiver) return;
     authorization.receiver = spawnedProcess;
     privateWeakMapSet(authorizedChildSpawns, spawnedProcess, authorization);
@@ -73892,7 +73997,8 @@ function installMessageFences() {
         throw descendantError();
       }
       privateWeakMapDelete(authorizedChildSpawns, this);
-      const nativeHandle = this._handle;
+      const nativeHandle = privateWeakMapGet(childNativeProcessHandles, this);
+      if (!nativeHandle) throw descendantError();
       privateWeakMapSet(authorizedNativeProcessSpawns, nativeHandle, options);
       try {
         return intrinsicReflectApply(originalChildSpawn, this, [options]);
@@ -74301,10 +74407,15 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
           nativeControlContext: lifecycleContext('native-channel', nonce),
         };
         privateWeakMapSet(childMessageContexts, child, messageContext);
-        const channelHandleSymbol = Object.getOwnPropertySymbols(child).find(
-          (symbol) => symbol.description === 'kChannelHandle',
-        );
-        fenceNativeChannel(child[channelHandleSymbol], messageContext);
+        let channel;
+        try {
+          channel = requireNativeChannelHandle(child);
+        } catch (error) {
+          child.kill();
+          throw error;
+        }
+        fenceNativeChannel(channel.handle, messageContext);
+        child[channel.symbol] = nativeHandleFacade(channel.handle, 'onread');
       }
       return child;
     },
@@ -74630,38 +74741,41 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   function addPath(value, field) {
     if (value == null) return;
     if (typeof value !== 'string') {
-      violations.push(field + ' must be a path');
+      privateArrayPush(violations, field + ' must be a path');
       return;
     }
     try {
       privateSetAdd(runtimeInputs, fs.realpathSync(path.resolve(process.cwd(), value)));
     } catch {
-      violations.push(field + ' cannot be resolved');
+      privateArrayPush(violations, field + ' cannot be resolved');
     }
   }
   function addPaths(values, field) {
     if (values == null) return;
     if (!Array.isArray(values)) {
-      violations.push(field + ' must contain paths');
+      privateArrayPush(violations, field + ' must contain paths');
       return;
     }
-    values.forEach((value) => addPath(value, field));
+    privateArrayForEach(values, (value) => addPath(value, field));
   }
   function addModule(value, field) {
     if (value == null) return null;
     if (typeof value !== 'string') {
-      violations.push(field + ' must identify a module');
+      privateArrayPush(violations, field + ' must identify a module');
       return null;
     }
     try {
       const resolved = fs.realpathSync(require.resolve(value, { paths: [process.cwd()] }));
       privateSetAdd(runtimeInputs, resolved);
       if (!isContained(resolved) || isExcluded(resolved)) {
-        violations.push(field + ' must resolve to Git-authenticated source or a local dependency store');
+        privateArrayPush(
+          violations,
+          field + ' must resolve to Git-authenticated source or a local dependency store',
+        );
       }
       return resolved;
     } catch {
-      violations.push(field + ' cannot be resolved as an authenticated module');
+      privateArrayPush(violations, field + ' cannot be resolved as an authenticated module');
       return null;
     }
   }
@@ -74691,7 +74805,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
         }
       }) || null;
     if (packageName === null) {
-      violations.push(field + ' is not a supported Metro executable module');
+      privateArrayPush(violations, field + ' is not a supported Metro executable module');
     }
     return { resolved, packageName };
   }
@@ -74699,16 +74813,20 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   addPaths(config.watchFolders, 'watchFolders');
   addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
   addPaths((process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
-  callbackRuntimeInputs.forEach((value) => addModule(value, 'Metro callback runtime input'));
+  privateArrayForEach(callbackRuntimeInputs, (value) =>
+    addModule(value, 'Metro callback runtime input')
+  );
   if (resolver.extraNodeModules !== undefined) {
     if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
-      violations.push('extraNodeModules must be a path map');
+      privateArrayPush(violations, 'extraNodeModules must be a path map');
     } else {
-      Object.values(resolver.extraNodeModules).forEach((value) => addPath(value, 'extraNodeModules'));
+      privateArrayForEach(Object.values(resolver.extraNodeModules), (value) =>
+        addPath(value, 'extraNodeModules')
+      );
     }
   }
   if (resolver.resolveRequest != null) {
-    violations.push('custom Metro resolvers are unsupported');
+    privateArrayPush(violations, 'custom Metro resolvers are unsupported');
   }
   const transformerPath = addExecutableModule(
     config.transformerPath,
@@ -74728,7 +74846,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     ('__originalSerializer' in serializer.customSerializer ||
       serializer.customSerializer.__expoSerializer === true);
   if (serializer.customSerializer != null && (!expoSerializerSupported || !expoSerializer)) {
-    violations.push('custom Metro serializers are unsupported');
+    privateArrayPush(violations, 'custom Metro serializers are unsupported');
   }
   addExecutableModule(resolver.dependencyExtractor, 'dependencyExtractor', []);
   addExecutableModule(resolver.hasteImplModulePath, 'hasteImplModulePath', []);
@@ -74743,18 +74861,20 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   addExecutableModule(transformer.minifierPath, 'minifierPath', ['metro-minify-terser']);
   if (transformer.assetPlugins != null) {
     if (!Array.isArray(transformer.assetPlugins)) {
-      violations.push('assetPlugins must identify modules');
+      privateArrayPush(violations, 'assetPlugins must identify modules');
     } else {
-      transformer.assetPlugins.forEach((value) =>
+      privateArrayForEach(transformer.assetPlugins, (value) =>
         addExecutableModule(value, 'assetPlugins', ['expo-asset', '@expo/metro-config'])
       );
     }
   }
   if (serializer.polyfillModuleNames != null) {
     if (!Array.isArray(serializer.polyfillModuleNames)) {
-      violations.push('polyfillModuleNames must identify modules');
+      privateArrayPush(violations, 'polyfillModuleNames must identify modules');
     } else {
-      serializer.polyfillModuleNames.forEach((value) => addModule(value, 'polyfillModuleNames'));
+      privateArrayForEach(serializer.polyfillModuleNames, (value) =>
+        addModule(value, 'polyfillModuleNames')
+      );
     }
   }
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD || '';
@@ -74777,24 +74897,28 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     hasNodeLoaderOption(baseNodeOptions) ||
     hasUnsupportedNodeOption(baseNodeOptions)
   ) {
-    violations.push('NODE_OPTIONS contain unsupported execution inputs');
+    privateArrayPush(violations, 'NODE_OPTIONS contain unsupported execution inputs');
   }
   if (!initialCacheCaptured) {
-    Object.keys(require.cache).forEach((value) => addPath(value, 'loaded Metro config module'));
+    privateArrayForEach(Object.keys(require.cache), (value) =>
+      addPath(value, 'loaded Metro config module')
+    );
     initialCacheCaptured = true;
   }
   privateSetForEach(runtimeInputs, (value) =>
     privateSetAdd(accumulatedRuntimeInputs, value),
   );
-  violations.forEach((value) => privateSetAdd(accumulatedViolations, value));
+  privateArrayForEach(violations, (value) =>
+    privateSetAdd(accumulatedViolations, value)
+  );
   const payload = {
     version: 1,
     sessionId,
     metroInstanceId,
     contentRoot: root,
     appRoot: fs.realpathSync(process.cwd()),
-    runtimeInputs: privateSetValues(accumulatedRuntimeInputs).sort(),
-    violations: privateSetValues(accumulatedViolations).sort(),
+    runtimeInputs: privateArraySort(privateSetValues(accumulatedRuntimeInputs)),
+    violations: privateArraySort(privateSetValues(accumulatedViolations)),
   };
   const serializedPayload = JSON.stringify(payload);
   if (serializedPayload === lastPolicyPayload) return;
