@@ -396,7 +396,7 @@ test('strict proof requires one exact terminal Metro integration block', () => {
   assert.throws(() => strictProofSourceIdentity(identity), /STRICT_PROOF_UNVERIFIED_METRO_CONFIG/);
 });
 
-test('strict proof validates broker-owned Metro runtime inputs', () => {
+test('strict proof rejects unenforced reporter silence and validates enforced runtime inputs', () => {
   const rootInput = mkdtempSync(join(tmpdir(), 'rn-source-proof-metro-policy-'));
   roots.push(rootInput);
   const root = realpathSync(rootInput);
@@ -411,25 +411,46 @@ test('strict proof validates broker-owned Metro runtime inputs', () => {
   writeFileSync(runtimeFile, 'module.exports = "first";');
   writeFileSync(join(root, 'metro.config.js'), previewMetroIntegration('module.exports = {};\n'));
   const capability = 'policy-capability';
-  const payload = {
+  const runtimeManifest = {
+    version: 1,
+    executable: process.execPath,
+    args: ['metro', '--port', '8341'],
+    nodeOptions: '',
+    environmentDigest: 'ab'.repeat(32),
+    contentRoot: root,
+    appRoot: root,
+    servingRoot: root,
+    buildGeneration: 1,
+    packageInputs: [],
+    metroConfigInputs: [join(root, 'metro.config.js')],
+    dependencyRoots: [],
+    runtimeInputs: [],
+  };
+  const policyPayload = (runtimeEnforcement: 'os-enforced-v1' | 'unsupported') => ({
     version: 1,
     runtimeEvidenceAuthority: 'broker-v2',
     sessionId: 'session',
     metroInstanceId: 'metro',
     contentRoot: root,
     appRoot: root,
+    runtimeEnforcement,
+    runtimeManifest,
     runtimeInputs: [],
     violations: [],
+  });
+  const publishPolicy = (runtimeEnforcement: 'os-enforced-v1' | 'unsupported') => {
+    const payload = policyPayload(runtimeEnforcement);
+    writeFileSync(
+      join(integration, 'metro-runtime-policy.json'),
+      `${JSON.stringify({
+        ...payload,
+        signature: createHmac('sha256', capability)
+          .update(canonicalAuthorityJson(payload))
+          .digest('hex'),
+      })}\n`,
+    );
   };
-  writeFileSync(
-    join(integration, 'metro-runtime-policy.json'),
-    `${JSON.stringify({
-      ...payload,
-      signature: createHmac('sha256', capability)
-        .update(canonicalAuthorityJson(payload))
-        .digest('hex'),
-    })}\n`,
-  );
+  publishPolicy('os-enforced-v1');
   const runtimeLoadPayload = {
     version: 1,
     runtimeEvidenceAuthority: 'broker-v2',
@@ -509,6 +530,12 @@ test('strict proof validates broker-owned Metro runtime inputs', () => {
     });
   };
   const dependencies = { git, metroRuntimePolicy, readMetroEvidenceHead };
+  publishPolicy('unsupported');
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /closed-world runtime enforcement is unavailable/,
+  );
+  publishPolicy('os-enforced-v1');
   publishRuntimeLoads([runtimeLoadPayload]);
   const first = strictProofSourceIdentity(identity, dependencies);
   const semanticsValue = JSON.stringify({

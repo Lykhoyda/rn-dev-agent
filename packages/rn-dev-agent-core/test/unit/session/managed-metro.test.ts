@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
+import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
 import {
   hasNodeLoaderOption,
   hasUnsupportedNodeOption,
@@ -131,6 +133,8 @@ test('managed Metro child environment excludes session authority', () => {
       PATH: '/bin',
       HOME: '/home/test',
       EXPO_PUBLIC_MODE: 'test',
+      BABEL_ENV: 'development',
+      CUSTOM_METRO_FLAG: 'enabled',
       RN_DEV_AGENT_SESSION_SECRET_PATH: '/secret',
       RN_DEV_AGENT_REGISTRY_PATH: '/registry',
       DATABASE_URL: 'secret',
@@ -139,6 +143,9 @@ test('managed Metro child environment excludes session authority', () => {
       PATH: '/bin',
       HOME: '/home/test',
       EXPO_PUBLIC_MODE: 'test',
+      BABEL_ENV: 'development',
+      CUSTOM_METRO_FLAG: 'enabled',
+      DATABASE_URL: 'secret',
     },
   );
 });
@@ -222,6 +229,23 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(binding.runtimeEvidenceProtocol, 2);
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_REGISTRY_PATH, undefined);
+  assert.equal(calls[0]?.env?.RCT_METRO_PORT, '8341');
+  const childEnvironment = JSON.parse(
+    calls[0]?.env?.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT ?? '{}',
+  ) as NodeJS.ProcessEnv;
+  assert.equal(childEnvironment.RCT_METRO_PORT, '8341');
+  assert.equal(childEnvironment.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
+  assert.equal(childEnvironment.RN_DEV_AGENT_REGISTRY_PATH, undefined);
+  const runtimeManifest = JSON.parse(
+    calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST ?? '{}',
+  ) as Record<string, unknown>;
+  assert.equal(
+    runtimeManifest.environmentDigest,
+    createHash('sha256').update(canonicalAuthorityJson(childEnvironment)).digest('hex'),
+  );
+  assert.equal(runtimeManifest.servingRoot, '/app');
+  assert.equal(runtimeManifest.buildGeneration, 1);
+  assert.ok(Array.isArray(runtimeManifest.runtimeInputs));
   assert.equal(
     verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
       sessionId: 'session-a',
@@ -250,10 +274,18 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     'runtimeEvidenceSocket',
     'runtimeEvidenceAuthority',
     'runtimeEvidenceProtocol',
+    'servingRoot',
+    'buildGeneration',
   ] as const) {
     assert.equal(
       verifyManagedMetroManagementProof(
-        { ...binding, [property]: property === 'runtimeEvidenceProtocol' ? 1 : 'forged' },
+        {
+          ...binding,
+          [property]:
+            property === 'runtimeEvidenceProtocol' || property === 'buildGeneration'
+              ? 99
+              : 'forged',
+        },
         { sessionId: 'session-a', signerCapability: 'signer' },
       ),
       false,
@@ -267,7 +299,11 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.match(calls[0]?.args[1] ?? '', /for \(const connection of headConnections\)/);
   assert.match(calls[0]?.args[1] ?? '', /journalSignature: previousSignature/);
   assert.match(calls[0]?.args[1] ?? '', /runtimeEvidenceAuthority: 'broker-v2'/);
-  assert.match(calls[0]?.args[1] ?? '', /if \(payload\.kind === 'violation'\) appendViolation/);
+  assert.match(calls[0]?.args[1] ?? '', /runtimeEnforcement: 'unsupported'/);
+  assert.match(
+    calls[0]?.args[1] ?? '',
+    /if \(payload\.kind === 'violation'\) \{\s+appendViolation/,
+  );
   assert.doesNotMatch(calls[0]?.args[1] ?? '', /\n\s+appendEvidence\(payload\);/);
 });
 
@@ -452,6 +488,8 @@ test('managed Metro proof authenticates every cleanup authority field', async ()
     { ...binding, birth: 'birth-203' },
     { ...binding, launcherPid: 102 },
     { ...binding, launcherBirth: 'birth-102' },
+    { ...binding, servingRoot: '/other' },
+    { ...binding, buildGeneration: 2 },
   ];
 
   for (const candidate of tampered) {

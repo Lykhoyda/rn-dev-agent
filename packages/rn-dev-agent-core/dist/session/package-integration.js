@@ -824,6 +824,7 @@ function exposeNativeProcessHandle(child, handle) {
           if (args.length !== 1 || args[0] !== deliveredSpawnError) {
             throw descendantError();
           }
+          slot.exposed = null;
         });
       } else {
         slot.exposed = null;

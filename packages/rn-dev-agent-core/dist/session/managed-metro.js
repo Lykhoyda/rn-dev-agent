@@ -1,14 +1,14 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { closeSync, existsSync, openSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { closeSync, existsSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { captureMetroBinding, metroListenerPid, probeMetroListener, } from './metro-binding.js';
 import { probeProcessBirth, readProcessBirth, } from './process-birth.js';
 import { canonicalAuthorityJson } from './authority-json.js';
 const METRO_LAUNCHER_SOURCE = String.raw `
 const { spawn } = require('node:child_process');
-const { createHmac } = require('node:crypto');
-const { chmodSync, closeSync, openSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { createHash, createHmac } = require('node:crypto');
+const { chmodSync, closeSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -114,9 +114,11 @@ const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
 const contentRoot = process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT;
 const appRoot = process.env.RN_DEV_AGENT_METRO_APP_ROOT;
 const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
-if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource) {
+const runtimeManifestSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST;
+if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource) {
   process.exit(1);
 }
+const runtimeManifest = JSON.parse(runtimeManifestSource);
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -147,7 +149,9 @@ function publishPolicy() {
     metroInstanceId,
     contentRoot,
     appRoot,
-    runtimeInputs: [],
+    runtimeEnforcement: 'unsupported',
+    runtimeManifest,
+    runtimeInputs: runtimeManifest.runtimeInputs,
     violations: [...violations],
   };
   const signature = createHmac('sha256', capability)
@@ -232,29 +236,20 @@ headServer.once('error', () => process.exit(1));
 headServer.listen(evidenceSocket, () => {
   if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
 });
+const childEnvironment = JSON.parse(childEnvironmentSource);
+const environmentDigest = createHash('sha256')
+  .update(canonicalAuthorityJson(childEnvironment))
+  .digest('hex');
+if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
 appendEvidence({
   version: 1,
   sessionId,
   metroInstanceId,
   kind: 'semantics',
-  value: canonicalAuthorityJson({
-    mode: 'managed-metro',
-    executable,
-    args,
-    nodeOptions: childNodeOptions,
-  }),
+  value: canonicalAuthorityJson(runtimeManifest),
   digest: null,
 });
 publishPolicy();
-const childEnvironment = {
-  ...JSON.parse(childEnvironmentSource),
-  NODE_OPTIONS: childNodeOptions,
-  RN_DEV_AGENT_METRO_EVIDENCE_FD: String(evidenceDescriptor),
-  RN_DEV_AGENT_SESSION_ID: sessionId,
-  RN_DEV_AGENT_METRO_INSTANCE_ID: metroInstanceId,
-  RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD,
-  RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS,
-};
 child = spawn(executable, args, {
   cwd: process.cwd(),
   env: childEnvironment,
@@ -328,7 +323,26 @@ evidence.on('data', (chunk) => {
         }
         continue;
       }
-      if (payload.kind === 'violation') appendViolation(payload.value);
+      if (payload.kind === 'violation') {
+        appendViolation(payload.value);
+        continue;
+      }
+      if (payload.kind === 'input') {
+        let candidate;
+        let digest;
+        try {
+          candidate = realpathSync(payload.value);
+          digest = createHash('sha256').update(readFileSync(candidate)).digest('hex');
+        } catch {
+          appendViolation('Metro runtime input could not be observed by the broker');
+          continue;
+        }
+        if (!runtimeManifest.runtimeInputs.includes(candidate) || digest !== payload.digest) {
+          appendViolation('Metro runtime input is outside the broker manifest');
+        }
+        continue;
+      }
+      appendViolation('Metro runtime execution is not independently broker-observed');
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -500,58 +514,14 @@ function managementProof(sessionId, authority, signerCapability) {
         runtimeEvidenceSocket: authority.runtimeEvidenceSocket,
         runtimeEvidenceAuthority: authority.runtimeEvidenceAuthority,
         runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol,
+        servingRoot: authority.servingRoot,
+        buildGeneration: authority.buildGeneration,
     }))
         .digest('hex');
 }
-const METRO_ENVIRONMENT_NAMES = new Set([
-    'ANDROID_HOME',
-    'ANDROID_SDK_ROOT',
-    'BABEL_ENV',
-    'CI',
-    'COMSPEC',
-    'DEVELOPER_DIR',
-    'FORCE_COLOR',
-    'HOME',
-    'HTTP_PROXY',
-    'HTTPS_PROXY',
-    'JAVA_HOME',
-    'LANG',
-    'LOCALAPPDATA',
-    'LOGNAME',
-    'NO_COLOR',
-    'NO_PROXY',
-    'NODE_ENV',
-    'PATH',
-    'PATHEXT',
-    'SHELL',
-    'SYSTEMROOT',
-    'TEMP',
-    'TERM',
-    'TMP',
-    'TMPDIR',
-    'USER',
-    'USERPROFILE',
-    'WINDIR',
-    'XDG_CACHE_HOME',
-    'XDG_CONFIG_HOME',
-    'XDG_DATA_HOME',
-    'http_proxy',
-    'https_proxy',
-    'no_proxy',
-]);
-const METRO_ENVIRONMENT_PREFIXES = [
-    'EXPO_',
-    'LC_',
-    'REACT_NATIVE_',
-    'RCT_',
-    'WATCHMAN_',
-    'XCODE_',
-];
 export function managedMetroChildEnvironment(environment) {
     return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== undefined &&
-        !name.startsWith('RN_DEV_AGENT_') &&
-        (METRO_ENVIRONMENT_NAMES.has(name) ||
-            METRO_ENVIRONMENT_PREFIXES.some((prefix) => name.startsWith(prefix)))));
+        !name.startsWith('RN_DEV_AGENT_')));
 }
 export function verifyManagedMetroManagementProof(binding, input) {
     if (binding.mode !== 'managed' ||
@@ -563,6 +533,9 @@ export function verifyManagedMetroManagementProof(binding, input) {
         typeof binding.instanceId !== 'string' ||
         typeof binding.runtimeEvidencePath !== 'string' ||
         typeof binding.runtimeEvidenceSocket !== 'string' ||
+        typeof binding.servingRoot !== 'string' ||
+        !Number.isSafeInteger(binding.buildGeneration) ||
+        binding.buildGeneration < 0 ||
         binding.runtimeEvidenceAuthority !== 'broker-v2' ||
         binding.runtimeEvidenceProtocol !== 2 ||
         typeof binding.managementProof !== 'string') {
@@ -579,6 +552,8 @@ export function verifyManagedMetroManagementProof(binding, input) {
         runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
         runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
         runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol,
+        servingRoot: binding.servingRoot,
+        buildGeneration: binding.buildGeneration,
     }, input.signerCapability);
     const expectedBuffer = Buffer.from(expected, 'hex');
     const observedBuffer = Buffer.from(binding.managementProof, 'hex');
@@ -599,6 +574,46 @@ function legacyManagementProof(sessionId, authority, signerCapability) {
         authority.runtimeEvidenceSocket,
     ].join('\0'))
         .digest('hex');
+}
+function brokerV2ManagementProofV1(sessionId, authority, signerCapability) {
+    return createHmac('sha256', signerCapability)
+        .update(canonicalAuthorityJson({
+        sessionId,
+        ...authority,
+    }))
+        .digest('hex');
+}
+function dependencyRoots(appRoot, sourceRoot, exists) {
+    const roots = new Set();
+    for (const start of [resolve(appRoot), resolve(sourceRoot)]) {
+        let current = start;
+        while (true) {
+            const candidate = join(current, 'node_modules');
+            if (exists(candidate))
+                roots.add(candidate);
+            const parent = dirname(current);
+            if (parent === current)
+                break;
+            current = parent;
+        }
+    }
+    for (const candidate of [
+        join(sourceRoot, '.yarn', 'cache'),
+        join(sourceRoot, '.yarn', 'unplugged'),
+        join(sourceRoot, '.pnpm'),
+    ]) {
+        if (exists(candidate))
+            roots.add(resolve(candidate));
+    }
+    return [...roots].sort();
+}
+function canonicalRuntimeInput(path) {
+    try {
+        return realpathSync(path);
+    }
+    catch {
+        return resolve(path);
+    }
 }
 async function stopSpawnedProcessGroup(input, dependencies) {
     const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
@@ -655,14 +670,58 @@ export async function startManagedMetro(input, dependencies = {}) {
     const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`]
         .filter(Boolean)
         .join(' ');
+    const metroArgs = [...command.args, '--port', String(input.port)];
+    const metroEnvironment = managedMetroChildEnvironment({
+        ...process.env,
+        RCT_METRO_PORT: String(input.port),
+    });
+    const childEnvironment = {
+        ...metroEnvironment,
+        NODE_OPTIONS: authorityNodeOptions,
+        RN_DEV_AGENT_METRO_EVIDENCE_FD: '9',
+        RN_DEV_AGENT_SESSION_ID: input.sessionId,
+        RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
+        RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
+        RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
+    };
+    const exists = dependencies.exists ?? existsSync;
+    const packageInputs = [canonicalRuntimeInput(join(input.appRoot, 'package.json'))];
+    const metroConfigInputs = ['metro.config.js', 'metro.config.cjs']
+        .map((name) => join(input.appRoot, name))
+        .filter(exists)
+        .map(canonicalRuntimeInput);
+    const resolvedDependencyRoots = dependencyRoots(input.appRoot, input.sourceRoot, exists).map(canonicalRuntimeInput);
+    const runtimeInputs = [
+        canonicalRuntimeInput(command.executable),
+        canonicalRuntimeInput(authorityPreload),
+        ...packageInputs,
+        ...metroConfigInputs,
+        ...resolvedDependencyRoots,
+    ].filter((value, index, entries) => entries.indexOf(value) === index);
+    const runtimeManifest = {
+        version: 1,
+        executable: canonicalRuntimeInput(command.executable),
+        args: metroArgs,
+        nodeOptions: authorityNodeOptions,
+        environmentDigest: createHash('sha256')
+            .update(canonicalAuthorityJson(childEnvironment))
+            .digest('hex'),
+        contentRoot: resolve(input.sourceRoot),
+        appRoot: resolve(input.appRoot),
+        servingRoot: resolve(input.sourceRoot),
+        buildGeneration: input.buildGeneration,
+        packageInputs,
+        metroConfigInputs,
+        dependencyRoots: resolvedDependencyRoots,
+        runtimeInputs,
+    };
     const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
-    const metroEnvironment = managedMetroChildEnvironment(process.env);
     const child = (dependencies.spawnProcess ?? spawn)(process.execPath, ['-e', METRO_LAUNCHER_SOURCE], {
         cwd: input.appRoot,
         env: {
             ...metroEnvironment,
             RN_DEV_AGENT_METRO_EXECUTABLE: command.executable,
-            RN_DEV_AGENT_METRO_ARGS: JSON.stringify([...command.args, '--port', String(input.port)]),
+            RN_DEV_AGENT_METRO_ARGS: JSON.stringify(metroArgs),
             RN_DEV_AGENT_SESSION_ID: input.sessionId,
             RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
             RN_DEV_AGENT_METRO_POLICY_CAPABILITY: runtimePolicyCapability,
@@ -673,7 +732,8 @@ export async function startManagedMetro(input, dependencies = {}) {
             RN_DEV_AGENT_METRO_RUNTIME_POLICY: runtimePolicyPath,
             RN_DEV_AGENT_METRO_CONTENT_ROOT: input.sourceRoot,
             RN_DEV_AGENT_METRO_APP_ROOT: input.appRoot,
-            RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT: JSON.stringify(metroEnvironment),
+            RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT: JSON.stringify(childEnvironment),
+            RN_DEV_AGENT_METRO_RUNTIME_MANIFEST: canonicalAuthorityJson(runtimeManifest),
             RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS: authorityNodeOptions,
             NODE_OPTIONS: baseNodeOptions,
         },
@@ -883,25 +943,44 @@ export async function stopManagedMetro(binding, input, dependencies = {}) {
         runtimeEvidencePath: binding.runtimeEvidencePath,
         runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
     };
-    const expected = binding.runtimeEvidenceAuthority === undefined
-        ? legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)
-        : binding.runtimeEvidenceAuthority === 'reported-v1'
-            ? createHmac('sha256', input.signerCapability)
-                .update(canonicalAuthorityJson({
-                sessionId: input.sessionId,
-                ...legacyAuthority,
-                runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-            }))
-                .digest('hex')
-            : managementProof(input.sessionId, {
-                ...legacyAuthority,
-                runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-                runtimeEvidenceProtocol: 2,
-            }, input.signerCapability);
-    const expectedBuffer = Buffer.from(expected, 'hex');
     const observedBuffer = Buffer.from(binding.managementProof, 'hex');
-    if (expectedBuffer.length !== observedBuffer.length ||
-        !timingSafeEqual(expectedBuffer, observedBuffer)) {
+    const expectedProofs = binding.runtimeEvidenceAuthority === undefined
+        ? [legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)]
+        : binding.runtimeEvidenceAuthority === 'reported-v1'
+            ? [
+                createHmac('sha256', input.signerCapability)
+                    .update(canonicalAuthorityJson({
+                    sessionId: input.sessionId,
+                    ...legacyAuthority,
+                    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+                }))
+                    .digest('hex'),
+            ]
+            : [
+                brokerV2ManagementProofV1(input.sessionId, {
+                    ...legacyAuthority,
+                    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+                    runtimeEvidenceProtocol: 2,
+                }, input.signerCapability),
+                ...(typeof binding.servingRoot === 'string' &&
+                    Number.isSafeInteger(binding.buildGeneration) &&
+                    binding.buildGeneration >= 0
+                    ? [
+                        managementProof(input.sessionId, {
+                            ...legacyAuthority,
+                            runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+                            runtimeEvidenceProtocol: 2,
+                            servingRoot: binding.servingRoot,
+                            buildGeneration: binding.buildGeneration,
+                        }, input.signerCapability),
+                    ]
+                    : []),
+            ];
+    if (!expectedProofs.some((expected) => {
+        const expectedBuffer = Buffer.from(expected, 'hex');
+        return (expectedBuffer.length === observedBuffer.length &&
+            timingSafeEqual(expectedBuffer, observedBuffer));
+    })) {
         return false;
     }
     const stopped = await stopManagedMetroProcesses({

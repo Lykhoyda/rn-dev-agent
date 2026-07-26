@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes8, createHash: createHash17 } = __require("crypto");
+    var { randomBytes: randomBytes8, createHash: createHash18 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash17("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash18("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash17 } = __require("crypto");
+    var { createHash: createHash18 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash17("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash18("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -32171,7 +32171,7 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash16, createHmac as createHmac5, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash17, createHmac as createHmac5, randomUUID as randomUUID8 } from "node:crypto";
 import { readFileSync as readFileSync38, rmSync as rmSync10 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
@@ -62003,7 +62003,7 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 import { execFile as execFile23 } from "node:child_process";
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 import { existsSync as existsSync27 } from "node:fs";
 import { promisify as promisify25 } from "node:util";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -62161,8 +62161,8 @@ import { promisify as promisify24 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync8, spawn as spawn6 } from "node:child_process";
-import { createHmac, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync4, existsSync as existsSync26, openSync as openSync4, readFileSync as readFileSync23, rmSync as rmSync9 } from "node:fs";
+import { createHash as createHash7, createHmac, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { closeSync as closeSync4, existsSync as existsSync26, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync5, rmSync as rmSync9 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
 init_metro_cwd();
@@ -62358,8 +62358,8 @@ function canonicalAuthorityJson(value) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
-const { createHmac } = require('node:crypto');
-const { chmodSync, closeSync, openSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { createHash, createHmac } = require('node:crypto');
+const { chmodSync, closeSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -62465,9 +62465,11 @@ const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
 const contentRoot = process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT;
 const appRoot = process.env.RN_DEV_AGENT_METRO_APP_ROOT;
 const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
-if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource) {
+const runtimeManifestSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST;
+if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource) {
   process.exit(1);
 }
+const runtimeManifest = JSON.parse(runtimeManifestSource);
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -62498,7 +62500,9 @@ function publishPolicy() {
     metroInstanceId,
     contentRoot,
     appRoot,
-    runtimeInputs: [],
+    runtimeEnforcement: 'unsupported',
+    runtimeManifest,
+    runtimeInputs: runtimeManifest.runtimeInputs,
     violations: [...violations],
   };
   const signature = createHmac('sha256', capability)
@@ -62583,29 +62587,20 @@ headServer.once('error', () => process.exit(1));
 headServer.listen(evidenceSocket, () => {
   if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
 });
+const childEnvironment = JSON.parse(childEnvironmentSource);
+const environmentDigest = createHash('sha256')
+  .update(canonicalAuthorityJson(childEnvironment))
+  .digest('hex');
+if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
 appendEvidence({
   version: 1,
   sessionId,
   metroInstanceId,
   kind: 'semantics',
-  value: canonicalAuthorityJson({
-    mode: 'managed-metro',
-    executable,
-    args,
-    nodeOptions: childNodeOptions,
-  }),
+  value: canonicalAuthorityJson(runtimeManifest),
   digest: null,
 });
 publishPolicy();
-const childEnvironment = {
-  ...JSON.parse(childEnvironmentSource),
-  NODE_OPTIONS: childNodeOptions,
-  RN_DEV_AGENT_METRO_EVIDENCE_FD: String(evidenceDescriptor),
-  RN_DEV_AGENT_SESSION_ID: sessionId,
-  RN_DEV_AGENT_METRO_INSTANCE_ID: metroInstanceId,
-  RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD,
-  RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS,
-};
 child = spawn(executable, args, {
   cwd: process.cwd(),
   env: childEnvironment,
@@ -62679,7 +62674,26 @@ evidence.on('data', (chunk) => {
         }
         continue;
       }
-      if (payload.kind === 'violation') appendViolation(payload.value);
+      if (payload.kind === 'violation') {
+        appendViolation(payload.value);
+        continue;
+      }
+      if (payload.kind === 'input') {
+        let candidate;
+        let digest;
+        try {
+          candidate = realpathSync(payload.value);
+          digest = createHash('sha256').update(readFileSync(candidate)).digest('hex');
+        } catch {
+          appendViolation('Metro runtime input could not be observed by the broker');
+          continue;
+        }
+        if (!runtimeManifest.runtimeInputs.includes(candidate) || digest !== payload.digest) {
+          appendViolation('Metro runtime input is outside the broker manifest');
+        }
+        continue;
+      }
+      appendViolation('Metro runtime execution is not independently broker-observed');
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -62791,11 +62805,13 @@ function managementProof(sessionId, authority, signerCapability) {
     runtimeEvidencePath: authority.runtimeEvidencePath,
     runtimeEvidenceSocket: authority.runtimeEvidenceSocket,
     runtimeEvidenceAuthority: authority.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol
+    runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol,
+    servingRoot: authority.servingRoot,
+    buildGeneration: authority.buildGeneration
   })).digest("hex");
 }
 function verifyManagedMetroManagementProof(binding, input) {
-  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== "broker-v2" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "broker-v2" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, {
@@ -62808,7 +62824,9 @@ function verifyManagedMetroManagementProof(binding, input) {
     runtimeEvidencePath: binding.runtimeEvidencePath,
     runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
     runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol
+    runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol,
+    servingRoot: binding.servingRoot,
+    buildGeneration: binding.buildGeneration
   }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
@@ -62826,6 +62844,12 @@ function legacyManagementProof(sessionId, authority, signerCapability) {
     authority.runtimeEvidencePath,
     authority.runtimeEvidenceSocket
   ].join("\0")).digest("hex");
+}
+function brokerV2ManagementProofV1(sessionId, authority, signerCapability) {
+  return createHmac("sha256", signerCapability).update(canonicalAuthorityJson({
+    sessionId,
+    ...authority
+  })).digest("hex");
 }
 function signalProcessTree(input) {
   if (process.platform === "win32") {
@@ -62923,18 +62947,33 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
     runtimeEvidencePath: binding.runtimeEvidencePath,
     runtimeEvidenceSocket: binding.runtimeEvidenceSocket
   };
-  const expected = binding.runtimeEvidenceAuthority === void 0 ? legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability) : binding.runtimeEvidenceAuthority === "reported-v1" ? createHmac("sha256", input.signerCapability).update(canonicalAuthorityJson({
-    sessionId: input.sessionId,
-    ...legacyAuthority,
-    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
-  })).digest("hex") : managementProof(input.sessionId, {
-    ...legacyAuthority,
-    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: 2
-  }, input.signerCapability);
-  const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
-  if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual3(expectedBuffer, observedBuffer)) {
+  const expectedProofs = binding.runtimeEvidenceAuthority === void 0 ? [legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)] : binding.runtimeEvidenceAuthority === "reported-v1" ? [
+    createHmac("sha256", input.signerCapability).update(canonicalAuthorityJson({
+      sessionId: input.sessionId,
+      ...legacyAuthority,
+      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
+    })).digest("hex")
+  ] : [
+    brokerV2ManagementProofV1(input.sessionId, {
+      ...legacyAuthority,
+      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+      runtimeEvidenceProtocol: 2
+    }, input.signerCapability),
+    ...typeof binding.servingRoot === "string" && Number.isSafeInteger(binding.buildGeneration) && binding.buildGeneration >= 0 ? [
+      managementProof(input.sessionId, {
+        ...legacyAuthority,
+        runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+        runtimeEvidenceProtocol: 2,
+        servingRoot: binding.servingRoot,
+        buildGeneration: binding.buildGeneration
+      }, input.signerCapability)
+    ] : []
+  ];
+  if (!expectedProofs.some((expected) => {
+    const expectedBuffer = Buffer.from(expected, "hex");
+    return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+  })) {
     return false;
   }
   const stopped = await stopManagedMetroProcesses({
@@ -63277,7 +63316,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash7("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash8("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -63554,14 +63593,14 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash9, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash10, randomUUID as randomUUID7 } from "node:crypto";
 import { execFileSync as execFileSync9 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync5, existsSync as existsSync28, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync15, openSync as openSync5, readFileSync as readFileSync24, realpathSync as realpathSync5, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync5, existsSync as existsSync28, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync15, openSync as openSync5, readFileSync as readFileSync24, realpathSync as realpathSync6, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename5, dirname as dirname15, extname, isAbsolute as isAbsolute4, join as join34, relative as relative2, resolve as resolve5, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
@@ -63635,14 +63674,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash8("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash9("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash8("sha256").update(bytes).digest("hex");
+  return createHash9("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -64187,7 +64226,7 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash9("sha256").update(bytes).digest("hex");
+  return createHash10("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -64195,14 +64234,14 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let coreBundleSha256 = null;
   try {
     if (typeof argv[1] === "string" && isAbsolute4(argv[1])) {
-      executedEntrypointPath = realpathSync5(argv[1]);
+      executedEntrypointPath = realpathSync6(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync5(fileURLToPath3(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync6(fileURLToPath3(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -64219,7 +64258,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 var proofWorkerStartup = captureProofWorkerStartup();
 function realpathOrSelf(path) {
   try {
-    return realpathSync5(path);
+    return realpathSync6(path);
   } catch {
     return path;
   }
@@ -64227,7 +64266,7 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync5(candidateRoot);
+    root = realpathSync6(candidateRoot);
   } catch {
     return null;
   }
@@ -64236,7 +64275,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   let arg;
   try {
-    arg = realpathSync5(authorityArg);
+    arg = realpathSync6(authorityArg);
   } catch {
     return null;
   }
@@ -64284,7 +64323,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     if (!value || !isAbsolute4(value))
       return value ? null : "";
     try {
-      return realpathSync5(value);
+      return realpathSync6(value);
     } catch {
       return null;
     }
@@ -64306,7 +64345,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync5(candidateRoot);
+    const root = realpathSync6(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -64319,7 +64358,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync5(artifactPath);
+      const resolvedArtifactPath = realpathSync6(artifactPath);
       const artifactRelativePath = relative2(root, resolvedArtifactPath).split(sep5).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
@@ -64339,7 +64378,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync5(resolve5(candidateRoot));
+  const root = realpathSync6(resolve5(candidateRoot));
   const sha = execFileSync9("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -64416,7 +64455,7 @@ function readProofActionIdentity(appProjectRoot, actionId) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash9("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash10("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
@@ -65394,7 +65433,7 @@ function createProofCaptureHandler(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir10 } from "node:os";
@@ -65437,7 +65476,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash10("sha256");
+  const hash = createHash11("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -67437,7 +67476,7 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { execFileSync as execFileSync11 } from "node:child_process";
 import { closeSync as closeSync6, existsSync as existsSync30, mkdirSync as mkdirSync16, openSync as openSync6, readFileSync as readFileSync26, statSync as statSync10, unlinkSync as unlinkSync10, writeFileSync as writeFileSync16, writeSync as writeSync2 } from "node:fs";
 import { tmpdir as tmpdir11, userInfo as userInfo2 } from "node:os";
@@ -67485,7 +67524,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash11("md5").update(resolve6(projectRoot)).digest("hex").slice(0, 8);
+  return createHash12("md5").update(resolve6(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -68323,8 +68362,8 @@ init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
-import { createHash as createHash12 } from "node:crypto";
-import { lstatSync as lstatSync9, readFileSync as readFileSync29, readdirSync as readdirSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync6, statSync as statSync11 } from "node:fs";
+import { createHash as createHash13 } from "node:crypto";
+import { lstatSync as lstatSync9, readFileSync as readFileSync29, readdirSync as readdirSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync7, statSync as statSync11 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join41, relative as relative3 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
@@ -68343,7 +68382,7 @@ function runBuffer(command, args) {
   });
 }
 function digest(parts) {
-  const hash = createHash12("sha256");
+  const hash = createHash13("sha256");
   for (const part of parts) {
     hash.update(`${part.byteLength}:`);
     hash.update(part);
@@ -68464,7 +68503,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync9;
     const readLink = dependencies.readLink ?? readlinkSync2;
-    const realpath = dependencies.realpath ?? realpathSync6;
+    const realpath = dependencies.realpath ?? realpathSync7;
     const artifactParts = [];
     for (const entry of files) {
       const path = join41(appPath, entry);
@@ -70043,7 +70082,7 @@ import { readFileSync as readFileSync33 } from "node:fs";
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname18, join as join46 } from "node:path";
 import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync31, readdirSync as readdirSync11, existsSync as existsSync33 } from "node:fs";
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
   return join46(projectRoot, ".rn-agent", "e2e");
@@ -70075,7 +70114,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash13("sha256").update(s).digest("hex");
+  return createHash14("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -71672,6 +71711,7 @@ function exposeNativeProcessHandle(child, handle) {
           if (args.length !== 1 || args[0] !== deliveredSpawnError) {
             throw descendantError();
           }
+          slot.exposed = null;
         });
       } else {
         slot.exposed = null;
@@ -74376,7 +74416,7 @@ init_authority_gate();
 init_discovery();
 init_metro_cwd();
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
@@ -74411,12 +74451,12 @@ init_process_birth();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash14, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
+import { createHash as createHash15, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { closeSync as closeSync8, existsSync as existsSync36, lstatSync as lstatSync11, openSync as openSync8, readdirSync as readdirSync14, readFileSync as readFileSync37, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync7 } from "node:fs";
+import { closeSync as closeSync8, existsSync as existsSync36, lstatSync as lstatSync11, openSync as openSync8, readdirSync as readdirSync14, readFileSync as readFileSync37, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync8 } from "node:fs";
 import { dirname as dirname20, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve8 } from "node:path";
 function digest2(parts) {
-  const hash = createHash14("sha256");
+  const hash = createHash15("sha256");
   for (const part of parts) {
     hash.update(part);
     hash.update("\0");
@@ -74511,7 +74551,7 @@ function fileDigest(path) {
   if (!stat2.isFile() || stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
   }
-  const hash = createHash14("sha256");
+  const hash = createHash15("sha256");
   const descriptor = openSync8(path, "r");
   const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(stat2.size, 1)));
   try {
@@ -74545,7 +74585,7 @@ function updateDependencyPath(hash, path, label, state) {
     updateFramed(hash, String(stat2.mode & 511));
     if (stat2.isSymbolicLink()) {
       const link = readlinkSync3(current.path);
-      const target = realpathSync7(current.path);
+      const target = realpathSync8(current.path);
       state.totalBytes += Buffer.byteLength(link);
       if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
         throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
@@ -74561,7 +74601,7 @@ function updateDependencyPath(hash, path, label, state) {
       continue;
     }
     if (stat2.isDirectory()) {
-      const canonical = realpathSync7(current.path);
+      const canonical = realpathSync8(current.path);
       if (state.visitedDirectories.has(canonical)) {
         updateFramed(hash, "directory-reference");
         updateFramed(hash, canonical);
@@ -74626,13 +74666,19 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     metroInstanceId: receipt2.metroInstanceId,
     contentRoot: receipt2.contentRoot,
     appRoot: receipt2.appRoot,
+    runtimeEnforcement: receipt2.runtimeEnforcement,
+    runtimeManifest: receipt2.runtimeManifest,
     runtimeInputs: receipt2.runtimeInputs,
     violations: receipt2.violations
   };
   const expected = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
   const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual7(observed, expected)) {
+  const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual7(observed, expected)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
+  }
+  if (receipt2.runtimeEnforcement !== "os-enforced-v1") {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable");
   }
   if (receipt2.violations.length > 0) {
     throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
@@ -74778,7 +74824,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
     }
   }
-  const observedSemanticDigests = new Set([...runtimeSemantics].map((value) => createHash14("sha256").update(value).digest("hex")));
+  const observedSemanticDigests = new Set([...runtimeSemantics].map((value) => createHash15("sha256").update(value).digest("hex")));
   for (const semantics of descendantSemanticDigests) {
     if (!observedSemanticDigests.has(semantics)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
@@ -74788,7 +74834,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     if (load.kind === "violation") {
       throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
     }
-    const candidate = realpathSync7(load.value);
+    const candidate = realpathSync8(load.value);
     if (fileDigest(candidate) !== load.digest) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution");
     }
@@ -74796,7 +74842,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   }
   return {
     paths: [...runtimeInputs].sort().flatMap((entry) => {
-      const candidate = realpathSync7(entry);
+      const candidate = realpathSync8(entry);
       return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
     }),
     semantics: orderedRuntimeSemantics
@@ -74912,7 +74958,7 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   };
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync7;
+  const canonicalize = dependencies.canonicalize ?? realpathSync8;
   const appRoot = canonicalize(resolve8(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
@@ -74978,7 +75024,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
     }
   }
-  const dirtyHash = createHash14("sha256");
+  const dirtyHash = createHash15("sha256");
   updateFramed(dirtyHash, "git-dirty-v3");
   updateFramed(dirtyHash, diff);
   for (const semantics of runtimeInputs.semantics) {
@@ -75013,7 +75059,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       continue;
     }
     if (stat2.isSymbolicLink()) {
-      const target = realpathSync7(file);
+      const target = realpathSync8(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
       const link = readlinkSync3(file);
       const targetStat = lstatSync11(target);
@@ -75085,7 +75131,7 @@ async function proveTargetDeviceAssociations(input, dependencies) {
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 function identity(value) {
-  return createHash15("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash16("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -75582,7 +75628,7 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
-      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash16("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash17("sha256").update(runner.capability).digest("hex") : void 0,
       runnerPort: runner?.port,
       runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
       deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -76488,7 +76534,7 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash16("sha256").update(errorBytes).digest("hex"),
+    errorSha256: createHash17("sha256").update(errorBytes).digest("hex"),
     device: identity2.device,
     runtime: identity2.runtime
   };

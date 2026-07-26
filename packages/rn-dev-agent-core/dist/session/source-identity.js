@@ -228,6 +228,8 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         metroInstanceId: receipt.metroInstanceId,
         contentRoot: receipt.contentRoot,
         appRoot: receipt.appRoot,
+        runtimeEnforcement: receipt.runtimeEnforcement,
+        runtimeManifest: receipt.runtimeManifest,
         runtimeInputs: receipt.runtimeInputs,
         violations: receipt.violations,
     };
@@ -235,19 +237,47 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         .update(canonicalAuthorityJson(payload))
         .digest();
     const observed = typeof receipt.signature === 'string' ? Buffer.from(receipt.signature, 'hex') : Buffer.alloc(0);
+    const runtimeManifest = receipt.runtimeManifest && typeof receipt.runtimeManifest === 'object'
+        ? receipt.runtimeManifest
+        : null;
     if (receipt.version !== 1 ||
         receipt.runtimeEvidenceAuthority !== authority.evidenceAuthority ||
         receipt.sessionId !== authority.sessionId ||
         receipt.metroInstanceId !== authority.metroInstanceId ||
         receipt.contentRoot !== identity.contentRoot ||
         receipt.appRoot !== identity.appRoot ||
+        !runtimeManifest ||
+        runtimeManifest.version !== 1 ||
+        typeof runtimeManifest.executable !== 'string' ||
+        !Array.isArray(runtimeManifest.args) ||
+        runtimeManifest.args.some((entry) => typeof entry !== 'string') ||
+        typeof runtimeManifest.nodeOptions !== 'string' ||
+        typeof runtimeManifest.environmentDigest !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) ||
+        runtimeManifest.contentRoot !== identity.contentRoot ||
+        runtimeManifest.appRoot !== identity.appRoot ||
+        typeof runtimeManifest.servingRoot !== 'string' ||
+        !Number.isSafeInteger(runtimeManifest.buildGeneration) ||
+        !Array.isArray(runtimeManifest.packageInputs) ||
+        runtimeManifest.packageInputs.some((entry) => typeof entry !== 'string') ||
+        !Array.isArray(runtimeManifest.metroConfigInputs) ||
+        runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== 'string') ||
+        !Array.isArray(runtimeManifest.dependencyRoots) ||
+        runtimeManifest.dependencyRoots.some((entry) => typeof entry !== 'string') ||
+        !Array.isArray(runtimeManifest.runtimeInputs) ||
+        runtimeManifest.runtimeInputs.some((entry) => typeof entry !== 'string') ||
         !Array.isArray(receipt.runtimeInputs) ||
         receipt.runtimeInputs.some((entry) => typeof entry !== 'string') ||
+        canonicalAuthorityJson(runtimeManifest.runtimeInputs) !==
+            canonicalAuthorityJson(receipt.runtimeInputs) ||
         !Array.isArray(receipt.violations) ||
         receipt.violations.some((entry) => typeof entry !== 'string') ||
         observed.length !== expected.length ||
         !timingSafeEqual(observed, expected)) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid');
+    }
+    if (receipt.runtimeEnforcement !== 'os-enforced-v1') {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable');
     }
     if (receipt.violations.length > 0) {
         throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt.violations[0]}`);

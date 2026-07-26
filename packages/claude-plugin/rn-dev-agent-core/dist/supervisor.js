@@ -1036,13 +1036,19 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     metroInstanceId: receipt2.metroInstanceId,
     contentRoot: receipt2.contentRoot,
     appRoot: receipt2.appRoot,
+    runtimeEnforcement: receipt2.runtimeEnforcement,
+    runtimeManifest: receipt2.runtimeManifest,
     runtimeInputs: receipt2.runtimeInputs,
     violations: receipt2.violations
   };
   const expected = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
   const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
+  const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
+  }
+  if (receipt2.runtimeEnforcement !== "os-enforced-v1") {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable");
   }
   if (receipt2.violations.length > 0) {
     throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
@@ -22858,8 +22864,8 @@ var init_metro_binding = __esm({
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync10, spawn as spawn4 } from "node:child_process";
-import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync4, existsSync as existsSync19, openSync as openSync4, readFileSync as readFileSync17, rmSync as rmSync7 } from "node:fs";
+import { createHash as createHash9, createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { closeSync as closeSync4, existsSync as existsSync19, openSync as openSync4, readFileSync as readFileSync17, realpathSync as realpathSync5, rmSync as rmSync7 } from "node:fs";
 function parseNodeOptions(value) {
   const tokens = [];
   let token2 = "";
@@ -22953,11 +22959,13 @@ function managementProof(sessionId, authority, signerCapability) {
     runtimeEvidencePath: authority.runtimeEvidencePath,
     runtimeEvidenceSocket: authority.runtimeEvidenceSocket,
     runtimeEvidenceAuthority: authority.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol
+    runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol,
+    servingRoot: authority.servingRoot,
+    buildGeneration: authority.buildGeneration
   })).digest("hex");
 }
 function verifyManagedMetroManagementProof(binding, input) {
-  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== "broker-v2" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "broker-v2" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, {
@@ -22970,7 +22978,9 @@ function verifyManagedMetroManagementProof(binding, input) {
     runtimeEvidencePath: binding.runtimeEvidencePath,
     runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
     runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol
+    runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol,
+    servingRoot: binding.servingRoot,
+    buildGeneration: binding.buildGeneration
   }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
@@ -22988,6 +22998,12 @@ function legacyManagementProof(sessionId, authority, signerCapability) {
     authority.runtimeEvidencePath,
     authority.runtimeEvidenceSocket
   ].join("\0")).digest("hex");
+}
+function brokerV2ManagementProofV1(sessionId, authority, signerCapability) {
+  return createHmac2("sha256", signerCapability).update(canonicalAuthorityJson({
+    sessionId,
+    ...authority
+  })).digest("hex");
 }
 function signalProcessTree(input) {
   if (process.platform === "win32") {
@@ -23085,18 +23101,33 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
     runtimeEvidencePath: binding.runtimeEvidencePath,
     runtimeEvidenceSocket: binding.runtimeEvidenceSocket
   };
-  const expected = binding.runtimeEvidenceAuthority === void 0 ? legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability) : binding.runtimeEvidenceAuthority === "reported-v1" ? createHmac2("sha256", input.signerCapability).update(canonicalAuthorityJson({
-    sessionId: input.sessionId,
-    ...legacyAuthority,
-    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
-  })).digest("hex") : managementProof(input.sessionId, {
-    ...legacyAuthority,
-    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: 2
-  }, input.signerCapability);
-  const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
-  if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual3(expectedBuffer, observedBuffer)) {
+  const expectedProofs = binding.runtimeEvidenceAuthority === void 0 ? [legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)] : binding.runtimeEvidenceAuthority === "reported-v1" ? [
+    createHmac2("sha256", input.signerCapability).update(canonicalAuthorityJson({
+      sessionId: input.sessionId,
+      ...legacyAuthority,
+      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
+    })).digest("hex")
+  ] : [
+    brokerV2ManagementProofV1(input.sessionId, {
+      ...legacyAuthority,
+      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+      runtimeEvidenceProtocol: 2
+    }, input.signerCapability),
+    ...typeof binding.servingRoot === "string" && Number.isSafeInteger(binding.buildGeneration) && binding.buildGeneration >= 0 ? [
+      managementProof(input.sessionId, {
+        ...legacyAuthority,
+        runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+        runtimeEvidenceProtocol: 2,
+        servingRoot: binding.servingRoot,
+        buildGeneration: binding.buildGeneration
+      }, input.signerCapability)
+    ] : []
+  ];
+  if (!expectedProofs.some((expected) => {
+    const expectedBuffer = Buffer.from(expected, "hex");
+    return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+  })) {
     return false;
   }
   const stopped = await stopManagedMetroProcesses({
@@ -23117,8 +23148,8 @@ var init_managed_metro = __esm({
     init_authority_json();
     METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
-const { createHmac } = require('node:crypto');
-const { chmodSync, closeSync, openSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { createHash, createHmac } = require('node:crypto');
+const { chmodSync, closeSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -23224,9 +23255,11 @@ const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
 const contentRoot = process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT;
 const appRoot = process.env.RN_DEV_AGENT_METRO_APP_ROOT;
 const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
-if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource) {
+const runtimeManifestSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST;
+if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource) {
   process.exit(1);
 }
+const runtimeManifest = JSON.parse(runtimeManifestSource);
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -23257,7 +23290,9 @@ function publishPolicy() {
     metroInstanceId,
     contentRoot,
     appRoot,
-    runtimeInputs: [],
+    runtimeEnforcement: 'unsupported',
+    runtimeManifest,
+    runtimeInputs: runtimeManifest.runtimeInputs,
     violations: [...violations],
   };
   const signature = createHmac('sha256', capability)
@@ -23342,29 +23377,20 @@ headServer.once('error', () => process.exit(1));
 headServer.listen(evidenceSocket, () => {
   if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
 });
+const childEnvironment = JSON.parse(childEnvironmentSource);
+const environmentDigest = createHash('sha256')
+  .update(canonicalAuthorityJson(childEnvironment))
+  .digest('hex');
+if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
 appendEvidence({
   version: 1,
   sessionId,
   metroInstanceId,
   kind: 'semantics',
-  value: canonicalAuthorityJson({
-    mode: 'managed-metro',
-    executable,
-    args,
-    nodeOptions: childNodeOptions,
-  }),
+  value: canonicalAuthorityJson(runtimeManifest),
   digest: null,
 });
 publishPolicy();
-const childEnvironment = {
-  ...JSON.parse(childEnvironmentSource),
-  NODE_OPTIONS: childNodeOptions,
-  RN_DEV_AGENT_METRO_EVIDENCE_FD: String(evidenceDescriptor),
-  RN_DEV_AGENT_SESSION_ID: sessionId,
-  RN_DEV_AGENT_METRO_INSTANCE_ID: metroInstanceId,
-  RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD,
-  RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS,
-};
 child = spawn(executable, args, {
   cwd: process.cwd(),
   env: childEnvironment,
@@ -23438,7 +23464,26 @@ evidence.on('data', (chunk) => {
         }
         continue;
       }
-      if (payload.kind === 'violation') appendViolation(payload.value);
+      if (payload.kind === 'violation') {
+        appendViolation(payload.value);
+        continue;
+      }
+      if (payload.kind === 'input') {
+        let candidate;
+        let digest;
+        try {
+          candidate = realpathSync(payload.value);
+          digest = createHash('sha256').update(readFileSync(candidate)).digest('hex');
+        } catch {
+          appendViolation('Metro runtime input could not be observed by the broker');
+          continue;
+        }
+        if (!runtimeManifest.runtimeInputs.includes(candidate) || digest !== payload.digest) {
+          appendViolation('Metro runtime input is outside the broker manifest');
+        }
+        continue;
+      }
+      appendViolation('Metro runtime execution is not independently broker-observed');
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -47967,7 +48012,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes9, createHash: createHash18 } = __require("crypto");
+    var { randomBytes: randomBytes9, createHash: createHash19 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -48635,7 +48680,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash18("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash19("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -49004,7 +49049,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash18 } = __require("crypto");
+    var { createHash: createHash19 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -49311,7 +49356,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash18("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash19("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -56090,7 +56135,7 @@ var init_action_state_store = __esm({
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn5 } from "node:child_process";
 import { randomUUID as randomUUID7 } from "node:crypto";
-import { closeSync as closeSync5, constants, existsSync as existsSync24, fstatSync, lstatSync as lstatSync8, mkdtempSync, openSync as openSync5, readFileSync as readFileSync23, realpathSync as realpathSync5, renameSync as renameSync6, rmSync as rmSync10, writeFileSync as writeFileSync13 } from "node:fs";
+import { closeSync as closeSync5, constants, existsSync as existsSync24, fstatSync, lstatSync as lstatSync8, mkdtempSync, openSync as openSync5, readFileSync as readFileSync23, realpathSync as realpathSync6, renameSync as renameSync6, rmSync as rmSync10, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir10 } from "node:os";
 import { join as join32 } from "node:path";
 function sameIdentity(left, right) {
@@ -56318,7 +56363,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
   let currentRealPath;
   try {
     current = lstatSync8(directory.path, { bigint: true });
-    currentRealPath = realpathSync5(directory.path);
+    currentRealPath = realpathSync6(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
@@ -56441,7 +56486,7 @@ function openValidatedDirectory(path, expected) {
     descriptor = openSync5(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync8(path, { bigint: true });
-    const realPath = realpathSync5(path);
+    const realPath = realpathSync6(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
@@ -65540,7 +65585,7 @@ var init_runtime = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile23 } from "node:child_process";
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { existsSync as existsSync29 } from "node:fs";
 import { promisify as promisify25 } from "node:util";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -65688,7 +65733,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash10("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash11("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -65980,7 +66025,7 @@ var init_device_record = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 function canonicalizeProofValue(value) {
   if (Array.isArray(value))
     return value.map(canonicalizeProofValue);
@@ -65992,14 +66037,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash11("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash12("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash11("sha256").update(bytes).digest("hex");
+  return createHash12("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -66521,9 +66566,9 @@ var init_startup_integrity = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash12, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash13, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync11 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync7, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync9, mkdirSync as mkdirSync16, openSync as openSync7, readFileSync as readFileSync26, realpathSync as realpathSync6, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync7, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync9, mkdirSync as mkdirSync16, openSync as openSync7, readFileSync as readFileSync26, realpathSync as realpathSync7, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename5, dirname as dirname17, extname, isAbsolute as isAbsolute5, join as join38, relative as relative3, resolve as resolve8, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
@@ -66548,7 +66593,7 @@ function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   return reasons;
 }
 function hashBytes(bytes) {
-  return createHash12("sha256").update(bytes).digest("hex");
+  return createHash13("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -66556,14 +66601,14 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let coreBundleSha256 = null;
   try {
     if (typeof argv[1] === "string" && isAbsolute5(argv[1])) {
-      executedEntrypointPath = realpathSync6(argv[1]);
+      executedEntrypointPath = realpathSync7(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync6(fileURLToPath3(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync7(fileURLToPath3(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -66579,7 +66624,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 }
 function realpathOrSelf(path) {
   try {
-    return realpathSync6(path);
+    return realpathSync7(path);
   } catch {
     return path;
   }
@@ -66587,7 +66632,7 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync6(candidateRoot);
+    root = realpathSync7(candidateRoot);
   } catch {
     return null;
   }
@@ -66596,7 +66641,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   let arg;
   try {
-    arg = realpathSync6(authorityArg);
+    arg = realpathSync7(authorityArg);
   } catch {
     return null;
   }
@@ -66644,7 +66689,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     if (!value || !isAbsolute5(value))
       return value ? null : "";
     try {
-      return realpathSync6(value);
+      return realpathSync7(value);
     } catch {
       return null;
     }
@@ -66666,7 +66711,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync6(candidateRoot);
+    const root = realpathSync7(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -66679,7 +66724,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync6(artifactPath);
+      const resolvedArtifactPath = realpathSync7(artifactPath);
       const artifactRelativePath = relative3(root, resolvedArtifactPath).split(sep5).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
@@ -66699,7 +66744,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync6(resolve8(candidateRoot));
+  const root = realpathSync7(resolve8(candidateRoot));
   const sha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -66776,7 +66821,7 @@ function readProofActionIdentity(appProjectRoot, actionId) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash12("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash13("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
@@ -67847,7 +67892,7 @@ var init_proof_capture2 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
@@ -67882,7 +67927,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash13("sha256");
+  const hash = createHash14("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -70573,8 +70618,8 @@ var init_metro_events = __esm({
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync13 } from "node:child_process";
-import { createHash as createHash14 } from "node:crypto";
-import { lstatSync as lstatSync11, readFileSync as readFileSync30, readdirSync as readdirSync12, readlinkSync as readlinkSync4, realpathSync as realpathSync7, statSync as statSync12 } from "node:fs";
+import { createHash as createHash15 } from "node:crypto";
+import { lstatSync as lstatSync11, readFileSync as readFileSync30, readdirSync as readdirSync12, readlinkSync as readlinkSync4, realpathSync as realpathSync8, statSync as statSync12 } from "node:fs";
 import { isAbsolute as isAbsolute6, join as join44, relative as relative4 } from "node:path";
 function runText(command, args) {
   return execFileSync13(command, [...args], {
@@ -70593,7 +70638,7 @@ function runBuffer(command, args) {
   });
 }
 function digest2(parts) {
-  const hash = createHash14("sha256");
+  const hash = createHash15("sha256");
   for (const part of parts) {
     hash.update(`${part.byteLength}:`);
     hash.update(part);
@@ -70714,7 +70759,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync11;
     const readLink = dependencies.readLink ?? readlinkSync4;
-    const realpath = dependencies.realpath ?? realpathSync7;
+    const realpath = dependencies.realpath ?? realpathSync8;
     const artifactParts = [];
     for (const entry of files) {
       const path = join44(appPath, entry);
@@ -72348,7 +72393,7 @@ var init_target = __esm({
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname20, join as join49 } from "node:path";
 import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync9, readFileSync as readFileSync32, readdirSync as readdirSync13, existsSync as existsSync34 } from "node:fs";
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join49(projectRoot, ".rn-agent", "e2e");
 }
@@ -72379,7 +72424,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash15("sha256").update(s).digest("hex");
+  return createHash16("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -74031,6 +74076,7 @@ function exposeNativeProcessHandle(child, handle) {
           if (args.length !== 1 || args[0] !== deliveredSpawnError) {
             throw descendantError();
           }
+          slot.exposed = null;
         });
       } else {
         slot.exposed = null;
@@ -76844,9 +76890,9 @@ var init_target_device_authority = __esm({
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 function identity(value) {
-  return createHash16("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash17("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -77249,7 +77295,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash17, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash18, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
 import { readFileSync as readFileSync38, rmSync as rmSync11 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
@@ -77795,7 +77841,7 @@ var init_index = __esm({
           runnerInstanceId: runner?.instanceId,
           runnerPid: runner?.pid,
           runnerProcessBirth: runner?.processBirth,
-          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash17("sha256").update(runner.capability).digest("hex") : void 0,
+          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash18("sha256").update(runner.capability).digest("hex") : void 0,
           runnerPort: runner?.port,
           runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
           deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -78514,7 +78560,7 @@ var init_index = __esm({
           connectedAt: current.connectedAt
         }),
         errorCount: errors.length,
-        errorSha256: createHash17("sha256").update(errorBytes).digest("hex"),
+        errorSha256: createHash18("sha256").update(errorBytes).digest("hex"),
         device: identity2.device,
         runtime: identity2.runtime
       };
@@ -79033,7 +79079,7 @@ init_source_identity();
 // packages/rn-dev-agent-core/dist/session/supervisor-authority.js
 init_process_cleanup();
 init_registry();
-import { createHash as createHash9, randomBytes as randomBytes6, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash10, randomBytes as randomBytes6, randomUUID as randomUUID6 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/shared-knowledge-root.js
 import { cpSync as cpSync2, lstatSync as lstatSync5, readdirSync as readdirSync6, readlinkSync as readlinkSync3, renameSync as renameSync4, rmSync as rmSync8, statSync as statSync6 } from "node:fs";
@@ -79184,7 +79230,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
       metroPort,
       observePort,
       ...adoptionRequired ? {
-        recoveryCapabilityHash: createHash9("sha256").update(recoveryCapability).digest("hex"),
+        recoveryCapabilityHash: createHash10("sha256").update(recoveryCapability).digest("hex"),
         adoptionRequired: {
           sessionId: adoptionRequired.sessionId,
           claimEpoch: adoptionRequired.claimEpoch

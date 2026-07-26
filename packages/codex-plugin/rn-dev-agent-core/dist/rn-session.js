@@ -7570,7 +7570,7 @@ var init_process_birth = __esm({
 // packages/rn-dev-agent-core/dist/session/authority-store.js
 import { chmodSync, lstatSync as lstatSync2, mkdirSync, statSync as statSync2 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname as dirname2 } from "node:path";
+import { dirname as dirname3 } from "node:path";
 function loadAuthoritySqlite() {
   try {
     const sqlite = require2("node:sqlite");
@@ -7651,7 +7651,7 @@ function openAuthorityStore(path, options = {}) {
   }
   let database = null;
   try {
-    assertPrivateDirectory(dirname2(path));
+    assertPrivateDirectory(dirname3(path));
     try {
       const existing = lstatSync2(path);
       if (existing.isSymbolicLink() || !existing.isFile()) {
@@ -7728,7 +7728,7 @@ var init_authority_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/registry.js
-import { createHash as createHash3, randomBytes, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { createHash as createHash4, randomBytes, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 function asSession(row) {
   return row ? row : null;
@@ -7944,7 +7944,7 @@ var init_registry = __esm({
           const row = this.#requireRecoverableSession(session);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
-          const actual = createHash3("sha256").update(capability).digest();
+          const actual = createHash4("sha256").update(capability).digest();
           if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
           }
@@ -8291,7 +8291,7 @@ var init_registry = __esm({
         const now = this.#now();
         const handoffId = randomBytes(16).toString("hex");
         const token2 = randomBytes(32).toString("base64url");
-        const tokenHash = createHash3("sha256").update(token2).digest("hex");
+        const tokenHash = createHash4("sha256").update(token2).digest("hex");
         this.#transaction(() => {
           const current = this.#requireSession(session);
           let targetInstance = input.targetInstance;
@@ -8383,7 +8383,7 @@ var init_registry = __esm({
           throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
         }
         const expected = Buffer.from(handoff.token_hash, "hex");
-        const actual = createHash3("sha256").update(input.token).digest();
+        const actual = createHash4("sha256").update(input.token).digest();
         if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
           throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
         }
@@ -8411,7 +8411,7 @@ var init_registry = __esm({
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
           }
           const expected = Buffer.from(handoff.token_hash, "hex");
-          const actual = Buffer.from(createHash3("sha256").update(input.token).digest("hex"), "hex");
+          const actual = Buffer.from(createHash4("sha256").update(input.token).digest("hex"), "hex");
           if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
           }
@@ -8470,7 +8470,7 @@ var init_registry = __esm({
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff target instance does not match");
           }
           const expected = Buffer.from(handoff.token_hash, "hex");
-          const actual = createHash3("sha256").update(input.token).digest();
+          const actual = createHash4("sha256").update(input.token).digest();
           if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
           }
@@ -8720,7 +8720,7 @@ var init_registry = __esm({
           return null;
         const persisted = JSON.parse(row.receipt_json);
         const probe = persisted.probe;
-        if (!probe || createHash3("sha256").update(probe.capability).digest("hex") !== receipt.runnerCapabilityHash) {
+        if (!probe || createHash4("sha256").update(probe.capability).digest("hex") !== receipt.runnerCapabilityHash) {
           return null;
         }
         return probe;
@@ -8977,7 +8977,7 @@ var init_registry = __esm({
           const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
           if (existing)
             return existing.port;
-          const digest3 = createHash3("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
+          const digest3 = createHash4("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
           const preferred = digest3.readUInt32BE(0) % input.span;
           for (let offset = 0; offset < input.span; offset += 1) {
             const port = input.base + (preferred + offset) % input.span;
@@ -9225,7 +9225,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
         const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
          WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session.sessionId, session.claimEpoch);
-        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash3("sha256").update(runner.capability).digest("hex") : null;
+        const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash4("sha256").update(runner.capability).digest("hex") : null;
         if (device?.platform !== platform || receipt.sessionId !== session.sessionId || receipt.claimEpoch !== session.claimEpoch || receipt.sourceKey !== row.source_key || receipt.worktreeKey !== row.worktree_key || receipt.appRootKey !== row.app_root_key || receipt.deviceId !== device.deviceId || receipt.appId !== device.appId || receipt.installGeneration !== install?.installGeneration || receipt.artifactDigest !== install?.artifactDigest || receipt.runnerInstanceId !== runner?.instanceId || receipt.runnerPid !== runner?.pid || receipt.runnerProcessBirth !== runner?.processBirth || receipt.runnerPort !== runner?.port || receipt.runnerClaim !== runnerClaim?.resource_key || receipt.deviceClaim !== deviceClaim?.resource_key || receipt.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
         }
@@ -9269,8 +9269,8 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session.sessionId, session.claimEpoch, platform);
       }
       #capabilityMatches(expected, actual) {
-        const expectedDigest = createHash3("sha256").update(expected).digest();
-        const actualDigest = createHash3("sha256").update(actual).digest();
+        const expectedDigest = createHash4("sha256").update(expected).digest();
+        const actualDigest = createHash4("sha256").update(actual).digest();
         return timingSafeEqual4(expectedDigest, actualDigest);
       }
       #fenceSession(sessionId, now) {
@@ -9307,7 +9307,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve3) => setTimeout(resolve3, retryDelayMs));
+            await new Promise((resolve4) => setTimeout(resolve4, retryDelayMs));
           }
         }
       }
@@ -9317,7 +9317,7 @@ var init_registry = __esm({
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
 import { readFileSync as readFileSync5, writeFileSync, unlinkSync, mkdirSync as mkdirSync2, renameSync, lstatSync as lstatSync4 } from "node:fs";
-import { join as join5, dirname as dirname4 } from "node:path";
+import { join as join5, dirname as dirname5 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
@@ -9339,7 +9339,7 @@ function readJsonStateFile(path) {
   }
 }
 function writeJsonStateFileAtomic(path, value) {
-  mkdirSync2(dirname4(path), { recursive: true });
+  mkdirSync2(dirname5(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
   writeFileSync(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   renameSync(tmpPath, path);
@@ -9552,9 +9552,9 @@ var init_project_config = __esm({
 
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
 import { join as join12 } from "node:path";
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 function getSessionFilePath() {
-  const projectId = createHash5("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+  const projectId = createHash6("sha256").update(process.cwd()).digest("hex").slice(0, 12);
   return join12(getStateDir(), `session-${projectId}.json`);
 }
 var SESSION_FILE, LEGACY_SESSION_FILE, activeSession;
@@ -10683,9 +10683,9 @@ async function captureMetroBinding(input, dependencies = {}) {
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
-import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync, existsSync as existsSync2, openSync, readFileSync as readFileSync3, rmSync } from "node:fs";
-import { join as join3 } from "node:path";
+import { createHash as createHash3, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { closeSync, existsSync as existsSync2, openSync, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync } from "node:fs";
+import { dirname as dirname2, join as join3, resolve as resolve2 } from "node:path";
 init_process_birth();
 
 // packages/rn-dev-agent-core/dist/session/authority-json.js
@@ -10777,8 +10777,8 @@ function canonicalAuthorityJson(value) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
-const { createHmac } = require('node:crypto');
-const { chmodSync, closeSync, openSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { createHash, createHmac } = require('node:crypto');
+const { chmodSync, closeSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -10884,9 +10884,11 @@ const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
 const contentRoot = process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT;
 const appRoot = process.env.RN_DEV_AGENT_METRO_APP_ROOT;
 const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
-if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource) {
+const runtimeManifestSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST;
+if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource) {
   process.exit(1);
 }
+const runtimeManifest = JSON.parse(runtimeManifestSource);
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -10917,7 +10919,9 @@ function publishPolicy() {
     metroInstanceId,
     contentRoot,
     appRoot,
-    runtimeInputs: [],
+    runtimeEnforcement: 'unsupported',
+    runtimeManifest,
+    runtimeInputs: runtimeManifest.runtimeInputs,
     violations: [...violations],
   };
   const signature = createHmac('sha256', capability)
@@ -11002,29 +11006,20 @@ headServer.once('error', () => process.exit(1));
 headServer.listen(evidenceSocket, () => {
   if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
 });
+const childEnvironment = JSON.parse(childEnvironmentSource);
+const environmentDigest = createHash('sha256')
+  .update(canonicalAuthorityJson(childEnvironment))
+  .digest('hex');
+if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
 appendEvidence({
   version: 1,
   sessionId,
   metroInstanceId,
   kind: 'semantics',
-  value: canonicalAuthorityJson({
-    mode: 'managed-metro',
-    executable,
-    args,
-    nodeOptions: childNodeOptions,
-  }),
+  value: canonicalAuthorityJson(runtimeManifest),
   digest: null,
 });
 publishPolicy();
-const childEnvironment = {
-  ...JSON.parse(childEnvironmentSource),
-  NODE_OPTIONS: childNodeOptions,
-  RN_DEV_AGENT_METRO_EVIDENCE_FD: String(evidenceDescriptor),
-  RN_DEV_AGENT_SESSION_ID: sessionId,
-  RN_DEV_AGENT_METRO_INSTANCE_ID: metroInstanceId,
-  RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD,
-  RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS,
-};
 child = spawn(executable, args, {
   cwd: process.cwd(),
   env: childEnvironment,
@@ -11098,7 +11093,26 @@ evidence.on('data', (chunk) => {
         }
         continue;
       }
-      if (payload.kind === 'violation') appendViolation(payload.value);
+      if (payload.kind === 'violation') {
+        appendViolation(payload.value);
+        continue;
+      }
+      if (payload.kind === 'input') {
+        let candidate;
+        let digest;
+        try {
+          candidate = realpathSync(payload.value);
+          digest = createHash('sha256').update(readFileSync(candidate)).digest('hex');
+        } catch {
+          appendViolation('Metro runtime input could not be observed by the broker');
+          continue;
+        }
+        if (!runtimeManifest.runtimeInputs.includes(candidate) || digest !== payload.digest) {
+          appendViolation('Metro runtime input is outside the broker manifest');
+        }
+        continue;
+      }
+      appendViolation('Metro runtime execution is not independently broker-observed');
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -11263,55 +11277,13 @@ function managementProof(sessionId, authority, signerCapability) {
     runtimeEvidencePath: authority.runtimeEvidencePath,
     runtimeEvidenceSocket: authority.runtimeEvidenceSocket,
     runtimeEvidenceAuthority: authority.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol
+    runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol,
+    servingRoot: authority.servingRoot,
+    buildGeneration: authority.buildGeneration
   })).digest("hex");
 }
-var METRO_ENVIRONMENT_NAMES = /* @__PURE__ */ new Set([
-  "ANDROID_HOME",
-  "ANDROID_SDK_ROOT",
-  "BABEL_ENV",
-  "CI",
-  "COMSPEC",
-  "DEVELOPER_DIR",
-  "FORCE_COLOR",
-  "HOME",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "JAVA_HOME",
-  "LANG",
-  "LOCALAPPDATA",
-  "LOGNAME",
-  "NO_COLOR",
-  "NO_PROXY",
-  "NODE_ENV",
-  "PATH",
-  "PATHEXT",
-  "SHELL",
-  "SYSTEMROOT",
-  "TEMP",
-  "TERM",
-  "TMP",
-  "TMPDIR",
-  "USER",
-  "USERPROFILE",
-  "WINDIR",
-  "XDG_CACHE_HOME",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy"
-]);
-var METRO_ENVIRONMENT_PREFIXES = [
-  "EXPO_",
-  "LC_",
-  "REACT_NATIVE_",
-  "RCT_",
-  "WATCHMAN_",
-  "XCODE_"
-];
 function managedMetroChildEnvironment(environment) {
-  return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== void 0 && !name.startsWith("RN_DEV_AGENT_") && (METRO_ENVIRONMENT_NAMES.has(name) || METRO_ENVIRONMENT_PREFIXES.some((prefix) => name.startsWith(prefix)))));
+  return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== void 0 && !name.startsWith("RN_DEV_AGENT_")));
 }
 function legacyManagementProof(sessionId, authority, signerCapability) {
   return createHmac3("sha256", signerCapability).update([
@@ -11326,11 +11298,48 @@ function legacyManagementProof(sessionId, authority, signerCapability) {
     authority.runtimeEvidenceSocket
   ].join("\0")).digest("hex");
 }
+function brokerV2ManagementProofV1(sessionId, authority, signerCapability) {
+  return createHmac3("sha256", signerCapability).update(canonicalAuthorityJson({
+    sessionId,
+    ...authority
+  })).digest("hex");
+}
+function dependencyRoots(appRoot, sourceRoot, exists) {
+  const roots = /* @__PURE__ */ new Set();
+  for (const start of [resolve2(appRoot), resolve2(sourceRoot)]) {
+    let current = start;
+    while (true) {
+      const candidate = join3(current, "node_modules");
+      if (exists(candidate))
+        roots.add(candidate);
+      const parent = dirname2(current);
+      if (parent === current)
+        break;
+      current = parent;
+    }
+  }
+  for (const candidate of [
+    join3(sourceRoot, ".yarn", "cache"),
+    join3(sourceRoot, ".yarn", "unplugged"),
+    join3(sourceRoot, ".pnpm")
+  ]) {
+    if (exists(candidate))
+      roots.add(resolve2(candidate));
+  }
+  return [...roots].sort();
+}
+function canonicalRuntimeInput(path) {
+  try {
+    return realpathSync3(path);
+  } catch {
+    return resolve2(path);
+  }
+}
 async function stopSpawnedProcessGroup(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
   let signalFailed = false;
   try {
     signalTree({
@@ -11371,14 +11380,53 @@ async function startManagedMetro(input, dependencies = {}) {
   const runtimeEvidenceEndpointId = createHmac3("sha256", input.signerCapability).update(`metro-runtime-evidence\0${instanceId}`).digest("hex").slice(0, 32);
   const runtimeEvidenceSocket = process.platform === "win32" ? `\\\\.\\pipe\\rn-dev-agent-${runtimeEvidenceEndpointId}` : `/tmp/rn-dev-agent-${runtimeEvidenceEndpointId}.sock`;
   const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`].filter(Boolean).join(" ");
+  const metroArgs = [...command.args, "--port", String(input.port)];
+  const metroEnvironment = managedMetroChildEnvironment({
+    ...process.env,
+    RCT_METRO_PORT: String(input.port)
+  });
+  const childEnvironment = {
+    ...metroEnvironment,
+    NODE_OPTIONS: authorityNodeOptions,
+    RN_DEV_AGENT_METRO_EVIDENCE_FD: "9",
+    RN_DEV_AGENT_SESSION_ID: input.sessionId,
+    RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
+    RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
+    RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions
+  };
+  const exists = dependencies.exists ?? existsSync2;
+  const packageInputs = [canonicalRuntimeInput(join3(input.appRoot, "package.json"))];
+  const metroConfigInputs = ["metro.config.js", "metro.config.cjs"].map((name) => join3(input.appRoot, name)).filter(exists).map(canonicalRuntimeInput);
+  const resolvedDependencyRoots = dependencyRoots(input.appRoot, input.sourceRoot, exists).map(canonicalRuntimeInput);
+  const runtimeInputs = [
+    canonicalRuntimeInput(command.executable),
+    canonicalRuntimeInput(authorityPreload),
+    ...packageInputs,
+    ...metroConfigInputs,
+    ...resolvedDependencyRoots
+  ].filter((value, index, entries) => entries.indexOf(value) === index);
+  const runtimeManifest = {
+    version: 1,
+    executable: canonicalRuntimeInput(command.executable),
+    args: metroArgs,
+    nodeOptions: authorityNodeOptions,
+    environmentDigest: createHash3("sha256").update(canonicalAuthorityJson(childEnvironment)).digest("hex"),
+    contentRoot: resolve2(input.sourceRoot),
+    appRoot: resolve2(input.appRoot),
+    servingRoot: resolve2(input.sourceRoot),
+    buildGeneration: input.buildGeneration,
+    packageInputs,
+    metroConfigInputs,
+    dependencyRoots: resolvedDependencyRoots,
+    runtimeInputs
+  };
   const log = openSync(join3(input.runtimeRoot, "metro.log"), "a", 384);
-  const metroEnvironment = managedMetroChildEnvironment(process.env);
   const child = (dependencies.spawnProcess ?? spawn)(process.execPath, ["-e", METRO_LAUNCHER_SOURCE], {
     cwd: input.appRoot,
     env: {
       ...metroEnvironment,
       RN_DEV_AGENT_METRO_EXECUTABLE: command.executable,
-      RN_DEV_AGENT_METRO_ARGS: JSON.stringify([...command.args, "--port", String(input.port)]),
+      RN_DEV_AGENT_METRO_ARGS: JSON.stringify(metroArgs),
       RN_DEV_AGENT_SESSION_ID: input.sessionId,
       RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
       RN_DEV_AGENT_METRO_POLICY_CAPABILITY: runtimePolicyCapability,
@@ -11389,7 +11437,8 @@ async function startManagedMetro(input, dependencies = {}) {
       RN_DEV_AGENT_METRO_RUNTIME_POLICY: runtimePolicyPath,
       RN_DEV_AGENT_METRO_CONTENT_ROOT: input.sourceRoot,
       RN_DEV_AGENT_METRO_APP_ROOT: input.appRoot,
-      RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT: JSON.stringify(metroEnvironment),
+      RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT: JSON.stringify(childEnvironment),
+      RN_DEV_AGENT_METRO_RUNTIME_MANIFEST: canonicalAuthorityJson(runtimeManifest),
       RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS: authorityNodeOptions,
       NODE_OPTIONS: baseNodeOptions
     },
@@ -11417,7 +11466,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
   const deadline = Date.now() + 2e4;
   let lastError = null;
   let listenerIdentity = null;
@@ -11509,7 +11558,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve3) => setTimeout(resolve3, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -11567,18 +11616,33 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
     runtimeEvidencePath: binding.runtimeEvidencePath,
     runtimeEvidenceSocket: binding.runtimeEvidenceSocket
   };
-  const expected = binding.runtimeEvidenceAuthority === void 0 ? legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability) : binding.runtimeEvidenceAuthority === "reported-v1" ? createHmac3("sha256", input.signerCapability).update(canonicalAuthorityJson({
-    sessionId: input.sessionId,
-    ...legacyAuthority,
-    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
-  })).digest("hex") : managementProof(input.sessionId, {
-    ...legacyAuthority,
-    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
-    runtimeEvidenceProtocol: 2
-  }, input.signerCapability);
-  const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
-  if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual3(expectedBuffer, observedBuffer)) {
+  const expectedProofs = binding.runtimeEvidenceAuthority === void 0 ? [legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)] : binding.runtimeEvidenceAuthority === "reported-v1" ? [
+    createHmac3("sha256", input.signerCapability).update(canonicalAuthorityJson({
+      sessionId: input.sessionId,
+      ...legacyAuthority,
+      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
+    })).digest("hex")
+  ] : [
+    brokerV2ManagementProofV1(input.sessionId, {
+      ...legacyAuthority,
+      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+      runtimeEvidenceProtocol: 2
+    }, input.signerCapability),
+    ...typeof binding.servingRoot === "string" && Number.isSafeInteger(binding.buildGeneration) && binding.buildGeneration >= 0 ? [
+      managementProof(input.sessionId, {
+        ...legacyAuthority,
+        runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+        runtimeEvidenceProtocol: 2,
+        servingRoot: binding.servingRoot,
+        buildGeneration: binding.buildGeneration
+      }, input.signerCapability)
+    ] : []
+  ];
+  if (!expectedProofs.some((expected) => {
+    const expectedBuffer = Buffer.from(expected, "hex");
+    return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+  })) {
     return false;
   }
   const stopped = await stopManagedMetroProcesses({
@@ -11622,12 +11686,12 @@ function inspectSessionOwner(owner, dependencies = {}) {
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash4, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { createHash as createHash5, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { closeSync as closeSync2, existsSync as existsSync3, lstatSync as lstatSync3, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync4, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve2 } from "node:path";
+import { closeSync as closeSync2, existsSync as existsSync3, lstatSync as lstatSync3, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync4, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve3 } from "node:path";
 function digest2(parts) {
-  const hash = createHash4("sha256");
+  const hash = createHash5("sha256");
   for (const part of parts) {
     hash.update(part);
     hash.update("\0");
@@ -11702,11 +11766,11 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
     throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
   }
-  const contentRoot = canonicalize(resolve2(dependencies.declaredRoot));
+  const contentRoot = canonicalize(resolve3(dependencies.declaredRoot));
   assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
   const manifestParts = [];
   for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve2(contentRoot, entry));
+    const manifest = canonicalize(resolve3(contentRoot, entry));
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
     manifestParts.push(relative2(contentRoot, manifest), readFileSync4(manifest));
   }
@@ -11724,8 +11788,8 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   };
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
-  const appRoot = canonicalize(resolve2(inputRoot));
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
+  const appRoot = canonicalize(resolve3(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
     const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
@@ -11845,7 +11909,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync3, constants, existsSync as existsSync4, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync3, readFileSync as readFileSync7, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync3, constants, existsSync as existsSync4, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync3, readFileSync as readFileSync7, realpathSync as realpathSync5, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -13131,7 +13195,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
   let currentRealPath;
   try {
     current = lstatSync6(directory.path, { bigint: true });
-    currentRealPath = realpathSync4(directory.path);
+    currentRealPath = realpathSync5(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
@@ -13254,7 +13318,7 @@ function openValidatedDirectory(path, expected) {
     descriptor = openSync3(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
     const opened = fstatSync(descriptor, { bigint: true });
     const after = lstatSync6(path, { bigint: true });
-    const realPath = realpathSync4(path);
+    const realPath = realpathSync5(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
@@ -13645,7 +13709,7 @@ async function waitForExactStopped(probe, deadlineMs, code, message) {
     if (Date.now() >= deadlineMs) {
       throw new SessionAuthorityError(code, message);
     }
-    await new Promise((resolve3) => setTimeout(resolve3, 25));
+    await new Promise((resolve4) => setTimeout(resolve4, 25));
   }
 }
 async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request = fetch) {
