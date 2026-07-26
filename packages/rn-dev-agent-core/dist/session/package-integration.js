@@ -115,6 +115,35 @@ if (descendantNonce) {
   } else {
     recordLoaderViolation('Metro descendant execution semantics are unavailable');
   }
+  if (workerThreads.isMainThread) {
+    const descendantLifecycleContext = lifecycleContext(
+      'descendant-lifecycle',
+      descendantNonce,
+    );
+    let processDisconnectImplementation =
+      typeof process.disconnect === 'function' ? process.disconnect : undefined;
+    const authenticatedProcessDisconnect = function () {
+      return authenticatedLifecycleResult(
+        descendantLifecycleContext,
+        'disconnect',
+        undefined,
+        () => Reflect.apply(processDisconnectImplementation, this, []),
+      );
+    };
+    Object.defineProperty(process, 'disconnect', {
+      configurable: false,
+      enumerable: true,
+      get() {
+        return processDisconnectImplementation
+          ? authenticatedProcessDisconnect
+          : undefined;
+      },
+      set(value) {
+        if (typeof value !== 'function') throw descendantError();
+        processDisconnectImplementation = value;
+      },
+    });
+  }
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
 }
@@ -550,7 +579,25 @@ function installMessageFences() {
     },
     writable: false,
   });
+  const originalChildKill = childPrototype.kill;
   const originalProcessKill = process.kill;
+  const normalizeChildSignal = (signal) => {
+    let normalizedSignal;
+    Reflect.apply(
+      originalChildKill,
+      {
+        _handle: {
+          kill(value) {
+            normalizedSignal = value;
+            return 0;
+          },
+        },
+        killed: false,
+      },
+      [signal],
+    );
+    return normalizedSignal;
+  };
   Object.defineProperty(childPrototype, 'kill', {
     configurable: false,
     enumerable: true,
@@ -561,13 +608,12 @@ function installMessageFences() {
         'kill',
         signal,
         (authenticatedSignal) => {
+          const normalizedSignal = normalizeChildSignal(authenticatedSignal);
+          if (processLifecycleTargets.get(target.pid) !== target) return false;
           try {
-            if (processLifecycleTargets.get(target?.pid) !== target) {
-              throw descendantError();
-            }
             const result = Reflect.apply(originalProcessKill, process, [
               target.pid,
-              authenticatedSignal,
+              normalizedSignal,
             ]);
             if (result) this.killed = true;
             return result;
