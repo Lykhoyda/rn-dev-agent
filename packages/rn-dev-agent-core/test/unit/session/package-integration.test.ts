@@ -447,7 +447,7 @@ test('Metro preload records child-process and worker-thread module loads', () =>
       process.execPath,
       [
         '-e',
-        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const { spawnSync } = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); const child = spawnSync(process.execPath, ['-e', ${JSON.stringify(`require(${JSON.stringify(childModule)})`)}], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const { Worker } = require('node:worker_threads'); const worker = new Worker(${JSON.stringify(`require(${JSON.stringify(threadModule)})`)}, { eval: true }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); const child = childProcess.spawnSync(process.execPath, ['-e', ${JSON.stringify(`require(${JSON.stringify(childModule)})`)}], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const workerThreads = require('node:worker_threads'); const worker = new workerThreads.Worker(${JSON.stringify(`require(${JSON.stringify(threadModule)})`)}, { eval: true, execArgv: [] }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
       ],
       {
         cwd: root,
@@ -475,6 +475,14 @@ test('Metro preload records child-process and worker-thread module loads', () =>
         (entry) => entry.kind === 'input' && entry.value === realpathSync(threadModule),
       ),
     );
+    const launches = new Set(
+      observations.filter((entry) => entry.kind === 'launch').map((entry) => entry.value),
+    );
+    const attestations = new Set(
+      observations.filter((entry) => entry.kind === 'attestation').map((entry) => entry.value),
+    );
+    assert.equal(launches.size, 2);
+    assert.deepEqual(launches, attestations);
   } finally {
     rmSync(root, { force: true, recursive: true });
     rmSync(external, { force: true, recursive: true });

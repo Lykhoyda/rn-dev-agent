@@ -70341,17 +70341,24 @@ function renderMetroIntegrationAdapter() {
   return `'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { createHash, createHmac } = require('node:crypto');
+const { createHash, createHmac, randomBytes } = require('node:crypto');
 const childProcess = require('node:child_process');
 const { execFileSync } = childProcess;
 const moduleApi = require('node:module');
 const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
+const workerThreads = require('node:worker_threads');
 ${parseNodeOptions.toString()}
 ${hasNodeLoaderOption.toString()}
 const accumulatedRuntimeInputs = new Set();
 const accumulatedViolations = new Set();
 const observedLoaderDigests = new Map();
+const metroPolicyCapability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+const authorityEnvironment = Object.entries(process.env).filter(
+  ([key]) =>
+    (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE',
+);
 let cachedSourceRoot;
 let sourceRootResolved = false;
 let lastPolicyPayload;
@@ -70370,16 +70377,17 @@ process.once('exit', () => {
   if (runtimeLoadsDescriptor !== undefined) fs.closeSync(runtimeLoadsDescriptor);
 });
 function persistLoaderObservation(kind, value, digest = null) {
-  const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
   const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
   const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
-  if (!capability || !sessionId || !metroInstanceId || !loadsPath) return;
+  if (!metroPolicyCapability || !sessionId || !metroInstanceId || !loadsPath) return;
   const payload = { version: 1, sessionId, metroInstanceId, kind, value, digest };
   const serializedPayload = JSON.stringify(payload);
   const receipt = {
     ...payload,
-    signature: createHmac('sha256', capability).update(serializedPayload).digest('hex'),
+    signature: createHmac('sha256', metroPolicyCapability)
+      .update(serializedPayload)
+      .digest('hex'),
   };
   writeRuntimeLoad(JSON.stringify(receipt) + '\\n', loadsPath);
 }
@@ -70389,10 +70397,16 @@ function recordLoaderViolation(value) {
   loaderEpoch += 1;
   persistLoaderObservation('violation', value);
 }
-const authorityEnvironment = Object.entries(process.env).filter(
-  ([key]) => key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_'),
-);
-function authenticatedChildEnvironment(environment) {
+const descendantNonce = process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+if (descendantNonce) {
+  const identity = workerThreads.isMainThread
+    ? 'process:' + process.pid
+    : 'worker:' + workerThreads.threadId;
+  persistLoaderObservation('attestation', descendantNonce + ':' + identity);
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+}
+if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+function authenticatedChildEnvironment(environment, nonce) {
   const nextEnvironment = {};
   for (const [key, value] of Object.entries(environment || process.env)) {
     const normalizedKey = key.toUpperCase();
@@ -70400,15 +70414,16 @@ function authenticatedChildEnvironment(environment) {
     nextEnvironment[key] = value;
   }
   for (const [key, value] of authorityEnvironment) nextEnvironment[key] = value;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   return nextEnvironment;
 }
-function authenticatedChildArguments(args, optionsIndex) {
+function authenticatedChildArguments(args, optionsIndex, nonce) {
   const nextArgs = [...args];
   const candidate = nextArgs[optionsIndex];
   const options = candidate && typeof candidate === 'object' ? candidate : {};
   const authenticatedOptions = {
     ...options,
-    env: authenticatedChildEnvironment(options.env),
+    env: authenticatedChildEnvironment(options.env, nonce),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -70417,15 +70432,92 @@ function authenticatedChildArguments(args, optionsIndex) {
   }
   return nextArgs;
 }
-function fenceChildProcessMethod(name, optionsIndex) {
+function descendantError() {
+  const error = new Error('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION');
+  error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
+  return error;
+}
+if (typeof process.execve === 'function') {
+  Object.defineProperty(process, 'execve', {
+    configurable: false,
+    enumerable: true,
+    value() {
+      throw descendantError();
+    },
+    writable: false,
+  });
+}
+const nodeExecutable = fs.realpathSync(process.execPath);
+function requireNodeExecutable(command, options) {
+  if (options.shell) throw descendantError();
+  try {
+    if (typeof command !== 'string' || fs.realpathSync(command) !== nodeExecutable) {
+      throw descendantError();
+    }
+  } catch (error) {
+    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
+    throw descendantError();
+  }
+}
+function recordChildLaunch(nonce, child) {
+  if (!child || typeof child.pid !== 'number') return;
+  persistLoaderObservation('launch', nonce + ':process:' + child.pid);
+}
+function fenceChildProcessMethod(name, optionsIndex, mode) {
   const original = childProcess[name];
   Object.defineProperty(childProcess, name, {
     configurable: false,
     enumerable: true,
     value(...args) {
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
-      return Reflect.apply(original, this, authenticatedChildArguments(args, index));
+      const nonce = randomBytes(16).toString('hex');
+      const authenticatedArgs = authenticatedChildArguments(args, index, nonce);
+      const options = authenticatedArgs[index];
+      if (mode === 'node' || mode === 'sync') requireNodeExecutable(args[0], options);
+      if (mode === 'fork') {
+        if (options.execPath) requireNodeExecutable(options.execPath, options);
+        options.execPath = nodeExecutable;
+      }
+      const child = Reflect.apply(original, this, authenticatedArgs);
+      if (mode === 'sync') {
+        recordChildLaunch(nonce, child);
+      } else if (typeof child?.once === 'function') {
+        child.once('spawn', () => recordChildLaunch(nonce, child));
+      }
+      return child;
     },
+    writable: false,
+  });
+}
+function rejectChildProcessMethod(name) {
+  Object.defineProperty(childProcess, name, {
+    configurable: false,
+    enumerable: true,
+    value() {
+      throw descendantError();
+    },
+    writable: false,
+  });
+}
+function fenceWorkers() {
+  const OriginalWorker = workerThreads.Worker;
+  const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
+  class AuthenticatedWorker extends OriginalWorker {
+    constructor(filename, options = {}) {
+      const nonce = randomBytes(16).toString('hex');
+      const requestedExecArgv = Array.isArray(options.execArgv) ? options.execArgv : [];
+      super(filename, {
+        ...options,
+        env: authenticatedChildEnvironment(options.env, nonce),
+        execArgv: [...requestedExecArgv, '--require', authorityPreload],
+      });
+      persistLoaderObservation('launch', nonce + ':worker:' + this.threadId);
+    }
+  }
+  Object.defineProperty(workerThreads, 'Worker', {
+    configurable: false,
+    enumerable: true,
+    value: AuthenticatedWorker,
     writable: false,
   });
 }
@@ -70433,16 +70525,17 @@ const optionalArgsIndex = (args) => (Array.isArray(args[1]) ? 2 : 1);
 const canAuthenticateChildProcesses =
   Boolean(process.env.NODE_OPTIONS) &&
   Boolean(process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD) &&
-  Boolean(process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY) &&
+  Boolean(metroPolicyCapability) &&
   Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS);
 if (canAuthenticateChildProcesses) {
-  fenceChildProcessMethod('spawn', optionalArgsIndex);
-  fenceChildProcessMethod('spawnSync', optionalArgsIndex);
-  fenceChildProcessMethod('execFile', optionalArgsIndex);
-  fenceChildProcessMethod('execFileSync', optionalArgsIndex);
-  fenceChildProcessMethod('fork', optionalArgsIndex);
-  fenceChildProcessMethod('exec', 1);
-  fenceChildProcessMethod('execSync', 1);
+  fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
+  fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
+  fenceChildProcessMethod('execFile', optionalArgsIndex, 'node');
+  fenceChildProcessMethod('fork', optionalArgsIndex, 'fork');
+  rejectChildProcessMethod('exec');
+  rejectChildProcessMethod('execFileSync');
+  rejectChildProcessMethod('execSync');
+  fenceWorkers();
 }
 const rejectNativeAddonLoad = () => {
   recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');
@@ -70561,10 +70654,9 @@ function sourceRoot() {
 }
 function runtimePolicy(config, callbackRuntimeInputs = []) {
   const root = sourceRoot();
-  const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
   const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
-  if (root === null || !capability || !sessionId || !metroInstanceId) return;
+  if (root === null || !metroPolicyCapability || !sessionId || !metroInstanceId) return;
   const runtimeInputs = new Set();
   const violations = [];
   const excludedRuntimeDirectories = [
@@ -70767,7 +70859,9 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   if (serializedPayload === lastPolicyPayload) return;
   const receipt = {
     ...payload,
-    signature: createHmac('sha256', capability).update(serializedPayload).digest('hex'),
+    signature: createHmac('sha256', metroPolicyCapability)
+      .update(serializedPayload)
+      .digest('hex'),
   };
   const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY)});
   const temporary = policyPath + '.' + process.pid + '.tmp';
@@ -72290,6 +72384,9 @@ function metroRuntimeInputs(identity2, authority) {
     });
   }
   const runtimeLoads = /* @__PURE__ */ new Map();
+  const descendantLaunches = /* @__PURE__ */ new Set();
+  const descendantAttestations = /* @__PURE__ */ new Set();
+  const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
   for (const rawLoad of runtimeLoadsRaw.split("\n").filter(Boolean)) {
     let load;
     try {
@@ -72309,10 +72406,21 @@ function metroRuntimeInputs(identity2, authority) {
     };
     const expectedLoad = createHmac4("sha256", authority.capability).update(JSON.stringify(loadPayload)).digest();
     const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" || typeof load.value !== "string" || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual7(observedLoad, expectedLoad)) {
+    if (load.version !== 1 || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" || typeof load.value !== "string" || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual7(observedLoad, expectedLoad)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
     }
     const key = `${load.kind}\0${load.value}`;
+    runtimeEvidenceKeys.add(key);
+    if (load.kind === "launch" || load.kind === "attestation") {
+      if (!/^[a-f0-9]{32}:(?:process|worker):\d+$/.test(load.value)) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      (load.kind === "launch" ? descendantLaunches : descendantAttestations).add(load.value);
+      if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
+      }
+      continue;
+    }
     const prior = runtimeLoads.get(key);
     if (prior && prior.digest !== load.digest) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed between executions");
@@ -72322,8 +72430,18 @@ function metroRuntimeInputs(identity2, authority) {
       value: load.value,
       digest: load.digest
     });
-    if (runtimeLoads.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+    if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
+    }
+  }
+  for (const launch of descendantLaunches) {
+    if (!descendantAttestations.has(launch)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested");
+    }
+  }
+  for (const attestation of descendantAttestations) {
+    if (!descendantLaunches.has(attestation)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch");
     }
   }
   for (const load of runtimeLoads.values()) {

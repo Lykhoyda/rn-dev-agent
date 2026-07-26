@@ -240,6 +240,9 @@ function metroRuntimeInputs(identity, authority) {
         });
     }
     const runtimeLoads = new Map();
+    const descendantLaunches = new Set();
+    const descendantAttestations = new Set();
+    const runtimeEvidenceKeys = new Set();
     for (const rawLoad of runtimeLoadsRaw.split('\n').filter(Boolean)) {
         let load;
         try {
@@ -265,7 +268,10 @@ function metroRuntimeInputs(identity, authority) {
         if (load.version !== 1 ||
             load.sessionId !== authority.sessionId ||
             load.metroInstanceId !== authority.metroInstanceId ||
-            (load.kind !== 'input' && load.kind !== 'violation') ||
+            (load.kind !== 'input' &&
+                load.kind !== 'violation' &&
+                load.kind !== 'launch' &&
+                load.kind !== 'attestation') ||
             typeof load.value !== 'string' ||
             (load.kind === 'input'
                 ? typeof load.digest !== 'string' || !/^[a-f0-9]{64}$/.test(load.digest)
@@ -275,6 +281,17 @@ function metroRuntimeInputs(identity, authority) {
             throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
         }
         const key = `${load.kind}\0${load.value}`;
+        runtimeEvidenceKeys.add(key);
+        if (load.kind === 'launch' || load.kind === 'attestation') {
+            if (!/^[a-f0-9]{32}:(?:process|worker):\d+$/.test(load.value)) {
+                throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
+            }
+            (load.kind === 'launch' ? descendantLaunches : descendantAttestations).add(load.value);
+            if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+                throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
+            }
+            continue;
+        }
         const prior = runtimeLoads.get(key);
         if (prior && prior.digest !== load.digest) {
             throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed between executions');
@@ -284,8 +301,18 @@ function metroRuntimeInputs(identity, authority) {
             value: load.value,
             digest: load.digest,
         });
-        if (runtimeLoads.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+        if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
             throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
+        }
+    }
+    for (const launch of descendantLaunches) {
+        if (!descendantAttestations.has(launch)) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested');
+        }
+    }
+    for (const attestation of descendantAttestations) {
+        if (!descendantLaunches.has(attestation)) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch');
         }
     }
     for (const load of runtimeLoads.values()) {

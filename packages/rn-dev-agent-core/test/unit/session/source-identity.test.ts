@@ -449,6 +449,37 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   };
 
   const first = strictProofSourceIdentity(identity, { git, metroRuntimePolicy });
+  const signRuntimeLoad = (entry: Record<string, unknown>) =>
+    JSON.stringify({
+      ...entry,
+      signature: createHmac('sha256', capability).update(JSON.stringify(entry)).digest('hex'),
+    });
+  const launchPayload = {
+    version: 1,
+    sessionId: 'session',
+    metroInstanceId: 'metro',
+    kind: 'launch',
+    value: `${'ab'.repeat(16)}:process:123`,
+    digest: null,
+  };
+  const attestationPayload = { ...launchPayload, kind: 'attestation' };
+  writeFileSync(
+    join(integration, 'metro-runtime-loads.jsonl'),
+    `${signRuntimeLoad(runtimeLoadPayload)}\n${signRuntimeLoad(launchPayload)}\n${signRuntimeLoad(attestationPayload)}\n`,
+  );
+  assert.doesNotThrow(() => strictProofSourceIdentity(identity, { git, metroRuntimePolicy }));
+  writeFileSync(
+    join(integration, 'metro-runtime-loads.jsonl'),
+    `${signRuntimeLoad(runtimeLoadPayload)}\n${signRuntimeLoad(launchPayload)}\n`,
+  );
+  assert.throws(
+    () => strictProofSourceIdentity(identity, { git, metroRuntimePolicy }),
+    /descendant execution was not attested/,
+  );
+  writeFileSync(
+    join(integration, 'metro-runtime-loads.jsonl'),
+    `${signRuntimeLoad(runtimeLoadPayload)}\n`,
+  );
   writeFileSync(runtimeFile, 'module.exports = "second";');
   assert.match(first.dirtyDigest, /^[a-f0-9]{64}$/);
   assert.throws(
