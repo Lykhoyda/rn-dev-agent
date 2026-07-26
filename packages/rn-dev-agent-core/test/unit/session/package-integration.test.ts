@@ -616,25 +616,17 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     assert.equal(workerMessageSemantics.length, 4);
     assert.equal(new Set(forkMessageSemantics.map((entry) => entry.recipient)).size, 4);
     assert.equal(new Set(workerMessageSemantics.map((entry) => entry.recipient)).size, 4);
-    assert.equal(
-      new Set(descendantLifecycleSemantics.map((entry) => entry.recipient)).size,
-      2,
-    );
+    assert.equal(new Set(descendantLifecycleSemantics.map((entry) => entry.recipient)).size, 2);
     assert.ok(workerMessageSemantics.every((entry) => entry.sequence === 1));
     assert.ok(
-      [...Map.groupBy(forkMessageSemantics, (entry) => entry.recipient).values()].every(
-        (entries) =>
-          ['1,2,3', '1,2,3,4,5,6'].includes(
-            entries.map((entry) => entry.sequence).join(','),
-          ),
+      [...Map.groupBy(forkMessageSemantics, (entry) => entry.recipient).values()].every((entries) =>
+        ['1,2,3', '1,2,3,4,5,6'].includes(entries.map((entry) => entry.sequence).join(',')),
       ),
     );
     assert.ok(
       [...Map.groupBy(descendantLifecycleSemantics, (entry) => entry.recipient).values()].every(
         (entries) =>
-          ['1,2,3,4', '1,2,3,4,5,6'].includes(
-            entries.map((entry) => entry.sequence).join(','),
-          ),
+          ['1,2,3,4', '1,2,3,4,5,6'].includes(entries.map((entry) => entry.sequence).join(',')),
       ),
     );
     assert.notEqual(syncSemantics[0].invocationDigest, syncSemantics[1].invocationDigest);
@@ -654,9 +646,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
       ),
     );
     assert.ok(
-      lifecycleSemantics.some(
-        (entry) => entry.mode === 'worker-lifecycle' && entry.sequence === 2,
-      ),
+      lifecycleSemantics.some((entry) => entry.mode === 'worker-lifecycle' && entry.sequence === 2),
     );
   } finally {
     if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
@@ -1168,9 +1158,7 @@ test('Metro seals native process handles and IPC read callbacks', () => {
     );
 
     assert.equal(result.status, 0, result.stderr);
-    const policy = JSON.parse(
-      readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
-    );
+    const policy = JSON.parse(readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'));
     assert.equal(policy.runtimeEvidenceAuthority, 'reported-v1');
     assert.ok(policy.violations.includes('watchFolders must be a path'));
     assert.ok(policy.violations.includes('extraNodeModules must be a path'));
@@ -1179,9 +1167,7 @@ test('Metro seals native process handles and IPC read callbacks', () => {
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-    assert.ok(
-      evidence.every((entry) => entry.runtimeEvidenceAuthority === 'reported-v1'),
-    );
+    assert.ok(evidence.every((entry) => entry.runtimeEvidenceAuthority === 'reported-v1'));
     assert.ok(
       evidence.some(
         (entry) =>

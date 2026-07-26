@@ -28,7 +28,7 @@ test('managed Metro rejects every Node loader option alias', () => {
   ]) {
     assert.equal(hasNodeLoaderOption(option), true, option);
   }
-  assert.equal(hasNodeLoaderOption('--trace_warnings --title=\"metro worker\"'), false);
+  assert.equal(hasNodeLoaderOption('--trace_warnings --title="metro worker"'), false);
 });
 
 test('managed Metro rejects unmodeled NODE_OPTIONS inputs', () => {
