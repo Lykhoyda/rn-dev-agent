@@ -781,7 +781,7 @@ var init_process_owner = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash3, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash as createHash3, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { closeSync as closeSync2, existsSync as existsSync4, lstatSync, openSync as openSync2, readdirSync, readFileSync as readFileSync3, readlinkSync, readSync, realpathSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve2 } from "node:path";
@@ -792,6 +792,14 @@ function digest(parts) {
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+function readMetroEvidenceHead(socket, challenge) {
+  return execFileSync3(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
+    encoding: "utf8",
+    maxBuffer: 4096,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3
+  });
 }
 function updateFramed(hash, part) {
   const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
@@ -921,7 +929,7 @@ function assertFinalMetroIntegration(identity2) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
   }
 }
-function metroRuntimeInputs(identity2, authority) {
+function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   if (!authority)
     return [];
   const raw = readFileSync3(join4(identity2.appRoot, METRO_RUNTIME_POLICY), "utf8");
@@ -1013,6 +1021,31 @@ function metroRuntimeInputs(identity2, authority) {
     if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
     }
+  }
+  if (evidenceSequence === 0 || previousEvidenceSignature === null) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");
+  }
+  const challenge = randomBytes(32).toString("hex");
+  let head;
+  try {
+    head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
+  } catch (error2) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is unavailable", {
+      cause: error2
+    });
+  }
+  const headPayload = {
+    version: head.version,
+    sessionId: head.sessionId,
+    metroInstanceId: head.metroInstanceId,
+    challenge: head.challenge,
+    sequence: head.sequence,
+    journalSignature: head.journalSignature
+  };
+  const expectedHead = createHmac("sha256", authority.capability).update(JSON.stringify(headPayload)).digest();
+  const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
+  if (head.version !== 1 || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual(observedHead, expectedHead)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
   }
   for (const launch of descendantLaunches) {
     if (!descendantAttestations.has(launch)) {
@@ -1184,7 +1217,8 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   const git = dependencies.git ?? defaultGit;
   const pathExists = dependencies.exists ?? existsSync4;
   assertFinalMetroIntegration(identity2);
-  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy);
+  const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
+  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader);
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
@@ -1266,7 +1300,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     }
     throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
   }
-  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy);
+  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader);
   if (JSON.stringify(runtimeInputsAfter) !== JSON.stringify(runtimeInputs)) {
     throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
   }
@@ -1279,7 +1313,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     dirtyDigest: dirtyHash.digest("hex")
   };
 }
-var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY;
+var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY, METRO_EVIDENCE_HEAD_CLIENT;
 var init_source_identity = __esm({
   "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
     "use strict";
@@ -1320,6 +1354,21 @@ var init_source_identity = __esm({
 module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
 ${METRO_INTEGRATION_END}`;
     METRO_RUNTIME_POLICY = ".rn-agent/integration/metro-runtime-policy.json";
+    METRO_EVIDENCE_HEAD_CLIENT = String.raw`
+const { createConnection } = require('node:net');
+const socket = createConnection(process.argv[1]);
+let response = '';
+socket.setEncoding('utf8');
+socket.setTimeout(1500);
+socket.once('connect', () => socket.write(process.argv[2] + '\n'));
+socket.on('data', (chunk) => {
+  response += chunk;
+  if (response.length > 4096) process.exit(2);
+});
+socket.once('end', () => process.stdout.write(response));
+socket.once('timeout', () => process.exit(3));
+socket.once('error', () => process.exit(4));
+`;
   }
 });
 
@@ -2411,7 +2460,7 @@ __export(rn_fast_runner_client_exports, {
 });
 import { spawn } from "node:child_process";
 import { join as join8 } from "node:path";
-import { randomBytes, randomUUID as randomUUID2 } from "node:crypto";
+import { randomBytes as randomBytes2, randomUUID as randomUUID2 } from "node:crypto";
 import { existsSync as existsSync7, readdirSync as readdirSync3, mkdirSync as mkdirSync5, rmSync as rmSync2, statSync as statSync3, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
@@ -2681,7 +2730,7 @@ function runnerAuthorityFromEnvironment(required3) {
     instanceId: randomUUID2(),
     sessionId,
     claimEpoch,
-    capability: randomBytes(32).toString("base64url")
+    capability: randomBytes2(32).toString("base64url")
   };
 }
 function buildRunnerAuthorityEnv(authority) {
@@ -14379,7 +14428,7 @@ var init_authority_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/registry.js
-import { createHash as createHash8, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { createHash as createHash8, randomBytes as randomBytes3, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 function shortAuthorityIdentity(value) {
   return createHash8("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
@@ -14642,13 +14691,13 @@ var init_registry = __esm({
           const expiresMs = now + 5 * 6e4;
           const recoveryHandles = {
             handoffRecipient: {
-              token: randomBytes2(32).toString("base64url"),
+              token: randomBytes3(32).toString("base64url"),
               expiresMs,
               workerInstance: worker.instanceId
             },
             ...typeof adoptionRequired?.sessionId === "string" ? {
               adoptStale: {
-                token: randomBytes2(32).toString("base64url"),
+                token: randomBytes3(32).toString("base64url"),
                 expiresMs,
                 priorSessionId: adoptionRequired.sessionId,
                 priorClaimEpoch: adoptionRequired.claimEpoch
@@ -14979,8 +15028,8 @@ var init_registry = __esm({
       }
       prepareHandoff(session, input) {
         const now = this.#now();
-        const handoffId = randomBytes2(16).toString("hex");
-        const token2 = randomBytes2(32).toString("base64url");
+        const handoffId = randomBytes3(16).toString("hex");
+        const token2 = randomBytes3(32).toString("base64url");
         const tokenHash = createHash8("sha256").update(token2).digest("hex");
         this.#transaction(() => {
           const current = this.#requireSession(session);
@@ -21489,7 +21538,7 @@ import { spawn as spawn3, execFile as execFile13 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
 import { writeFileSync as writeFileSync9, existsSync as existsSync17, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
-import { randomBytes as randomBytes3, randomUUID as randomUUID4 } from "node:crypto";
+import { randomBytes as randomBytes4, randomUUID as randomUUID4 } from "node:crypto";
 import { join as join21 } from "node:path";
 function getAndroidRunnerState() {
   return runnerState2;
@@ -21633,7 +21682,7 @@ function androidRunnerAuthority(deviceId, appId) {
     instanceId: randomUUID4(),
     sessionId,
     claimEpoch,
-    capability: randomBytes3(32).toString("base64url"),
+    capability: randomBytes4(32).toString("base64url"),
     deviceId,
     appId
   };
@@ -22708,7 +22757,9 @@ function managementProof(sessionId, authority, signerCapability) {
     authority.birth,
     authority.launcherPid,
     authority.launcherBirth,
-    authority.instanceId
+    authority.instanceId,
+    authority.runtimeEvidencePath,
+    authority.runtimeEvidenceSocket
   ].join("\0")).digest("hex");
 }
 function signalProcessTree(input) {
@@ -22778,7 +22829,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
-  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, {
@@ -22787,7 +22838,9 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
     birth: binding.birth,
     launcherPid: binding.launcherPid,
     launcherBirth: binding.launcherBirth,
-    instanceId: binding.instanceId
+    instanceId: binding.instanceId,
+    runtimeEvidencePath: binding.runtimeEvidencePath,
+    runtimeEvidenceSocket: binding.runtimeEvidenceSocket
   }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
@@ -22809,15 +22862,17 @@ var init_managed_metro = __esm({
     METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
-const { closeSync, openSync, writeSync } = require('node:fs');
+const { closeSync, openSync, rmSync, writeSync } = require('node:fs');
+const { createServer } = require('node:net');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
 const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
+const evidenceSocket = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET;
 const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
 const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
 const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
-if (!executable || !evidencePath || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
+if (!executable || !evidencePath || !evidenceSocket || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
   process.exit(1);
 }
 const evidenceDescriptor = 9;
@@ -22843,6 +22898,39 @@ function appendViolation(value) {
     digest: null,
   });
 }
+if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+const headServer = createServer((connection) => {
+  let request = '';
+  connection.setEncoding('utf8');
+  connection.on('data', (chunk) => {
+    request += chunk;
+    if (request.length > 256) {
+      connection.destroy();
+      return;
+    }
+    const newline = request.indexOf('\n');
+    if (newline < 0) return;
+    const challenge = request.slice(0, newline);
+    if (!/^[a-f0-9]{64}$/.test(challenge)) {
+      connection.destroy();
+      return;
+    }
+    const payload = {
+      version: 1,
+      sessionId,
+      metroInstanceId,
+      challenge,
+      sequence,
+      journalSignature: previousSignature,
+    };
+    const signature = createHmac('sha256', capability)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+    connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+  });
+});
+headServer.once('error', () => process.exit(1));
+headServer.listen(evidenceSocket);
 const childEnvironment = {
   ...process.env,
   NODE_OPTIONS: childNodeOptions,
@@ -22856,6 +22944,24 @@ const child = spawn(executable, args, {
   stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
 });
 const evidence = child.stdio[evidenceDescriptor];
+let childOutcome = null;
+let evidenceFinished = false;
+let launcherFinished = false;
+function finishLauncher() {
+  if (launcherFinished || childOutcome === null || !evidenceFinished) return;
+  launcherFinished = true;
+  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  closeSync(journalDescriptor);
+  headServer.close(() => {
+    if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+    process.exit(childOutcome.signal ? 1 : childOutcome.code);
+  });
+}
+function finishEvidence() {
+  if (evidenceFinished) return;
+  evidenceFinished = true;
+  finishLauncher();
+}
 evidence.setEncoding('utf8');
 evidence.on('data', (chunk) => {
   buffered += chunk;
@@ -22890,10 +22996,15 @@ evidence.on('data', (chunk) => {
   }
 });
 child.once('error', () => process.exit(1));
+evidence.once('end', finishEvidence);
+evidence.once('close', finishEvidence);
+evidence.once('error', () => {
+  appendViolation('Metro runtime evidence stream failed');
+  finishEvidence();
+});
 child.once('exit', (code, signal) => {
-  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
-  closeSync(journalDescriptor);
-  process.exit(signal ? 1 : (code ?? 1));
+  childOutcome = { code: code ?? 1, signal };
+  finishLauncher();
 });
 setInterval(() => {}, 1 << 30);
 `;
@@ -23093,7 +23204,7 @@ var init_process_cleanup = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
-import { randomBytes as randomBytes4, randomUUID as randomUUID5 } from "node:crypto";
+import { randomBytes as randomBytes5, randomUUID as randomUUID5 } from "node:crypto";
 import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync10, readFileSync as readFileSync17, renameSync as renameSync5, rmSync as rmSync8, statSync as statSync7, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join24 } from "node:path";
 function fail(code, detail) {
@@ -23145,7 +23256,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const temporary = join24(layout.root, `.bound-directory.${randomUUID5()}.key`);
   try {
     try {
-      writeFileSync10(temporary, randomBytes4(32), { flag: "wx", mode: 384, flush: true });
+      writeFileSync10(temporary, randomBytes5(32), { flag: "wx", mode: 384, flush: true });
       try {
         linkSync(temporary, path);
       } catch (error2) {
@@ -47407,7 +47518,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes8, createHash: createHash18 } = __require("crypto");
+    var { randomBytes: randomBytes9, createHash: createHash18 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -47945,7 +48056,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes8(16).toString("base64");
+      const key = randomBytes9(16).toString("base64");
       const request2 = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -49524,10 +49635,10 @@ var init_events_client = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/multiplexer.js
 import { createServer as createServer2 } from "node:http";
-import { randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { Buffer as Buffer2 } from "node:buffer";
 function generateCapabilityToken() {
-  return randomBytes6(32).toString("base64url");
+  return randomBytes7(32).toString("base64url");
 }
 function verifyConsumerPath(reqUrl, expectedToken) {
   if (typeof expectedToken !== "string" || expectedToken.length === 0)
@@ -70468,9 +70579,9 @@ var init_live_device = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
-import { randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { randomBytes as randomBytes8, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 function makeCsrfToken() {
-  return randomBytes7(24).toString("hex");
+  return randomBytes8(24).toString("hex");
 }
 function isPostAllowed(req, token2) {
   if ((req.method ?? "").toUpperCase() !== "POST") {
@@ -72693,9 +72804,13 @@ let lastPolicyPayload;
 let initialCacheCaptured = false;
 let loaderEpoch = 0;
 let runtimeLoadsDescriptor;
+let runtimeLoadsDescriptorOwned = false;
 function writeRuntimeLoad(line, loadsPath) {
-  runtimeLoadsDescriptor ??=
-    typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
+  if (runtimeLoadsDescriptor === undefined) {
+    runtimeLoadsDescriptor =
+      typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
+    runtimeLoadsDescriptorOwned = typeof loadsPath !== 'number';
+  }
   const bytes = Buffer.from(line);
   let offset = 0;
   while (offset < bytes.length) {
@@ -72703,7 +72818,9 @@ function writeRuntimeLoad(line, loadsPath) {
   }
 }
 process.once('exit', () => {
-  if (runtimeLoadsDescriptor !== undefined) fs.closeSync(runtimeLoadsDescriptor);
+  if (runtimeLoadsDescriptorOwned && runtimeLoadsDescriptor !== undefined) {
+    fs.closeSync(runtimeLoadsDescriptor);
+  }
 });
 function persistLoaderObservation(kind, value, digest = null) {
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
@@ -72752,14 +72869,14 @@ function authenticatedChildEnvironment(environment, nonce) {
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   return nextEnvironment;
 }
-function authenticatedChildArguments(args, optionsIndex, nonce) {
+function authenticatedChildArguments(args, optionsIndex, nonce, mode) {
   const nextArgs = [...args];
   const candidate = nextArgs[optionsIndex];
   const options = candidate && typeof candidate === 'object' ? candidate : {};
   const authenticatedOptions = {
     ...options,
     env: authenticatedChildEnvironment(options.env, nonce),
-    stdio: authenticatedChildStdio(options.stdio),
+    stdio: authenticatedChildStdio(options.stdio, mode, options.silent),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -72768,7 +72885,7 @@ function authenticatedChildArguments(args, optionsIndex, nonce) {
   }
   return nextArgs;
 }
-function authenticatedChildStdio(stdio) {
+function authenticatedChildStdio(stdio, mode, silent) {
   const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
   if (!Number.isInteger(evidenceDescriptor) || evidenceDescriptor < 3) return stdio;
   const normalized =
@@ -72778,7 +72895,9 @@ function authenticatedChildStdio(stdio) {
         ? ['inherit', 'inherit', 'inherit']
         : stdio === 'ignore'
           ? ['ignore', 'ignore', 'ignore']
-          : ['pipe', 'pipe', 'pipe'];
+          : mode === 'fork' && !silent
+            ? ['inherit', 'inherit', 'inherit']
+            : ['pipe', 'pipe', 'pipe'];
   while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
   normalized[evidenceDescriptor] = evidenceDescriptor;
   return normalized;
@@ -72812,18 +72931,75 @@ function requireNodeExecutable(command, options) {
 }
 function isInlineNodeOption(value) {
   if (typeof value !== 'string') return false;
-  const option = value.split('=', 1)[0].replaceAll('_', '-');
+  const option = value.replaceAll('_', '-');
   return (
-    option === '-e' ||
-    option.startsWith('-e') ||
-    option === '-p' ||
-    option.startsWith('-p') ||
-    ['--eval', '--print', '--input-type'].includes(option)
+    /^-(?:e|p).*/.test(option) ||
+    option === '--eval' ||
+    option.startsWith('--eval=') ||
+    option === '--print' ||
+    option.startsWith('--print=') ||
+    option === '--input-type' ||
+    option.startsWith('--input-type=')
   );
 }
-function requireFileBackedNodeArguments(args) {
-  if (!Array.isArray(args) || args.length === 0 || args[0] === '-') throw descendantError();
-  if (args.some(isInlineNodeOption)) throw descendantError();
+function requireFileBackedNodeArguments(args, cwd) {
+  if (!Array.isArray(args)) throw descendantError();
+  const booleanOptions = new Set([
+    '--enable-source-maps',
+    '--experimental-strip-types',
+    '--experimental-transform-types',
+    '--no-deprecation',
+    '--no-warnings',
+    '--preserve-symlinks',
+    '--preserve-symlinks-main',
+    '--trace-deprecation',
+    '--trace-uncaught',
+    '--trace-warnings',
+  ]);
+  const valueOptions = new Set([
+    '--conditions',
+    '--import',
+    '--loader',
+    '--require',
+    '--title',
+    '-r',
+  ]);
+  let entrypoint;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
+    if (argument === '--') {
+      entrypoint = args[index + 1];
+      break;
+    }
+    if (!argument.startsWith('-')) {
+      entrypoint = argument;
+      break;
+    }
+    const normalized = argument.replaceAll('_', '-');
+    const equals = normalized.indexOf('=');
+    const option = equals < 0 ? normalized : normalized.slice(0, equals);
+    if (equals >= 0 || booleanOptions.has(option)) continue;
+    if (valueOptions.has(option)) {
+      index += 1;
+      if (index >= args.length || typeof args[index] !== 'string') throw descendantError();
+      continue;
+    }
+    throw descendantError();
+  }
+  requireFileBackedEntrypoint(entrypoint, cwd);
+}
+function requireFileBackedEntrypoint(entrypoint, cwd) {
+  if (typeof entrypoint !== 'string' || entrypoint === '-' || entrypoint.startsWith('-')) {
+    throw descendantError();
+  }
+  try {
+    const candidate = path.resolve(cwd || process.cwd(), entrypoint);
+    if (!fs.statSync(fs.realpathSync(candidate)).isFile()) throw descendantError();
+  } catch (error) {
+    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
+    throw descendantError();
+  }
 }
 function requireSafeWorkerExecArgv(execArgv) {
   if (execArgv.some(isInlineNodeOption)) throw descendantError();
@@ -72850,14 +73026,15 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
     value(...args) {
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
       const nonce = randomBytes(16).toString('hex');
-      const authenticatedArgs = authenticatedChildArguments(args, index, nonce);
+      const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode);
       const options = authenticatedArgs[index];
       if (mode === 'node' || mode === 'sync') {
         requireNodeExecutable(args[0], options);
-        requireFileBackedNodeArguments(args[1]);
+        requireFileBackedNodeArguments(args[1], options.cwd);
       }
       if (mode === 'fork') {
         if (options.execPath) requireNodeExecutable(options.execPath, options);
+        requireFileBackedEntrypoint(args[0], options.cwd);
         options.execPath = nodeExecutable;
         if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
           options.stdio[3] = 'ipc';
@@ -75255,7 +75432,7 @@ function proofAuthority(runId) {
     throw new Error("PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher");
   }
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
-  if (!secret?.signerCapability || typeof metro.instanceId !== "string" || typeof metro.runtimeEvidencePath !== "string") {
+  if (!secret?.signerCapability || typeof metro.instanceId !== "string" || typeof metro.runtimeEvidencePath !== "string" || typeof metro.runtimeEvidenceSocket !== "string") {
     throw new Error("PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable");
   }
   const source = strictProofSourceIdentity(status.source, {
@@ -75263,7 +75440,8 @@ function proofAuthority(runId) {
       sessionId: status.sessionId,
       metroInstanceId: metro.instanceId,
       capability: createHmac5("sha256", secret.signerCapability).update("metro-runtime-policy").digest("base64url"),
-      evidencePath: metro.runtimeEvidencePath
+      evidencePath: metro.runtimeEvidencePath,
+      evidenceSocket: metro.runtimeEvidenceSocket
     }
   });
   const pendingProof = status.bindings.proof?.runId;
@@ -76822,7 +77000,7 @@ init_source_identity();
 // packages/rn-dev-agent-core/dist/session/supervisor-authority.js
 init_process_cleanup();
 init_registry();
-import { createHash as createHash9, randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash9, randomBytes as randomBytes6, randomUUID as randomUUID6 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/shared-knowledge-root.js
 import { cpSync as cpSync2, lstatSync as lstatSync5, readdirSync as readdirSync6, readlinkSync as readlinkSync3, renameSync as renameSync4, rmSync as rmSync7, statSync as statSync6 } from "node:fs";
@@ -76899,9 +77077,9 @@ function createSupervisorAuthority(input, dependencies = {}) {
     leaseMs: 3e4
   });
   const sessionId = input.sessionId ?? randomUUID6();
-  const signerCapability = randomBytes5(32).toString("base64url");
-  const observeCapability = randomBytes5(32).toString("base64url");
-  const recoveryCapability = randomBytes5(32).toString("base64url");
+  const signerCapability = randomBytes6(32).toString("base64url");
+  const observeCapability = randomBytes6(32).toString("base64url");
+  const recoveryCapability = randomBytes6(32).toString("base64url");
   const session = registry2.createSession({
     sessionId,
     sourceKey: input.source.sourceKey,

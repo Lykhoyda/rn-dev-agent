@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -47,6 +47,29 @@ const METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
 module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
 ${METRO_INTEGRATION_END}`;
 const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
+const METRO_EVIDENCE_HEAD_CLIENT = String.raw `
+const { createConnection } = require('node:net');
+const socket = createConnection(process.argv[1]);
+let response = '';
+socket.setEncoding('utf8');
+socket.setTimeout(1500);
+socket.once('connect', () => socket.write(process.argv[2] + '\n'));
+socket.on('data', (chunk) => {
+  response += chunk;
+  if (response.length > 4096) process.exit(2);
+});
+socket.once('end', () => process.stdout.write(response));
+socket.once('timeout', () => process.exit(3));
+socket.once('error', () => process.exit(4));
+`;
+function readMetroEvidenceHead(socket, challenge) {
+    return execFileSync(process.execPath, ['-e', METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
+        encoding: 'utf8',
+        maxBuffer: 4_096,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 2_000,
+    });
+}
 function updateFramed(hash, part) {
     const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
     hash.update(`${bytes.byteLength}:`);
@@ -189,7 +212,7 @@ function assertFinalMetroIntegration(identity) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block');
     }
 }
-function metroRuntimeInputs(identity, authority) {
+function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     if (!authority)
         return [];
     const raw = readFileSync(join(identity.appRoot, METRO_RUNTIME_POLICY), 'utf8');
@@ -312,6 +335,41 @@ function metroRuntimeInputs(identity, authority) {
         if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
             throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
         }
+    }
+    if (evidenceSequence === 0 || previousEvidenceSignature === null) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty');
+    }
+    const challenge = randomBytes(32).toString('hex');
+    let head;
+    try {
+        head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
+    }
+    catch (error) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is unavailable', {
+            cause: error,
+        });
+    }
+    const headPayload = {
+        version: head.version,
+        sessionId: head.sessionId,
+        metroInstanceId: head.metroInstanceId,
+        challenge: head.challenge,
+        sequence: head.sequence,
+        journalSignature: head.journalSignature,
+    };
+    const expectedHead = createHmac('sha256', authority.capability)
+        .update(JSON.stringify(headPayload))
+        .digest();
+    const observedHead = typeof head.signature === 'string' ? Buffer.from(head.signature, 'hex') : Buffer.alloc(0);
+    if (head.version !== 1 ||
+        head.sessionId !== authority.sessionId ||
+        head.metroInstanceId !== authority.metroInstanceId ||
+        head.challenge !== challenge ||
+        head.sequence !== evidenceSequence ||
+        head.journalSignature !== previousEvidenceSignature ||
+        observedHead.length !== expectedHead.length ||
+        !timingSafeEqual(observedHead, expectedHead)) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid');
     }
     for (const launch of descendantLaunches) {
         if (!descendantAttestations.has(launch)) {
@@ -496,7 +554,8 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
     const git = dependencies.git ?? defaultGit;
     const pathExists = dependencies.exists ?? existsSync;
     assertFinalMetroIntegration(identity);
-    const runtimeInputs = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy);
+    const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
+    const runtimeInputs = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy, evidenceHeadReader);
     const head = git(identity.contentRoot, ['rev-parse', 'HEAD']);
     const diff = git(identity.contentRoot, ['diff', '--binary', '--no-ext-diff', head, '--']);
     const untracked = git(identity.contentRoot, ['ls-files', '--others', '--exclude-standard', '-z'])
@@ -586,7 +645,7 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         }
         throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink');
     }
-    const runtimeInputsAfter = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy);
+    const runtimeInputsAfter = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy, evidenceHeadReader);
     if (JSON.stringify(runtimeInputsAfter) !== JSON.stringify(runtimeInputs)) {
         throw new Error('STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing');
     }

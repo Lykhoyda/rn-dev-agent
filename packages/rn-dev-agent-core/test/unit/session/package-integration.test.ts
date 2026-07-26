@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   readdirSync,
@@ -433,6 +435,7 @@ test('Metro integration rejects spoofed supported package metadata', () => {
 test('Metro preload records child-process and worker-thread module loads', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-worker-preload-'));
   const external = mkdtempSync(join(tmpdir(), 'rn-session-metro-worker-inputs-'));
+  let evidenceDescriptor: number | undefined;
   try {
     execFileSync('git', ['init', '-q', root]);
     const integration = join(root, '.rn-agent', 'integration');
@@ -442,21 +445,39 @@ test('Metro preload records child-process and worker-thread module loads', () =>
     const childEntry = join(external, 'child-entry.cjs');
     const threadModule = join(external, 'thread.cjs');
     const threadEntry = join(external, 'thread-entry.cjs');
+    const postWorkerModule = join(external, 'post-worker.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(childModule, 'module.exports = {};\n');
     writeFileSync(childEntry, `require(${JSON.stringify(childModule)});\n`);
     writeFileSync(threadModule, 'module.exports = {};\n');
     writeFileSync(threadEntry, `require(${JSON.stringify(threadModule)});\n`);
+    writeFileSync(postWorkerModule, 'module.exports = {};\n');
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
     const result = spawnSync(
       process.execPath,
       [
         '-e',
-        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); for (const args of [['-e', 'process.exit(0)'], ['--eval=process.exit(0)']]) { try { childProcess.spawnSync(process.execPath, args); process.exit(4); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const workerThreads = require('node:worker_threads'); for (const options of [{ eval: true }, { execArgv: ['--require', ${JSON.stringify(childModule)}] }]) { try { new workerThreads.Worker('void 0', options); process.exit(5); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const worker = new workerThreads.Worker(${JSON.stringify(threadEntry)}, { execArgv: [] }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); for (const args of [['-e', 'process.exit(0)'], ['--eval=process.exit(0)'], ['--no-warnings'], ['--', '-'], ['--enable-source-maps']]) { try { childProcess.spawnSync(process.execPath, args); process.exit(4); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const child = childProcess.spawnSync(process.execPath, ['--no-warnings', ${JSON.stringify(childEntry)}, '-profile'], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const forked = childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv }); if (forked.stdout !== null) process.exit(6); await new Promise((resolve, reject) => { forked.once('error', reject); forked.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); const workerThreads = require('node:worker_threads'); for (const options of [{ eval: true }, { execArgv: ['--require', ${JSON.stringify(childModule)}] }]) { try { new workerThreads.Worker('void 0', options); process.exit(5); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const worker = new workerThreads.Worker(${JSON.stringify(threadEntry)}, { execArgv: [] }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); require(${JSON.stringify(postWorkerModule)}); })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
-        env: metroPolicyEnvironment(adapterPath),
+        env: environment,
         encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
       },
     );
 
@@ -479,15 +500,21 @@ test('Metro preload records child-process and worker-thread module loads', () =>
         (entry) => entry.kind === 'input' && entry.value === realpathSync(threadModule),
       ),
     );
+    assert.ok(
+      observations.some(
+        (entry) => entry.kind === 'input' && entry.value === realpathSync(postWorkerModule),
+      ),
+    );
     const launches = new Set(
       observations.filter((entry) => entry.kind === 'launch').map((entry) => entry.value),
     );
     const attestations = new Set(
       observations.filter((entry) => entry.kind === 'attestation').map((entry) => entry.value),
     );
-    assert.equal(launches.size, 2);
+    assert.equal(launches.size, 3);
     assert.deepEqual(launches, attestations);
   } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
     rmSync(root, { force: true, recursive: true });
     rmSync(external, { force: true, recursive: true });
   }

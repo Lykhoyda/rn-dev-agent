@@ -75,9 +75,13 @@ let lastPolicyPayload;
 let initialCacheCaptured = false;
 let loaderEpoch = 0;
 let runtimeLoadsDescriptor;
+let runtimeLoadsDescriptorOwned = false;
 function writeRuntimeLoad(line, loadsPath) {
-  runtimeLoadsDescriptor ??=
-    typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
+  if (runtimeLoadsDescriptor === undefined) {
+    runtimeLoadsDescriptor =
+      typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
+    runtimeLoadsDescriptorOwned = typeof loadsPath !== 'number';
+  }
   const bytes = Buffer.from(line);
   let offset = 0;
   while (offset < bytes.length) {
@@ -85,7 +89,9 @@ function writeRuntimeLoad(line, loadsPath) {
   }
 }
 process.once('exit', () => {
-  if (runtimeLoadsDescriptor !== undefined) fs.closeSync(runtimeLoadsDescriptor);
+  if (runtimeLoadsDescriptorOwned && runtimeLoadsDescriptor !== undefined) {
+    fs.closeSync(runtimeLoadsDescriptor);
+  }
 });
 function persistLoaderObservation(kind, value, digest = null) {
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
@@ -134,14 +140,14 @@ function authenticatedChildEnvironment(environment, nonce) {
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   return nextEnvironment;
 }
-function authenticatedChildArguments(args, optionsIndex, nonce) {
+function authenticatedChildArguments(args, optionsIndex, nonce, mode) {
   const nextArgs = [...args];
   const candidate = nextArgs[optionsIndex];
   const options = candidate && typeof candidate === 'object' ? candidate : {};
   const authenticatedOptions = {
     ...options,
     env: authenticatedChildEnvironment(options.env, nonce),
-    stdio: authenticatedChildStdio(options.stdio),
+    stdio: authenticatedChildStdio(options.stdio, mode, options.silent),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -150,7 +156,7 @@ function authenticatedChildArguments(args, optionsIndex, nonce) {
   }
   return nextArgs;
 }
-function authenticatedChildStdio(stdio) {
+function authenticatedChildStdio(stdio, mode, silent) {
   const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
   if (!Number.isInteger(evidenceDescriptor) || evidenceDescriptor < 3) return stdio;
   const normalized =
@@ -160,7 +166,9 @@ function authenticatedChildStdio(stdio) {
         ? ['inherit', 'inherit', 'inherit']
         : stdio === 'ignore'
           ? ['ignore', 'ignore', 'ignore']
-          : ['pipe', 'pipe', 'pipe'];
+          : mode === 'fork' && !silent
+            ? ['inherit', 'inherit', 'inherit']
+            : ['pipe', 'pipe', 'pipe'];
   while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
   normalized[evidenceDescriptor] = evidenceDescriptor;
   return normalized;
@@ -194,18 +202,75 @@ function requireNodeExecutable(command, options) {
 }
 function isInlineNodeOption(value) {
   if (typeof value !== 'string') return false;
-  const option = value.split('=', 1)[0].replaceAll('_', '-');
+  const option = value.replaceAll('_', '-');
   return (
-    option === '-e' ||
-    option.startsWith('-e') ||
-    option === '-p' ||
-    option.startsWith('-p') ||
-    ['--eval', '--print', '--input-type'].includes(option)
+    /^-(?:e|p).*/.test(option) ||
+    option === '--eval' ||
+    option.startsWith('--eval=') ||
+    option === '--print' ||
+    option.startsWith('--print=') ||
+    option === '--input-type' ||
+    option.startsWith('--input-type=')
   );
 }
-function requireFileBackedNodeArguments(args) {
-  if (!Array.isArray(args) || args.length === 0 || args[0] === '-') throw descendantError();
-  if (args.some(isInlineNodeOption)) throw descendantError();
+function requireFileBackedNodeArguments(args, cwd) {
+  if (!Array.isArray(args)) throw descendantError();
+  const booleanOptions = new Set([
+    '--enable-source-maps',
+    '--experimental-strip-types',
+    '--experimental-transform-types',
+    '--no-deprecation',
+    '--no-warnings',
+    '--preserve-symlinks',
+    '--preserve-symlinks-main',
+    '--trace-deprecation',
+    '--trace-uncaught',
+    '--trace-warnings',
+  ]);
+  const valueOptions = new Set([
+    '--conditions',
+    '--import',
+    '--loader',
+    '--require',
+    '--title',
+    '-r',
+  ]);
+  let entrypoint;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
+    if (argument === '--') {
+      entrypoint = args[index + 1];
+      break;
+    }
+    if (!argument.startsWith('-')) {
+      entrypoint = argument;
+      break;
+    }
+    const normalized = argument.replaceAll('_', '-');
+    const equals = normalized.indexOf('=');
+    const option = equals < 0 ? normalized : normalized.slice(0, equals);
+    if (equals >= 0 || booleanOptions.has(option)) continue;
+    if (valueOptions.has(option)) {
+      index += 1;
+      if (index >= args.length || typeof args[index] !== 'string') throw descendantError();
+      continue;
+    }
+    throw descendantError();
+  }
+  requireFileBackedEntrypoint(entrypoint, cwd);
+}
+function requireFileBackedEntrypoint(entrypoint, cwd) {
+  if (typeof entrypoint !== 'string' || entrypoint === '-' || entrypoint.startsWith('-')) {
+    throw descendantError();
+  }
+  try {
+    const candidate = path.resolve(cwd || process.cwd(), entrypoint);
+    if (!fs.statSync(fs.realpathSync(candidate)).isFile()) throw descendantError();
+  } catch (error) {
+    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
+    throw descendantError();
+  }
 }
 function requireSafeWorkerExecArgv(execArgv) {
   if (execArgv.some(isInlineNodeOption)) throw descendantError();
@@ -232,14 +297,15 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
     value(...args) {
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
       const nonce = randomBytes(16).toString('hex');
-      const authenticatedArgs = authenticatedChildArguments(args, index, nonce);
+      const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode);
       const options = authenticatedArgs[index];
       if (mode === 'node' || mode === 'sync') {
         requireNodeExecutable(args[0], options);
-        requireFileBackedNodeArguments(args[1]);
+        requireFileBackedNodeArguments(args[1], options.cwd);
       }
       if (mode === 'fork') {
         if (options.execPath) requireNodeExecutable(options.execPath, options);
+        requireFileBackedEntrypoint(args[0], options.cwd);
         options.execPath = nodeExecutable;
         if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
           options.stdio[3] = 'ipc';

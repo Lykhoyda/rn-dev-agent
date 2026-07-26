@@ -2373,7 +2373,8 @@ function proofAuthority(runId: string): ProofAuthority {
   if (
     !secret?.signerCapability ||
     typeof metro.instanceId !== 'string' ||
-    typeof metro.runtimeEvidencePath !== 'string'
+    typeof metro.runtimeEvidencePath !== 'string' ||
+    typeof metro.runtimeEvidenceSocket !== 'string'
   ) {
     throw new Error('PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable');
   }
@@ -2385,6 +2386,7 @@ function proofAuthority(runId: string): ProofAuthority {
         .update('metro-runtime-policy')
         .digest('base64url'),
       evidencePath: metro.runtimeEvidencePath,
+      evidenceSocket: metro.runtimeEvidenceSocket,
     },
   });
   const pendingProof = (status.bindings.proof as Record<string, unknown> | undefined)?.runId;

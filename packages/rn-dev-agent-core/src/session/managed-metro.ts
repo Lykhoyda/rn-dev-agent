@@ -22,6 +22,7 @@ export interface ManagedMetroBinding extends MetroBinding {
   launcherBirth: string;
   managementProof: string;
   runtimeEvidencePath: string;
+  runtimeEvidenceSocket: string;
 }
 
 interface ManagedMetroDependencies {
@@ -57,15 +58,17 @@ interface ManagedMetroProcessIdentity {
 const METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
-const { closeSync, openSync, writeSync } = require('node:fs');
+const { closeSync, openSync, rmSync, writeSync } = require('node:fs');
+const { createServer } = require('node:net');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
 const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
+const evidenceSocket = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET;
 const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
 const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
 const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
-if (!executable || !evidencePath || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
+if (!executable || !evidencePath || !evidenceSocket || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
   process.exit(1);
 }
 const evidenceDescriptor = 9;
@@ -91,6 +94,39 @@ function appendViolation(value) {
     digest: null,
   });
 }
+if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+const headServer = createServer((connection) => {
+  let request = '';
+  connection.setEncoding('utf8');
+  connection.on('data', (chunk) => {
+    request += chunk;
+    if (request.length > 256) {
+      connection.destroy();
+      return;
+    }
+    const newline = request.indexOf('\n');
+    if (newline < 0) return;
+    const challenge = request.slice(0, newline);
+    if (!/^[a-f0-9]{64}$/.test(challenge)) {
+      connection.destroy();
+      return;
+    }
+    const payload = {
+      version: 1,
+      sessionId,
+      metroInstanceId,
+      challenge,
+      sequence,
+      journalSignature: previousSignature,
+    };
+    const signature = createHmac('sha256', capability)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+    connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+  });
+});
+headServer.once('error', () => process.exit(1));
+headServer.listen(evidenceSocket);
 const childEnvironment = {
   ...process.env,
   NODE_OPTIONS: childNodeOptions,
@@ -104,6 +140,24 @@ const child = spawn(executable, args, {
   stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
 });
 const evidence = child.stdio[evidenceDescriptor];
+let childOutcome = null;
+let evidenceFinished = false;
+let launcherFinished = false;
+function finishLauncher() {
+  if (launcherFinished || childOutcome === null || !evidenceFinished) return;
+  launcherFinished = true;
+  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  closeSync(journalDescriptor);
+  headServer.close(() => {
+    if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+    process.exit(childOutcome.signal ? 1 : childOutcome.code);
+  });
+}
+function finishEvidence() {
+  if (evidenceFinished) return;
+  evidenceFinished = true;
+  finishLauncher();
+}
 evidence.setEncoding('utf8');
 evidence.on('data', (chunk) => {
   buffered += chunk;
@@ -138,10 +192,15 @@ evidence.on('data', (chunk) => {
   }
 });
 child.once('error', () => process.exit(1));
+evidence.once('end', finishEvidence);
+evidence.once('close', finishEvidence);
+evidence.once('error', () => {
+  appendViolation('Metro runtime evidence stream failed');
+  finishEvidence();
+});
 child.once('exit', (code, signal) => {
-  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
-  closeSync(journalDescriptor);
-  process.exit(signal ? 1 : (code ?? 1));
+  childOutcome = { code: code ?? 1, signal };
+  finishLauncher();
 });
 setInterval(() => {}, 1 << 30);
 `;
@@ -271,6 +330,8 @@ function managementProof(
     launcherPid: number;
     launcherBirth: string;
     instanceId: string;
+    runtimeEvidencePath: string;
+    runtimeEvidenceSocket: string;
   },
   signerCapability: string,
 ): string {
@@ -284,6 +345,8 @@ function managementProof(
         authority.launcherPid,
         authority.launcherBirth,
         authority.instanceId,
+        authority.runtimeEvidencePath,
+        authority.runtimeEvidenceSocket,
       ].join('\0'),
     )
     .digest('hex');
@@ -348,6 +411,10 @@ export async function startManagedMetro(
   }
   const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
   const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');
+  const runtimeEvidenceSocket =
+    process.platform === 'win32'
+      ? `\\\\.\\pipe\\rn-dev-agent-${instanceId.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+      : join(input.runtimeRoot, 'metro-runtime-evidence.sock');
   const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`]
     .filter(Boolean)
     .join(' ');
@@ -368,6 +435,7 @@ export async function startManagedMetro(
         RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
         RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
         RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE: runtimeEvidencePath,
+        RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET: runtimeEvidenceSocket,
         RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS: authorityNodeOptions,
         NODE_OPTIONS: baseNodeOptions,
       },
@@ -429,6 +497,7 @@ export async function startManagedMetro(
           launcherPid: child.pid,
           launcherBirth: launcherBirth.token,
           runtimeEvidencePath,
+          runtimeEvidenceSocket,
         } satisfies Omit<ManagedMetroBinding, 'managementProof'>;
         return {
           ...authority,
@@ -585,6 +654,8 @@ export async function stopManagedMetro(
     typeof binding.launcherPid !== 'number' ||
     typeof binding.launcherBirth !== 'string' ||
     typeof binding.instanceId !== 'string' ||
+    typeof binding.runtimeEvidencePath !== 'string' ||
+    typeof binding.runtimeEvidenceSocket !== 'string' ||
     typeof binding.managementProof !== 'string'
   ) {
     return false;
@@ -598,6 +669,8 @@ export async function stopManagedMetro(
       launcherPid: binding.launcherPid,
       launcherBirth: binding.launcherBirth,
       instanceId: binding.instanceId,
+      runtimeEvidencePath: binding.runtimeEvidencePath,
+      runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
     },
     input.signerCapability,
   );

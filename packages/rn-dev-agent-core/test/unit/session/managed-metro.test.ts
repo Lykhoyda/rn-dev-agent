@@ -163,6 +163,14 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE,
     '/tmp/metro-runtime-evidence.jsonl',
   );
+  const runtimeEvidenceSocket =
+    process.platform === 'win32'
+      ? '\\\\.\\pipe\\rn-dev-agent-metro-a'
+      : '/tmp/metro-runtime-evidence.sock';
+  assert.equal(
+    calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET,
+    runtimeEvidenceSocket,
+  );
   assert.equal(
     calls[0]?.env?.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS,
     [
@@ -174,6 +182,9 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   );
   assert.equal(calls[0]?.env?.NODE_OPTIONS, (process.env.NODE_OPTIONS ?? '').trim());
   assert.equal(binding.runtimeEvidencePath, '/tmp/metro-runtime-evidence.jsonl');
+  assert.equal(binding.runtimeEvidenceSocket, runtimeEvidenceSocket);
+  assert.match(calls[0]?.args[1] ?? '', /childOutcome === null \|\| !evidenceFinished/);
+  assert.match(calls[0]?.args[1] ?? '', /journalSignature: previousSignature/);
 });
 
 test('managed Metro proves a cross-platform listener belongs to the spawned launcher', async () => {

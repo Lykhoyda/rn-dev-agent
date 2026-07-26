@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes7, createHash: createHash17 } = __require("crypto");
+    var { randomBytes: randomBytes8, createHash: createHash17 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9782,7 +9782,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes7(16).toString("base64");
+      const key = randomBytes8(16).toString("base64");
       const request2 = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -62270,15 +62270,17 @@ init_process_birth();
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
-const { closeSync, openSync, writeSync } = require('node:fs');
+const { closeSync, openSync, rmSync, writeSync } = require('node:fs');
+const { createServer } = require('node:net');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
 const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
+const evidenceSocket = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET;
 const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
 const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
 const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
-if (!executable || !evidencePath || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
+if (!executable || !evidencePath || !evidenceSocket || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
   process.exit(1);
 }
 const evidenceDescriptor = 9;
@@ -62304,6 +62306,39 @@ function appendViolation(value) {
     digest: null,
   });
 }
+if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+const headServer = createServer((connection) => {
+  let request = '';
+  connection.setEncoding('utf8');
+  connection.on('data', (chunk) => {
+    request += chunk;
+    if (request.length > 256) {
+      connection.destroy();
+      return;
+    }
+    const newline = request.indexOf('\n');
+    if (newline < 0) return;
+    const challenge = request.slice(0, newline);
+    if (!/^[a-f0-9]{64}$/.test(challenge)) {
+      connection.destroy();
+      return;
+    }
+    const payload = {
+      version: 1,
+      sessionId,
+      metroInstanceId,
+      challenge,
+      sequence,
+      journalSignature: previousSignature,
+    };
+    const signature = createHmac('sha256', capability)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+    connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+  });
+});
+headServer.once('error', () => process.exit(1));
+headServer.listen(evidenceSocket);
 const childEnvironment = {
   ...process.env,
   NODE_OPTIONS: childNodeOptions,
@@ -62317,6 +62352,24 @@ const child = spawn(executable, args, {
   stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
 });
 const evidence = child.stdio[evidenceDescriptor];
+let childOutcome = null;
+let evidenceFinished = false;
+let launcherFinished = false;
+function finishLauncher() {
+  if (launcherFinished || childOutcome === null || !evidenceFinished) return;
+  launcherFinished = true;
+  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  closeSync(journalDescriptor);
+  headServer.close(() => {
+    if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+    process.exit(childOutcome.signal ? 1 : childOutcome.code);
+  });
+}
+function finishEvidence() {
+  if (evidenceFinished) return;
+  evidenceFinished = true;
+  finishLauncher();
+}
 evidence.setEncoding('utf8');
 evidence.on('data', (chunk) => {
   buffered += chunk;
@@ -62351,10 +62404,15 @@ evidence.on('data', (chunk) => {
   }
 });
 child.once('error', () => process.exit(1));
+evidence.once('end', finishEvidence);
+evidence.once('close', finishEvidence);
+evidence.once('error', () => {
+  appendViolation('Metro runtime evidence stream failed');
+  finishEvidence();
+});
 child.once('exit', (code, signal) => {
-  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
-  closeSync(journalDescriptor);
-  process.exit(signal ? 1 : (code ?? 1));
+  childOutcome = { code: code ?? 1, signal };
+  finishLauncher();
 });
 setInterval(() => {}, 1 << 30);
 `;
@@ -62401,7 +62459,9 @@ function managementProof(sessionId, authority, signerCapability) {
     authority.birth,
     authority.launcherPid,
     authority.launcherBirth,
-    authority.instanceId
+    authority.instanceId,
+    authority.runtimeEvidencePath,
+    authority.runtimeEvidenceSocket
   ].join("\0")).digest("hex");
 }
 function signalProcessTree(input) {
@@ -62471,7 +62531,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
-  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.managementProof !== "string") {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, {
@@ -62480,7 +62540,9 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
     birth: binding.birth,
     launcherPid: binding.launcherPid,
     launcherBirth: binding.launcherBirth,
-    instanceId: binding.instanceId
+    instanceId: binding.instanceId,
+    runtimeEvidencePath: binding.runtimeEvidencePath,
+    runtimeEvidenceSocket: binding.runtimeEvidenceSocket
   }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
@@ -70441,9 +70503,13 @@ let lastPolicyPayload;
 let initialCacheCaptured = false;
 let loaderEpoch = 0;
 let runtimeLoadsDescriptor;
+let runtimeLoadsDescriptorOwned = false;
 function writeRuntimeLoad(line, loadsPath) {
-  runtimeLoadsDescriptor ??=
-    typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
+  if (runtimeLoadsDescriptor === undefined) {
+    runtimeLoadsDescriptor =
+      typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
+    runtimeLoadsDescriptorOwned = typeof loadsPath !== 'number';
+  }
   const bytes = Buffer.from(line);
   let offset = 0;
   while (offset < bytes.length) {
@@ -70451,7 +70517,9 @@ function writeRuntimeLoad(line, loadsPath) {
   }
 }
 process.once('exit', () => {
-  if (runtimeLoadsDescriptor !== undefined) fs.closeSync(runtimeLoadsDescriptor);
+  if (runtimeLoadsDescriptorOwned && runtimeLoadsDescriptor !== undefined) {
+    fs.closeSync(runtimeLoadsDescriptor);
+  }
 });
 function persistLoaderObservation(kind, value, digest = null) {
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
@@ -70500,14 +70568,14 @@ function authenticatedChildEnvironment(environment, nonce) {
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   return nextEnvironment;
 }
-function authenticatedChildArguments(args, optionsIndex, nonce) {
+function authenticatedChildArguments(args, optionsIndex, nonce, mode) {
   const nextArgs = [...args];
   const candidate = nextArgs[optionsIndex];
   const options = candidate && typeof candidate === 'object' ? candidate : {};
   const authenticatedOptions = {
     ...options,
     env: authenticatedChildEnvironment(options.env, nonce),
-    stdio: authenticatedChildStdio(options.stdio),
+    stdio: authenticatedChildStdio(options.stdio, mode, options.silent),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -70516,7 +70584,7 @@ function authenticatedChildArguments(args, optionsIndex, nonce) {
   }
   return nextArgs;
 }
-function authenticatedChildStdio(stdio) {
+function authenticatedChildStdio(stdio, mode, silent) {
   const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
   if (!Number.isInteger(evidenceDescriptor) || evidenceDescriptor < 3) return stdio;
   const normalized =
@@ -70526,7 +70594,9 @@ function authenticatedChildStdio(stdio) {
         ? ['inherit', 'inherit', 'inherit']
         : stdio === 'ignore'
           ? ['ignore', 'ignore', 'ignore']
-          : ['pipe', 'pipe', 'pipe'];
+          : mode === 'fork' && !silent
+            ? ['inherit', 'inherit', 'inherit']
+            : ['pipe', 'pipe', 'pipe'];
   while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
   normalized[evidenceDescriptor] = evidenceDescriptor;
   return normalized;
@@ -70560,18 +70630,75 @@ function requireNodeExecutable(command, options) {
 }
 function isInlineNodeOption(value) {
   if (typeof value !== 'string') return false;
-  const option = value.split('=', 1)[0].replaceAll('_', '-');
+  const option = value.replaceAll('_', '-');
   return (
-    option === '-e' ||
-    option.startsWith('-e') ||
-    option === '-p' ||
-    option.startsWith('-p') ||
-    ['--eval', '--print', '--input-type'].includes(option)
+    /^-(?:e|p).*/.test(option) ||
+    option === '--eval' ||
+    option.startsWith('--eval=') ||
+    option === '--print' ||
+    option.startsWith('--print=') ||
+    option === '--input-type' ||
+    option.startsWith('--input-type=')
   );
 }
-function requireFileBackedNodeArguments(args) {
-  if (!Array.isArray(args) || args.length === 0 || args[0] === '-') throw descendantError();
-  if (args.some(isInlineNodeOption)) throw descendantError();
+function requireFileBackedNodeArguments(args, cwd) {
+  if (!Array.isArray(args)) throw descendantError();
+  const booleanOptions = new Set([
+    '--enable-source-maps',
+    '--experimental-strip-types',
+    '--experimental-transform-types',
+    '--no-deprecation',
+    '--no-warnings',
+    '--preserve-symlinks',
+    '--preserve-symlinks-main',
+    '--trace-deprecation',
+    '--trace-uncaught',
+    '--trace-warnings',
+  ]);
+  const valueOptions = new Set([
+    '--conditions',
+    '--import',
+    '--loader',
+    '--require',
+    '--title',
+    '-r',
+  ]);
+  let entrypoint;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
+    if (argument === '--') {
+      entrypoint = args[index + 1];
+      break;
+    }
+    if (!argument.startsWith('-')) {
+      entrypoint = argument;
+      break;
+    }
+    const normalized = argument.replaceAll('_', '-');
+    const equals = normalized.indexOf('=');
+    const option = equals < 0 ? normalized : normalized.slice(0, equals);
+    if (equals >= 0 || booleanOptions.has(option)) continue;
+    if (valueOptions.has(option)) {
+      index += 1;
+      if (index >= args.length || typeof args[index] !== 'string') throw descendantError();
+      continue;
+    }
+    throw descendantError();
+  }
+  requireFileBackedEntrypoint(entrypoint, cwd);
+}
+function requireFileBackedEntrypoint(entrypoint, cwd) {
+  if (typeof entrypoint !== 'string' || entrypoint === '-' || entrypoint.startsWith('-')) {
+    throw descendantError();
+  }
+  try {
+    const candidate = path.resolve(cwd || process.cwd(), entrypoint);
+    if (!fs.statSync(fs.realpathSync(candidate)).isFile()) throw descendantError();
+  } catch (error) {
+    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
+    throw descendantError();
+  }
 }
 function requireSafeWorkerExecArgv(execArgv) {
   if (execArgv.some(isInlineNodeOption)) throw descendantError();
@@ -70598,14 +70725,15 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
     value(...args) {
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
       const nonce = randomBytes(16).toString('hex');
-      const authenticatedArgs = authenticatedChildArguments(args, index, nonce);
+      const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode);
       const options = authenticatedArgs[index];
       if (mode === 'node' || mode === 'sync') {
         requireNodeExecutable(args[0], options);
-        requireFileBackedNodeArguments(args[1]);
+        requireFileBackedNodeArguments(args[1], options.cwd);
       }
       if (mode === 'fork') {
         if (options.execPath) requireNodeExecutable(options.execPath, options);
+        requireFileBackedEntrypoint(args[0], options.cwd);
         options.execPath = nodeExecutable;
         if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
           options.stdio[3] = 'ipc';
@@ -72313,7 +72441,7 @@ init_process_birth();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash14, createHmac as createHmac4, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
+import { createHash as createHash14, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
 import { closeSync as closeSync7, existsSync as existsSync35, lstatSync as lstatSync11, openSync as openSync7, readdirSync as readdirSync14, readFileSync as readFileSync36, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync7 } from "node:fs";
 import { dirname as dirname20, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve8 } from "node:path";
@@ -72362,6 +72490,29 @@ var METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
 module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
 ${METRO_INTEGRATION_END}`;
 var METRO_RUNTIME_POLICY2 = ".rn-agent/integration/metro-runtime-policy.json";
+var METRO_EVIDENCE_HEAD_CLIENT = String.raw`
+const { createConnection } = require('node:net');
+const socket = createConnection(process.argv[1]);
+let response = '';
+socket.setEncoding('utf8');
+socket.setTimeout(1500);
+socket.once('connect', () => socket.write(process.argv[2] + '\n'));
+socket.on('data', (chunk) => {
+  response += chunk;
+  if (response.length > 4096) process.exit(2);
+});
+socket.once('end', () => process.stdout.write(response));
+socket.once('timeout', () => process.exit(3));
+socket.once('error', () => process.exit(4));
+`;
+function readMetroEvidenceHead(socket, challenge) {
+  return execFileSync14(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
+    encoding: "utf8",
+    maxBuffer: 4096,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3
+  });
+}
 function updateFramed(hash, part) {
   const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
   hash.update(`${bytes.byteLength}:`);
@@ -72490,7 +72641,7 @@ function assertFinalMetroIntegration(identity2) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
   }
 }
-function metroRuntimeInputs(identity2, authority) {
+function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   if (!authority)
     return [];
   const raw = readFileSync36(join53(identity2.appRoot, METRO_RUNTIME_POLICY2), "utf8");
@@ -72582,6 +72733,31 @@ function metroRuntimeInputs(identity2, authority) {
     if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
     }
+  }
+  if (evidenceSequence === 0 || previousEvidenceSignature === null) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");
+  }
+  const challenge = randomBytes7(32).toString("hex");
+  let head;
+  try {
+    head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
+  } catch (error2) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is unavailable", {
+      cause: error2
+    });
+  }
+  const headPayload = {
+    version: head.version,
+    sessionId: head.sessionId,
+    metroInstanceId: head.metroInstanceId,
+    challenge: head.challenge,
+    sequence: head.sequence,
+    journalSignature: head.journalSignature
+  };
+  const expectedHead = createHmac4("sha256", authority.capability).update(JSON.stringify(headPayload)).digest();
+  const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
+  if (head.version !== 1 || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual7(observedHead, expectedHead)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
   }
   for (const launch of descendantLaunches) {
     if (!descendantAttestations.has(launch)) {
@@ -72753,7 +72929,8 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   const git = dependencies.git ?? defaultGit;
   const pathExists = dependencies.exists ?? existsSync35;
   assertFinalMetroIntegration(identity2);
-  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy);
+  const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
+  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader);
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
@@ -72835,7 +73012,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     }
     throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
   }
-  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy);
+  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader);
   if (JSON.stringify(runtimeInputsAfter) !== JSON.stringify(runtimeInputs)) {
     throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
   }
@@ -74312,7 +74489,7 @@ function proofAuthority(runId) {
     throw new Error("PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher");
   }
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
-  if (!secret?.signerCapability || typeof metro.instanceId !== "string" || typeof metro.runtimeEvidencePath !== "string") {
+  if (!secret?.signerCapability || typeof metro.instanceId !== "string" || typeof metro.runtimeEvidencePath !== "string" || typeof metro.runtimeEvidenceSocket !== "string") {
     throw new Error("PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable");
   }
   const source = strictProofSourceIdentity(status.source, {
@@ -74320,7 +74497,8 @@ function proofAuthority(runId) {
       sessionId: status.sessionId,
       metroInstanceId: metro.instanceId,
       capability: createHmac5("sha256", secret.signerCapability).update("metro-runtime-policy").digest("base64url"),
-      evidencePath: metro.runtimeEvidencePath
+      evidencePath: metro.runtimeEvidencePath,
+      evidenceSocket: metro.runtimeEvidenceSocket
     }
   });
   const pendingProof = status.bindings.proof?.runId;
