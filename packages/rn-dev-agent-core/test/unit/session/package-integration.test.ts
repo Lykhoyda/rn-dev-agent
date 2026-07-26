@@ -557,7 +557,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(
       childEntry,
-      "if (!process.send) { process.disconnect = () => process.exit(14); if (process.disconnect !== undefined) process.exit(15); } else { setInterval(() => {}, 1000); process.once('disconnect', () => process.exit(0)); process.once('message', (message) => { const disconnect = process.disconnect; const delegate = process._disconnect; const handleQueue = process._handleQueue; process.disconnect = () => process.exit(16); process._disconnect = () => process.exit(17); process._handleQueue = true; process.connected = false; try { Object.defineProperty(process, '_disconnect', { value: () => process.exit(18) }); } catch {} try { Object.defineProperty(process, '_handleQueue', { value: true }); } catch {} if (process.disconnect !== disconnect || process._disconnect !== delegate || process._handleQueue !== handleQueue) process.exit(19); const channelSymbol = Object.getOwnPropertySymbols(process).find((symbol) => symbol.description === 'kChannelHandle'); const channel = process[channelSymbol]; let writeOwner = channel; while (writeOwner && !Object.hasOwn(writeOwner, 'writeUtf8String')) writeOwner = Object.getPrototypeOf(writeOwner); for (const write of [channel.writeUtf8String, writeOwner.writeUtf8String]) { let rejected = false; try { write.call(channel); } catch (error) { rejected = error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'; } if (!rejected) process.exit(20); } process.on('error', () => {}); if (process.send({ rejected: message.color }) !== false) process.exit(21); process.connected = true; process._send({ acknowledged: message.color }, undefined, { swallowErrors: false }, (error) => { if (error) process.exit(22); }); if (message.color === 'red') { process.connected = false; process.disconnect.call({ connected: true, _handleQueue: true }); process.connected = true; } process._disconnect.call({ channel: null }); }); }",
+      "if (!process.send) { process.disconnect = () => process.exit(14); if (process.disconnect !== undefined) process.exit(15); } else { setInterval(() => {}, 1000); process.once('disconnect', () => process.exit(0)); process.once('message', (message) => { const disconnect = process.disconnect; const delegate = process._disconnect; const handleQueue = process._handleQueue; process.disconnect = () => process.exit(16); process._disconnect = () => process.exit(17); process._handleQueue = true; process.connected = false; try { Object.defineProperty(process, '_disconnect', { value: () => process.exit(18) }); } catch {} try { Object.defineProperty(process, '_handleQueue', { value: true }); } catch {} if (process.disconnect !== disconnect || process._disconnect !== delegate || process._handleQueue !== handleQueue) process.exit(19); const channelSymbol = Object.getOwnPropertySymbols(process).find((symbol) => symbol.description === 'kChannelHandle'); const channel = process[channelSymbol]; let rejected = false; try { channel.writeUtf8String(); } catch (error) { rejected = error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'; } if (!rejected) process.exit(20); process.on('error', () => {}); if (process.send({ rejected: message.color }) !== false) process.exit(21); process.connected = true; process._send({ acknowledged: message.color }, undefined, { swallowErrors: false }, (error) => { if (error) process.exit(22); }); if (message.color === 'red') { process.connected = false; process.disconnect.call({ connected: true, _handleQueue: true }); process.connected = true; } process._disconnect.call({ channel: null }); }); }",
     );
     writeFileSync(
       workerEntry,
@@ -574,7 +574,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => childProcess.execFile(process.execPath, [${JSON.stringify(childEntry)}])); unsupported(() => childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] })); unsupported(() => childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { stdio: 'inherit' })); unsupported(() => childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { stdio: [0, 'pipe', 'pipe'] })); const inputChild = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { input: 'authenticated' }); if (inputChild.status !== 0) process.exit(inputChild.status || 1); const ordinaryChild = childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}]); if (ordinaryChild.send !== undefined || ordinaryChild._send !== undefined) throw new Error('non-IPC child exposed send'); await new Promise((resolve, reject) => { ordinaryChild.once('error', reject); ordinaryChild.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn failed'))); }); for (const value of ['red', 'blue']) { let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return value; } }); const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}, 'same'], { argv0: 'node-' + value, env, timeout: value === 'red' ? 1000 : 2000, windowsVerbatimArguments: false }); if (child.status !== 0 || environmentReads !== 1) process.exit(child.status || 1); } for (const color of ['red', 'blue']) { const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'], serialization: color === 'red' ? 'json' : 'advanced' }); const channelSymbol = Object.getOwnPropertySymbols(child).find((symbol) => symbol.description === 'kChannelHandle'); const channel = child[channelSymbol]; let writeOwner = channel; while (writeOwner && !Object.hasOwn(writeOwner, 'writeBuffer')) writeOwner = Object.getPrototypeOf(writeOwner); unsupported(() => channel.writeBuffer()); unsupported(() => writeOwner.writeBuffer.call(channel)); const acknowledged = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', (message) => message.acknowledged === color ? resolve() : reject(new Error('fork response changed'))); }); const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); if (color === 'red') childProcess.ChildProcess.prototype.send.call(child, { color }); else child._send({ color }, undefined, { swallowErrors: false }); await Promise.all([acknowledged, exited]); } const workerThreads = require('node:worker_threads'); const { MessageChannel, Worker } = workerThreads; unsupported(() => new workerThreads.BroadcastChannel('unsupported')); if (typeof workerThreads.postMessageToThread === 'function') unsupported(() => workerThreads.postMessageToThread(1, { color: 'red' })); unsupported(() => workerThreads.setEnvironmentData('color', 'red')); const messageChannel = new MessageChannel(); unsupported(() => messageChannel.port1.postMessage({ color: 'red' })); messageChannel.port1.close(); messageChannel.port2.close(); unsupported(() => new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'], stdin: true })); const mutableWorkerUrl = require('node:url').pathToFileURL(${JSON.stringify(canonicalWorkerEntry)}); const mutableWorkerEnv = {}; Object.defineProperty(mutableWorkerEnv, 'COLOR', { enumerable: true, get: () => { mutableWorkerUrl.pathname = require('node:url').pathToFileURL(${JSON.stringify(alternateWorkerEntry)}).pathname; return 'canonical'; } }); const canonicalWorker = new Worker(mutableWorkerUrl, { env: mutableWorkerEnv, execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { canonicalWorker.once('error', reject); canonicalWorker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('mutable Worker entrypoint was used'))); }); for (const color of ['red', 'blue']) { const workerData = {}; Object.defineProperty(workerData, 'color', { enumerable: true, get: () => color }); let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return color; } }); const worker = new Worker(${JSON.stringify(workerEntry)}, { env, execArgv: ['--no-warnings'], workerData }); Worker.prototype.postMessage.call(worker, { color }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('message', resolve); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); if (environmentReads !== 1) throw new Error('Worker environment was read more than once'); } const killedChild = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killedChild.once('error', reject); killedChild.once('spawn', resolve); }); const killedExit = new Promise((resolve) => killedChild.once('exit', resolve)); killedChild.kill('SIGTERM'); await killedExit; const processKilledChild = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { processKilledChild.once('error', reject); processKilledChild.once('spawn', resolve); }); const processKilledExit = new Promise((resolve) => processKilledChild.once('exit', resolve)); process.kill(processKilledChild.pid, 'SIGTERM'); await processKilledExit; const terminatedWorker = new Worker(${JSON.stringify(lifecycleEntry)}, { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { terminatedWorker.once('error', reject); terminatedWorker.once('online', resolve); }); await terminatedWorker.terminate(); })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => childProcess.execFile(process.execPath, [${JSON.stringify(childEntry)}])); unsupported(() => childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] })); unsupported(() => childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { stdio: 'inherit' })); unsupported(() => childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { stdio: [0, 'pipe', 'pipe'] })); const inputChild = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { input: 'authenticated' }); if (inputChild.status !== 0) process.exit(inputChild.status || 1); const ordinaryChild = childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}]); if (ordinaryChild.send !== undefined || ordinaryChild._send !== undefined) throw new Error('non-IPC child exposed send'); await new Promise((resolve, reject) => { ordinaryChild.once('error', reject); ordinaryChild.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn failed'))); }); for (const value of ['red', 'blue']) { let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return value; } }); const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}, 'same'], { argv0: 'node-' + value, env, timeout: value === 'red' ? 1000 : 2000, windowsVerbatimArguments: false }); if (child.status !== 0 || environmentReads !== 1) process.exit(child.status || 1); } for (const color of ['red', 'blue']) { const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'], serialization: color === 'red' ? 'json' : 'advanced' }); const channelSymbol = Object.getOwnPropertySymbols(child).find((symbol) => symbol.description === 'kChannelHandle'); const channel = child[channelSymbol]; unsupported(() => channel.writeBuffer()); const acknowledged = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', (message) => message.acknowledged === color ? resolve() : reject(new Error('fork response changed'))); }); const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); if (color === 'red') childProcess.ChildProcess.prototype.send.call(child, { color }); else child._send({ color }, undefined, { swallowErrors: false }); await Promise.all([acknowledged, exited]); } const workerThreads = require('node:worker_threads'); const { MessageChannel, Worker } = workerThreads; unsupported(() => new workerThreads.BroadcastChannel('unsupported')); if (typeof workerThreads.postMessageToThread === 'function') unsupported(() => workerThreads.postMessageToThread(1, { color: 'red' })); unsupported(() => workerThreads.setEnvironmentData('color', 'red')); const messageChannel = new MessageChannel(); unsupported(() => messageChannel.port1.postMessage({ color: 'red' })); messageChannel.port1.close(); messageChannel.port2.close(); unsupported(() => new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'], stdin: true })); const mutableWorkerUrl = require('node:url').pathToFileURL(${JSON.stringify(canonicalWorkerEntry)}); const mutableWorkerEnv = {}; Object.defineProperty(mutableWorkerEnv, 'COLOR', { enumerable: true, get: () => { mutableWorkerUrl.pathname = require('node:url').pathToFileURL(${JSON.stringify(alternateWorkerEntry)}).pathname; return 'canonical'; } }); const canonicalWorker = new Worker(mutableWorkerUrl, { env: mutableWorkerEnv, execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { canonicalWorker.once('error', reject); canonicalWorker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('mutable Worker entrypoint was used'))); }); for (const color of ['red', 'blue']) { const workerData = {}; Object.defineProperty(workerData, 'color', { enumerable: true, get: () => color }); let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return color; } }); const worker = new Worker(${JSON.stringify(workerEntry)}, { env, execArgv: ['--no-warnings'], workerData }); Worker.prototype.postMessage.call(worker, { color }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('message', resolve); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); if (environmentReads !== 1) throw new Error('Worker environment was read more than once'); } const killedChild = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killedChild.once('error', reject); killedChild.once('spawn', resolve); }); const killedExit = new Promise((resolve) => killedChild.once('exit', resolve)); killedChild.kill('SIGTERM'); await killedExit; const processKilledChild = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { processKilledChild.once('error', reject); processKilledChild.once('spawn', resolve); }); const processKilledExit = new Promise((resolve) => processKilledChild.once('exit', resolve)); process.kill(processKilledChild.pid, 'SIGTERM'); await processKilledExit; const terminatedWorker = new Worker(${JSON.stringify(lifecycleEntry)}, { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { terminatedWorker.once('error', reject); terminatedWorker.once('online', resolve); }); await terminatedWorker.terminate(); })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -677,7 +677,7 @@ test('Metro fences underlying descendant constructors and native IPC controls', 
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(
       childEntry,
-      "const channelSymbol = Object.getOwnPropertySymbols(process).find((symbol) => symbol.description === 'kChannelHandle'); const channel = process[channelSymbol]; for (const [name, args] of [['readStop', []], ['readStart', []], ['ref', []], ['unref', []], ['hasRef', []], ['setBlocking', [false]]]) { let owner = channel; while (owner && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner); if (owner) owner[name].call(channel, ...args); } process.once('message', () => process.send({ acknowledged: true }, (error) => { if (error) process.exit(11); }));",
+      "const channelSymbol = Object.getOwnPropertySymbols(process).find((symbol) => symbol.description === 'kChannelHandle'); const channel = process[channelSymbol]; for (const [name, args] of [['readStop', []], ['readStart', []], ['ref', []], ['unref', []], ['hasRef', []], ['setBlocking', [false]]]) channel[name](...args); process.once('message', () => process.send({ acknowledged: true }, (error) => { if (error) process.exit(11); }));",
     );
     writeFileSync(workerEntry, 'process.exit(0);\n');
     const environment = metroPolicyEnvironment(adapterPath);
@@ -770,7 +770,10 @@ test('Metro seals native process handles and IPC read callbacks', () => {
       childEntry,
       "process.once('message', () => process.send({ acknowledged: true }, (error) => { if (error) process.exit(11); process.disconnect(); }));",
     );
-    writeFileSync(probeEntry, 'process.exit(0);\n');
+    writeFileSync(
+      probeEntry,
+      "process.exit(process.env.MARKER && process.env.MARKER !== 'safe' ? 23 : 0);\n",
+    );
     const environment = metroPolicyEnvironment(adapterPath);
     const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
     evidenceDescriptor = openSync(runtimeLoads, 'a');
@@ -783,9 +786,11 @@ test('Metro seals native process handles and IPC read callbacks', () => {
           const compose = require(${JSON.stringify(adapterPath)});
           const arrayMethods = {
             forEach: Array.prototype.forEach,
+            map: Array.prototype.map,
             push: Array.prototype.push,
             sort: Array.prototype.sort,
           };
+          const objectValues = Object.values;
           try {
             Array.prototype.forEach = function (callback, thisArg) {
               if (this.length === 1 && this[0] === false) return;
@@ -799,11 +804,17 @@ test('Metro seals native process handles and IPC read callbacks', () => {
               if (this.includes('watchFolders must be a path')) return [];
               return Reflect.apply(arrayMethods.sort, this, [compare]);
             };
-            compose({ watchFolders: [false] });
+            Object.values = () => [];
+            compose({
+              resolver: { extraNodeModules: { alias: false } },
+              watchFolders: [false],
+            });
           } finally {
             Array.prototype.forEach = arrayMethods.forEach;
+            Array.prototype.map = arrayMethods.map;
             Array.prototype.push = arrayMethods.push;
             Array.prototype.sort = arrayMethods.sort;
+            Object.values = objectValues;
           }
           const childProcess = require('node:child_process');
           const diagnosticsChannel = require('node:diagnostics_channel');
@@ -815,7 +826,14 @@ test('Metro seals native process handles and IPC read callbacks', () => {
               if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
             }
           };
-          const rawChild = new childProcess.ChildProcess();
+          const arrayIterator = Array.prototype[Symbol.iterator];
+          let rawChild;
+          try {
+            Array.prototype[Symbol.iterator] = function* () {};
+            rawChild = new childProcess.ChildProcess();
+          } finally {
+            Array.prototype[Symbol.iterator] = arrayIterator;
+          }
           const rawHandle = rawChild._handle;
           if (Object.getPrototypeOf(rawHandle) !== null) {
             throw new Error('native process prototype remained exposed');
@@ -824,9 +842,15 @@ test('Metro seals native process handles and IPC read callbacks', () => {
           unsupported(() => rawHandle.kill(0));
           unsupported(() => new rawHandle.constructor());
           unsupported(() => rawHandle.onexit(0, 0));
+          unsupported(() => Object.defineProperty(rawHandle, 'spawn', { value() {} }));
+          unsupported(() => Object.setPrototypeOf(rawHandle, {}));
           unsupported(() => {
             rawHandle.onexit = () => {};
           });
+          unsupported(() => {
+            rawChild._handle = { spawn() {} };
+          });
+          unsupported(() => rawHandle.close());
           unsupported(() => Object.getOwnPropertyDescriptor(rawHandle, 'onexit').value(0, 0));
           for (const name of ['close', 'hasRef', 'ref', 'unref']) {
             let owner = rawHandle;
@@ -874,8 +898,74 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             reflectionProbe.once('error', reject);
             reflectionProbe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('captured reflection spawn failed')));
           });
+          const objectMethods = {
+            entries: Object.entries,
+            fromEntries: Object.fromEntries,
+          };
+          let environmentProbe;
+          try {
+            Object.entries = () => [['MARKER', 'changed']];
+            Object.fromEntries = () => ({ MARKER: 'changed' });
+            environmentProbe = childProcess.spawn(
+              process.execPath,
+              [${JSON.stringify(probeEntry)}],
+              { env: { MARKER: 'safe' } },
+            );
+          } finally {
+            Object.entries = objectMethods.entries;
+            Object.fromEntries = objectMethods.fromEntries;
+          }
+          await new Promise((resolve, reject) => {
+            environmentProbe.once('error', reject);
+            environmentProbe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('captured environment changed')));
+          });
+          const reflectApply = Reflect.apply;
+          let applyProbe;
+          try {
+            Reflect.apply = function (target, receiver, args) {
+              if (
+                Array.isArray(args) &&
+                args[0] === process.execPath &&
+                Array.isArray(args[1])
+              ) {
+                args[1] = ['-e', 'process.exit(24)'];
+              }
+              return reflectApply(target, receiver, args);
+            };
+            applyProbe = childProcess.spawn(process.execPath, [${JSON.stringify(probeEntry)}]);
+          } finally {
+            Reflect.apply = reflectApply;
+          }
+          await new Promise((resolve, reject) => {
+            applyProbe.once('error', reject);
+            applyProbe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('mutable Reflect.apply changed launch')));
+          });
           let receiverSealed = false;
+          let handleFacadeSealed = false;
+          let handleSlotSealed = false;
           diagnosticsChannel.subscribe('child_process', ({ process: constructed }) => {
+            const facade = constructed._handle;
+            const savedSpawn = facade.spawn;
+            try {
+              Object.defineProperty(facade, 'spawn', {
+                value(options) {
+                  options.args = [process.execPath, '-e', 'process.exit(25)'];
+                  return savedSpawn(options);
+                },
+              });
+            } catch {
+              handleFacadeSealed = true;
+            }
+            try {
+              constructed._handle = {
+                spawn(options) {
+                  options.args = [process.execPath, '-e', 'process.exit(26)'];
+                  return savedSpawn(options);
+                },
+              };
+            } catch {
+              handleSlotSealed = true;
+            }
             try {
               Object.defineProperty(constructed, 'spawn', {
                 value(options) {
@@ -898,7 +988,9 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             probe.once('error', reject);
             probe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn failed')));
           });
-          if (!receiverSealed) throw new Error('spawn receiver was mutable');
+          if (!receiverSealed || !handleFacadeSealed || !handleSlotSealed) {
+            throw new Error('spawn receiver or native handle remained mutable');
+          }
           let injectDuplicateChannel = true;
           diagnosticsChannel.subscribe('child_process', ({ process: constructed }) => {
             if (!injectDuplicateChannel) return;
@@ -941,7 +1033,9 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             child.once('error', reject);
             child.once('message', (message) => {
               unsupported(() => channel.onread(new ArrayBuffer(0)));
-              channel.onread = () => {};
+              unsupported(() => {
+                channel.onread = () => {};
+              });
               unsupported(() => channel.onread(new ArrayBuffer(0)));
               message.acknowledged ? resolve() : reject(new Error('message changed'));
             });
@@ -985,8 +1079,16 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             Set.prototype.add = setMethods.add;
             Set.prototype.has = setMethods.has;
           }
-          child.send({ ready: true });
-          await Promise.all([acknowledged, exited]);
+          const completed = new Promise((resolve, reject) => {
+            Array.prototype.map = () => {
+              throw new Error('mutable Array.map authority was used');
+            };
+            child.send({ ready: true }, (error) => {
+              Array.prototype.map = arrayMethods.map;
+              error ? reject(error) : resolve();
+            });
+          });
+          await Promise.all([acknowledged, completed, exited]);
         })().catch((error) => {
           console.error(error);
           process.exit(1);
@@ -1016,6 +1118,7 @@ test('Metro seals native process handles and IPC read callbacks', () => {
       readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
     );
     assert.ok(policy.violations.includes('watchFolders must be a path'));
+    assert.ok(policy.violations.includes('extraNodeModules must be a path'));
     const evidence = readFileSync(runtimeLoads, 'utf8')
       .trim()
       .split('\n')
@@ -1060,7 +1163,7 @@ test('Metro lifecycle controls reject unowned targets and bind outcomes', () => 
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const fs = require('node:fs'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => process.kill(0, 0)); unsupported(() => process.kill(-1, 0)); unsupported(() => process.kill(process.pid, 0)); const child = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); }); let rejected = false; try { process.kill(child.pid, 'SIGINVALID'); } catch { rejected = true; } if (!rejected) throw new Error('invalid signal was accepted'); const exited = new Promise((resolve) => child.once('exit', resolve)); if (process.kill(child.pid, 'SIGTERM') !== true) throw new Error('process.kill result changed'); await exited; unsupported(() => process.kill(child.pid, 0)); const killed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killed.once('error', reject); killed.once('spawn', resolve); }); for (const invalidSignal of [null, NaN, '']) { let invalidRejected = false; try { killed.kill(invalidSignal); } catch (error) { invalidRejected = error.code === 'ERR_UNKNOWN_SIGNAL'; } if (!invalidRejected) throw new Error('invalid child signal was accepted'); } const killedExit = new Promise((resolve) => killed.once('exit', resolve)); const originalHandle = killed._handle; let mutableHandleCalled = false; killed._handle = { kill: () => { mutableHandleCalled = true; return 0; } }; const killedResult = killed.kill('sigterm'); killed._handle = originalHandle; if (mutableHandleCalled) { process.kill(killed.pid, 'SIGTERM'); throw new Error('mutable child handle was used'); } if (killedResult !== true || killed.killed !== true) throw new Error('child.kill result changed'); await killedExit; if (killed.kill('SIGTERM') !== false) throw new Error('retired child kill result changed'); const failedEnvironment = {}; Object.defineProperty(failedEnvironment, 'REMOVE_CWD', { enumerable: true, get: () => { fs.rmSync(${JSON.stringify(vanishingCwd)}, { recursive: true }); return '1'; } }); const failed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}], { cwd: ${JSON.stringify(vanishingCwd)}, env: failedEnvironment }); const failedError = new Promise((resolve) => failed.once('error', resolve)); if (failed.pid !== undefined) throw new Error('spawn failure unexpectedly received a pid'); if (failed.kill('SIGTERM') !== false) throw new Error('no-pid child kill result changed'); await failedError; const disconnecting = childProcess.fork(${JSON.stringify(disconnectEntry)}, [], { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('spawn', resolve); }); const disconnectedExit = new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('exit', (code) => code === 0 ? resolve() : reject(new Error('disconnect cleanup failed'))); }); disconnecting.disconnect(); await disconnectedExit; })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const fs = require('node:fs'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => process.kill(0, 0)); unsupported(() => process.kill(-1, 0)); unsupported(() => process.kill(process.pid, 0)); const child = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); }); let rejected = false; try { process.kill(child.pid, 'SIGINVALID'); } catch { rejected = true; } if (!rejected) throw new Error('invalid signal was accepted'); const exited = new Promise((resolve) => child.once('exit', resolve)); if (process.kill(child.pid, 'SIGTERM') !== true) throw new Error('process.kill result changed'); await exited; unsupported(() => process.kill(child.pid, 0)); const killed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killed.once('error', reject); killed.once('spawn', resolve); }); for (const invalidSignal of [null, NaN, '']) { let invalidRejected = false; try { killed.kill(invalidSignal); } catch (error) { invalidRejected = error.code === 'ERR_UNKNOWN_SIGNAL'; } if (!invalidRejected) throw new Error('invalid child signal was accepted'); } const killedExit = new Promise((resolve) => killed.once('exit', resolve)); unsupported(() => { killed._handle = { kill: () => 0 }; }); const killedResult = killed.kill('sigterm'); if (killedResult !== true || killed.killed !== true) throw new Error('child.kill result changed'); await killedExit; if (killed.kill('SIGTERM') !== false) throw new Error('retired child kill result changed'); const failedEnvironment = {}; Object.defineProperty(failedEnvironment, 'REMOVE_CWD', { enumerable: true, get: () => { fs.rmSync(${JSON.stringify(vanishingCwd)}, { recursive: true }); return '1'; } }); const failed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}], { cwd: ${JSON.stringify(vanishingCwd)}, env: failedEnvironment }); const failedError = new Promise((resolve) => failed.once('error', resolve)); if (failed.pid !== undefined) throw new Error('spawn failure unexpectedly received a pid'); if (failed.kill('SIGTERM') !== false) throw new Error('no-pid child kill result changed'); await failedError; const disconnecting = childProcess.fork(${JSON.stringify(disconnectEntry)}, [], { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('spawn', resolve); }); const disconnectedExit = new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('exit', (code) => code === 0 ? resolve() : reject(new Error('disconnect cleanup failed'))); }); disconnecting.disconnect(); await disconnectedExit; })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -1096,10 +1199,10 @@ test('Metro lifecycle controls reject unowned targets and bind outcomes', () => 
         .map((entries) => entries.map((entry) => entry.sequence))
         .sort((left, right) => left.length - right.length),
       [
-        [1, 2],
-        [1, 2],
         [1, 2, 3, 4],
-        Array.from({ length: 10 }, (_, index) => index + 1),
+        [1, 2, 3, 4],
+        [1, 2, 3, 4, 5, 6],
+        Array.from({ length: 12 }, (_, index) => index + 1),
       ],
     );
   } finally {

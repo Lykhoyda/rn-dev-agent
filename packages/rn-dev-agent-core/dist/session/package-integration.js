@@ -33,10 +33,16 @@ const IntrinsicProxy = Proxy;
 const IntrinsicSet = Set;
 const IntrinsicWeakMap = WeakMap;
 const IntrinsicWeakSet = WeakSet;
+const intrinsicArrayFilter = Array.prototype.filter;
 const intrinsicArrayForEach = Array.prototype.forEach;
+const intrinsicArrayMap = Array.prototype.map;
 const intrinsicArrayPush = Array.prototype.push;
+const intrinsicArraySlice = Array.prototype.slice;
 const intrinsicArraySort = Array.prototype.sort;
 const intrinsicDefineProperty = Object.defineProperty;
+const intrinsicObjectEntries = Object.entries;
+const intrinsicObjectFromEntries = Object.fromEntries;
+const intrinsicObjectValues = Object.values;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
 const intrinsicGetOwnPropertySymbols = Object.getOwnPropertySymbols;
@@ -77,8 +83,21 @@ function privateMapSet(map, key, value) {
 function privateArrayForEach(array, callback) {
   return intrinsicReflectApply(intrinsicArrayForEach, array, [callback]);
 }
+function privateArrayFilter(array, callback) {
+  return intrinsicReflectApply(intrinsicArrayFilter, array, [callback]);
+}
+function privateArrayMap(array, callback) {
+  return intrinsicReflectApply(intrinsicArrayMap, array, [callback]);
+}
 function privateArrayPush(array, ...values) {
   return intrinsicReflectApply(intrinsicArrayPush, array, values);
+}
+function privateArraySlice(array, start, end) {
+  return intrinsicReflectApply(
+    intrinsicArraySlice,
+    array,
+    end === undefined ? [start] : [start, end],
+  );
 }
 function privateArraySort(array, compare) {
   return intrinsicReflectApply(
@@ -101,6 +120,15 @@ function privateGetOwnPropertySymbols(value) {
 }
 function privateGetPrototypeOf(value) {
   return intrinsicReflectApply(intrinsicGetPrototypeOf, IntrinsicObject, [value]);
+}
+function privateObjectEntries(value) {
+  return intrinsicReflectApply(intrinsicObjectEntries, IntrinsicObject, [value]);
+}
+function privateObjectFromEntries(entries) {
+  return intrinsicReflectApply(intrinsicObjectFromEntries, IntrinsicObject, [entries]);
+}
+function privateObjectValues(value) {
+  return intrinsicReflectApply(intrinsicObjectValues, IntrinsicObject, [value]);
 }
 function privateSetAdd(set, value) {
   return intrinsicReflectApply(intrinsicSetAdd, set, [value]);
@@ -142,7 +170,7 @@ const accumulatedViolations = new IntrinsicSet();
 const observedLoaderDigests = new IntrinsicMap();
 const metroPolicyCapability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 const usesExternalEvidenceOwner = Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
-const authorityEnvironment = Object.entries(process.env).filter(
+const authorityEnvironment = privateArrayFilter(privateObjectEntries(process.env),
   ([key]) =>
     (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
     key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
@@ -279,7 +307,7 @@ if (descendantNonce) {
           undefined,
           () =>
             withNativeChannelControl(descendantMessageContext, () =>
-              Reflect.apply(processChannelClose, processChannelHandle, []),
+              intrinsicReflectApply(processChannelClose, processChannelHandle, []),
             ),
         );
       Object.defineProperty(processChannelHandle, 'close', {
@@ -294,7 +322,7 @@ if (descendantNonce) {
         value() {
           if (descendantLifecycleContext.disconnectDepth > 0) {
             return withNativeChannelControl(descendantMessageContext, () =>
-              Reflect.apply(processDisconnectDelegate, process, []),
+              intrinsicReflectApply(processDisconnectDelegate, process, []),
             );
           }
           return authenticatedLifecycleResult(
@@ -306,7 +334,7 @@ if (descendantNonce) {
               try {
                 process.connected = false;
                 return withNativeChannelControl(descendantMessageContext, () =>
-                  Reflect.apply(processDisconnectDelegate, process, []),
+                  intrinsicReflectApply(processDisconnectDelegate, process, []),
                 );
               } finally {
                 descendantLifecycleContext.disconnectDepth -= 1;
@@ -333,7 +361,11 @@ if (descendantNonce) {
             () => {
               descendantLifecycleContext.disconnectDepth += 1;
               try {
-                return Reflect.apply(processDisconnectImplementation, process, []);
+                return intrinsicReflectApply(
+                  processDisconnectImplementation,
+                  process,
+                  [],
+                );
               } finally {
                 descendantLifecycleContext.disconnectDepth -= 1;
               }
@@ -398,16 +430,18 @@ if (workerThreads.isMainThread && typeof process.send === 'function') {
 if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 function normalizedInvocationEnvironment(environment) {
   const entries = [];
-  for (const [key, value] of Object.entries(environment || process.env)) {
+  privateArrayForEach(privateObjectEntries(environment || process.env), ([key, value]) => {
     const normalizedKey = key.toUpperCase();
-    if (normalizedKey === 'NODE_OPTIONS' || normalizedKey.startsWith('RN_DEV_AGENT_')) continue;
+    if (normalizedKey === 'NODE_OPTIONS' || normalizedKey.startsWith('RN_DEV_AGENT_')) return;
     privateArrayPush(entries, [key, value]);
-  }
+  });
   return privateArraySort(entries, ([left], [right]) => left.localeCompare(right));
 }
 function authenticatedChildEnvironment(entries, nonce, semantics) {
-  const nextEnvironment = Object.fromEntries(entries);
-  for (const [key, value] of authorityEnvironment) nextEnvironment[key] = value;
+  const nextEnvironment = privateObjectFromEntries(entries);
+  privateArrayForEach(authorityEnvironment, ([key, value]) => {
+    nextEnvironment[key] = value;
+  });
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
   return nextEnvironment;
@@ -440,7 +474,7 @@ function snapshotInvocation(value) {
       privateSetForEach(candidate, (entry) => privateArrayPush(pending, entry));
       continue;
     }
-    privateArrayPush(pending, ...Object.values(candidate));
+    privateArrayPush(pending, ...privateObjectValues(candidate));
   }
   return {
     digest: createHash('sha256').update(bytes).digest('hex'),
@@ -457,6 +491,7 @@ const childDisconnectImplementations = new IntrinsicWeakMap();
 const childLifecycleContexts = new IntrinsicWeakMap();
 const childLifecycleTargets = new IntrinsicWeakMap();
 const childNativeProcessHandles = new IntrinsicWeakMap();
+const nativeProcessHandleSlots = new IntrinsicWeakMap();
 const workerMessageContexts = new IntrinsicWeakMap();
 const workerLifecycleContexts = new IntrinsicWeakMap();
 const portMessageContexts = new IntrinsicWeakMap();
@@ -484,7 +519,9 @@ function authenticatedPostMessage(original, receiver, context, message, transfer
   if (transferList !== undefined) {
     if (!Array.isArray(transferList) || transferList.length > 0) throw descendantError();
   }
-  return Reflect.apply(original, receiver, [authenticatedMessage(context, message)]);
+  return intrinsicReflectApply(original, receiver, [
+    authenticatedMessage(context, message),
+  ]);
 }
 function authenticatedIpcSend(
   original,
@@ -501,7 +538,12 @@ function authenticatedIpcSend(
     if (!primitive) throw descendantError();
     context.nativeWriteDepth += 1;
     try {
-      return Reflect.apply(original, receiver, [message, sendHandle, options, callback]);
+      return intrinsicReflectApply(original, receiver, [
+        message,
+        sendHandle,
+        options,
+        callback,
+      ]);
     } finally {
       context.nativeWriteDepth -= 1;
     }
@@ -526,10 +568,12 @@ function authenticatedIpcSend(
   let completionRecorded = false;
   const recordCompletion = (callbackArgs) => {
     if (completionRecorded) throw descendantError();
-    const normalizedCallbackArgs = callbackArgs.map((entry) => {
+    const normalizedCallbackArgs = privateArrayMap(callbackArgs, (entry) => {
       if (!(entry instanceof Error)) return snapshotInvocation(entry).value;
       const normalized = {};
-      for (const name of ['name', 'message', 'code', 'errno', 'syscall', 'path', 'dest']) {
+      const errorFields = ['name', 'message', 'code', 'errno', 'syscall', 'path', 'dest'];
+      for (let index = 0; index < errorFields.length; index += 1) {
+        const name = errorFields[index];
         const descriptor = privateGetOwnPropertyDescriptor(entry, name);
         if (descriptor && 'value' in descriptor) normalized[name] = descriptor.value;
       }
@@ -547,7 +591,7 @@ function authenticatedIpcSend(
       ? function (...callbackArgs) {
           recordCompletion(callbackArgs);
           if (typeof nextCallback === 'function') {
-            return Reflect.apply(nextCallback, this, callbackArgs);
+            return intrinsicReflectApply(nextCallback, this, callbackArgs);
           }
           if (callbackArgs[0] !== null && callbackArgs[0] !== undefined) {
             return receiver.emit('error', callbackArgs[0]);
@@ -559,7 +603,7 @@ function authenticatedIpcSend(
     if (primitive) context.nativeWriteDepth += 1;
     let result;
     try {
-      result = Reflect.apply(original, receiver, [
+      result = intrinsicReflectApply(original, receiver, [
         authenticated.message,
         undefined,
         authenticated.options,
@@ -594,33 +638,40 @@ function withNativeChannelControl(context, run) {
     context.nativeControlDepth -= 1;
   }
 }
-function nativeHandleFacade(handle, hiddenCallback) {
+function nativeHandleFacade(handle, hiddenCallback, hiddenCallbackDelegate) {
   const blockedCallback = function () {
     throw descendantError();
   };
-  return new IntrinsicProxy(handle, {
-    defineProperty(target, property, descriptor) {
-      if (property === hiddenCallback) throw descendantError();
-      return intrinsicDefineProperty(target, property, descriptor);
+  return new IntrinsicProxy(new IntrinsicObject(), {
+    defineProperty() {
+      throw descendantError();
     },
-    deleteProperty(target, property) {
-      if (property === hiddenCallback) throw descendantError();
-      return delete target[property];
+    deleteProperty() {
+      throw descendantError();
     },
-    get(target, property) {
-      if (property === hiddenCallback) return blockedCallback;
-      const value = intrinsicReflectGet(target, property, target);
+    get(_target, property) {
+      if (property === hiddenCallback) {
+        return hiddenCallbackDelegate || blockedCallback;
+      }
+      const value = intrinsicReflectGet(handle, property, handle);
       if (typeof value !== 'function') return value;
       return function (...args) {
-        return intrinsicReflectApply(value, target, args);
+        return intrinsicReflectApply(value, handle, args);
       };
     },
-    getOwnPropertyDescriptor(target, property) {
-      const descriptor = privateGetOwnPropertyDescriptor(target, property);
-      if (property !== hiddenCallback || !descriptor) return descriptor;
-      if (!descriptor.configurable) return descriptor;
+    getOwnPropertyDescriptor(_target, property) {
+      const descriptor = privateGetOwnPropertyDescriptor(handle, property);
+      if (!descriptor) return undefined;
+      if (property !== hiddenCallback) {
+        return {
+          configurable: true,
+          enumerable: descriptor.enumerable,
+          value: intrinsicReflectGet(handle, property, handle),
+          writable: false,
+        };
+      }
       return {
-        configurable: descriptor.configurable,
+        configurable: true,
         enumerable: descriptor.enumerable,
         value: blockedCallback,
         writable: false,
@@ -629,9 +680,60 @@ function nativeHandleFacade(handle, hiddenCallback) {
     getPrototypeOf() {
       return null;
     },
-    set(target, property, value) {
-      if (property === hiddenCallback) throw descendantError();
-      return intrinsicReflectSet(target, property, value, target);
+    preventExtensions() {
+      throw descendantError();
+    },
+    set() {
+      throw descendantError();
+    },
+    setPrototypeOf() {
+      throw descendantError();
+    },
+  });
+}
+function exposeNativeProcessHandle(child, handle) {
+  const originalOnExit = handle.onexit;
+  if (typeof originalOnExit !== 'function') throw descendantError();
+  const slot = {
+    exitDepth: 0,
+    exposed: undefined,
+    spawnDepth: 0,
+    spawnErrorPending: false,
+  };
+  const invokeOnExit = (...args) => {
+    slot.exitDepth += 1;
+    try {
+      return intrinsicReflectApply(originalOnExit, handle, args);
+    } finally {
+      slot.exitDepth -= 1;
+    }
+  };
+  intrinsicDefineProperty(handle, 'onexit', {
+    configurable: false,
+    enumerable: true,
+    value: invokeOnExit,
+    writable: false,
+  });
+  slot.exposed = nativeHandleFacade(handle, 'onexit', (...args) => {
+    if (!slot.spawnErrorPending) throw descendantError();
+    slot.spawnErrorPending = false;
+    return invokeOnExit(...args);
+  });
+  privateWeakMapSet(nativeProcessHandleSlots, handle, slot);
+  intrinsicDefineProperty(child, '_handle', {
+    configurable: false,
+    enumerable: true,
+    get() {
+      return slot.exposed;
+    },
+    set(value) {
+      if (
+        value !== null ||
+        (slot.exitDepth <= 0 && slot.spawnDepth <= 0)
+      ) {
+        throw descendantError();
+      }
+      slot.exposed = null;
     },
   });
 }
@@ -671,7 +773,9 @@ function fenceNativeReadCallback(handle, descriptor) {
 function fenceNativeHandleOwner(owner, handle, allowedOwnControls) {
   if (privateWeakSetHas(fencedNativeHandlePrototypes, owner)) return;
   privateWeakSetAdd(fencedNativeHandlePrototypes, owner);
-  for (const name of privateGetOwnPropertyNames(owner)) {
+  const names = privateGetOwnPropertyNames(owner);
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
     if (
       name === 'constructor' ||
       (owner === handle && privateSetHas(allowedOwnControls, name))
@@ -760,7 +864,10 @@ function fenceNativeProcessHandle(handle, context) {
           throw descendantError();
         }
         privateWeakMapDelete(authorizedNativeProcessSpawns, this);
-        return intrinsicReflectApply(spawn, this, args);
+        const result = intrinsicReflectApply(spawn, this, args);
+        const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
+        if (slot && result !== 0) slot.spawnErrorPending = true;
+        return result;
       },
       writable: false,
     });
@@ -796,12 +903,19 @@ function invocationCwd(cwd) {
     throw descendantError();
   }
 }
-function authenticatedChildArguments(args, optionsIndex, options, nonce, semantics) {
+function authenticatedChildArguments(
+  args,
+  optionsIndex,
+  options,
+  environmentEntries,
+  nonce,
+  semantics,
+) {
   const nextArgs = [...args];
   const candidate = nextArgs[optionsIndex];
   const authenticatedOptions = {
     ...options,
-    env: authenticatedChildEnvironment(Object.entries(options.env), nonce, semantics),
+    env: authenticatedChildEnvironment(environmentEntries, nonce, semantics),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -940,10 +1054,13 @@ function requireFileBackedNodeArguments(args, cwd) {
   return {
     entrypoint: requireFileBackedEntrypoint(entrypoint, cwd),
     execArgv,
-    applicationArgs: args.slice(entrypointIndex + 1).map((value) => {
+    applicationArgs: privateArrayMap(
+      privateArraySlice(args, entrypointIndex + 1),
+      (value) => {
       if (typeof value !== 'string') throw descendantError();
       return value;
-    }),
+      },
+    ),
   };
 }
 function requireFileBackedEntrypoint(entrypoint, cwd) {
@@ -1051,7 +1168,7 @@ function installMessageFences() {
     const nativeHandle = spawnedProcess._handle;
     fenceNativeProcessHandle(nativeHandle, authorization?.lifecycleContext);
     privateWeakMapSet(childNativeProcessHandles, spawnedProcess, nativeHandle);
-    spawnedProcess._handle = nativeHandleFacade(nativeHandle, 'onexit');
+    exposeNativeProcessHandle(spawnedProcess, nativeHandle);
     if (!authorization || authorization.receiver) return;
     authorization.receiver = spawnedProcess;
     privateWeakMapSet(authorizedChildSpawns, spawnedProcess, authorization);
@@ -1079,10 +1196,14 @@ function installMessageFences() {
       privateWeakMapDelete(authorizedChildSpawns, this);
       const nativeHandle = privateWeakMapGet(childNativeProcessHandles, this);
       if (!nativeHandle) throw descendantError();
+      const slot = privateWeakMapGet(nativeProcessHandleSlots, nativeHandle);
+      if (!slot) throw descendantError();
       privateWeakMapSet(authorizedNativeProcessSpawns, nativeHandle, options);
+      slot.spawnDepth += 1;
       try {
         return intrinsicReflectApply(originalChildSpawn, this, [options]);
       } finally {
+        slot.spawnDepth -= 1;
         privateWeakMapDelete(authorizedNativeProcessSpawns, nativeHandle);
       }
     },
@@ -1186,7 +1307,7 @@ function installMessageFences() {
         privateWeakMapGet(workerLifecycleContexts, this),
         'terminate',
         undefined,
-        () => Reflect.apply(originalWorkerTerminate, this, []),
+        () => intrinsicReflectApply(originalWorkerTerminate, this, []),
       );
     },
     writable: false,
@@ -1195,7 +1316,7 @@ function installMessageFences() {
   const originalProcessKill = process.kill;
   const normalizeChildSignal = (signal) => {
     let normalizedSignal;
-    Reflect.apply(
+    intrinsicReflectApply(
       originalChildKill,
       {
         _handle: {
@@ -1224,7 +1345,7 @@ function installMessageFences() {
           if (target.pid === undefined) return false;
           if (privateMapGet(processLifecycleTargets, target.pid) !== target) return false;
           try {
-            const result = Reflect.apply(originalProcessKill, process, [
+            const result = intrinsicReflectApply(originalProcessKill, process, [
               target.pid,
               normalizedSignal,
             ]);
@@ -1251,7 +1372,11 @@ function installMessageFences() {
       undefined,
       () =>
         withNativeChannelControl(privateWeakMapGet(childMessageContexts, this), () =>
-          Reflect.apply(privateWeakMapGet(childDisconnectImplementations, this), this, []),
+          intrinsicReflectApply(
+            privateWeakMapGet(childDisconnectImplementations, this),
+            this,
+            [],
+          ),
         ),
     );
   };
@@ -1284,7 +1409,7 @@ function installMessageFences() {
         'kill',
         { pid, signal },
         (authenticated) =>
-          Reflect.apply(originalProcessKill, process, [
+          intrinsicReflectApply(originalProcessKill, process, [
             authenticated.pid,
             authenticated.signal,
           ]),
@@ -1300,7 +1425,10 @@ function installMessageFences() {
     value(message, transferList) {
       const context = privateWeakMapGet(portMessageContexts, this);
       if (!context) {
-        return Reflect.apply(originalPortPostMessage, this, [message, transferList]);
+        return intrinsicReflectApply(originalPortPostMessage, this, [
+          message,
+          transferList,
+        ]);
       }
       return authenticatedPostMessage(
         originalPortPostMessage,
@@ -1412,7 +1540,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const authenticatedOptions = snapshotInvocation({
         ...rawOptions,
         cwd,
-        env: Object.fromEntries(environmentEntries),
+        env: privateObjectFromEntries(environmentEntries),
         stdio,
       }).value;
       const semantics = executionSemantics(mode, entrypoint, execArgv, {
@@ -1423,6 +1551,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
         args,
         index,
         authenticatedOptions,
+        environmentEntries,
         nonce,
         semantics,
       );
@@ -1444,7 +1573,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       }
       let child;
       try {
-        child = Reflect.apply(original, this, authenticatedArgs);
+        child = intrinsicReflectApply(original, this, authenticatedArgs);
       } finally {
         if (spawnAuthorization) {
           activeChildSpawnAuthorization = undefined;
@@ -1521,7 +1650,7 @@ function fenceNativeProcessLaunchBindings() {
       if (name === 'process_wrap' || name === 'spawn_sync') {
         throw descendantError();
       }
-      return Reflect.apply(originalBinding, process, [name]);
+      return intrinsicReflectApply(originalBinding, process, [name]);
     },
     writable: false,
   });
@@ -1554,9 +1683,10 @@ function fenceWorkers() {
     const invocationOptions = { ...capturedOptions };
     delete invocationOptions.execArgv;
     delete invocationOptions.transferList;
-    invocationOptions.env = Object.fromEntries(
-      snapshotInvocation(normalizedInvocationEnvironment(capturedOptions.env)).value,
-    );
+    const environmentEntries = snapshotInvocation(
+      normalizedInvocationEnvironment(capturedOptions.env),
+    ).value;
+    invocationOptions.env = privateObjectFromEntries(environmentEntries);
     const authenticatedInvocationOptions = snapshotInvocation(invocationOptions).value;
     const semantics = executionSemantics(
       'worker',
@@ -1575,7 +1705,7 @@ function fenceWorkers() {
         {
           ...authenticatedInvocationOptions,
           env: authenticatedChildEnvironment(
-            Object.entries(authenticatedInvocationOptions.env),
+            environmentEntries,
             nonce,
             semantics,
           ),
@@ -1900,7 +2030,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
       privateArrayPush(violations, 'extraNodeModules must be a path map');
     } else {
-      privateArrayForEach(Object.values(resolver.extraNodeModules), (value) =>
+      privateArrayForEach(privateObjectValues(resolver.extraNodeModules), (value) =>
         addPath(value, 'extraNodeModules')
       );
     }
@@ -2043,11 +2173,14 @@ function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
   return Object.assign(wrapped, callback);
 }
 function withPolicyCallbacks(config, names, getConfig) {
-  return Object.fromEntries(names.flatMap((name) =>
-    typeof config[name] === 'function'
-      ? [[name, withPolicyRefresh(config[name], getConfig, false)]]
-      : []
-  ));
+  const callbacks = {};
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (typeof config[name] === 'function') {
+      callbacks[name] = withPolicyRefresh(config[name], getConfig, false);
+    }
+  }
+  return callbacks;
 }
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
