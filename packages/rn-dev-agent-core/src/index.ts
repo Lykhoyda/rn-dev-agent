@@ -2370,7 +2370,11 @@ function proofAuthority(runId: string): ProofAuthority {
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
     ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
     : null;
-  if (!secret?.signerCapability || typeof metro.instanceId !== 'string') {
+  if (
+    !secret?.signerCapability ||
+    typeof metro.instanceId !== 'string' ||
+    typeof metro.runtimeEvidencePath !== 'string'
+  ) {
     throw new Error('PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable');
   }
   const source = strictProofSourceIdentity(status.source as unknown as SourceIdentity, {
@@ -2380,6 +2384,7 @@ function proofAuthority(runId: string): ProofAuthority {
       capability: createHmac('sha256', secret.signerCapability)
         .update('metro-runtime-policy')
         .digest('base64url'),
+      evidencePath: metro.runtimeEvidencePath,
     },
   });
   const pendingProof = (status.bindings.proof as Record<string, unknown> | undefined)?.runId;

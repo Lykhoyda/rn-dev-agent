@@ -944,7 +944,7 @@ function metroRuntimeInputs(identity2, authority) {
     throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
   }
   const runtimeInputs = new Set(receipt2.runtimeInputs);
-  const runtimeLoadsPath = join4(identity2.appRoot, METRO_RUNTIME_LOADS);
+  const runtimeLoadsPath = authority.evidencePath;
   let runtimeLoadsRaw;
   try {
     const runtimeLoadsStat = lstatSync(runtimeLoadsPath);
@@ -961,6 +961,8 @@ function metroRuntimeInputs(identity2, authority) {
   const descendantLaunches = /* @__PURE__ */ new Set();
   const descendantAttestations = /* @__PURE__ */ new Set();
   const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
+  let evidenceSequence = 0;
+  let previousEvidenceSignature = null;
   for (const rawLoad of runtimeLoadsRaw.split("\n").filter(Boolean)) {
     let load;
     try {
@@ -976,13 +978,17 @@ function metroRuntimeInputs(identity2, authority) {
       metroInstanceId: load.metroInstanceId,
       kind: load.kind,
       value: load.value,
-      digest: load.digest
+      digest: load.digest,
+      sequence: load.sequence,
+      previousSignature: load.previousSignature
     };
     const expectedLoad = createHmac("sha256", authority.capability).update(JSON.stringify(loadPayload)).digest();
     const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" || typeof load.value !== "string" || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
+    if (load.version !== 1 || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
     }
+    evidenceSequence = load.sequence;
+    previousEvidenceSignature = load.signature;
     const key = `${load.kind}\0${load.value}`;
     runtimeEvidenceKeys.add(key);
     if (load.kind === "launch" || load.kind === "attestation") {
@@ -1273,7 +1279,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     dirtyDigest: dirtyHash.digest("hex")
   };
 }
-var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY, METRO_RUNTIME_LOADS;
+var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY;
 var init_source_identity = __esm({
   "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
     "use strict";
@@ -1314,7 +1320,6 @@ var init_source_identity = __esm({
 module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
 ${METRO_INTEGRATION_END}`;
     METRO_RUNTIME_POLICY = ".rn-agent/integration/metro-runtime-policy.json";
-    METRO_RUNTIME_LOADS = ".rn-agent/integration/metro-runtime-loads.jsonl";
   }
 });
 
@@ -22803,19 +22808,91 @@ var init_managed_metro = __esm({
     init_process_birth();
     METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
-const { writeFileSync } = require('node:fs');
+const { createHmac } = require('node:crypto');
+const { closeSync, openSync, writeSync } = require('node:fs');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
-const runtimeLoads = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
-if (!executable || !runtimeLoads) process.exit(1);
-writeFileSync(runtimeLoads, '', { mode: 0o600 });
+const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
+const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
+if (!executable || !evidencePath || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
+  process.exit(1);
+}
+const evidenceDescriptor = 9;
+const journalDescriptor = openSync(evidencePath, 'w', 0o600);
+let sequence = 0;
+let previousSignature = null;
+let buffered = '';
+function appendEvidence(payload) {
+  const chainedPayload = { ...payload, sequence: ++sequence, previousSignature };
+  const signature = createHmac('sha256', capability)
+    .update(JSON.stringify(chainedPayload))
+    .digest('hex');
+  writeSync(journalDescriptor, JSON.stringify({ ...chainedPayload, signature }) + '\n');
+  previousSignature = signature;
+}
+function appendViolation(value) {
+  appendEvidence({
+    version: 1,
+    sessionId,
+    metroInstanceId,
+    kind: 'violation',
+    value,
+    digest: null,
+  });
+}
+const childEnvironment = {
+  ...process.env,
+  NODE_OPTIONS: childNodeOptions,
+  RN_DEV_AGENT_METRO_EVIDENCE_FD: String(evidenceDescriptor),
+};
+delete childEnvironment.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
+delete childEnvironment.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
 const child = spawn(executable, args, {
   cwd: process.cwd(),
-  env: process.env,
-  stdio: 'inherit',
+  env: childEnvironment,
+  stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
+});
+const evidence = child.stdio[evidenceDescriptor];
+evidence.setEncoding('utf8');
+evidence.on('data', (chunk) => {
+  buffered += chunk;
+  if (buffered.length > 1024 * 1024) {
+    appendViolation('Metro runtime evidence record exceeds the limit');
+    buffered = '';
+    return;
+  }
+  let newline;
+  while ((newline = buffered.indexOf('\n')) >= 0) {
+    const line = buffered.slice(0, newline);
+    buffered = buffered.slice(newline + 1);
+    if (!line) continue;
+    try {
+      const payload = JSON.parse(line);
+      if (
+        payload.version !== 1 ||
+        payload.sessionId !== sessionId ||
+        payload.metroInstanceId !== metroInstanceId ||
+        !['input', 'violation', 'launch', 'attestation'].includes(payload.kind) ||
+        typeof payload.value !== 'string' ||
+        (payload.kind === 'input'
+          ? typeof payload.digest !== 'string'
+          : payload.digest !== null)
+      ) {
+        throw new Error('invalid evidence');
+      }
+      appendEvidence(payload);
+    } catch {
+      appendViolation('Metro runtime evidence record is invalid');
+    }
+  }
 });
 child.once('error', () => process.exit(1));
 child.once('exit', (code, signal) => {
+  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  closeSync(journalDescriptor);
   process.exit(signal ? 1 : (code ?? 1));
 });
 setInterval(() => {}, 1 << 30);
@@ -72601,10 +72678,14 @@ const accumulatedRuntimeInputs = new Set();
 const accumulatedViolations = new Set();
 const observedLoaderDigests = new Map();
 const metroPolicyCapability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+const usesExternalEvidenceOwner = Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
 const authorityEnvironment = Object.entries(process.env).filter(
   ([key]) =>
     (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
-    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE',
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
+    (!usesExternalEvidenceOwner ||
+      (key !== 'RN_DEV_AGENT_METRO_POLICY_CAPABILITY' &&
+        key !== 'RN_DEV_AGENT_METRO_RUNTIME_LOADS')),
 );
 let cachedSourceRoot;
 let sourceRootResolved = false;
@@ -72613,7 +72694,8 @@ let initialCacheCaptured = false;
 let loaderEpoch = 0;
 let runtimeLoadsDescriptor;
 function writeRuntimeLoad(line, loadsPath) {
-  runtimeLoadsDescriptor ??= fs.openSync(loadsPath, 'a', 0o600);
+  runtimeLoadsDescriptor ??=
+    typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
   const bytes = Buffer.from(line);
   let offset = 0;
   while (offset < bytes.length) {
@@ -72626,9 +72708,15 @@ process.once('exit', () => {
 function persistLoaderObservation(kind, value, digest = null) {
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
   const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
   const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
-  if (!metroPolicyCapability || !sessionId || !metroInstanceId || !loadsPath) return;
+  if (!sessionId || !metroInstanceId) return;
   const payload = { version: 1, sessionId, metroInstanceId, kind, value, digest };
+  if (Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3) {
+    writeRuntimeLoad(JSON.stringify(payload) + '\\n', evidenceDescriptor);
+    return;
+  }
+  if (!metroPolicyCapability || !loadsPath) return;
   const serializedPayload = JSON.stringify(payload);
   const receipt = {
     ...payload,
@@ -72671,6 +72759,7 @@ function authenticatedChildArguments(args, optionsIndex, nonce) {
   const authenticatedOptions = {
     ...options,
     env: authenticatedChildEnvironment(options.env, nonce),
+    stdio: authenticatedChildStdio(options.stdio),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -72678,6 +72767,21 @@ function authenticatedChildArguments(args, optionsIndex, nonce) {
     nextArgs[optionsIndex] = authenticatedOptions;
   }
   return nextArgs;
+}
+function authenticatedChildStdio(stdio) {
+  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
+  if (!Number.isInteger(evidenceDescriptor) || evidenceDescriptor < 3) return stdio;
+  const normalized =
+    Array.isArray(stdio)
+      ? [...stdio]
+      : stdio === 'inherit'
+        ? ['inherit', 'inherit', 'inherit']
+        : stdio === 'ignore'
+          ? ['ignore', 'ignore', 'ignore']
+          : ['pipe', 'pipe', 'pipe'];
+  while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
+  normalized[evidenceDescriptor] = evidenceDescriptor;
+  return normalized;
 }
 function descendantError() {
   const error = new Error('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION');
@@ -72706,6 +72810,34 @@ function requireNodeExecutable(command, options) {
     throw descendantError();
   }
 }
+function isInlineNodeOption(value) {
+  if (typeof value !== 'string') return false;
+  const option = value.split('=', 1)[0].replaceAll('_', '-');
+  return (
+    option === '-e' ||
+    option.startsWith('-e') ||
+    option === '-p' ||
+    option.startsWith('-p') ||
+    ['--eval', '--print', '--input-type'].includes(option)
+  );
+}
+function requireFileBackedNodeArguments(args) {
+  if (!Array.isArray(args) || args.length === 0 || args[0] === '-') throw descendantError();
+  if (args.some(isInlineNodeOption)) throw descendantError();
+}
+function requireSafeWorkerExecArgv(execArgv) {
+  if (execArgv.some(isInlineNodeOption)) throw descendantError();
+  for (const argument of execArgv) {
+    const option = typeof argument === 'string' ? argument.split('=', 1)[0] : '';
+    if (
+      ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(
+        option.replaceAll('_', '-'),
+      )
+    ) {
+      throw descendantError();
+    }
+  }
+}
 function recordChildLaunch(nonce, child) {
   if (!child || typeof child.pid !== 'number') return;
   persistLoaderObservation('launch', nonce + ':process:' + child.pid);
@@ -72720,10 +72852,16 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const nonce = randomBytes(16).toString('hex');
       const authenticatedArgs = authenticatedChildArguments(args, index, nonce);
       const options = authenticatedArgs[index];
-      if (mode === 'node' || mode === 'sync') requireNodeExecutable(args[0], options);
+      if (mode === 'node' || mode === 'sync') {
+        requireNodeExecutable(args[0], options);
+        requireFileBackedNodeArguments(args[1]);
+      }
       if (mode === 'fork') {
         if (options.execPath) requireNodeExecutable(options.execPath, options);
         options.execPath = nodeExecutable;
+        if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
+          options.stdio[3] = 'ipc';
+        }
       }
       const child = Reflect.apply(original, this, authenticatedArgs);
       if (mode === 'sync') {
@@ -72751,12 +72889,22 @@ function fenceWorkers() {
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
   class AuthenticatedWorker extends OriginalWorker {
     constructor(filename, options = {}) {
+      if (
+        options.eval ||
+        (typeof filename === 'string' && filename.startsWith('data:')) ||
+        (filename instanceof URL && filename.protocol === 'data:')
+      ) {
+        throw descendantError();
+      }
       const nonce = randomBytes(16).toString('hex');
-      const requestedExecArgv = Array.isArray(options.execArgv) ? options.execArgv : [];
+      const requestedExecArgv = Array.isArray(options.execArgv)
+        ? [...options.execArgv]
+        : [...process.execArgv];
+      requireSafeWorkerExecArgv(requestedExecArgv);
       super(filename, {
         ...options,
         env: authenticatedChildEnvironment(options.env, nonce),
-        execArgv: [...requestedExecArgv, '--require', authorityPreload],
+        execArgv: ['--require', authorityPreload, ...requestedExecArgv],
       });
       persistLoaderObservation('launch', nonce + ':worker:' + this.threadId);
     }
@@ -72772,8 +72920,8 @@ const optionalArgsIndex = (args) => (Array.isArray(args[1]) ? 2 : 1);
 const canAuthenticateChildProcesses =
   Boolean(process.env.NODE_OPTIONS) &&
   Boolean(process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD) &&
-  Boolean(metroPolicyCapability) &&
-  Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS);
+  (Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD) ||
+    (Boolean(metroPolicyCapability) && Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS)));
 if (canAuthenticateChildProcesses) {
   fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
   fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
@@ -73076,8 +73224,9 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   try {
     authorityPreloadMatches =
       fs.realpathSync(authorityPreload) === fs.realpathSync(__filename) &&
-      fs.realpathSync(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS) ===
-        fs.realpathSync(path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_LOADS2)}));
+      (Number.isInteger(Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD)) ||
+        fs.realpathSync(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS) ===
+          fs.realpathSync(path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_LOADS)})));
   } catch {}
   if (
     !authorityPreload ||
@@ -73615,7 +73764,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     "rn-session-metro.cjs",
     "authority-marker.js",
     "metro-runtime-policy.json",
-    basename6(METRO_RUNTIME_LOADS2)
+    basename6(METRO_RUNTIME_LOADS)
   ];
   const applied = [];
   let primaryError;
@@ -73735,7 +73884,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     "rn-session-metro.cjs",
     "authority-marker.js",
     "metro-runtime-policy.json",
-    basename6(METRO_RUNTIME_LOADS2)
+    basename6(METRO_RUNTIME_LOADS)
   ];
   const applied = [];
   let primaryError;
@@ -73821,7 +73970,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
   }
 }
-var ADAPTER, METRO_ADAPTER, AUTHORITY_MODULE, METRO_RUNTIME_POLICY2, METRO_RUNTIME_LOADS2, METRO_START, METRO_END, SENTINELS;
+var ADAPTER, METRO_ADAPTER, AUTHORITY_MODULE, METRO_RUNTIME_POLICY2, METRO_RUNTIME_LOADS, METRO_START, METRO_END, SENTINELS;
 var init_package_integration = __esm({
   "packages/rn-dev-agent-core/dist/session/package-integration.js"() {
     "use strict";
@@ -73832,7 +73981,7 @@ var init_package_integration = __esm({
     METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
     AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
     METRO_RUNTIME_POLICY2 = ".rn-agent/integration/metro-runtime-policy.json";
-    METRO_RUNTIME_LOADS2 = ".rn-agent/integration/metro-runtime-loads.jsonl";
+    METRO_RUNTIME_LOADS = ".rn-agent/integration/metro-runtime-loads.jsonl";
     METRO_START = "// rn-dev-agent session integration: begin";
     METRO_END = "// rn-dev-agent session integration: end";
     SENTINELS = {
@@ -75106,14 +75255,15 @@ function proofAuthority(runId) {
     throw new Error("PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher");
   }
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
-  if (!secret?.signerCapability || typeof metro.instanceId !== "string") {
+  if (!secret?.signerCapability || typeof metro.instanceId !== "string" || typeof metro.runtimeEvidencePath !== "string") {
     throw new Error("PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable");
   }
   const source = strictProofSourceIdentity(status.source, {
     metroRuntimePolicy: {
       sessionId: status.sessionId,
       metroInstanceId: metro.instanceId,
-      capability: createHmac5("sha256", secret.signerCapability).update("metro-runtime-policy").digest("base64url")
+      capability: createHmac5("sha256", secret.signerCapability).update("metro-runtime-policy").digest("base64url"),
+      evidencePath: metro.runtimeEvidencePath
     }
   });
   const pendingProof = status.bindings.proof?.runId;

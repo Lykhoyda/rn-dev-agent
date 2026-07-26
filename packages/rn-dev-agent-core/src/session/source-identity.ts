@@ -44,6 +44,7 @@ interface SourceIdentityDependencies {
     sessionId: string;
     metroInstanceId: string;
     capability: string;
+    evidencePath: string;
   };
   declaredRoot?: string;
   declaredManifests?: readonly string[];
@@ -95,7 +96,6 @@ const METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
 module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
 ${METRO_INTEGRATION_END}`;
 const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
-const METRO_RUNTIME_LOADS = '.rn-agent/integration/metro-runtime-loads.jsonl';
 
 function updateFramed(hash: ReturnType<typeof createHash>, part: string | Buffer): void {
   const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
@@ -336,7 +336,7 @@ function metroRuntimeInputs(
     throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt.violations[0]}`);
   }
   const runtimeInputs = new Set(receipt.runtimeInputs);
-  const runtimeLoadsPath = join(identity.appRoot, METRO_RUNTIME_LOADS);
+  const runtimeLoadsPath = authority.evidencePath;
   let runtimeLoadsRaw: string;
   try {
     const runtimeLoadsStat = lstatSync(runtimeLoadsPath);
@@ -356,6 +356,8 @@ function metroRuntimeInputs(
   const descendantLaunches = new Set<string>();
   const descendantAttestations = new Set<string>();
   const runtimeEvidenceKeys = new Set<string>();
+  let evidenceSequence = 0;
+  let previousEvidenceSignature: string | null = null;
   for (const rawLoad of runtimeLoadsRaw.split('\n').filter(Boolean)) {
     let load: {
       version?: unknown;
@@ -364,6 +366,8 @@ function metroRuntimeInputs(
       kind?: unknown;
       value?: unknown;
       digest?: unknown;
+      sequence?: unknown;
+      previousSignature?: unknown;
       signature?: unknown;
     };
     try {
@@ -374,6 +378,8 @@ function metroRuntimeInputs(
         kind?: unknown;
         value?: unknown;
         digest?: unknown;
+        sequence?: unknown;
+        previousSignature?: unknown;
         signature?: unknown;
       };
     } catch (error) {
@@ -388,6 +394,8 @@ function metroRuntimeInputs(
       kind: load.kind,
       value: load.value,
       digest: load.digest,
+      sequence: load.sequence,
+      previousSignature: load.previousSignature,
     };
     const expectedLoad = createHmac('sha256', authority.capability)
       .update(JSON.stringify(loadPayload))
@@ -403,6 +411,9 @@ function metroRuntimeInputs(
         load.kind !== 'launch' &&
         load.kind !== 'attestation') ||
       typeof load.value !== 'string' ||
+      !Number.isSafeInteger(load.sequence) ||
+      load.sequence !== evidenceSequence + 1 ||
+      load.previousSignature !== previousEvidenceSignature ||
       (load.kind === 'input'
         ? typeof load.digest !== 'string' || !/^[a-f0-9]{64}$/.test(load.digest)
         : load.digest !== null) ||
@@ -411,6 +422,8 @@ function metroRuntimeInputs(
     ) {
       throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
     }
+    evidenceSequence = load.sequence as number;
+    previousEvidenceSignature = load.signature as string;
     const key = `${load.kind}\0${load.value}`;
     runtimeEvidenceKeys.add(key);
     if (load.kind === 'launch' || load.kind === 'attestation') {

@@ -388,6 +388,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   roots.push(externalInput);
   const external = realpathSync(externalInput);
   const runtimeFile = join(external, 'transformer.js');
+  const runtimeEvidencePath = join(external, 'metro-runtime-evidence.jsonl');
   const integration = join(root, '.rn-agent', 'integration');
   mkdirSync(integration, { recursive: true });
   writeFileSync(runtimeFile, 'module.exports = "first";');
@@ -417,15 +418,6 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     value: runtimeFile,
     digest: createHash('sha256').update('module.exports = "first";').digest('hex'),
   };
-  writeFileSync(
-    join(integration, 'metro-runtime-loads.jsonl'),
-    `${JSON.stringify({
-      ...runtimeLoadPayload,
-      signature: createHmac('sha256', capability)
-        .update(JSON.stringify(runtimeLoadPayload))
-        .digest('hex'),
-    })}\n`,
-  );
   const identity = {
     kind: 'git' as const,
     contentRoot: root,
@@ -446,14 +438,26 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     sessionId: 'session',
     metroInstanceId: 'metro',
     capability,
+    evidencePath: runtimeEvidencePath,
   };
-
+  const signRuntimeLoads = (entries: Record<string, unknown>[]) => {
+    let previousSignature: string | null = null;
+    return entries
+      .map((entry, index) => {
+        const chained = {
+          ...entry,
+          sequence: index + 1,
+          previousSignature,
+        };
+        previousSignature = createHmac('sha256', capability)
+          .update(JSON.stringify(chained))
+          .digest('hex');
+        return JSON.stringify({ ...chained, signature: previousSignature });
+      })
+      .join('\n');
+  };
+  writeFileSync(runtimeEvidencePath, `${signRuntimeLoads([runtimeLoadPayload])}\n`);
   const first = strictProofSourceIdentity(identity, { git, metroRuntimePolicy });
-  const signRuntimeLoad = (entry: Record<string, unknown>) =>
-    JSON.stringify({
-      ...entry,
-      signature: createHmac('sha256', capability).update(JSON.stringify(entry)).digest('hex'),
-    });
   const launchPayload = {
     version: 1,
     sessionId: 'session',
@@ -464,21 +468,21 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   };
   const attestationPayload = { ...launchPayload, kind: 'attestation' };
   writeFileSync(
-    join(integration, 'metro-runtime-loads.jsonl'),
-    `${signRuntimeLoad(runtimeLoadPayload)}\n${signRuntimeLoad(launchPayload)}\n${signRuntimeLoad(attestationPayload)}\n`,
+    runtimeEvidencePath,
+    `${signRuntimeLoads([runtimeLoadPayload, launchPayload, attestationPayload])}\n`,
   );
   assert.doesNotThrow(() => strictProofSourceIdentity(identity, { git, metroRuntimePolicy }));
   writeFileSync(
-    join(integration, 'metro-runtime-loads.jsonl'),
-    `${signRuntimeLoad(runtimeLoadPayload)}\n${signRuntimeLoad(launchPayload)}\n`,
+    runtimeEvidencePath,
+    `${signRuntimeLoads([runtimeLoadPayload, launchPayload])}\n`,
   );
   assert.throws(
     () => strictProofSourceIdentity(identity, { git, metroRuntimePolicy }),
     /descendant execution was not attested/,
   );
   writeFileSync(
-    join(integration, 'metro-runtime-loads.jsonl'),
-    `${signRuntimeLoad(runtimeLoadPayload)}\n`,
+    runtimeEvidencePath,
+    `${signRuntimeLoads([runtimeLoadPayload])}\n`,
   );
   writeFileSync(runtimeFile, 'module.exports = "second";');
   assert.match(first.dirtyDigest, /^[a-f0-9]{64}$/);
@@ -487,8 +491,13 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     /runtime input bytes changed after execution/,
   );
   writeFileSync(
-    join(integration, 'metro-runtime-loads.jsonl'),
-    `${JSON.stringify({ ...runtimeLoadPayload, signature: '00'.repeat(32) })}\n`,
+    runtimeEvidencePath,
+    `${JSON.stringify({
+      ...runtimeLoadPayload,
+      sequence: 1,
+      previousSignature: null,
+      signature: '00'.repeat(32),
+    })}\n`,
   );
   assert.throws(
     () => strictProofSourceIdentity(identity, { git, metroRuntimePolicy }),

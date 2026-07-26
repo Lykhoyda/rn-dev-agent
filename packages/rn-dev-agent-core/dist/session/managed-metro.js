@@ -6,19 +6,91 @@ import { captureMetroBinding, metroListenerPid, probeMetroListener, } from './me
 import { probeProcessBirth, readProcessBirth, } from './process-birth.js';
 const METRO_LAUNCHER_SOURCE = String.raw `
 const { spawn } = require('node:child_process');
-const { writeFileSync } = require('node:fs');
+const { createHmac } = require('node:crypto');
+const { closeSync, openSync, writeSync } = require('node:fs');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
-const runtimeLoads = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
-if (!executable || !runtimeLoads) process.exit(1);
-writeFileSync(runtimeLoads, '', { mode: 0o600 });
+const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
+const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
+if (!executable || !evidencePath || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
+  process.exit(1);
+}
+const evidenceDescriptor = 9;
+const journalDescriptor = openSync(evidencePath, 'w', 0o600);
+let sequence = 0;
+let previousSignature = null;
+let buffered = '';
+function appendEvidence(payload) {
+  const chainedPayload = { ...payload, sequence: ++sequence, previousSignature };
+  const signature = createHmac('sha256', capability)
+    .update(JSON.stringify(chainedPayload))
+    .digest('hex');
+  writeSync(journalDescriptor, JSON.stringify({ ...chainedPayload, signature }) + '\n');
+  previousSignature = signature;
+}
+function appendViolation(value) {
+  appendEvidence({
+    version: 1,
+    sessionId,
+    metroInstanceId,
+    kind: 'violation',
+    value,
+    digest: null,
+  });
+}
+const childEnvironment = {
+  ...process.env,
+  NODE_OPTIONS: childNodeOptions,
+  RN_DEV_AGENT_METRO_EVIDENCE_FD: String(evidenceDescriptor),
+};
+delete childEnvironment.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
+delete childEnvironment.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
 const child = spawn(executable, args, {
   cwd: process.cwd(),
-  env: process.env,
-  stdio: 'inherit',
+  env: childEnvironment,
+  stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
+});
+const evidence = child.stdio[evidenceDescriptor];
+evidence.setEncoding('utf8');
+evidence.on('data', (chunk) => {
+  buffered += chunk;
+  if (buffered.length > 1024 * 1024) {
+    appendViolation('Metro runtime evidence record exceeds the limit');
+    buffered = '';
+    return;
+  }
+  let newline;
+  while ((newline = buffered.indexOf('\n')) >= 0) {
+    const line = buffered.slice(0, newline);
+    buffered = buffered.slice(newline + 1);
+    if (!line) continue;
+    try {
+      const payload = JSON.parse(line);
+      if (
+        payload.version !== 1 ||
+        payload.sessionId !== sessionId ||
+        payload.metroInstanceId !== metroInstanceId ||
+        !['input', 'violation', 'launch', 'attestation'].includes(payload.kind) ||
+        typeof payload.value !== 'string' ||
+        (payload.kind === 'input'
+          ? typeof payload.digest !== 'string'
+          : payload.digest !== null)
+      ) {
+        throw new Error('invalid evidence');
+      }
+      appendEvidence(payload);
+    } catch {
+      appendViolation('Metro runtime evidence record is invalid');
+    }
+  }
 });
 child.once('error', () => process.exit(1));
 child.once('exit', (code, signal) => {
+  if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  closeSync(journalDescriptor);
   process.exit(signal ? 1 : (code ?? 1));
 });
 setInterval(() => {}, 1 << 30);
@@ -172,7 +244,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         throw new Error('METRO_START_UNAVAILABLE: NODE_OPTIONS loaders are unsupported');
     }
     const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
-    const runtimeLoads = join(input.appRoot, '.rn-agent', 'integration', 'metro-runtime-loads.jsonl');
+    const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');
     const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`]
         .filter(Boolean)
         .join(' ');
@@ -189,8 +261,9 @@ export async function startManagedMetro(input, dependencies = {}) {
             RN_DEV_AGENT_METRO_POLICY_CAPABILITY: runtimePolicyCapability,
             RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
             RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
-            RN_DEV_AGENT_METRO_RUNTIME_LOADS: runtimeLoads,
-            NODE_OPTIONS: authorityNodeOptions,
+            RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE: runtimeEvidencePath,
+            RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS: authorityNodeOptions,
+            NODE_OPTIONS: baseNodeOptions,
         },
         detached: true,
         stdio: ['ignore', log, log],
@@ -239,6 +312,7 @@ export async function startManagedMetro(input, dependencies = {}) {
                     mode: 'managed',
                     launcherPid: child.pid,
                     launcherBirth: launcherBirth.token,
+                    runtimeEvidencePath,
                 };
                 return {
                     ...authority,

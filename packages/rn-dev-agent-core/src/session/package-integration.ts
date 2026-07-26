@@ -60,10 +60,14 @@ const accumulatedRuntimeInputs = new Set();
 const accumulatedViolations = new Set();
 const observedLoaderDigests = new Map();
 const metroPolicyCapability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+const usesExternalEvidenceOwner = Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
 const authorityEnvironment = Object.entries(process.env).filter(
   ([key]) =>
     (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
-    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE',
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
+    (!usesExternalEvidenceOwner ||
+      (key !== 'RN_DEV_AGENT_METRO_POLICY_CAPABILITY' &&
+        key !== 'RN_DEV_AGENT_METRO_RUNTIME_LOADS')),
 );
 let cachedSourceRoot;
 let sourceRootResolved = false;
@@ -72,7 +76,8 @@ let initialCacheCaptured = false;
 let loaderEpoch = 0;
 let runtimeLoadsDescriptor;
 function writeRuntimeLoad(line, loadsPath) {
-  runtimeLoadsDescriptor ??= fs.openSync(loadsPath, 'a', 0o600);
+  runtimeLoadsDescriptor ??=
+    typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
   const bytes = Buffer.from(line);
   let offset = 0;
   while (offset < bytes.length) {
@@ -85,9 +90,15 @@ process.once('exit', () => {
 function persistLoaderObservation(kind, value, digest = null) {
   const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
   const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
   const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
-  if (!metroPolicyCapability || !sessionId || !metroInstanceId || !loadsPath) return;
+  if (!sessionId || !metroInstanceId) return;
   const payload = { version: 1, sessionId, metroInstanceId, kind, value, digest };
+  if (Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3) {
+    writeRuntimeLoad(JSON.stringify(payload) + '\\n', evidenceDescriptor);
+    return;
+  }
+  if (!metroPolicyCapability || !loadsPath) return;
   const serializedPayload = JSON.stringify(payload);
   const receipt = {
     ...payload,
@@ -130,6 +141,7 @@ function authenticatedChildArguments(args, optionsIndex, nonce) {
   const authenticatedOptions = {
     ...options,
     env: authenticatedChildEnvironment(options.env, nonce),
+    stdio: authenticatedChildStdio(options.stdio),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -137,6 +149,21 @@ function authenticatedChildArguments(args, optionsIndex, nonce) {
     nextArgs[optionsIndex] = authenticatedOptions;
   }
   return nextArgs;
+}
+function authenticatedChildStdio(stdio) {
+  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
+  if (!Number.isInteger(evidenceDescriptor) || evidenceDescriptor < 3) return stdio;
+  const normalized =
+    Array.isArray(stdio)
+      ? [...stdio]
+      : stdio === 'inherit'
+        ? ['inherit', 'inherit', 'inherit']
+        : stdio === 'ignore'
+          ? ['ignore', 'ignore', 'ignore']
+          : ['pipe', 'pipe', 'pipe'];
+  while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
+  normalized[evidenceDescriptor] = evidenceDescriptor;
+  return normalized;
 }
 function descendantError() {
   const error = new Error('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION');
@@ -165,6 +192,34 @@ function requireNodeExecutable(command, options) {
     throw descendantError();
   }
 }
+function isInlineNodeOption(value) {
+  if (typeof value !== 'string') return false;
+  const option = value.split('=', 1)[0].replaceAll('_', '-');
+  return (
+    option === '-e' ||
+    option.startsWith('-e') ||
+    option === '-p' ||
+    option.startsWith('-p') ||
+    ['--eval', '--print', '--input-type'].includes(option)
+  );
+}
+function requireFileBackedNodeArguments(args) {
+  if (!Array.isArray(args) || args.length === 0 || args[0] === '-') throw descendantError();
+  if (args.some(isInlineNodeOption)) throw descendantError();
+}
+function requireSafeWorkerExecArgv(execArgv) {
+  if (execArgv.some(isInlineNodeOption)) throw descendantError();
+  for (const argument of execArgv) {
+    const option = typeof argument === 'string' ? argument.split('=', 1)[0] : '';
+    if (
+      ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(
+        option.replaceAll('_', '-'),
+      )
+    ) {
+      throw descendantError();
+    }
+  }
+}
 function recordChildLaunch(nonce, child) {
   if (!child || typeof child.pid !== 'number') return;
   persistLoaderObservation('launch', nonce + ':process:' + child.pid);
@@ -179,10 +234,16 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const nonce = randomBytes(16).toString('hex');
       const authenticatedArgs = authenticatedChildArguments(args, index, nonce);
       const options = authenticatedArgs[index];
-      if (mode === 'node' || mode === 'sync') requireNodeExecutable(args[0], options);
+      if (mode === 'node' || mode === 'sync') {
+        requireNodeExecutable(args[0], options);
+        requireFileBackedNodeArguments(args[1]);
+      }
       if (mode === 'fork') {
         if (options.execPath) requireNodeExecutable(options.execPath, options);
         options.execPath = nodeExecutable;
+        if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
+          options.stdio[3] = 'ipc';
+        }
       }
       const child = Reflect.apply(original, this, authenticatedArgs);
       if (mode === 'sync') {
@@ -210,12 +271,22 @@ function fenceWorkers() {
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
   class AuthenticatedWorker extends OriginalWorker {
     constructor(filename, options = {}) {
+      if (
+        options.eval ||
+        (typeof filename === 'string' && filename.startsWith('data:')) ||
+        (filename instanceof URL && filename.protocol === 'data:')
+      ) {
+        throw descendantError();
+      }
       const nonce = randomBytes(16).toString('hex');
-      const requestedExecArgv = Array.isArray(options.execArgv) ? options.execArgv : [];
+      const requestedExecArgv = Array.isArray(options.execArgv)
+        ? [...options.execArgv]
+        : [...process.execArgv];
+      requireSafeWorkerExecArgv(requestedExecArgv);
       super(filename, {
         ...options,
         env: authenticatedChildEnvironment(options.env, nonce),
-        execArgv: [...requestedExecArgv, '--require', authorityPreload],
+        execArgv: ['--require', authorityPreload, ...requestedExecArgv],
       });
       persistLoaderObservation('launch', nonce + ':worker:' + this.threadId);
     }
@@ -231,8 +302,8 @@ const optionalArgsIndex = (args) => (Array.isArray(args[1]) ? 2 : 1);
 const canAuthenticateChildProcesses =
   Boolean(process.env.NODE_OPTIONS) &&
   Boolean(process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD) &&
-  Boolean(metroPolicyCapability) &&
-  Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS);
+  (Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD) ||
+    (Boolean(metroPolicyCapability) && Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS)));
 if (canAuthenticateChildProcesses) {
   fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
   fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
@@ -535,8 +606,9 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   try {
     authorityPreloadMatches =
       fs.realpathSync(authorityPreload) === fs.realpathSync(__filename) &&
-      fs.realpathSync(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS) ===
-        fs.realpathSync(path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_LOADS)}));
+      (Number.isInteger(Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD)) ||
+        fs.realpathSync(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS) ===
+          fs.realpathSync(path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_LOADS)})));
   } catch {}
   if (
     !authorityPreload ||

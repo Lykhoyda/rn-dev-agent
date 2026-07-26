@@ -439,15 +439,19 @@ test('Metro preload records child-process and worker-thread module loads', () =>
     mkdirSync(integration, { recursive: true });
     const adapterPath = join(integration, 'rn-session-metro.cjs');
     const childModule = join(external, 'child.cjs');
+    const childEntry = join(external, 'child-entry.cjs');
     const threadModule = join(external, 'thread.cjs');
+    const threadEntry = join(external, 'thread-entry.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(childModule, 'module.exports = {};\n');
+    writeFileSync(childEntry, `require(${JSON.stringify(childModule)});\n`);
     writeFileSync(threadModule, 'module.exports = {};\n');
+    writeFileSync(threadEntry, `require(${JSON.stringify(threadModule)});\n`);
     const result = spawnSync(
       process.execPath,
       [
         '-e',
-        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); const child = childProcess.spawnSync(process.execPath, ['-e', ${JSON.stringify(`require(${JSON.stringify(childModule)})`)}], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const workerThreads = require('node:worker_threads'); const worker = new workerThreads.Worker(${JSON.stringify(`require(${JSON.stringify(threadModule)})`)}, { eval: true, execArgv: [] }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
+        `const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); for (const args of [['-e', 'process.exit(0)'], ['--eval=process.exit(0)']]) { try { childProcess.spawnSync(process.execPath, args); process.exit(4); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const workerThreads = require('node:worker_threads'); for (const options of [{ eval: true }, { execArgv: ['--require', ${JSON.stringify(childModule)}] }]) { try { new workerThreads.Worker('void 0', options); process.exit(5); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const worker = new workerThreads.Worker(${JSON.stringify(threadEntry)}, { execArgv: [] }); worker.once('error', (error) => { console.error(error); process.exitCode = 1; }); worker.once('exit', (code) => { if (code !== 0) process.exitCode = code; });`,
       ],
       {
         cwd: root,
