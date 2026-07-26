@@ -33,6 +33,9 @@ test('managed Metro rejects unmodeled NODE_OPTIONS inputs', () => {
     '--icu-data-dir /tmp/icu',
     '--env-file=.env',
     '--snapshot-blob=snapshot.blob',
+    '--inspect',
+    '--inspect-brk=127.0.0.1:9229',
+    '--inspect-wait',
   ]) {
     assert.equal(hasUnsupportedNodeOption(option), true, option);
   }

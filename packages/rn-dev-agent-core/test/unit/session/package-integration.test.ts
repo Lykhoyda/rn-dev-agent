@@ -552,8 +552,14 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     const childEntry = join(root, 'child.cjs');
     const workerEntry = join(root, 'worker.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
-    writeFileSync(childEntry, '');
-    writeFileSync(workerEntry, '');
+    writeFileSync(
+      childEntry,
+      "if (process.send) process.once('message', () => process.disconnect());",
+    );
+    writeFileSync(
+      workerEntry,
+      "const { parentPort } = require('node:worker_threads'); parentPort.once('message', () => parentPort.close());",
+    );
     const environment = metroPolicyEnvironment(adapterPath);
     const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
     evidenceDescriptor = openSync(runtimeLoads, 'a');
@@ -562,7 +568,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); for (const value of ['red', 'blue']) { const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}, value]); if (child.status !== 0) process.exit(child.status || 1); } const { Worker } = require('node:worker_threads'); for (const color of ['red', 'blue']) { const worker = new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'], workerData: { color } }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); } })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); for (const value of ['red', 'blue']) { const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}, value], { argv0: 'node-' + value, windowsVerbatimArguments: false }); if (child.status !== 0) process.exit(child.status || 1); } for (const color of ['red', 'blue']) { const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'] }); child.send({ color }); await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); } const { Worker } = require('node:worker_threads'); for (const color of ['red', 'blue']) { const workerData = {}; Object.defineProperty(workerData, 'color', { enumerable: true, get: () => color }); const worker = new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'], workerData }); worker.postMessage({ color }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); } })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -593,8 +599,12 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
       .map((entry) => JSON.parse(entry.value));
     const syncSemantics = semantics.filter((entry) => entry.mode === 'sync');
     const workerSemantics = semantics.filter((entry) => entry.mode === 'worker');
+    const forkMessageSemantics = semantics.filter((entry) => entry.mode === 'fork-message');
+    const workerMessageSemantics = semantics.filter((entry) => entry.mode === 'worker-message');
     assert.equal(syncSemantics.length, 2);
     assert.equal(workerSemantics.length, 2);
+    assert.equal(forkMessageSemantics.length, 2);
+    assert.equal(workerMessageSemantics.length, 2);
     assert.notEqual(syncSemantics[0].invocationDigest, syncSemantics[1].invocationDigest);
     assert.notEqual(workerSemantics[0].invocationDigest, workerSemantics[1].invocationDigest);
   } finally {

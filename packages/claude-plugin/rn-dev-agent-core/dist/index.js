@@ -62514,7 +62514,6 @@ function hasUnsupportedNodeOption(value) {
     "--title",
     "--unhandled-rejections"
   ]);
-  const optionalValueOptions = /* @__PURE__ */ new Set(["--inspect", "--inspect-brk", "--inspect-wait"]);
   const tokens = parseNodeOptions(value);
   for (let index = 0; index < tokens.length; index += 1) {
     const token2 = tokens[index];
@@ -62522,11 +62521,6 @@ function hasUnsupportedNodeOption(value) {
     const option = (equals < 0 ? token2 : token2.slice(0, equals)).replaceAll("_", "-");
     if (booleanOptions.has(option)) {
       if (equals >= 0)
-        return true;
-      continue;
-    }
-    if (optionalValueOptions.has(option)) {
-      if (equals >= 0 && token2.slice(equals + 1).length === 0)
         return true;
       continue;
     }
@@ -70596,7 +70590,7 @@ const { execFileSync } = childProcess;
 const moduleApi = require('node:module');
 const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
-const { serialize } = require('node:v8');
+const { deserialize, serialize } = require('node:v8');
 const workerThreads = require('node:worker_threads');
 ${parseNodeOptions.toString()}
 ${hasNodeLoaderOption.toString()}
@@ -70719,7 +70713,7 @@ function authenticatedChildEnvironment(environment, nonce, semantics) {
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
   return nextEnvironment;
 }
-function digestInvocation(value) {
+function snapshotInvocation(value) {
   let bytes;
   try {
     bytes = serialize(value);
@@ -70727,7 +70721,69 @@ function digestInvocation(value) {
     throw descendantError();
   }
   if (bytes.byteLength > 1024 * 1024) throw descendantError();
-  return createHash('sha256').update(bytes).digest('hex');
+  return {
+    digest: createHash('sha256').update(bytes).digest('hex'),
+    value: deserialize(bytes),
+  };
+}
+function digestInvocation(value) {
+  return snapshotInvocation(value).digest;
+}
+function authenticatedMessage(mode, value) {
+  const snapshot = snapshotInvocation(value);
+  persistLoaderObservation(
+    'semantics',
+    JSON.stringify({ mode, invocationDigest: snapshot.digest }),
+  );
+  return snapshot.value;
+}
+function fencePostMessage(target, mode) {
+  const original = target?.postMessage;
+  if (typeof original !== 'function') return;
+  Object.defineProperty(target, 'postMessage', {
+    configurable: false,
+    enumerable: true,
+    value(message, transferList) {
+      if (transferList !== undefined) {
+        if (!Array.isArray(transferList) || transferList.length > 0) throw descendantError();
+      }
+      return Reflect.apply(original, this, [authenticatedMessage(mode, message)]);
+    },
+    writable: false,
+  });
+}
+function fenceIpcSend(target, mode) {
+  const original = target?.send;
+  if (typeof original !== 'function') return;
+  Object.defineProperty(target, 'send', {
+    configurable: false,
+    enumerable: true,
+    value(message, sendHandle, options, callback) {
+      let nextCallback = callback;
+      let nextOptions = options;
+      if (typeof sendHandle === 'function') {
+        nextCallback = sendHandle;
+        sendHandle = undefined;
+        nextOptions = undefined;
+      } else if (typeof options === 'function') {
+        nextCallback = options;
+        nextOptions = undefined;
+      }
+      if (sendHandle !== undefined && sendHandle !== null) throw descendantError();
+      const snapshot = snapshotInvocation({ message, options: nextOptions });
+      persistLoaderObservation(
+        'semantics',
+        JSON.stringify({ mode, invocationDigest: snapshot.digest }),
+      );
+      return Reflect.apply(original, this, [
+        snapshot.value.message,
+        undefined,
+        snapshot.value.options,
+        nextCallback,
+      ]);
+    },
+    writable: false,
+  });
 }
 function invocationCwd(cwd) {
   try {
@@ -70763,8 +70819,9 @@ function authenticatedChildStdio(stdio, mode, silent) {
         : stdio === 'ignore'
           ? ['ignore', 'ignore', 'ignore']
           : mode === 'fork' && !silent
-            ? ['inherit', 'inherit', 'inherit']
-            : ['pipe', 'pipe', 'pipe'];
+            ? ['ignore', 'inherit', 'inherit']
+            : [mode === 'sync' ? 'pipe' : 'ignore', 'pipe', 'pipe'];
+  if (mode !== 'sync' && normalized[0] !== 'ignore') throw descendantError();
   while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
   normalized[evidenceDescriptor] = evidenceDescriptor;
   return normalized;
@@ -70944,9 +71001,11 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       }
       const semantics = executionSemantics(mode, entrypoint, execArgv, {
         applicationArgs,
+        argv0: rawOptions.argv0,
         cwd: invocationCwd(rawOptions.cwd),
         environment: normalizedInvocationEnvironment(rawOptions.env),
         input: rawOptions.input,
+        windowsVerbatimArguments: rawOptions.windowsVerbatimArguments,
       });
       const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode, semantics);
       const options = authenticatedArgs[index];
@@ -70962,6 +71021,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       } else if (typeof child?.once === 'function') {
         child.once('spawn', () => recordChildLaunch(nonce, child, semantics));
       }
+      if (mode === 'fork') fenceIpcSend(child, 'fork-message');
       return child;
     },
     writable: false,
@@ -71005,20 +71065,22 @@ function fenceWorkers() {
       delete invocationOptions.env;
       delete invocationOptions.execArgv;
       delete invocationOptions.transferList;
+      const authenticatedInvocationOptions = snapshotInvocation(invocationOptions).value;
       const semantics = executionSemantics(
         'worker',
         entrypoint,
         normalizedExecArgv,
         {
           environment: normalizedInvocationEnvironment(capturedOptions.env),
-          options: invocationOptions,
+          options: authenticatedInvocationOptions,
         },
       );
       super(filename, {
-        ...capturedOptions,
+        ...authenticatedInvocationOptions,
         env: authenticatedChildEnvironment(capturedOptions.env, nonce, semantics),
         execArgv: ['--require', authorityPreload, ...requestedExecArgv],
       });
+      fencePostMessage(this, 'worker-message');
       persistLoaderObservation(
         'launch',
         nonce + ':worker:' + this.threadId + ':' + semantics,
@@ -71039,6 +71101,10 @@ const canAuthenticateChildProcesses =
   (Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD) ||
     (Boolean(metroPolicyCapability) && Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS)));
 if (canAuthenticateChildProcesses) {
+  if (descendantNonce) {
+    fenceIpcSend(process, 'fork-message');
+    fencePostMessage(workerThreads.parentPort, 'worker-message');
+  }
   fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
   fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
   fenceChildProcessMethod('execFile', optionalArgsIndex, 'node');

@@ -304,7 +304,6 @@ export function hasUnsupportedNodeOption(value: string): boolean {
     '--title',
     '--unhandled-rejections',
   ]);
-  const optionalValueOptions = new Set(['--inspect', '--inspect-brk', '--inspect-wait']);
   const tokens = parseNodeOptions(value);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
@@ -312,10 +311,6 @@ export function hasUnsupportedNodeOption(value: string): boolean {
     const option = (equals < 0 ? token : token.slice(0, equals)).replaceAll('_', '-');
     if (booleanOptions.has(option)) {
       if (equals >= 0) return true;
-      continue;
-    }
-    if (optionalValueOptions.has(option)) {
-      if (equals >= 0 && token.slice(equals + 1).length === 0) return true;
       continue;
     }
     if (!valueOptions.has(option)) return true;
