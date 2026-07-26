@@ -424,11 +424,12 @@ run its Protocol steps with `<feature-slug>`. In Codex, read
 `packages/codex-plugin/skills/capturing-proof/SKILL.md` from this repository
 checkout. The pipeline adds these deltas:
 
-**Strict factory routing**: execute `$rn-dev-agent:proof-capture --strict` when
-the run is unattended, the PR will auto-merge, the caller asks for factory
-proof or merge-ready evidence, or a machine receipt is required. The controller
-consumes the resulting receipt. State, duration, and frame policy remain owned
-by the strict protocol; do not duplicate or reinterpret them here.
+**Strict factory routing**: when the run is unattended, the PR will auto-merge,
+or a machine receipt or merge-ready evidence is required, follow
+`$rn-dev-agent:proof-capture --strict`. Its command contract currently fails
+closed before recording because closed-world Metro runtime enforcement is
+unavailable. Do not substitute interactive artifacts or report merge-ready
+evidence.
 
 1. **The flow source is the architect's E2E Proof Flow table** from Phase 4 —
    execute it mechanically. Do NOT improvise, skip, or simplify steps; the

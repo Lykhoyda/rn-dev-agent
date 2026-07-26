@@ -16,7 +16,9 @@ function quoted(value) {
     return intrinsicReflectApply(intrinsicJsonStringify, JSON, [value]);
 }
 function sortedOwnNames(value) {
-    const names = intrinsicReflectApply(intrinsicObjectGetOwnPropertyNames, IntrinsicObject, [value]);
+    const names = intrinsicReflectApply(intrinsicObjectGetOwnPropertyNames, IntrinsicObject, [
+        value,
+    ]);
     const enumerable = [];
     for (let index = 0; index < names.length; index += 1) {
         const name = names[index];
@@ -59,7 +61,9 @@ export function canonicalAuthorityJson(value) {
                 }
                 return `${serialized}]`;
             }
-            const prototype = intrinsicReflectApply(intrinsicObjectGetPrototypeOf, IntrinsicObject, [candidate]);
+            const prototype = intrinsicReflectApply(intrinsicObjectGetPrototypeOf, IntrinsicObject, [
+                candidate,
+            ]);
             if (prototype !== intrinsicObjectPrototype && prototype !== null) {
                 throw new TypeError('AUTHORITY_JSON_UNSUPPORTED_OBJECT');
             }

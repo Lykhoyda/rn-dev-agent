@@ -616,14 +616,10 @@ function managementProof(
     .digest('hex');
 }
 
-export function managedMetroChildEnvironment(
-  environment: NodeJS.ProcessEnv,
-): NodeJS.ProcessEnv {
+export function managedMetroChildEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(environment).filter(
-      ([name, value]) =>
-        value !== undefined &&
-        !name.startsWith('RN_DEV_AGENT_'),
+      ([name, value]) => value !== undefined && !name.startsWith('RN_DEV_AGENT_'),
     ),
   );
 }
@@ -704,10 +700,7 @@ function legacyManagementProof(
 
 function brokerV2ManagementProofV1(
   sessionId: string,
-  authority: Omit<
-    Parameters<typeof managementProof>[1],
-    'servingRoot' | 'buildGeneration'
-  >,
+  authority: Omit<Parameters<typeof managementProof>[1], 'servingRoot' | 'buildGeneration'>,
   signerCapability: string,
 ): string {
   return createHmac('sha256', signerCapability)
@@ -1150,8 +1143,7 @@ export async function stopManagedMetro(
     (binding.runtimeEvidenceAuthority !== undefined &&
       binding.runtimeEvidenceAuthority !== 'reported-v1' &&
       binding.runtimeEvidenceAuthority !== 'broker-v2') ||
-    (binding.runtimeEvidenceAuthority === 'broker-v2' &&
-      binding.runtimeEvidenceProtocol !== 2) ||
+    (binding.runtimeEvidenceAuthority === 'broker-v2' && binding.runtimeEvidenceProtocol !== 2) ||
     typeof binding.managementProof !== 'string'
   ) {
     return false;

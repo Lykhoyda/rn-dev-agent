@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 const require = createRequire(import.meta.url);
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 const INITIALIZATION_TIMEOUT_MS = 1_000;
-const DATABASE_OPERATION_TIMEOUT_MS = 100;
+const DATABASE_OPERATION_TIMEOUT_MS = 1_000;
 export class AuthorityStoreUnavailableError extends Error {
     code = 'AUTHORITY_STORE_UNAVAILABLE';
     constructor(reason, options) {

@@ -5,7 +5,7 @@ import { dirname } from 'node:path';
 const require = createRequire(import.meta.url);
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 const INITIALIZATION_TIMEOUT_MS = 1_000;
-const DATABASE_OPERATION_TIMEOUT_MS = 100;
+const DATABASE_OPERATION_TIMEOUT_MS = 1_000;
 
 interface PreparedStatement {
   get(...params: unknown[]): Record<string, unknown> | undefined;

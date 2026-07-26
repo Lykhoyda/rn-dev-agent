@@ -785,7 +785,9 @@ function quoted(value) {
   return intrinsicReflectApply(intrinsicJsonStringify, JSON, [value]);
 }
 function sortedOwnNames(value) {
-  const names = intrinsicReflectApply(intrinsicObjectGetOwnPropertyNames, IntrinsicObject, [value]);
+  const names = intrinsicReflectApply(intrinsicObjectGetOwnPropertyNames, IntrinsicObject, [
+    value
+  ]);
   const enumerable = [];
   for (let index = 0; index < names.length; index += 1) {
     const name = names[index];
@@ -828,7 +830,9 @@ function canonicalAuthorityJson(value) {
         }
         return `${serialized2}]`;
       }
-      const prototype = intrinsicReflectApply(intrinsicObjectGetPrototypeOf, IntrinsicObject, [candidate]);
+      const prototype = intrinsicReflectApply(intrinsicObjectGetPrototypeOf, IntrinsicObject, [
+        candidate
+      ]);
       if (prototype !== intrinsicObjectPrototype && prototype !== null) {
         throw new TypeError("AUTHORITY_JSON_UNSUPPORTED_OBJECT");
       }
@@ -1410,7 +1414,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs");
   }
   let totalBytes = 0;
-  for (const [classification, entry] of [...sourceEntries]) {
+  for (const [classification, entry] of sourceEntries) {
     const file = resolve2(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
     const stat2 = lstatSync(file);
@@ -14567,7 +14571,7 @@ var init_authority_store = __esm({
     require2 = createRequire(import.meta.url);
     INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
     INITIALIZATION_TIMEOUT_MS = 1e3;
-    DATABASE_OPERATION_TIMEOUT_MS = 100;
+    DATABASE_OPERATION_TIMEOUT_MS = 1e3;
     AuthorityStoreUnavailableError = class extends Error {
       code = "AUTHORITY_STORE_UNAVAILABLE";
       constructor(reason, options) {

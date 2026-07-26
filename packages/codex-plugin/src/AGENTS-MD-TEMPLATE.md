@@ -9,8 +9,8 @@ never be replaced.
 ## React Native development with rn-dev-agent
 
 This project uses **rn-dev-agent** for React Native development, device control,
-live CDP introspection, reusable-action replay, and strict proof. Codex uses the
-`cdp` MCP server, ten domain skills, and fifteen explicit workflow skills.
+live CDP introspection, reusable-action replay, and evidence capture. Codex uses
+the `cdp` MCP server, ten domain skills, and fifteen explicit workflow skills.
 Invoke a workflow as `$rn-dev-agent:<workflow> [request text]`.
 
 ### Mandatory preflight before app/device interaction
@@ -74,12 +74,10 @@ walk only the novel remainder. Persist a verified novel flow under
 
 ### Strict proof
 
-Strict proof is fail-closed. Use `$rn-dev-agent:proof-capture --strict`, a clean
-candidate tree, the actual issue/PR/head, a pinned learned action and hash, a
-typed storyboard, result-bound screenshots/assertions, and an independent
-reviewer provider. Repair, reload, reset, or undeclared interaction during
-recording invalidates the capture. Rejected media is discarded, never
-reclassified as accepted evidence.
+Strict proof is fail-closed and currently unavailable because the managed Metro
+launcher cannot provide closed-world runtime enforcement. A
+`$rn-dev-agent:proof-capture --strict` request stops before recording; never
+substitute interactive artifacts or report merge-ready evidence.
 
 ### Recovery truth
 

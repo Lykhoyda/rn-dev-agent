@@ -520,8 +520,7 @@ function managementProof(sessionId, authority, signerCapability) {
         .digest('hex');
 }
 export function managedMetroChildEnvironment(environment) {
-    return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== undefined &&
-        !name.startsWith('RN_DEV_AGENT_')));
+    return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== undefined && !name.startsWith('RN_DEV_AGENT_')));
 }
 export function verifyManagedMetroManagementProof(binding, input) {
     if (binding.mode !== 'managed' ||
@@ -928,8 +927,7 @@ export async function stopManagedMetro(binding, input, dependencies = {}) {
         (binding.runtimeEvidenceAuthority !== undefined &&
             binding.runtimeEvidenceAuthority !== 'reported-v1' &&
             binding.runtimeEvidenceAuthority !== 'broker-v2') ||
-        (binding.runtimeEvidenceAuthority === 'broker-v2' &&
-            binding.runtimeEvidenceProtocol !== 2) ||
+        (binding.runtimeEvidenceAuthority === 'broker-v2' && binding.runtimeEvidenceProtocol !== 2) ||
         typeof binding.managementProof !== 'string') {
         return false;
     }

@@ -1,11 +1,13 @@
 ---
 title: "proof-capture"
-description: "Capture fail-closed proof receipts or interactive PR-ready video and screenshots."
+description: "Capture interactive PR-ready video and screenshots; strict machine proof currently fails closed."
 sidebar:
   order: 5
 ---
 
-Use strict mode to produce a machine-validated proof receipt, or omit `--strict` for the existing interactive video, screenshots, and PR-body workflow.
+Use the interactive workflow for video, screenshots, and a PR body. Strict
+machine proof is currently unavailable because the managed Metro launcher
+cannot yet provide the required closed-world runtime enforcement.
 
 ## Usage
 
@@ -24,30 +26,11 @@ Use strict mode to produce a machine-validated proof receipt, or omit `--strict`
 
 ## Strict Mode
 
-Strict mode is fail-closed and produces `proof-receipt.json` only after mechanical validation and independent evidence review.
-
-```text
-rehearsing -> rehearsed -> armed -> recording -> validating -> mechanically_accepted -> accepted
-```
-
-Every transition uses the stateful `proof_capture` tool. It pins a clean Git
-head, one learned-action identity, the device/runtime, an error-free Metro
-baseline, and a typed storyboard. The recording must execute the declared tools
-and `proof_step` assertions in order without repair, reload, restart, reset,
-Dev Client dismissal, failed tools, or undeclared debugging activity.
-
-At least three result-bound screenshots are required; they cannot replace the video.
-The adaptive target adds a 10-second API and device timing grace and is capped at two minutes; the hard maximum is five seconds beyond that target.
-A clip inside that tolerance is accepted only when every frame, semantic, timing, Git/runtime/error, and final evidence-review gate passes.
-Video start, stop, path, device, media, or validation failure rejects the capture
-and returns its exact stable invalidation reason. Strict mode does not ask
-whether to re-record and does not emit GitHub upload instructions; it discards
-the rejected artifacts and starts again from rehearsal.
-
-An accepted strict result contains only the receipt path, screenshot paths,
-local video path and hash, contact-sheet path, action/storyboard hashes, or the
-exact invalidation reason on failure. Timing is derived from receipt fields,
-not estimated manually.
+`--strict` fails closed with `STRICT_PROOF_UNVERIFIED_METRO_POLICY` before
+recording and never emits an accepted receipt. Do not substitute interactive
+artifacts when a machine receipt or merge-ready evidence is required. See
+[Parallel session authority](/rn-dev-agent/session-authority/) for the owned
+runtime-enforcement contract.
 
 ## Interactive Artifacts
 

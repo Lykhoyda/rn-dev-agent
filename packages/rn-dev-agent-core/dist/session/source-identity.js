@@ -694,7 +694,7 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         throw new Error('STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs');
     }
     let totalBytes = 0;
-    for (const [classification, entry] of [...sourceEntries]) {
+    for (const [classification, entry] of sourceEntries) {
         const file = resolve(identity.contentRoot, entry);
         assertContained(identity.contentRoot, file, 'STRICT_PROOF_PATH_ESCAPE');
         const stat = lstatSync(file);
