@@ -8,12 +8,28 @@ import {
   resolveSourceIdentity,
   strictProofSourceIdentity,
 } from '../../../dist/session/source-identity.js';
+import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
 import { previewMetroIntegration } from '../../../dist/session/package-integration.js';
 
 const roots = [];
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
+});
+
+test('authority JSON ignores mutable serializers and toJSON hooks', () => {
+  const stringify = JSON.stringify;
+  try {
+    JSON.stringify = () => '{"forged":true}';
+    Object.defineProperty(Object.prototype, 'toJSON', {
+      configurable: true,
+      value: () => ({ forged: true }),
+    });
+    assert.equal(canonicalAuthorityJson({ safe: true }), '{"safe":true}');
+  } finally {
+    delete (Object.prototype as { toJSON?: unknown }).toJSON;
+    JSON.stringify = stringify;
+  }
 });
 
 test('normal Git authority is coarse and does not compute a dirty-content digest', () => {
@@ -380,7 +396,7 @@ test('strict proof requires one exact terminal Metro integration block', () => {
   assert.throws(() => strictProofSourceIdentity(identity), /STRICT_PROOF_UNVERIFIED_METRO_CONFIG/);
 });
 
-test('strict proof authenticates signed external Metro runtime inputs', () => {
+test('strict proof validates broker-owned Metro runtime inputs', () => {
   const rootInput = mkdtempSync(join(tmpdir(), 'rn-source-proof-metro-policy-'));
   roots.push(rootInput);
   const root = realpathSync(rootInput);
@@ -397,6 +413,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   const capability = 'policy-capability';
   const payload = {
     version: 1,
+    runtimeEvidenceAuthority: 'broker-v2',
     sessionId: 'session',
     metroInstanceId: 'metro',
     contentRoot: root,
@@ -408,11 +425,14 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     join(integration, 'metro-runtime-policy.json'),
     `${JSON.stringify({
       ...payload,
-      signature: createHmac('sha256', capability).update(JSON.stringify(payload)).digest('hex'),
+      signature: createHmac('sha256', capability)
+        .update(canonicalAuthorityJson(payload))
+        .digest('hex'),
     })}\n`,
   );
   const runtimeLoadPayload = {
     version: 1,
+    runtimeEvidenceAuthority: 'broker-v2',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'input',
@@ -441,6 +461,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     capability,
     evidencePath: runtimeEvidencePath,
     evidenceSocket: runtimeEvidenceSocket,
+    evidenceAuthority: 'broker-v2' as const,
   };
   const signRuntimeLoads = (entries: Record<string, unknown>[]) => {
     let previousSignature: string | null = null;
@@ -452,9 +473,9 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
           previousSignature,
         };
         previousSignature = createHmac('sha256', capability)
-          .update(JSON.stringify(chained))
+          .update(canonicalAuthorityJson(chained))
           .digest('hex');
-        return JSON.stringify({ ...chained, signature: previousSignature });
+        return canonicalAuthorityJson({ ...chained, signature: previousSignature });
       })
       .join('\n');
   };
@@ -474,14 +495,17 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   const readMetroEvidenceHead = (_socket: string, challenge: string) => {
     const headPayload = {
       version: 1,
+      runtimeEvidenceAuthority: 'broker-v2',
       sessionId: 'session',
       metroInstanceId: 'metro',
       challenge,
       ...authoritativeHead,
     };
-    return JSON.stringify({
+    return canonicalAuthorityJson({
       ...headPayload,
-      signature: createHmac('sha256', capability).update(JSON.stringify(headPayload)).digest('hex'),
+      signature: createHmac('sha256', capability)
+        .update(canonicalAuthorityJson(headPayload))
+        .digest('hex'),
     });
   };
   const dependencies = { git, metroRuntimePolicy, readMetroEvidenceHead };
@@ -494,6 +518,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   });
   const semanticsPayload = {
     version: 1,
+    runtimeEvidenceAuthority: 'broker-v2',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'semantics',
@@ -522,6 +547,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   );
   const launchPayload = {
     version: 1,
+    runtimeEvidenceAuthority: 'broker-v2',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'launch',
@@ -533,6 +559,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
   const pendingPayload = {
     version: 1,
+    runtimeEvidenceAuthority: 'broker-v2',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'pending',
@@ -610,6 +637,36 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   assert.throws(
     () => strictProofSourceIdentity(identity, dependencies),
     /STRICT_PROOF_UNVERIFIED_METRO_POLICY/,
+  );
+});
+
+test('strict proof rejects Metro-reported runtime evidence', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-reported-metro-'));
+  roots.push(root);
+  writeFileSync(join(root, 'metro.config.js'), previewMetroIntegration('module.exports = {};\n'));
+  const identity = {
+    kind: 'git' as const,
+    contentRoot: root,
+    appRoot: root,
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    head: 'abc123',
+  };
+
+  assert.throws(
+    () =>
+      strictProofSourceIdentity(identity, {
+        metroRuntimePolicy: {
+          sessionId: 'session',
+          metroInstanceId: 'metro',
+          capability: 'capability',
+          evidencePath: join(root, 'reported.jsonl'),
+          evidenceSocket: join(root, 'reported.sock'),
+          evidenceAuthority: 'reported-v1',
+        },
+      }),
+    /reported Metro evidence cannot grant strict authority/,
   );
 });
 

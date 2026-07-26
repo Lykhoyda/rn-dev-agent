@@ -66,6 +66,10 @@ const IntrinsicProxy = Proxy;
 const IntrinsicSet = Set;
 const IntrinsicWeakMap = WeakMap;
 const IntrinsicWeakSet = WeakSet;
+const intrinsicArrayIsArray = Array.isArray;
+const intrinsicJsonStringify = JSON.stringify;
+const intrinsicNumberIsFinite = Number.isFinite;
+const intrinsicObjectPrototype = Object.prototype;
 const intrinsicArrayFilter = Array.prototype.filter;
 const intrinsicArrayForEach = Array.prototype.forEach;
 const intrinsicArrayMap = Array.prototype.map;
@@ -86,6 +90,7 @@ const intrinsicMapGet = Map.prototype.get;
 const intrinsicMapHas = Map.prototype.has;
 const intrinsicMapSet = Map.prototype.set;
 const intrinsicReflectApply = Reflect.apply;
+const intrinsicReflectConstruct = Reflect.construct;
 const intrinsicReflectGet = Reflect.get;
 const intrinsicReflectSet = Reflect.set;
 const intrinsicSetAdd = Set.prototype.add;
@@ -97,7 +102,9 @@ const intrinsicWeakMapGet = WeakMap.prototype.get;
 const intrinsicWeakMapHas = WeakMap.prototype.has;
 const intrinsicWeakMapSet = WeakMap.prototype.set;
 const intrinsicWeakSetAdd = WeakSet.prototype.add;
+const intrinsicWeakSetDelete = WeakSet.prototype.delete;
 const intrinsicWeakSetHas = WeakSet.prototype.has;
+const intrinsicProcessNextTick = process.nextTick;
 function privateMapDelete(map, key) {
   return intrinsicReflectApply(intrinsicMapDelete, map, [key]);
 }
@@ -192,8 +199,68 @@ function privateWeakMapSet(map, key, value) {
 function privateWeakSetAdd(set, value) {
   return intrinsicReflectApply(intrinsicWeakSetAdd, set, [value]);
 }
+function privateWeakSetDelete(set, value) {
+  return intrinsicReflectApply(intrinsicWeakSetDelete, set, [value]);
+}
 function privateWeakSetHas(set, value) {
   return intrinsicReflectApply(intrinsicWeakSetHas, set, [value]);
+}
+function canonicalAuthorityJson(value) {
+  const active = new IntrinsicWeakSet();
+  const encode = (candidate) => {
+    if (candidate === null) return 'null';
+    if (typeof candidate === 'string') {
+      return intrinsicReflectApply(intrinsicJsonStringify, null, [candidate]);
+    }
+    if (typeof candidate === 'boolean') return candidate ? 'true' : 'false';
+    if (typeof candidate === 'number') {
+      return intrinsicNumberIsFinite(candidate)
+        ? intrinsicReflectApply(intrinsicJsonStringify, null, [candidate])
+        : 'null';
+    }
+    if (typeof candidate !== 'object') throw descendantError();
+    if (privateWeakSetHas(active, candidate)) throw descendantError();
+    privateWeakSetAdd(active, candidate);
+    try {
+      if (intrinsicArrayIsArray(candidate)) {
+        let serialized = '[';
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (index > 0) serialized += ',';
+          const descriptor = privateGetOwnPropertyDescriptor(candidate, String(index));
+          if (!descriptor || !('value' in descriptor)) throw descendantError();
+          serialized += encode(descriptor.value);
+        }
+        return serialized + ']';
+      }
+      const prototype = privateGetPrototypeOf(candidate);
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw descendantError();
+      }
+      const names = privateGetOwnPropertyNames(candidate);
+      const enumerable = [];
+      for (let index = 0; index < names.length; index += 1) {
+        const name = names[index];
+        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
+        if (descriptor?.enumerable) privateArrayPush(enumerable, name);
+      }
+      privateArraySort(enumerable);
+      let serialized = '{';
+      for (let index = 0; index < enumerable.length; index += 1) {
+        if (index > 0) serialized += ',';
+        const name = enumerable[index];
+        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
+        if (!descriptor || !('value' in descriptor)) throw descendantError();
+        serialized +=
+          intrinsicReflectApply(intrinsicJsonStringify, null, [name]) +
+          ':' +
+          encode(descriptor.value);
+      }
+      return serialized + '}';
+    } finally {
+      privateWeakSetDelete(active, candidate);
+    }
+  };
+  return encode(value);
 }
 ${parseNodeOptions.toString()}
 ${hasNodeLoaderOption.toString()}
@@ -242,27 +309,35 @@ function persistLoaderObservation(kind, value, digest = null) {
   const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
   const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
   if (!sessionId || !metroInstanceId) return;
-  const payload = { version: 1, sessionId, metroInstanceId, kind, value, digest };
+  const payload = {
+    version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sessionId,
+    metroInstanceId,
+    kind,
+    value,
+    digest,
+  };
   if (Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3) {
-    writeRuntimeLoad(JSON.stringify(payload) + '\\n', evidenceDescriptor);
+    writeRuntimeLoad(canonicalAuthorityJson(payload) + '\\n', evidenceDescriptor);
     return;
   }
   if (!metroPolicyCapability || !loadsPath) return;
-  const serializedPayload = JSON.stringify(payload);
+  const serializedPayload = canonicalAuthorityJson(payload);
   const receipt = {
     ...payload,
     signature: createHmac('sha256', metroPolicyCapability)
       .update(serializedPayload)
       .digest('hex'),
   };
-  writeRuntimeLoad(JSON.stringify(receipt) + '\\n', loadsPath);
+  writeRuntimeLoad(canonicalAuthorityJson(receipt) + '\\n', loadsPath);
 }
 const effectiveBaseNodeOptions = parseNodeOptions(
   process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '',
 );
 persistLoaderObservation(
   'semantics',
-  JSON.stringify({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
+  canonicalAuthorityJson({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
 );
 function recordLoaderViolation(value) {
   if (privateSetHas(accumulatedViolations, value)) return;
@@ -538,7 +613,7 @@ function authenticatedMessage(context, value) {
   context.sequence += 1;
   persistLoaderObservation(
     'semantics',
-    JSON.stringify({
+    canonicalAuthorityJson({
       mode: context.mode,
       recipient: context.recipient,
       sequence: context.sequence,
@@ -728,10 +803,12 @@ function exposeNativeProcessHandle(child, handle) {
   const originalOnExit = handle.onexit;
   if (typeof originalOnExit !== 'function') throw descendantError();
   const slot = {
+    deliveringSpawnError: false,
     exitDepth: 0,
     exposed: undefined,
+    invokeOnExit: undefined,
+    pendingSpawnError: undefined,
     spawnDepth: 0,
-    spawnErrorPending: false,
   };
   const invokeOnExit = (...args) => {
     slot.exitDepth += 1;
@@ -741,17 +818,14 @@ function exposeNativeProcessHandle(child, handle) {
       slot.exitDepth -= 1;
     }
   };
+  slot.invokeOnExit = invokeOnExit;
   intrinsicDefineProperty(handle, 'onexit', {
     configurable: false,
     enumerable: true,
     value: invokeOnExit,
     writable: false,
   });
-  slot.exposed = nativeHandleFacade(handle, 'onexit', (...args) => {
-    if (!slot.spawnErrorPending) throw descendantError();
-    slot.spawnErrorPending = false;
-    return invokeOnExit(...args);
-  });
+  slot.exposed = nativeHandleFacade(handle, 'onexit');
   privateWeakMapSet(nativeProcessHandleSlots, handle, slot);
   intrinsicDefineProperty(child, '_handle', {
     configurable: false,
@@ -766,7 +840,17 @@ function exposeNativeProcessHandle(child, handle) {
       ) {
         throw descendantError();
       }
-      slot.exposed = null;
+      slot.exposed =
+        slot.deliveringSpawnError && slot.pendingSpawnError !== undefined
+          ? nativeHandleFacade(handle, 'onexit', (...args) => {
+              if (
+                args.length !== 1 ||
+                args[0] !== slot.pendingSpawnError
+              ) {
+                throw descendantError();
+              }
+            })
+          : null;
     },
   });
 }
@@ -893,13 +977,31 @@ function fenceNativeProcessHandle(handle, context) {
       configurable: false,
       enumerable: false,
       value(...args) {
-        if (!privateWeakMapHas(authorizedNativeProcessSpawns, this)) {
+        const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
+        if (
+          authorizedOptions === undefined ||
+          args.length !== 1 ||
+          args[0] !== authorizedOptions
+        ) {
           throw descendantError();
         }
         privateWeakMapDelete(authorizedNativeProcessSpawns, this);
         const result = intrinsicReflectApply(spawn, this, args);
         const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
-        if (slot && result !== 0) slot.spawnErrorPending = true;
+        if (slot && result !== 0) {
+          slot.pendingSpawnError = result;
+          intrinsicReflectApply(intrinsicProcessNextTick, process, [
+            () => {
+              if (slot.pendingSpawnError !== result) throw descendantError();
+              slot.deliveringSpawnError = true;
+              try {
+                slot.invokeOnExit(result);
+              } finally {
+                slot.deliveringSpawnError = false;
+              }
+            },
+          ]);
+        }
         return result;
       },
       writable: false,
@@ -1121,7 +1223,7 @@ function requireSafeExecArgv(execArgv) {
   return normalized;
 }
 function executionSemantics(mode, entrypoint, execArgv, invocation) {
-  const value = JSON.stringify({
+  const value = canonicalAuthorityJson({
     mode,
     entrypoint,
     execArgv,
@@ -1731,7 +1833,7 @@ function fenceWorkers() {
     );
     const workerNewTarget =
       new.target === AuthenticatedWorker ? OriginalWorker : new.target;
-    const worker = Reflect.construct(
+    const worker = intrinsicReflectConstruct(
       OriginalWorker,
       [
         entrypoint,
@@ -2122,7 +2224,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   }
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD || '';
   const baseNodeOptions = process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '';
-  const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + JSON.stringify(authorityPreload)]
+  const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + canonicalAuthorityJson(authorityPreload)]
     .filter(Boolean)
     .join(' ');
   let authorityPreloadMatches = false;
@@ -2156,6 +2258,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   );
   const payload = {
     version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
     sessionId,
     metroInstanceId,
     contentRoot: root,
@@ -2163,7 +2266,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     runtimeInputs: privateArraySort(privateSetValues(accumulatedRuntimeInputs)),
     violations: privateArraySort(privateSetValues(accumulatedViolations)),
   };
-  const serializedPayload = JSON.stringify(payload);
+  const serializedPayload = canonicalAuthorityJson(payload);
   if (serializedPayload === lastPolicyPayload) return;
   const receipt = {
     ...payload,
@@ -2173,7 +2276,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   };
   const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY)});
   const temporary = policyPath + '.' + process.pid + '.tmp';
-  fs.writeFileSync(temporary, JSON.stringify(receipt) + '\\n', { mode: 0o600 });
+  fs.writeFileSync(temporary, canonicalAuthorityJson(receipt) + '\\n', { mode: 0o600 });
   fs.renameSync(temporary, policyPath);
   lastPolicyPayload = serializedPayload;
 }

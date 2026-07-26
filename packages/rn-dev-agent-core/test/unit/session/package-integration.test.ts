@@ -784,6 +784,9 @@ test('Metro seals native process handles and IPC read callbacks', () => {
         '-e',
         `(async () => {
           const compose = require(${JSON.stringify(adapterPath)});
+          const jsonStringify = JSON.stringify;
+          Object.prototype.toJSON = () => ({ violations: [] });
+          JSON.stringify = () => '{"violations":[]}';
           const arrayMethods = {
             forEach: Array.prototype.forEach,
             map: Array.prototype.map,
@@ -815,6 +818,8 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             Array.prototype.push = arrayMethods.push;
             Array.prototype.sort = arrayMethods.sort;
             Object.values = objectValues;
+            JSON.stringify = jsonStringify;
+            delete Object.prototype.toJSON;
           }
           const childProcess = require('node:child_process');
           const diagnosticsChannel = require('node:diagnostics_channel');
@@ -940,6 +945,55 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             applyProbe.once('error', reject);
             applyProbe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('mutable Reflect.apply changed launch')));
           });
+          const reflectConstruct = Reflect.construct;
+          let workerProbe;
+          try {
+            Reflect.construct = function (target, args, newTarget) {
+              if (target === require('node:worker_threads').Worker) {
+                args[1] = { ...args[1], workerData: { forged: true } };
+              }
+              return reflectConstruct(target, args, newTarget);
+            };
+            workerProbe = new (require('node:worker_threads').Worker)(
+              ${JSON.stringify(probeEntry)},
+              { execArgv: ['--no-warnings'] },
+            );
+          } finally {
+            Reflect.construct = reflectConstruct;
+          }
+          await new Promise((resolve, reject) => {
+            workerProbe.once('error', reject);
+            workerProbe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('mutable Reflect.construct changed Worker')));
+          });
+          let reentrantHandle;
+          let attemptedReentrantSpawn = false;
+          diagnosticsChannel.subscribe('child_process', ({ process: constructed }) => {
+            reentrantHandle = constructed._handle;
+          });
+          const asyncHook = require('node:async_hooks').createHook({
+            init() {
+              if (!reentrantHandle || attemptedReentrantSpawn) return;
+              attemptedReentrantSpawn = true;
+              unsupported(() =>
+                reentrantHandle.spawn({
+                  file: process.execPath,
+                  args: [process.execPath, '-e', 'process.exit(29)'],
+                }),
+              );
+            },
+          });
+          asyncHook.enable();
+          const reentrantProbe = childProcess.spawn(
+            process.execPath,
+            [${JSON.stringify(probeEntry)}],
+            { stdio: ['ignore', 'pipe', 'pipe'] },
+          );
+          asyncHook.disable();
+          await new Promise((resolve, reject) => {
+            reentrantProbe.once('error', reject);
+            reentrantProbe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('reentrant spawn changed launch')));
+          });
+          if (!attemptedReentrantSpawn) throw new Error('reentrant spawn probe did not execute');
           let receiverSealed = false;
           let handleFacadeSealed = false;
           let handleSlotSealed = false;
@@ -1117,6 +1171,7 @@ test('Metro seals native process handles and IPC read callbacks', () => {
     const policy = JSON.parse(
       readFileSync(join(integration, 'metro-runtime-policy.json'), 'utf8'),
     );
+    assert.equal(policy.runtimeEvidenceAuthority, 'reported-v1');
     assert.ok(policy.violations.includes('watchFolders must be a path'));
     assert.ok(policy.violations.includes('extraNodeModules must be a path'));
     const evidence = readFileSync(runtimeLoads, 'utf8')
@@ -1124,6 +1179,9 @@ test('Metro seals native process handles and IPC read callbacks', () => {
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line));
+    assert.ok(
+      evidence.every((entry) => entry.runtimeEvidenceAuthority === 'reported-v1'),
+    );
     assert.ok(
       evidence.some(
         (entry) =>
@@ -1163,7 +1221,7 @@ test('Metro lifecycle controls reject unowned targets and bind outcomes', () => 
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const fs = require('node:fs'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => process.kill(0, 0)); unsupported(() => process.kill(-1, 0)); unsupported(() => process.kill(process.pid, 0)); const child = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); }); let rejected = false; try { process.kill(child.pid, 'SIGINVALID'); } catch { rejected = true; } if (!rejected) throw new Error('invalid signal was accepted'); const exited = new Promise((resolve) => child.once('exit', resolve)); if (process.kill(child.pid, 'SIGTERM') !== true) throw new Error('process.kill result changed'); await exited; unsupported(() => process.kill(child.pid, 0)); const killed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killed.once('error', reject); killed.once('spawn', resolve); }); for (const invalidSignal of [null, NaN, '']) { let invalidRejected = false; try { killed.kill(invalidSignal); } catch (error) { invalidRejected = error.code === 'ERR_UNKNOWN_SIGNAL'; } if (!invalidRejected) throw new Error('invalid child signal was accepted'); } const killedExit = new Promise((resolve) => killed.once('exit', resolve)); unsupported(() => { killed._handle = { kill: () => 0 }; }); const killedResult = killed.kill('sigterm'); if (killedResult !== true || killed.killed !== true) throw new Error('child.kill result changed'); await killedExit; if (killed.kill('SIGTERM') !== false) throw new Error('retired child kill result changed'); const failedEnvironment = {}; Object.defineProperty(failedEnvironment, 'REMOVE_CWD', { enumerable: true, get: () => { fs.rmSync(${JSON.stringify(vanishingCwd)}, { recursive: true }); return '1'; } }); const failed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}], { cwd: ${JSON.stringify(vanishingCwd)}, env: failedEnvironment }); const failedError = new Promise((resolve) => failed.once('error', resolve)); if (failed.pid !== undefined) throw new Error('spawn failure unexpectedly received a pid'); if (failed.kill('SIGTERM') !== false) throw new Error('no-pid child kill result changed'); await failedError; const disconnecting = childProcess.fork(${JSON.stringify(disconnectEntry)}, [], { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('spawn', resolve); }); const disconnectedExit = new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('exit', (code) => code === 0 ? resolve() : reject(new Error('disconnect cleanup failed'))); }); disconnecting.disconnect(); await disconnectedExit; })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const fs = require('node:fs'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => process.kill(0, 0)); unsupported(() => process.kill(-1, 0)); unsupported(() => process.kill(process.pid, 0)); const child = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); }); let rejected = false; try { process.kill(child.pid, 'SIGINVALID'); } catch { rejected = true; } if (!rejected) throw new Error('invalid signal was accepted'); const exited = new Promise((resolve) => child.once('exit', resolve)); if (process.kill(child.pid, 'SIGTERM') !== true) throw new Error('process.kill result changed'); await exited; unsupported(() => process.kill(child.pid, 0)); const killed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killed.once('error', reject); killed.once('spawn', resolve); }); for (const invalidSignal of [null, NaN, '']) { let invalidRejected = false; try { killed.kill(invalidSignal); } catch (error) { invalidRejected = error.code === 'ERR_UNKNOWN_SIGNAL'; } if (!invalidRejected) throw new Error('invalid child signal was accepted'); } const killedExit = new Promise((resolve) => killed.once('exit', resolve)); unsupported(() => { killed._handle = { kill: () => 0 }; }); const killedResult = killed.kill('sigterm'); if (killedResult !== true || killed.killed !== true) throw new Error('child.kill result changed'); await killedExit; if (killed.kill('SIGTERM') !== false) throw new Error('retired child kill result changed'); const failedEnvironment = {}; Object.defineProperty(failedEnvironment, 'REMOVE_CWD', { enumerable: true, get: () => { fs.rmSync(${JSON.stringify(vanishingCwd)}, { recursive: true }); return '1'; } }); const failed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}], { cwd: ${JSON.stringify(vanishingCwd)}, env: failedEnvironment }); const failedError = new Promise((resolve) => failed.once('error', resolve)); unsupported(() => failed._handle.onexit(0, 0)); if (failed.pid !== undefined) throw new Error('spawn failure unexpectedly received a pid'); if (failed.kill('SIGTERM') !== false) throw new Error('no-pid child kill result changed'); await failedError; const disconnecting = childProcess.fork(${JSON.stringify(disconnectEntry)}, [], { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('spawn', resolve); }); const disconnectedExit = new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('exit', (code) => code === 0 ? resolve() : reject(new Error('disconnect cleanup failed'))); }); disconnecting.disconnect(); await disconnectedExit; })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,

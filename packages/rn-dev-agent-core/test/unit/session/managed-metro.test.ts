@@ -198,6 +198,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(calls[0]?.env?.NODE_OPTIONS, (process.env.NODE_OPTIONS ?? '').trim());
   assert.equal(binding.runtimeEvidencePath, '/tmp/metro-runtime-evidence.jsonl');
   assert.equal(binding.runtimeEvidenceSocket, runtimeEvidenceSocket);
+  assert.equal(binding.runtimeEvidenceAuthority, 'reported-v1');
   assert.match(calls[0]?.args[1] ?? '', /childOutcome === null \|\| !evidenceFinished/);
   assert.match(calls[0]?.args[1] ?? '', /rn-dev-agent:evidence-barrier/);
   assert.match(calls[0]?.args[1] ?? '', /stream ended before Metro exited/);

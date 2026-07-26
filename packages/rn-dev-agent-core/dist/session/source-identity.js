@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { canonicalAuthorityJson } from './authority-json.js';
 function digest(parts) {
     const hash = createHash('sha256');
     for (const part of parts) {
@@ -215,10 +216,14 @@ function assertFinalMetroIntegration(identity) {
 function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     if (!authority)
         return { paths: [], semantics: [] };
+    if (authority.evidenceAuthority !== 'broker-v2') {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: reported Metro evidence cannot grant strict authority');
+    }
     const raw = readFileSync(join(identity.appRoot, METRO_RUNTIME_POLICY), 'utf8');
     const receipt = JSON.parse(raw);
     const payload = {
         version: receipt.version,
+        runtimeEvidenceAuthority: receipt.runtimeEvidenceAuthority,
         sessionId: receipt.sessionId,
         metroInstanceId: receipt.metroInstanceId,
         contentRoot: receipt.contentRoot,
@@ -227,10 +232,11 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         violations: receipt.violations,
     };
     const expected = createHmac('sha256', authority.capability)
-        .update(JSON.stringify(payload))
+        .update(canonicalAuthorityJson(payload))
         .digest();
     const observed = typeof receipt.signature === 'string' ? Buffer.from(receipt.signature, 'hex') : Buffer.alloc(0);
     if (receipt.version !== 1 ||
+        receipt.runtimeEvidenceAuthority !== authority.evidenceAuthority ||
         receipt.sessionId !== authority.sessionId ||
         receipt.metroInstanceId !== authority.metroInstanceId ||
         receipt.contentRoot !== identity.contentRoot ||
@@ -285,6 +291,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         }
         const loadPayload = {
             version: load.version,
+            runtimeEvidenceAuthority: load.runtimeEvidenceAuthority,
             sessionId: load.sessionId,
             metroInstanceId: load.metroInstanceId,
             kind: load.kind,
@@ -294,10 +301,11 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
             previousSignature: load.previousSignature,
         };
         const expectedLoad = createHmac('sha256', authority.capability)
-            .update(JSON.stringify(loadPayload))
+            .update(canonicalAuthorityJson(loadPayload))
             .digest();
         const observedLoad = typeof load.signature === 'string' ? Buffer.from(load.signature, 'hex') : Buffer.alloc(0);
         if (load.version !== 1 ||
+            load.runtimeEvidenceAuthority !== authority.evidenceAuthority ||
             load.sessionId !== authority.sessionId ||
             load.metroInstanceId !== authority.metroInstanceId ||
             (load.kind !== 'input' &&
@@ -377,6 +385,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     }
     const headPayload = {
         version: head.version,
+        runtimeEvidenceAuthority: head.runtimeEvidenceAuthority,
         sessionId: head.sessionId,
         metroInstanceId: head.metroInstanceId,
         challenge: head.challenge,
@@ -384,10 +393,11 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         journalSignature: head.journalSignature,
     };
     const expectedHead = createHmac('sha256', authority.capability)
-        .update(JSON.stringify(headPayload))
+        .update(canonicalAuthorityJson(headPayload))
         .digest();
     const observedHead = typeof head.signature === 'string' ? Buffer.from(head.signature, 'hex') : Buffer.alloc(0);
     if (head.version !== 1 ||
+        head.runtimeEvidenceAuthority !== authority.evidenceAuthority ||
         head.sessionId !== authority.sessionId ||
         head.metroInstanceId !== authority.metroInstanceId ||
         head.challenge !== challenge ||
@@ -695,7 +705,7 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink');
     }
     const runtimeInputsAfter = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy, evidenceHeadReader);
-    if (JSON.stringify(runtimeInputsAfter) !== JSON.stringify(runtimeInputs)) {
+    if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
         throw new Error('STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing');
     }
     return {

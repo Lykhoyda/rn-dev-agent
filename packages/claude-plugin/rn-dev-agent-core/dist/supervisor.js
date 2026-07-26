@@ -780,6 +780,98 @@ var init_process_owner = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/authority-json.js
+function quoted(value) {
+  return intrinsicReflectApply(intrinsicJsonStringify, JSON, [value]);
+}
+function sortedOwnNames(value) {
+  const names = intrinsicReflectApply(intrinsicObjectGetOwnPropertyNames, IntrinsicObject, [value]);
+  const enumerable = [];
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [value, name]);
+    if (descriptor?.enumerable)
+      enumerable.push(name);
+  }
+  return intrinsicReflectApply(intrinsicArraySort, enumerable, []);
+}
+function canonicalAuthorityJson(value) {
+  const active = new IntrinsicWeakSet();
+  const encode = (candidate) => {
+    if (candidate === null)
+      return "null";
+    if (typeof candidate === "string")
+      return quoted(candidate);
+    if (typeof candidate === "boolean")
+      return candidate ? "true" : "false";
+    if (typeof candidate === "number") {
+      return intrinsicNumberIsFinite(candidate) ? quoted(candidate) : "null";
+    }
+    if (typeof candidate !== "object") {
+      throw new TypeError("AUTHORITY_JSON_UNSUPPORTED_VALUE");
+    }
+    if (intrinsicReflectApply(intrinsicWeakSetHas, active, [candidate])) {
+      throw new TypeError("AUTHORITY_JSON_CYCLE");
+    }
+    intrinsicReflectApply(intrinsicWeakSetAdd, active, [candidate]);
+    try {
+      if (intrinsicArrayIsArray(candidate)) {
+        let serialized2 = "[";
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (index > 0)
+            serialized2 += ",";
+          const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [candidate, String(index)]);
+          if (!descriptor || !("value" in descriptor)) {
+            throw new TypeError("AUTHORITY_JSON_ACCESSOR");
+          }
+          serialized2 += encode(descriptor.value);
+        }
+        return `${serialized2}]`;
+      }
+      const prototype = intrinsicReflectApply(intrinsicObjectGetPrototypeOf, IntrinsicObject, [candidate]);
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw new TypeError("AUTHORITY_JSON_UNSUPPORTED_OBJECT");
+      }
+      const names = sortedOwnNames(candidate);
+      let serialized = "{";
+      for (let index = 0; index < names.length; index += 1) {
+        if (index > 0)
+          serialized += ",";
+        const name = names[index];
+        const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [candidate, name]);
+        if (!descriptor || !("value" in descriptor)) {
+          throw new TypeError("AUTHORITY_JSON_ACCESSOR");
+        }
+        serialized += `${quoted(name)}:${encode(descriptor.value)}`;
+      }
+      return `${serialized}}`;
+    } finally {
+      intrinsicReflectApply(intrinsicWeakSetDelete, active, [candidate]);
+    }
+  };
+  return encode(value);
+}
+var intrinsicJsonStringify, intrinsicObjectGetOwnPropertyDescriptor, intrinsicObjectGetOwnPropertyNames, intrinsicObjectGetPrototypeOf, intrinsicArrayIsArray, intrinsicArraySort, intrinsicNumberIsFinite, intrinsicReflectApply, IntrinsicObject, intrinsicObjectPrototype, IntrinsicWeakSet, intrinsicWeakSetAdd, intrinsicWeakSetDelete, intrinsicWeakSetHas;
+var init_authority_json = __esm({
+  "packages/rn-dev-agent-core/dist/session/authority-json.js"() {
+    "use strict";
+    intrinsicJsonStringify = JSON.stringify;
+    intrinsicObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+    intrinsicObjectGetOwnPropertyNames = Object.getOwnPropertyNames;
+    intrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
+    intrinsicArrayIsArray = Array.isArray;
+    intrinsicArraySort = Array.prototype.sort;
+    intrinsicNumberIsFinite = Number.isFinite;
+    intrinsicReflectApply = Reflect.apply;
+    IntrinsicObject = Object;
+    intrinsicObjectPrototype = Object.prototype;
+    IntrinsicWeakSet = WeakSet;
+    intrinsicWeakSetAdd = WeakSet.prototype.add;
+    intrinsicWeakSetDelete = WeakSet.prototype.delete;
+    intrinsicWeakSetHas = WeakSet.prototype.has;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash3, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync as execFileSync3 } from "node:child_process";
@@ -932,10 +1024,14 @@ function assertFinalMetroIntegration(identity2) {
 function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   if (!authority)
     return { paths: [], semantics: [] };
+  if (authority.evidenceAuthority !== "broker-v2") {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: reported Metro evidence cannot grant strict authority");
+  }
   const raw = readFileSync3(join4(identity2.appRoot, METRO_RUNTIME_POLICY), "utf8");
   const receipt2 = JSON.parse(raw);
   const payload = {
     version: receipt2.version,
+    runtimeEvidenceAuthority: receipt2.runtimeEvidenceAuthority,
     sessionId: receipt2.sessionId,
     metroInstanceId: receipt2.metroInstanceId,
     contentRoot: receipt2.contentRoot,
@@ -943,9 +1039,9 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     runtimeInputs: receipt2.runtimeInputs,
     violations: receipt2.violations
   };
-  const expected = createHmac("sha256", authority.capability).update(JSON.stringify(payload)).digest();
+  const expected = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
   const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
-  if (receipt2.version !== 1 || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
   }
   if (receipt2.violations.length > 0) {
@@ -988,6 +1084,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     }
     const loadPayload = {
       version: load.version,
+      runtimeEvidenceAuthority: load.runtimeEvidenceAuthority,
       sessionId: load.sessionId,
       metroInstanceId: load.metroInstanceId,
       kind: load.kind,
@@ -996,9 +1093,9 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
       sequence: load.sequence,
       previousSignature: load.previousSignature
     };
-    const expectedLoad = createHmac("sha256", authority.capability).update(JSON.stringify(loadPayload)).digest();
+    const expectedLoad = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(loadPayload)).digest();
     const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
+    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
     }
     evidenceSequence = load.sequence;
@@ -1059,15 +1156,16 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   }
   const headPayload = {
     version: head.version,
+    runtimeEvidenceAuthority: head.runtimeEvidenceAuthority,
     sessionId: head.sessionId,
     metroInstanceId: head.metroInstanceId,
     challenge: head.challenge,
     sequence: head.sequence,
     journalSignature: head.journalSignature
   };
-  const expectedHead = createHmac("sha256", authority.capability).update(JSON.stringify(headPayload)).digest();
+  const expectedHead = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(headPayload)).digest();
   const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
-  if (head.version !== 1 || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual(observedHead, expectedHead)) {
+  if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual(observedHead, expectedHead)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
   }
   for (const launch of descendantLaunches) {
@@ -1347,7 +1445,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
   }
   const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader);
-  if (JSON.stringify(runtimeInputsAfter) !== JSON.stringify(runtimeInputs)) {
+  if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
     throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
   }
   return {
@@ -1363,6 +1461,7 @@ var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_
 var init_source_identity = __esm({
   "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
     "use strict";
+    init_authority_json();
     MAX_STRICT_PROOF_FILES = 4096;
     MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
     MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
@@ -22764,20 +22863,20 @@ import { closeSync as closeSync4, existsSync as existsSync19, openSync as openSy
 function parseNodeOptions(value) {
   const tokens = [];
   let token2 = "";
-  let quoted = false;
+  let quoted2 = false;
   for (let index = 0; index < value.length; index += 1) {
     let character = value[index];
-    if (character === "\\" && quoted) {
+    if (character === "\\" && quoted2) {
       if (index + 1 === value.length)
         return tokens;
       character = value[index += 1];
-    } else if (character === " " && !quoted) {
+    } else if (character === " " && !quoted2) {
       if (token2)
         tokens.push(token2);
       token2 = "";
       continue;
     } else if (character === '"') {
-      quoted = !quoted;
+      quoted2 = !quoted2;
       continue;
     }
     token2 += character;
@@ -22843,6 +22942,20 @@ function probeManagedMetroListener(port, platform = process.platform, execute = 
   return probeMetroListener(port, platform, execute);
 }
 function managementProof(sessionId, authority, signerCapability) {
+  return createHmac2("sha256", signerCapability).update(canonicalAuthorityJson({
+    sessionId,
+    port: authority.port,
+    pid: authority.pid,
+    birth: authority.birth,
+    launcherPid: authority.launcherPid,
+    launcherBirth: authority.launcherBirth,
+    instanceId: authority.instanceId,
+    runtimeEvidencePath: authority.runtimeEvidencePath,
+    runtimeEvidenceSocket: authority.runtimeEvidenceSocket,
+    runtimeEvidenceAuthority: authority.runtimeEvidenceAuthority
+  })).digest("hex");
+}
+function legacyManagementProof(sessionId, authority, signerCapability) {
   return createHmac2("sha256", signerCapability).update([
     sessionId,
     authority.port,
@@ -22938,10 +23051,10 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
-  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.managementProof !== "string") {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "broker-v2" || typeof binding.managementProof !== "string") {
     return false;
   }
-  const expected = managementProof(input.sessionId, {
+  const legacyAuthority = {
     port: binding.port,
     pid: binding.pid,
     birth: binding.birth,
@@ -22950,6 +23063,10 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
     instanceId: binding.instanceId,
     runtimeEvidencePath: binding.runtimeEvidencePath,
     runtimeEvidenceSocket: binding.runtimeEvidenceSocket
+  };
+  const expected = binding.runtimeEvidenceAuthority === void 0 ? legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability) : managementProof(input.sessionId, {
+    ...legacyAuthority,
+    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
   }, input.signerCapability);
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
@@ -22971,11 +23088,104 @@ var init_managed_metro = __esm({
     "use strict";
     init_metro_binding();
     init_process_birth();
+    init_authority_json();
     METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
 const { chmodSync, closeSync, openSync, rmSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
+const intrinsicJsonStringify = JSON.stringify;
+const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
+const intrinsicGetPrototypeOf = Object.getPrototypeOf;
+const intrinsicArrayIsArray = Array.isArray;
+const intrinsicArraySort = Array.prototype.sort;
+const intrinsicNumberIsFinite = Number.isFinite;
+const intrinsicReflectApply = Reflect.apply;
+const intrinsicObjectPrototype = Object.prototype;
+const IntrinsicObject = Object;
+const IntrinsicWeakSet = WeakSet;
+const intrinsicWeakSetAdd = WeakSet.prototype.add;
+const intrinsicWeakSetDelete = WeakSet.prototype.delete;
+const intrinsicWeakSetHas = WeakSet.prototype.has;
+function canonicalAuthorityJson(value) {
+  const active = new IntrinsicWeakSet();
+  const encode = (candidate) => {
+    if (candidate === null) return 'null';
+    if (typeof candidate === 'string') {
+      return intrinsicReflectApply(intrinsicJsonStringify, JSON, [candidate]);
+    }
+    if (typeof candidate === 'number') {
+      return intrinsicNumberIsFinite(candidate)
+        ? intrinsicReflectApply(intrinsicJsonStringify, JSON, [candidate])
+        : 'null';
+    }
+    if (typeof candidate === 'boolean') return candidate ? 'true' : 'false';
+    if (typeof candidate !== 'object') throw new TypeError('AUTHORITY_JSON_UNSUPPORTED_VALUE');
+    if (intrinsicReflectApply(intrinsicWeakSetHas, active, [candidate])) {
+      throw new TypeError('AUTHORITY_JSON_CYCLE');
+    }
+    intrinsicReflectApply(intrinsicWeakSetAdd, active, [candidate]);
+    try {
+      if (intrinsicArrayIsArray(candidate)) {
+        let serialized = '[';
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (index > 0) serialized += ',';
+          const descriptor = intrinsicReflectApply(
+            intrinsicGetOwnPropertyDescriptor,
+            IntrinsicObject,
+            [candidate, String(index)],
+          );
+          if (!descriptor || !('value' in descriptor)) throw new TypeError('AUTHORITY_JSON_ACCESSOR');
+          serialized += encode(descriptor.value);
+        }
+        return serialized + ']';
+      }
+      const prototype = intrinsicReflectApply(
+        intrinsicGetPrototypeOf,
+        IntrinsicObject,
+        [candidate],
+      );
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw new TypeError('AUTHORITY_JSON_UNSUPPORTED_OBJECT');
+      }
+      const names = intrinsicReflectApply(
+        intrinsicGetOwnPropertyNames,
+        IntrinsicObject,
+        [candidate],
+      );
+      const enumerable = [];
+      for (let index = 0; index < names.length; index += 1) {
+        const descriptor = intrinsicReflectApply(
+          intrinsicGetOwnPropertyDescriptor,
+          IntrinsicObject,
+          [candidate, names[index]],
+        );
+        if (descriptor?.enumerable) enumerable.push(names[index]);
+      }
+      intrinsicReflectApply(intrinsicArraySort, enumerable, []);
+      let serialized = '{';
+      for (let index = 0; index < enumerable.length; index += 1) {
+        if (index > 0) serialized += ',';
+        const name = enumerable[index];
+        const descriptor = intrinsicReflectApply(
+          intrinsicGetOwnPropertyDescriptor,
+          IntrinsicObject,
+          [candidate, name],
+        );
+        if (!descriptor || !('value' in descriptor)) throw new TypeError('AUTHORITY_JSON_ACCESSOR');
+        serialized +=
+          intrinsicReflectApply(intrinsicJsonStringify, JSON, [name]) +
+          ':' +
+          encode(descriptor.value);
+      }
+      return serialized + '}';
+    } finally {
+      intrinsicReflectApply(intrinsicWeakSetDelete, active, [candidate]);
+    }
+  };
+  return encode(value);
+}
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
 const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
@@ -22993,11 +23203,19 @@ let sequence = 0;
 let previousSignature = null;
 let buffered = '';
 function appendEvidence(payload) {
-  const chainedPayload = { ...payload, sequence: ++sequence, previousSignature };
+  const chainedPayload = {
+    ...payload,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sequence: ++sequence,
+    previousSignature,
+  };
   const signature = createHmac('sha256', capability)
-    .update(JSON.stringify(chainedPayload))
+    .update(canonicalAuthorityJson(chainedPayload))
     .digest('hex');
-  writeSync(journalDescriptor, JSON.stringify({ ...chainedPayload, signature }) + '\n');
+  writeSync(
+    journalDescriptor,
+    canonicalAuthorityJson({ ...chainedPayload, signature }) + '\n',
+  );
   previousSignature = signature;
 }
 function appendViolation(value) {
@@ -23023,6 +23241,7 @@ function closeHeadConnection(connection) {
 function respondWithHead(connection, challenge) {
   const payload = {
     version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
     sessionId,
     metroInstanceId,
     challenge,
@@ -23030,9 +23249,9 @@ function respondWithHead(connection, challenge) {
     journalSignature: previousSignature,
   };
   const signature = createHmac('sha256', capability)
-    .update(JSON.stringify(payload))
+    .update(canonicalAuthorityJson(payload))
     .digest('hex');
-  connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+  connection.end(canonicalAuthorityJson({ ...payload, signature }) + '\n');
 }
 const headServer = createServer((connection) => {
   headConnections.add(connection);
@@ -60959,8 +61178,8 @@ function replaceIdSelector(body, oldId, newId) {
     }
     m = line.match(bare);
     if (m) {
-      const quoted = !newId.includes('"') ? `"${newId}"` : !newId.includes("'") ? `'${newId}'` : `"${newId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-      out.push(`${m[1]}id: ${quoted}${m[2]}`);
+      const quoted2 = !newId.includes('"') ? `"${newId}"` : !newId.includes("'") ? `'${newId}'` : `"${newId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+      out.push(`${m[1]}id: ${quoted2}${m[2]}`);
       replacements++;
       continue;
     }
@@ -72953,6 +73172,10 @@ const IntrinsicProxy = Proxy;
 const IntrinsicSet = Set;
 const IntrinsicWeakMap = WeakMap;
 const IntrinsicWeakSet = WeakSet;
+const intrinsicArrayIsArray = Array.isArray;
+const intrinsicJsonStringify = JSON.stringify;
+const intrinsicNumberIsFinite = Number.isFinite;
+const intrinsicObjectPrototype = Object.prototype;
 const intrinsicArrayFilter = Array.prototype.filter;
 const intrinsicArrayForEach = Array.prototype.forEach;
 const intrinsicArrayMap = Array.prototype.map;
@@ -72973,6 +73196,7 @@ const intrinsicMapGet = Map.prototype.get;
 const intrinsicMapHas = Map.prototype.has;
 const intrinsicMapSet = Map.prototype.set;
 const intrinsicReflectApply = Reflect.apply;
+const intrinsicReflectConstruct = Reflect.construct;
 const intrinsicReflectGet = Reflect.get;
 const intrinsicReflectSet = Reflect.set;
 const intrinsicSetAdd = Set.prototype.add;
@@ -72984,7 +73208,9 @@ const intrinsicWeakMapGet = WeakMap.prototype.get;
 const intrinsicWeakMapHas = WeakMap.prototype.has;
 const intrinsicWeakMapSet = WeakMap.prototype.set;
 const intrinsicWeakSetAdd = WeakSet.prototype.add;
+const intrinsicWeakSetDelete = WeakSet.prototype.delete;
 const intrinsicWeakSetHas = WeakSet.prototype.has;
+const intrinsicProcessNextTick = process.nextTick;
 function privateMapDelete(map, key) {
   return intrinsicReflectApply(intrinsicMapDelete, map, [key]);
 }
@@ -73079,8 +73305,68 @@ function privateWeakMapSet(map, key, value) {
 function privateWeakSetAdd(set, value) {
   return intrinsicReflectApply(intrinsicWeakSetAdd, set, [value]);
 }
+function privateWeakSetDelete(set, value) {
+  return intrinsicReflectApply(intrinsicWeakSetDelete, set, [value]);
+}
 function privateWeakSetHas(set, value) {
   return intrinsicReflectApply(intrinsicWeakSetHas, set, [value]);
+}
+function canonicalAuthorityJson(value) {
+  const active = new IntrinsicWeakSet();
+  const encode = (candidate) => {
+    if (candidate === null) return 'null';
+    if (typeof candidate === 'string') {
+      return intrinsicReflectApply(intrinsicJsonStringify, null, [candidate]);
+    }
+    if (typeof candidate === 'boolean') return candidate ? 'true' : 'false';
+    if (typeof candidate === 'number') {
+      return intrinsicNumberIsFinite(candidate)
+        ? intrinsicReflectApply(intrinsicJsonStringify, null, [candidate])
+        : 'null';
+    }
+    if (typeof candidate !== 'object') throw descendantError();
+    if (privateWeakSetHas(active, candidate)) throw descendantError();
+    privateWeakSetAdd(active, candidate);
+    try {
+      if (intrinsicArrayIsArray(candidate)) {
+        let serialized = '[';
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (index > 0) serialized += ',';
+          const descriptor = privateGetOwnPropertyDescriptor(candidate, String(index));
+          if (!descriptor || !('value' in descriptor)) throw descendantError();
+          serialized += encode(descriptor.value);
+        }
+        return serialized + ']';
+      }
+      const prototype = privateGetPrototypeOf(candidate);
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw descendantError();
+      }
+      const names = privateGetOwnPropertyNames(candidate);
+      const enumerable = [];
+      for (let index = 0; index < names.length; index += 1) {
+        const name = names[index];
+        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
+        if (descriptor?.enumerable) privateArrayPush(enumerable, name);
+      }
+      privateArraySort(enumerable);
+      let serialized = '{';
+      for (let index = 0; index < enumerable.length; index += 1) {
+        if (index > 0) serialized += ',';
+        const name = enumerable[index];
+        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
+        if (!descriptor || !('value' in descriptor)) throw descendantError();
+        serialized +=
+          intrinsicReflectApply(intrinsicJsonStringify, null, [name]) +
+          ':' +
+          encode(descriptor.value);
+      }
+      return serialized + '}';
+    } finally {
+      privateWeakSetDelete(active, candidate);
+    }
+  };
+  return encode(value);
 }
 ${parseNodeOptions.toString()}
 ${hasNodeLoaderOption.toString()}
@@ -73129,27 +73415,35 @@ function persistLoaderObservation(kind, value, digest = null) {
   const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
   const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
   if (!sessionId || !metroInstanceId) return;
-  const payload = { version: 1, sessionId, metroInstanceId, kind, value, digest };
+  const payload = {
+    version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sessionId,
+    metroInstanceId,
+    kind,
+    value,
+    digest,
+  };
   if (Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3) {
-    writeRuntimeLoad(JSON.stringify(payload) + '\\n', evidenceDescriptor);
+    writeRuntimeLoad(canonicalAuthorityJson(payload) + '\\n', evidenceDescriptor);
     return;
   }
   if (!metroPolicyCapability || !loadsPath) return;
-  const serializedPayload = JSON.stringify(payload);
+  const serializedPayload = canonicalAuthorityJson(payload);
   const receipt = {
     ...payload,
     signature: createHmac('sha256', metroPolicyCapability)
       .update(serializedPayload)
       .digest('hex'),
   };
-  writeRuntimeLoad(JSON.stringify(receipt) + '\\n', loadsPath);
+  writeRuntimeLoad(canonicalAuthorityJson(receipt) + '\\n', loadsPath);
 }
 const effectiveBaseNodeOptions = parseNodeOptions(
   process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '',
 );
 persistLoaderObservation(
   'semantics',
-  JSON.stringify({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
+  canonicalAuthorityJson({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
 );
 function recordLoaderViolation(value) {
   if (privateSetHas(accumulatedViolations, value)) return;
@@ -73425,7 +73719,7 @@ function authenticatedMessage(context, value) {
   context.sequence += 1;
   persistLoaderObservation(
     'semantics',
-    JSON.stringify({
+    canonicalAuthorityJson({
       mode: context.mode,
       recipient: context.recipient,
       sequence: context.sequence,
@@ -73615,10 +73909,12 @@ function exposeNativeProcessHandle(child, handle) {
   const originalOnExit = handle.onexit;
   if (typeof originalOnExit !== 'function') throw descendantError();
   const slot = {
+    deliveringSpawnError: false,
     exitDepth: 0,
     exposed: undefined,
+    invokeOnExit: undefined,
+    pendingSpawnError: undefined,
     spawnDepth: 0,
-    spawnErrorPending: false,
   };
   const invokeOnExit = (...args) => {
     slot.exitDepth += 1;
@@ -73628,17 +73924,14 @@ function exposeNativeProcessHandle(child, handle) {
       slot.exitDepth -= 1;
     }
   };
+  slot.invokeOnExit = invokeOnExit;
   intrinsicDefineProperty(handle, 'onexit', {
     configurable: false,
     enumerable: true,
     value: invokeOnExit,
     writable: false,
   });
-  slot.exposed = nativeHandleFacade(handle, 'onexit', (...args) => {
-    if (!slot.spawnErrorPending) throw descendantError();
-    slot.spawnErrorPending = false;
-    return invokeOnExit(...args);
-  });
+  slot.exposed = nativeHandleFacade(handle, 'onexit');
   privateWeakMapSet(nativeProcessHandleSlots, handle, slot);
   intrinsicDefineProperty(child, '_handle', {
     configurable: false,
@@ -73653,7 +73946,17 @@ function exposeNativeProcessHandle(child, handle) {
       ) {
         throw descendantError();
       }
-      slot.exposed = null;
+      slot.exposed =
+        slot.deliveringSpawnError && slot.pendingSpawnError !== undefined
+          ? nativeHandleFacade(handle, 'onexit', (...args) => {
+              if (
+                args.length !== 1 ||
+                args[0] !== slot.pendingSpawnError
+              ) {
+                throw descendantError();
+              }
+            })
+          : null;
     },
   });
 }
@@ -73780,13 +74083,31 @@ function fenceNativeProcessHandle(handle, context) {
       configurable: false,
       enumerable: false,
       value(...args) {
-        if (!privateWeakMapHas(authorizedNativeProcessSpawns, this)) {
+        const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
+        if (
+          authorizedOptions === undefined ||
+          args.length !== 1 ||
+          args[0] !== authorizedOptions
+        ) {
           throw descendantError();
         }
         privateWeakMapDelete(authorizedNativeProcessSpawns, this);
         const result = intrinsicReflectApply(spawn, this, args);
         const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
-        if (slot && result !== 0) slot.spawnErrorPending = true;
+        if (slot && result !== 0) {
+          slot.pendingSpawnError = result;
+          intrinsicReflectApply(intrinsicProcessNextTick, process, [
+            () => {
+              if (slot.pendingSpawnError !== result) throw descendantError();
+              slot.deliveringSpawnError = true;
+              try {
+                slot.invokeOnExit(result);
+              } finally {
+                slot.deliveringSpawnError = false;
+              }
+            },
+          ]);
+        }
         return result;
       },
       writable: false,
@@ -74008,7 +74329,7 @@ function requireSafeExecArgv(execArgv) {
   return normalized;
 }
 function executionSemantics(mode, entrypoint, execArgv, invocation) {
-  const value = JSON.stringify({
+  const value = canonicalAuthorityJson({
     mode,
     entrypoint,
     execArgv,
@@ -74618,7 +74939,7 @@ function fenceWorkers() {
     );
     const workerNewTarget =
       new.target === AuthenticatedWorker ? OriginalWorker : new.target;
-    const worker = Reflect.construct(
+    const worker = intrinsicReflectConstruct(
       OriginalWorker,
       [
         entrypoint,
@@ -75009,7 +75330,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   }
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD || '';
   const baseNodeOptions = process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '';
-  const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + JSON.stringify(authorityPreload)]
+  const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + canonicalAuthorityJson(authorityPreload)]
     .filter(Boolean)
     .join(' ');
   let authorityPreloadMatches = false;
@@ -75043,6 +75364,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   );
   const payload = {
     version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
     sessionId,
     metroInstanceId,
     contentRoot: root,
@@ -75050,7 +75372,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     runtimeInputs: privateArraySort(privateSetValues(accumulatedRuntimeInputs)),
     violations: privateArraySort(privateSetValues(accumulatedViolations)),
   };
-  const serializedPayload = JSON.stringify(payload);
+  const serializedPayload = canonicalAuthorityJson(payload);
   if (serializedPayload === lastPolicyPayload) return;
   const receipt = {
     ...payload,
@@ -75060,7 +75382,7 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
   };
   const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY2)});
   const temporary = policyPath + '.' + process.pid + '.tmp';
-  fs.writeFileSync(temporary, JSON.stringify(receipt) + '\\n', { mode: 0o600 });
+  fs.writeFileSync(temporary, canonicalAuthorityJson(receipt) + '\\n', { mode: 0o600 });
   fs.renameSync(temporary, policyPath);
   lastPolicyPayload = serializedPayload;
 }
@@ -77057,7 +77379,7 @@ function proofAuthority(runId) {
     throw new Error("PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher");
   }
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
-  if (!secret?.signerCapability || typeof metro.instanceId !== "string" || typeof metro.runtimeEvidencePath !== "string" || typeof metro.runtimeEvidenceSocket !== "string") {
+  if (!secret?.signerCapability || typeof metro.instanceId !== "string" || typeof metro.runtimeEvidencePath !== "string" || typeof metro.runtimeEvidenceSocket !== "string" || metro.runtimeEvidenceAuthority !== "reported-v1" && metro.runtimeEvidenceAuthority !== "broker-v2") {
     throw new Error("PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable");
   }
   const source = strictProofSourceIdentity(status.source, {
@@ -77066,7 +77388,8 @@ function proofAuthority(runId) {
       metroInstanceId: metro.instanceId,
       capability: createHmac5("sha256", secret.signerCapability).update("metro-runtime-policy").digest("base64url"),
       evidencePath: metro.runtimeEvidencePath,
-      evidenceSocket: metro.runtimeEvidenceSocket
+      evidenceSocket: metro.runtimeEvidenceSocket,
+      evidenceAuthority: metro.runtimeEvidenceAuthority
     }
   });
   const pendingProof = status.bindings.proof?.runId;

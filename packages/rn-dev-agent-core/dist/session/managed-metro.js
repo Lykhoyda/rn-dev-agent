@@ -4,11 +4,104 @@ import { closeSync, existsSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { captureMetroBinding, metroListenerPid, probeMetroListener, } from './metro-binding.js';
 import { probeProcessBirth, readProcessBirth, } from './process-birth.js';
+import { canonicalAuthorityJson } from './authority-json.js';
 const METRO_LAUNCHER_SOURCE = String.raw `
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
 const { chmodSync, closeSync, openSync, rmSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
+const intrinsicJsonStringify = JSON.stringify;
+const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
+const intrinsicGetPrototypeOf = Object.getPrototypeOf;
+const intrinsicArrayIsArray = Array.isArray;
+const intrinsicArraySort = Array.prototype.sort;
+const intrinsicNumberIsFinite = Number.isFinite;
+const intrinsicReflectApply = Reflect.apply;
+const intrinsicObjectPrototype = Object.prototype;
+const IntrinsicObject = Object;
+const IntrinsicWeakSet = WeakSet;
+const intrinsicWeakSetAdd = WeakSet.prototype.add;
+const intrinsicWeakSetDelete = WeakSet.prototype.delete;
+const intrinsicWeakSetHas = WeakSet.prototype.has;
+function canonicalAuthorityJson(value) {
+  const active = new IntrinsicWeakSet();
+  const encode = (candidate) => {
+    if (candidate === null) return 'null';
+    if (typeof candidate === 'string') {
+      return intrinsicReflectApply(intrinsicJsonStringify, JSON, [candidate]);
+    }
+    if (typeof candidate === 'number') {
+      return intrinsicNumberIsFinite(candidate)
+        ? intrinsicReflectApply(intrinsicJsonStringify, JSON, [candidate])
+        : 'null';
+    }
+    if (typeof candidate === 'boolean') return candidate ? 'true' : 'false';
+    if (typeof candidate !== 'object') throw new TypeError('AUTHORITY_JSON_UNSUPPORTED_VALUE');
+    if (intrinsicReflectApply(intrinsicWeakSetHas, active, [candidate])) {
+      throw new TypeError('AUTHORITY_JSON_CYCLE');
+    }
+    intrinsicReflectApply(intrinsicWeakSetAdd, active, [candidate]);
+    try {
+      if (intrinsicArrayIsArray(candidate)) {
+        let serialized = '[';
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (index > 0) serialized += ',';
+          const descriptor = intrinsicReflectApply(
+            intrinsicGetOwnPropertyDescriptor,
+            IntrinsicObject,
+            [candidate, String(index)],
+          );
+          if (!descriptor || !('value' in descriptor)) throw new TypeError('AUTHORITY_JSON_ACCESSOR');
+          serialized += encode(descriptor.value);
+        }
+        return serialized + ']';
+      }
+      const prototype = intrinsicReflectApply(
+        intrinsicGetPrototypeOf,
+        IntrinsicObject,
+        [candidate],
+      );
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw new TypeError('AUTHORITY_JSON_UNSUPPORTED_OBJECT');
+      }
+      const names = intrinsicReflectApply(
+        intrinsicGetOwnPropertyNames,
+        IntrinsicObject,
+        [candidate],
+      );
+      const enumerable = [];
+      for (let index = 0; index < names.length; index += 1) {
+        const descriptor = intrinsicReflectApply(
+          intrinsicGetOwnPropertyDescriptor,
+          IntrinsicObject,
+          [candidate, names[index]],
+        );
+        if (descriptor?.enumerable) enumerable.push(names[index]);
+      }
+      intrinsicReflectApply(intrinsicArraySort, enumerable, []);
+      let serialized = '{';
+      for (let index = 0; index < enumerable.length; index += 1) {
+        if (index > 0) serialized += ',';
+        const name = enumerable[index];
+        const descriptor = intrinsicReflectApply(
+          intrinsicGetOwnPropertyDescriptor,
+          IntrinsicObject,
+          [candidate, name],
+        );
+        if (!descriptor || !('value' in descriptor)) throw new TypeError('AUTHORITY_JSON_ACCESSOR');
+        serialized +=
+          intrinsicReflectApply(intrinsicJsonStringify, JSON, [name]) +
+          ':' +
+          encode(descriptor.value);
+      }
+      return serialized + '}';
+    } finally {
+      intrinsicReflectApply(intrinsicWeakSetDelete, active, [candidate]);
+    }
+  };
+  return encode(value);
+}
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
 const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
@@ -26,11 +119,19 @@ let sequence = 0;
 let previousSignature = null;
 let buffered = '';
 function appendEvidence(payload) {
-  const chainedPayload = { ...payload, sequence: ++sequence, previousSignature };
+  const chainedPayload = {
+    ...payload,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sequence: ++sequence,
+    previousSignature,
+  };
   const signature = createHmac('sha256', capability)
-    .update(JSON.stringify(chainedPayload))
+    .update(canonicalAuthorityJson(chainedPayload))
     .digest('hex');
-  writeSync(journalDescriptor, JSON.stringify({ ...chainedPayload, signature }) + '\n');
+  writeSync(
+    journalDescriptor,
+    canonicalAuthorityJson({ ...chainedPayload, signature }) + '\n',
+  );
   previousSignature = signature;
 }
 function appendViolation(value) {
@@ -56,6 +157,7 @@ function closeHeadConnection(connection) {
 function respondWithHead(connection, challenge) {
   const payload = {
     version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
     sessionId,
     metroInstanceId,
     challenge,
@@ -63,9 +165,9 @@ function respondWithHead(connection, challenge) {
     journalSignature: previousSignature,
   };
   const signature = createHmac('sha256', capability)
-    .update(JSON.stringify(payload))
+    .update(canonicalAuthorityJson(payload))
     .digest('hex');
-  connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+  connection.end(canonicalAuthorityJson({ ...payload, signature }) + '\n');
 }
 const headServer = createServer((connection) => {
   headConnections.add(connection);
@@ -344,6 +446,22 @@ export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
 }
 function managementProof(sessionId, authority, signerCapability) {
     return createHmac('sha256', signerCapability)
+        .update(canonicalAuthorityJson({
+        sessionId,
+        port: authority.port,
+        pid: authority.pid,
+        birth: authority.birth,
+        launcherPid: authority.launcherPid,
+        launcherBirth: authority.launcherBirth,
+        instanceId: authority.instanceId,
+        runtimeEvidencePath: authority.runtimeEvidencePath,
+        runtimeEvidenceSocket: authority.runtimeEvidenceSocket,
+        runtimeEvidenceAuthority: authority.runtimeEvidenceAuthority,
+    }))
+        .digest('hex');
+}
+function legacyManagementProof(sessionId, authority, signerCapability) {
+    return createHmac('sha256', signerCapability)
         .update([
         sessionId,
         authority.port,
@@ -481,6 +599,7 @@ export async function startManagedMetro(input, dependencies = {}) {
                     launcherBirth: launcherBirth.token,
                     runtimeEvidencePath,
                     runtimeEvidenceSocket,
+                    runtimeEvidenceAuthority: 'reported-v1',
                 };
                 return {
                     ...authority,
@@ -615,10 +734,13 @@ export async function stopManagedMetro(binding, input, dependencies = {}) {
         typeof binding.instanceId !== 'string' ||
         typeof binding.runtimeEvidencePath !== 'string' ||
         typeof binding.runtimeEvidenceSocket !== 'string' ||
+        (binding.runtimeEvidenceAuthority !== undefined &&
+            binding.runtimeEvidenceAuthority !== 'reported-v1' &&
+            binding.runtimeEvidenceAuthority !== 'broker-v2') ||
         typeof binding.managementProof !== 'string') {
         return false;
     }
-    const expected = managementProof(input.sessionId, {
+    const legacyAuthority = {
         port: binding.port,
         pid: binding.pid,
         birth: binding.birth,
@@ -627,7 +749,13 @@ export async function stopManagedMetro(binding, input, dependencies = {}) {
         instanceId: binding.instanceId,
         runtimeEvidencePath: binding.runtimeEvidencePath,
         runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
-    }, input.signerCapability);
+    };
+    const expected = binding.runtimeEvidenceAuthority === undefined
+        ? legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)
+        : managementProof(input.sessionId, {
+            ...legacyAuthority,
+            runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+        }, input.signerCapability);
     const expectedBuffer = Buffer.from(expected, 'hex');
     const observedBuffer = Buffer.from(binding.managementProof, 'hex');
     if (expectedBuffer.length !== observedBuffer.length ||
