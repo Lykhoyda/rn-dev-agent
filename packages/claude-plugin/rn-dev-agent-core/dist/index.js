@@ -70686,33 +70686,48 @@ if (descendantNonce) {
       'descendant-lifecycle',
       descendantNonce,
     );
-    let processDisconnectImplementation =
+    const processDisconnectImplementation =
       typeof process.disconnect === 'function' ? process.disconnect : undefined;
-    let processDisconnectCaptured = Boolean(processDisconnectImplementation);
-    const authenticatedProcessDisconnect = function () {
-      return authenticatedLifecycleResult(
-        descendantLifecycleContext,
-        'disconnect',
-        undefined,
-        () => Reflect.apply(processDisconnectImplementation, process, []),
-      );
-    };
-    Object.defineProperty(process, 'disconnect', {
-      configurable: false,
-      enumerable: true,
-      get() {
-        return processDisconnectImplementation
-          ? authenticatedProcessDisconnect
-          : undefined;
-      },
-      set(value) {
-        if (processDisconnectCaptured || typeof value !== 'function') {
-          throw descendantError();
-        }
-        processDisconnectImplementation = value;
-        processDisconnectCaptured = true;
-      },
-    });
+    if (processDisconnectImplementation) {
+      const processDisconnectDelegate = process._disconnect;
+      const processHandleQueue = process._handleQueue;
+      if (typeof processDisconnectDelegate !== 'function' || processHandleQueue) {
+        throw descendantError();
+      }
+      Object.defineProperty(process, '_disconnect', {
+        configurable: false,
+        enumerable: false,
+        value: processDisconnectDelegate,
+        writable: false,
+      });
+      Object.defineProperty(process, '_handleQueue', {
+        configurable: false,
+        enumerable: false,
+        value: processHandleQueue,
+        writable: false,
+      });
+      const authenticatedProcessDisconnect = function () {
+        return authenticatedLifecycleResult(
+          descendantLifecycleContext,
+          'disconnect',
+          undefined,
+          () => Reflect.apply(processDisconnectImplementation, process, []),
+        );
+      };
+      Object.defineProperty(process, 'disconnect', {
+        configurable: false,
+        enumerable: true,
+        value: authenticatedProcessDisconnect,
+        writable: false,
+      });
+    } else {
+      Object.defineProperty(process, 'disconnect', {
+        configurable: false,
+        enumerable: true,
+        value: undefined,
+        writable: false,
+      });
+    }
   }
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
