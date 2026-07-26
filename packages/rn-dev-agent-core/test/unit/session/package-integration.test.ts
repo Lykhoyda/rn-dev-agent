@@ -557,7 +557,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(
       childEntry,
-      "if (process.send) process.once('message', () => { try { process.disconnect(); process.exit(12); } catch (error) { process.exit(error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION' ? 0 : 13); } });",
+      "if (process.send) { process.once('disconnect', () => process.exit(0)); process.once('message', () => process.disconnect()); }",
     );
     writeFileSync(
       workerEntry,
@@ -654,8 +654,13 @@ test('Metro lifecycle controls reject unowned targets and bind outcomes', () => 
     mkdirSync(integration, { recursive: true });
     const adapterPath = join(integration, 'rn-session-metro.cjs');
     const lifecycleEntry = join(root, 'lifecycle.cjs');
+    const disconnectEntry = join(root, 'disconnect.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(lifecycleEntry, 'setInterval(() => {}, 1000);\n');
+    writeFileSync(
+      disconnectEntry,
+      "process.once('disconnect', () => process.exit(0)); setInterval(() => {}, 1000);\n",
+    );
     const environment = metroPolicyEnvironment(adapterPath);
     const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
     evidenceDescriptor = openSync(runtimeLoads, 'a');
@@ -664,7 +669,7 @@ test('Metro lifecycle controls reject unowned targets and bind outcomes', () => 
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => process.kill(0, 0)); unsupported(() => process.kill(-1, 0)); unsupported(() => process.kill(process.pid, 0)); const child = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); }); let rejected = false; try { process.kill(child.pid, 'SIGINVALID'); } catch { rejected = true; } if (!rejected) throw new Error('invalid signal was accepted'); const exited = new Promise((resolve) => child.once('exit', resolve)); if (process.kill(child.pid, 'SIGTERM') !== true) throw new Error('process.kill result changed'); await exited; unsupported(() => process.kill(child.pid, 0)); const killed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killed.once('error', reject); killed.once('spawn', resolve); }); const killedExit = new Promise((resolve) => killed.once('exit', resolve)); if (killed.kill('SIGTERM') !== true) throw new Error('child.kill result changed'); await killedExit; })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => process.kill(0, 0)); unsupported(() => process.kill(-1, 0)); unsupported(() => process.kill(process.pid, 0)); const child = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); }); let rejected = false; try { process.kill(child.pid, 'SIGINVALID'); } catch { rejected = true; } if (!rejected) throw new Error('invalid signal was accepted'); const exited = new Promise((resolve) => child.once('exit', resolve)); if (process.kill(child.pid, 'SIGTERM') !== true) throw new Error('process.kill result changed'); await exited; unsupported(() => process.kill(child.pid, 0)); const killed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killed.once('error', reject); killed.once('spawn', resolve); }); const killedExit = new Promise((resolve) => killed.once('exit', resolve)); const originalHandle = killed._handle; let mutableHandleCalled = false; killed._handle = { kill: () => { mutableHandleCalled = true; return 0; } }; const killedResult = killed.kill('SIGTERM'); killed._handle = originalHandle; if (mutableHandleCalled) { process.kill(killed.pid, 'SIGTERM'); throw new Error('mutable child handle was used'); } if (killedResult !== true || killed.killed !== true) throw new Error('child.kill result changed'); await killedExit; const disconnecting = childProcess.fork(${JSON.stringify(disconnectEntry)}, [], { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('spawn', resolve); }); const disconnectedExit = new Promise((resolve, reject) => { disconnecting.once('error', reject); disconnecting.once('exit', (code) => code === 0 ? resolve() : reject(new Error('disconnect cleanup failed'))); }); disconnecting.disconnect(); await disconnectedExit; })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -700,6 +705,7 @@ test('Metro lifecycle controls reject unowned targets and bind outcomes', () => 
         .map((entries) => entries.map((entry) => entry.sequence))
         .sort((left, right) => left.length - right.length),
       [
+        [1, 2],
         [1, 2],
         [1, 2, 3, 4],
       ],

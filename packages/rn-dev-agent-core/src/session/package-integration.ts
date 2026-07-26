@@ -218,11 +218,11 @@ const childMessageContexts = new WeakMap();
 const childSendImplementations = new WeakMap();
 const childDisconnectImplementations = new WeakMap();
 const childLifecycleContexts = new WeakMap();
+const childLifecycleTargets = new WeakMap();
 const workerMessageContexts = new WeakMap();
 const workerLifecycleContexts = new WeakMap();
 const portMessageContexts = new WeakMap();
-const processLifecycleContexts = new Map();
-let childKillDepth = 0;
+const processLifecycleTargets = new Map();
 function authenticatedMessage(context, value) {
   const snapshot = snapshotInvocation(value);
   context.sequence += 1;
@@ -583,21 +583,35 @@ function installMessageFences() {
     },
     writable: false,
   });
-  const originalChildKill = childPrototype.kill;
+  const originalProcessKill = process.kill;
   Object.defineProperty(childPrototype, 'kill', {
     configurable: false,
     enumerable: true,
     value(signal) {
+      const target = childLifecycleTargets.get(this);
       return authenticatedLifecycleResult(
-        childLifecycleContexts.get(this),
+        target?.context,
         'kill',
         signal,
         (authenticatedSignal) => {
-          childKillDepth += 1;
           try {
-            return Reflect.apply(originalChildKill, this, [authenticatedSignal]);
-          } finally {
-            childKillDepth -= 1;
+            if (processLifecycleTargets.get(target?.pid) !== target) {
+              throw descendantError();
+            }
+            const result = Reflect.apply(originalProcessKill, process, [
+              target.pid,
+              authenticatedSignal,
+            ]);
+            if (result) this.killed = true;
+            return result;
+          } catch (error) {
+            if (error?.code === 'ESRCH') return false;
+            if (error?.code === 'EINVAL' || error?.code === 'ENOSYS') throw error;
+            if (error?.code) {
+              this.emit('error', error);
+              return false;
+            }
+            throw error;
           }
         },
       );
@@ -629,21 +643,21 @@ function installMessageFences() {
       childDisconnectImplementations.set(this, value);
     },
   });
-  const originalProcessKill = process.kill;
   Object.defineProperty(process, 'kill', {
     configurable: false,
     enumerable: true,
     value(pid, signal) {
-      if (childKillDepth > 0) {
-        return Reflect.apply(originalProcessKill, process, [pid, signal]);
-      }
-      const context = processLifecycleContexts.get(pid);
-      if (!context) throw descendantError();
-      return authenticatedLifecycleResult(context, 'kill', { pid, signal }, (authenticated) =>
-        Reflect.apply(originalProcessKill, process, [
-          authenticated.pid,
-          authenticated.signal,
-        ]),
+      const target = processLifecycleTargets.get(pid);
+      if (!target) throw descendantError();
+      return authenticatedLifecycleResult(
+        target.context,
+        'kill',
+        { pid, signal },
+        (authenticated) =>
+          Reflect.apply(originalProcessKill, process, [
+            authenticated.pid,
+            authenticated.signal,
+          ]),
       );
     },
     writable: false,
@@ -797,8 +811,14 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
         childLifecycleContexts.set(child, context);
         if (typeof child?.pid === 'number') {
           const pid = child.pid;
-          processLifecycleContexts.set(pid, context);
-          child.once?.('exit', () => processLifecycleContexts.delete(pid));
+          const target = { pid, context };
+          childLifecycleTargets.set(child, target);
+          processLifecycleTargets.set(pid, target);
+          child.once?.('exit', () => {
+            if (processLifecycleTargets.get(pid) === target) {
+              processLifecycleTargets.delete(pid);
+            }
+          });
         }
       }
       if (mode === 'fork') {
@@ -905,27 +925,6 @@ if (canAuthenticateChildProcesses) {
       recipient: 'parent:' + descendantNonce,
       sequence: 0,
     };
-    if (workerThreads.isMainThread) {
-      let processDisconnectImplementation =
-        typeof process.disconnect === 'function' ? process.disconnect : undefined;
-      const rejectedProcessDisconnect = function () {
-        if (!processDisconnectImplementation) throw descendantError();
-        throw descendantError();
-      };
-      Object.defineProperty(process, 'disconnect', {
-        configurable: false,
-        enumerable: true,
-        get() {
-          return processDisconnectImplementation
-            ? rejectedProcessDisconnect
-            : undefined;
-        },
-        set(value) {
-          if (typeof value !== 'function') throw descendantError();
-          processDisconnectImplementation = value;
-        },
-      });
-    }
     if (typeof process.send === 'function') {
       const originalSend = process.send;
       Object.defineProperty(process, 'send', {
