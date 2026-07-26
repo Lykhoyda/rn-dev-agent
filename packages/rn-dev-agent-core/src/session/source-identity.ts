@@ -317,8 +317,8 @@ function metroRuntimeInputs(
   identity: GitSourceIdentity,
   authority: SourceIdentityDependencies['metroRuntimePolicy'],
   readEvidenceHead: (socket: string, challenge: string) => string,
-): string[] {
-  if (!authority) return [];
+): { paths: string[]; semantics: string[] } {
+  if (!authority) return { paths: [], semantics: [] };
   const raw = readFileSync(join(identity.appRoot, METRO_RUNTIME_POLICY), 'utf8');
   const receipt = JSON.parse(raw) as {
     version?: unknown;
@@ -382,6 +382,8 @@ function metroRuntimeInputs(
   >();
   const descendantLaunches = new Set<string>();
   const descendantAttestations = new Set<string>();
+  const descendantSemanticDigests = new Set<string>();
+  const runtimeSemantics = new Set<string>();
   const runtimeEvidenceKeys = new Set<string>();
   let evidenceSequence = 0;
   let previousEvidenceSignature: string | null = null;
@@ -436,7 +438,8 @@ function metroRuntimeInputs(
       (load.kind !== 'input' &&
         load.kind !== 'violation' &&
         load.kind !== 'launch' &&
-        load.kind !== 'attestation') ||
+        load.kind !== 'attestation' &&
+        load.kind !== 'semantics') ||
       typeof load.value !== 'string' ||
       !Number.isSafeInteger(load.sequence) ||
       load.sequence !== evidenceSequence + 1 ||
@@ -454,13 +457,21 @@ function metroRuntimeInputs(
     const key = `${load.kind}\0${load.value}`;
     runtimeEvidenceKeys.add(key);
     if (load.kind === 'launch' || load.kind === 'attestation') {
-      if (!/^[a-f0-9]{32}:(?:process|worker):\d+$/.test(load.value)) {
+      if (!/^[a-f0-9]{32}:(?:process|worker):\d+:[a-f0-9]{64}$/.test(load.value)) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
       }
       (load.kind === 'launch' ? descendantLaunches : descendantAttestations).add(load.value);
+      descendantSemanticDigests.add(load.value.slice(-64));
       if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
       }
+      continue;
+    }
+    if (load.kind === 'semantics') {
+      if (load.value.length > 4_096) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded');
+      }
+      runtimeSemantics.add(load.value);
       continue;
     }
     const prior = runtimeLoads.get(key);
@@ -532,8 +543,16 @@ function metroRuntimeInputs(
   }
   for (const attestation of descendantAttestations) {
     if (!descendantLaunches.has(attestation)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch');
+    }
+  }
+  const observedSemanticDigests = new Set(
+    [...runtimeSemantics].map((value) => createHash('sha256').update(value).digest('hex')),
+  );
+  for (const semantics of descendantSemanticDigests) {
+    if (!observedSemanticDigests.has(semantics)) {
       throw new Error(
-        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch',
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing',
       );
     }
   }
@@ -549,13 +568,16 @@ function metroRuntimeInputs(
     }
     runtimeInputs.add(candidate);
   }
-  return [...runtimeInputs].sort().flatMap((entry) => {
-    const candidate = realpathSync(entry);
-    return !isContained(identity.contentRoot, candidate) ||
-      isExcludedRuntimePath(identity.contentRoot, candidate)
-      ? [candidate]
-      : [];
-  });
+  return {
+    paths: [...runtimeInputs].sort().flatMap((entry) => {
+      const candidate = realpathSync(entry);
+      return !isContained(identity.contentRoot, candidate) ||
+        isExcludedRuntimePath(identity.contentRoot, candidate)
+        ? [candidate]
+        : [];
+    }),
+    semantics: [...runtimeSemantics].sort(),
+  };
 }
 
 function dependencyStoreRoots(
@@ -811,7 +833,11 @@ export function strictProofSourceIdentity(
   const dirtyHash = createHash('sha256');
   updateFramed(dirtyHash, 'git-dirty-v3');
   updateFramed(dirtyHash, diff);
-  updateDependencyStores(dirtyHash, identity, git, pathExists, runtimeInputs);
+  for (const semantics of runtimeInputs.semantics) {
+    updateFramed(dirtyHash, 'runtime-semantics');
+    updateFramed(dirtyHash, semantics);
+  }
+  updateDependencyStores(dirtyHash, identity, git, pathExists, runtimeInputs.paths);
   const sourceEntries = [
     ...untracked.map((entry) => ['untracked', entry] as const),
     ...ignored.map((entry) => ['ignored-runtime', entry] as const),

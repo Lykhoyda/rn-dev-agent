@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { closeSync, existsSync, openSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { captureMetroBinding, metroListenerPid, probeMetroListener, } from './metro-binding.js';
 import { probeProcessBirth, readProcessBirth, } from './process-birth.js';
@@ -159,7 +159,9 @@ evidence.on('data', (chunk) => {
         payload.version !== 1 ||
         payload.sessionId !== sessionId ||
         payload.metroInstanceId !== metroInstanceId ||
-        !['input', 'violation', 'launch', 'attestation', 'barrier'].includes(payload.kind) ||
+        !['input', 'violation', 'launch', 'attestation', 'semantics', 'barrier'].includes(
+          payload.kind,
+        ) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
           ? typeof payload.digest !== 'string'
@@ -388,6 +390,9 @@ export async function startManagedMetro(input, dependencies = {}) {
         if (!cleanupProven) {
             throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro launcher birth and cleanup could not be proven');
         }
+        if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
+            throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed');
+        }
         throw new Error('PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven');
     }
     child.unref();
@@ -443,6 +448,9 @@ export async function startManagedMetro(input, dependencies = {}) {
     if (!cleanupProven) {
         throw new Error('METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous');
     }
+    if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
+        throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed');
+    }
     throw new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${lastError instanceof Error ? ` (${lastError.message})` : ''}`);
 }
 function signalProcessTree(input) {
@@ -455,6 +463,23 @@ function signalProcessTree(input) {
         return;
     }
     process.kill(-input.launcherPid, input.signal);
+}
+function removeManagedMetroEvidenceSocket(path) {
+    if (process.platform === 'win32')
+        return;
+    if (!/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path)) {
+        throw new Error('METRO_EVIDENCE_SOCKET_INVALID');
+    }
+    rmSync(path, { force: true });
+}
+function removeManagedMetroEvidenceSocketSafely(path, dependencies) {
+    try {
+        (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(path);
+        return true;
+    }
+    catch {
+        return false;
+    }
 }
 function exactProcessState(expected, probe) {
     if (probe.status === 'unknown')
@@ -556,9 +581,12 @@ export async function stopManagedMetro(binding, input, dependencies = {}) {
         !timingSafeEqual(expectedBuffer, observedBuffer)) {
         return false;
     }
-    return stopManagedMetroProcesses({
+    const stopped = await stopManagedMetroProcesses({
         port: binding.port,
         launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
         listener: { pid: binding.pid, birth: binding.birth },
     }, dependencies);
+    if (!stopped)
+        return false;
+    return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
 }

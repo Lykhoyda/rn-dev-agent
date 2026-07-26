@@ -302,6 +302,7 @@ test('managed Metro stops its owned process tree and proves the listener is gone
   );
   let stopped = false;
   const signals: Array<[number, NodeJS.Signals]> = [];
+  let removedEvidenceSocket: string | null = null;
 
   const result = await stopManagedMetro(
     binding,
@@ -316,6 +317,9 @@ test('managed Metro stops its owned process tree and proves the listener is gone
             },
       probeListener: () => (stopped ? { status: 'absent' } : { status: 'listening', pid: 202 }),
       signalTree: ({ launcherPid, signal }) => signals.push([launcherPid, signal]),
+      removeEvidenceSocket: (path) => {
+        removedEvidenceSocket = path;
+      },
       wait: async () => {
         stopped = true;
       },
@@ -324,6 +328,7 @@ test('managed Metro stops its owned process tree and proves the listener is gone
 
   assert.equal(result, true);
   assert.deepEqual(signals, [[101, 'SIGTERM']]);
+  assert.equal(removedEvidenceSocket, binding.runtimeEvidenceSocket);
 });
 
 test('managed Metro proof authenticates every cleanup authority field', async () => {

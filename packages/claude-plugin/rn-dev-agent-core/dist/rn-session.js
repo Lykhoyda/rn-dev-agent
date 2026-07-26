@@ -10684,7 +10684,7 @@ async function captureMetroBinding(input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync, existsSync as existsSync2, openSync, readFileSync as readFileSync3 } from "node:fs";
+import { closeSync, existsSync as existsSync2, openSync, readFileSync as readFileSync3, rmSync } from "node:fs";
 import { join as join3 } from "node:path";
 init_process_birth();
 var METRO_LAUNCHER_SOURCE = String.raw`
@@ -10842,7 +10842,9 @@ evidence.on('data', (chunk) => {
         payload.version !== 1 ||
         payload.sessionId !== sessionId ||
         payload.metroInstanceId !== metroInstanceId ||
-        !['input', 'violation', 'launch', 'attestation', 'barrier'].includes(payload.kind) ||
+        !['input', 'violation', 'launch', 'attestation', 'semantics', 'barrier'].includes(
+          payload.kind,
+        ) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
           ? typeof payload.digest !== 'string'
@@ -11054,6 +11056,9 @@ async function startManagedMetro(input, dependencies = {}) {
     if (!cleanupProven2) {
       throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro launcher birth and cleanup could not be proven");
     }
+    if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
+      throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed");
+    }
     throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro launcher birth could not be proven");
   }
   child.unref();
@@ -11108,6 +11113,9 @@ async function startManagedMetro(input, dependencies = {}) {
   if (!cleanupProven) {
     throw new Error("METRO_START_CLEANUP_UNPROVEN: failed Metro startup left process or listener state ambiguous");
   }
+  if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
+    throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed");
+  }
   throw new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${lastError instanceof Error ? ` (${lastError.message})` : ""}`);
 }
 function signalProcessTree(input) {
@@ -11120,6 +11128,22 @@ function signalProcessTree(input) {
     return;
   }
   process.kill(-input.launcherPid, input.signal);
+}
+function removeManagedMetroEvidenceSocket(path) {
+  if (process.platform === "win32")
+    return;
+  if (!/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path)) {
+    throw new Error("METRO_EVIDENCE_SOCKET_INVALID");
+  }
+  rmSync(path, { force: true });
+}
+function removeManagedMetroEvidenceSocketSafely(path, dependencies) {
+  try {
+    (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function exactProcessState(expected, probe) {
   if (probe.status === "unknown")
@@ -11195,11 +11219,14 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   if (expectedBuffer.length !== observedBuffer.length || !timingSafeEqual3(expectedBuffer, observedBuffer)) {
     return false;
   }
-  return stopManagedMetroProcesses({
+  const stopped = await stopManagedMetroProcesses({
     port: binding.port,
     launcher: { pid: binding.launcherPid, birth: binding.launcherBirth },
     listener: { pid: binding.pid, birth: binding.birth }
   }, dependencies);
+  if (!stopped)
+    return false;
+  return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
 }
 
 // packages/rn-dev-agent-core/dist/session/process-owner.js
@@ -11367,7 +11394,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync6, renameSync as renameSync2, rmSync, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync6, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -11426,7 +11453,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
           throw error;
       }
     } finally {
-      rmSync(temporary, { force: true });
+      rmSync2(temporary, { force: true });
     }
     const link = lstatSync5(path);
     const stat = statSync3(path);
@@ -11456,7 +11483,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync3, constants, existsSync as existsSync4, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync3, readFileSync as readFileSync7, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync3, constants, existsSync as existsSync4, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync3, readFileSync as readFileSync7, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -12538,7 +12565,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     }
     if (waitForFile(stoppedPath, 1e3)) {
       if (!existsSync4(join7(worker.controlPath, "lock-retained"))) {
-        rmSync2(worker.controlPath, { force: true, recursive: true });
+        rmSync3(worker.controlPath, { force: true, recursive: true });
       }
       return;
     }
@@ -12554,7 +12581,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
   if (!existsSync4(join7(worker.controlPath, "lock-retained"))) {
-    rmSync2(worker.controlPath, { force: true, recursive: true });
+    rmSync3(worker.controlPath, { force: true, recursive: true });
   }
 }
 function bindWorker(controlPath, child, owner, childId, lifecycleCapability = "") {
@@ -12666,7 +12693,7 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
           sequence: 0
         }, "SIGKILL");
       } else {
-        rmSync2(controlPath, { force: true, recursive: true });
+        rmSync3(controlPath, { force: true, recursive: true });
       }
     } catch (cleanupError) {
       throw new AggregateError([
@@ -12720,7 +12747,7 @@ function sendOperation(directory, request, timeoutMs) {
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output");
   } finally {
-    rmSync2(responsePath, { force: true });
+    rmSync3(responsePath, { force: true });
   }
   return result;
 }
@@ -12987,7 +13014,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
     });
     childStarted = !result.directoryMissing;
     if (result.directoryMissing) {
-      rmSync2(controlPath, { force: true, recursive: true });
+      rmSync3(controlPath, { force: true, recursive: true });
       return null;
     }
     worker = bindWorker(controlPath, void 0, parent, childId, lifecycleCapability);
@@ -13027,7 +13054,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
           sequence: 0
         }, "SIGKILL");
       } else {
-        rmSync2(controlPath, { force: true, recursive: true });
+        rmSync3(controlPath, { force: true, recursive: true });
       }
     } catch (cleanupError) {
       throw new AggregateError([

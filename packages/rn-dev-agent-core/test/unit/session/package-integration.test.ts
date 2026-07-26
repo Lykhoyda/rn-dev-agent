@@ -505,6 +505,14 @@ test('Metro preload records child-process and worker-thread module loads', () =>
         (entry) => entry.kind === 'input' && entry.value === realpathSync(postWorkerModule),
       ),
     );
+    assert.ok(
+      observations.some(
+        (entry) =>
+          entry.kind === 'semantics' &&
+          entry.value.includes('"mode":"sync"') &&
+          entry.value.includes('"--conditions=development"'),
+      ),
+    );
     const launches = new Set(
       observations.filter((entry) => entry.kind === 'launch').map((entry) => entry.value),
     );

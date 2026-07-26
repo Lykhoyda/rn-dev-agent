@@ -65,6 +65,7 @@ const authorityEnvironment = Object.entries(process.env).filter(
   ([key]) =>
     (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
     key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS' &&
     (!usesExternalEvidenceOwner ||
       (key !== 'RN_DEV_AGENT_METRO_POLICY_CAPABILITY' &&
         key !== 'RN_DEV_AGENT_METRO_RUNTIME_LOADS')),
@@ -122,11 +123,20 @@ function recordLoaderViolation(value) {
 }
 const descendantNonce = process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
 if (descendantNonce) {
+  const descendantSemantics = process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
   const identity = workerThreads.isMainThread
     ? 'process:' + process.pid
     : 'worker:' + workerThreads.threadId;
-  persistLoaderObservation('attestation', descendantNonce + ':' + identity);
+  if (descendantSemantics && /^[a-f0-9]{64}$/.test(descendantSemantics)) {
+    persistLoaderObservation(
+      'attestation',
+      descendantNonce + ':' + identity + ':' + descendantSemantics,
+    );
+  } else {
+    recordLoaderViolation('Metro descendant execution semantics are unavailable');
+  }
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
 }
 if (workerThreads.isMainThread && typeof process.send === 'function') {
   process.on('message', (message) => {
@@ -141,7 +151,7 @@ if (workerThreads.isMainThread && typeof process.send === 'function') {
   process.channel?.unref();
 }
 if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
-function authenticatedChildEnvironment(environment, nonce) {
+function authenticatedChildEnvironment(environment, nonce, semantics) {
   const nextEnvironment = {};
   for (const [key, value] of Object.entries(environment || process.env)) {
     const normalizedKey = key.toUpperCase();
@@ -150,15 +160,16 @@ function authenticatedChildEnvironment(environment, nonce) {
   }
   for (const [key, value] of authorityEnvironment) nextEnvironment[key] = value;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
   return nextEnvironment;
 }
-function authenticatedChildArguments(args, optionsIndex, nonce, mode) {
+function authenticatedChildArguments(args, optionsIndex, nonce, mode, semantics) {
   const nextArgs = [...args];
   const candidate = nextArgs[optionsIndex];
   const options = candidate && typeof candidate === 'object' ? candidate : {};
   const authenticatedOptions = {
     ...options,
-    env: authenticatedChildEnvironment(options.env, nonce),
+    env: authenticatedChildEnvironment(options.env, nonce, semantics),
     stdio: authenticatedChildStdio(options.stdio, mode, options.silent),
   };
   if (typeof candidate === 'function') {
@@ -238,7 +249,7 @@ const safeBooleanNodeOptions = new Set([
     '--trace-warnings',
 ]);
 const safeValueNodeOptions = new Set(['--conditions', '--title']);
-function consumeSafeNodeOption(args, index) {
+function normalizeSafeNodeOption(args, index) {
   const argument = args[index];
   if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
   const normalized = argument.replaceAll('_', '-');
@@ -246,20 +257,22 @@ function consumeSafeNodeOption(args, index) {
   const option = equals < 0 ? normalized : normalized.slice(0, equals);
   if (safeBooleanNodeOptions.has(option)) {
     if (equals >= 0) throw descendantError();
-    return index;
+    return { index, value: option };
   }
   if (!safeValueNodeOptions.has(option)) throw descendantError();
   if (equals >= 0) {
-    if (normalized.slice(equals + 1).length === 0) throw descendantError();
-    return index;
+    const value = normalized.slice(equals + 1);
+    if (value.length === 0) throw descendantError();
+    return { index, value: option + '=' + value };
   }
   const value = args[index + 1];
   if (typeof value !== 'string' || value.length === 0) throw descendantError();
-  return index + 1;
+  return { index: index + 1, value: option + '=' + value };
 }
 function requireFileBackedNodeArguments(args, cwd) {
   if (!Array.isArray(args)) throw descendantError();
   let entrypoint;
+  const execArgv = [];
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
@@ -271,9 +284,14 @@ function requireFileBackedNodeArguments(args, cwd) {
       entrypoint = argument;
       break;
     }
-    index = consumeSafeNodeOption(args, index);
+    const normalized = normalizeSafeNodeOption(args, index);
+    execArgv.push(normalized.value);
+    index = normalized.index;
   }
-  requireFileBackedEntrypoint(entrypoint, cwd);
+  return {
+    entrypoint: requireFileBackedEntrypoint(entrypoint, cwd),
+    execArgv,
+  };
 }
 function requireFileBackedEntrypoint(entrypoint, cwd) {
   if (typeof entrypoint !== 'string' || entrypoint === '-' || entrypoint.startsWith('-')) {
@@ -281,7 +299,9 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
   }
   try {
     const candidate = path.resolve(cwd || process.cwd(), entrypoint);
-    if (!fs.statSync(fs.realpathSync(candidate)).isFile()) throw descendantError();
+    const canonical = fs.realpathSync(candidate);
+    if (!fs.statSync(canonical).isFile()) throw descendantError();
+    return canonical;
   } catch (error) {
     if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
     throw descendantError();
@@ -289,13 +309,22 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
 }
 function requireSafeExecArgv(execArgv) {
   if (!Array.isArray(execArgv)) throw descendantError();
+  const normalized = [];
   for (let index = 0; index < execArgv.length; index += 1) {
-    index = consumeSafeNodeOption(execArgv, index);
+    const option = normalizeSafeNodeOption(execArgv, index);
+    normalized.push(option.value);
+    index = option.index;
   }
+  return normalized;
 }
-function recordChildLaunch(nonce, child) {
+function executionSemantics(mode, entrypoint, execArgv) {
+  const value = JSON.stringify({ mode, entrypoint, execArgv });
+  persistLoaderObservation('semantics', value);
+  return createHash('sha256').update(value).digest('hex');
+}
+function recordChildLaunch(nonce, child, semantics) {
   if (!child || typeof child.pid !== 'number') return;
-  persistLoaderObservation('launch', nonce + ':process:' + child.pid);
+  persistLoaderObservation('launch', nonce + ':process:' + child.pid + ':' + semantics);
 }
 function fenceChildProcessMethod(name, optionsIndex, mode) {
   const original = childProcess[name];
@@ -305,18 +334,27 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
     value(...args) {
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
       const nonce = randomBytes(16).toString('hex');
-      const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode);
-      const options = authenticatedArgs[index];
+      const candidate = args[index];
+      const rawOptions = candidate && typeof candidate === 'object' ? candidate : {};
+      let entrypoint;
+      let execArgv;
       if (mode === 'node' || mode === 'sync') {
-        requireNodeExecutable(args[0], options);
-        requireFileBackedNodeArguments(args[1], options.cwd);
+        requireNodeExecutable(args[0], rawOptions);
+        const invocation = requireFileBackedNodeArguments(args[1], rawOptions.cwd);
+        entrypoint = invocation.entrypoint;
+        execArgv = invocation.execArgv;
       }
       if (mode === 'fork') {
-        if (options.execPath) requireNodeExecutable(options.execPath, options);
-        requireFileBackedEntrypoint(args[0], options.cwd);
-        requireSafeExecArgv(
-          Array.isArray(options.execArgv) ? options.execArgv : process.execArgv,
+        if (rawOptions.execPath) requireNodeExecutable(rawOptions.execPath, rawOptions);
+        entrypoint = requireFileBackedEntrypoint(args[0], rawOptions.cwd);
+        execArgv = requireSafeExecArgv(
+          Array.isArray(rawOptions.execArgv) ? rawOptions.execArgv : process.execArgv,
         );
+      }
+      const semantics = executionSemantics(mode, entrypoint, execArgv);
+      const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode, semantics);
+      const options = authenticatedArgs[index];
+      if (mode === 'fork') {
         options.execPath = nodeExecutable;
         if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
           options.stdio[3] = 'ipc';
@@ -324,9 +362,9 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       }
       const child = Reflect.apply(original, this, authenticatedArgs);
       if (mode === 'sync') {
-        recordChildLaunch(nonce, child);
+        recordChildLaunch(nonce, child, semantics);
       } else if (typeof child?.once === 'function') {
-        child.once('spawn', () => recordChildLaunch(nonce, child));
+        child.once('spawn', () => recordChildLaunch(nonce, child, semantics));
       }
       return child;
     },
@@ -359,13 +397,21 @@ function fenceWorkers() {
       const requestedExecArgv = Array.isArray(options.execArgv)
         ? [...options.execArgv]
         : [...process.execArgv];
-      requireSafeExecArgv(requestedExecArgv);
+      const normalizedExecArgv = requireSafeExecArgv(requestedExecArgv);
+      const semantics = executionSemantics(
+        'worker',
+        filename instanceof URL ? filename.href : String(filename),
+        normalizedExecArgv,
+      );
       super(filename, {
         ...options,
-        env: authenticatedChildEnvironment(options.env, nonce),
+        env: authenticatedChildEnvironment(options.env, nonce, semantics),
         execArgv: ['--require', authorityPreload, ...requestedExecArgv],
       });
-      persistLoaderObservation('launch', nonce + ':worker:' + this.threadId);
+      persistLoaderObservation(
+        'launch',
+        nonce + ':worker:' + this.threadId + ':' + semantics,
+      );
     }
   }
   Object.defineProperty(workerThreads, 'Worker', {

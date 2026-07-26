@@ -481,25 +481,46 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     };
     return JSON.stringify({
       ...headPayload,
-      signature: createHmac('sha256', capability)
-        .update(JSON.stringify(headPayload))
-        .digest('hex'),
+      signature: createHmac('sha256', capability).update(JSON.stringify(headPayload)).digest('hex'),
     });
   };
   const dependencies = { git, metroRuntimePolicy, readMetroEvidenceHead };
   publishRuntimeLoads([runtimeLoadPayload]);
   const first = strictProofSourceIdentity(identity, dependencies);
+  const semanticsValue = JSON.stringify({
+    mode: 'node',
+    entrypoint: runtimeFile,
+    execArgv: ['--conditions=development'],
+  });
+  const semanticsPayload = {
+    version: 1,
+    sessionId: 'session',
+    metroInstanceId: 'metro',
+    kind: 'semantics',
+    value: semanticsValue,
+    digest: null,
+  };
+  const semanticsDigest = createHash('sha256').update(semanticsValue).digest('hex');
+  publishRuntimeLoads([runtimeLoadPayload, semanticsPayload]);
+  const semanticIdentity = strictProofSourceIdentity(identity, dependencies);
+  assert.notEqual(first.dirtyDigest, semanticIdentity.dirtyDigest);
   const launchPayload = {
     version: 1,
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'launch',
-    value: `${'ab'.repeat(16)}:process:123`,
+    value: `${'ab'.repeat(16)}:process:123:${semanticsDigest}`,
     digest: null,
   };
   const attestationPayload = { ...launchPayload, kind: 'attestation' };
-  publishRuntimeLoads([runtimeLoadPayload, launchPayload, attestationPayload]);
+  publishRuntimeLoads([runtimeLoadPayload, semanticsPayload, launchPayload, attestationPayload]);
   assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
+  publishRuntimeLoads([runtimeLoadPayload, launchPayload, attestationPayload]);
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /descendant execution semantics are missing/,
+  );
+  publishRuntimeLoads([runtimeLoadPayload, semanticsPayload, launchPayload, attestationPayload]);
   writeFileSync(runtimeEvidencePath, `${signRuntimeLoads([runtimeLoadPayload])}\n`);
   assert.throws(
     () => strictProofSourceIdentity(identity, dependencies),
@@ -510,7 +531,7 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     () => strictProofSourceIdentity(identity, dependencies),
     /runtime load evidence is empty/,
   );
-  publishRuntimeLoads([runtimeLoadPayload, launchPayload]);
+  publishRuntimeLoads([runtimeLoadPayload, semanticsPayload, launchPayload]);
   assert.throws(
     () => strictProofSourceIdentity(identity, dependencies),
     /descendant execution was not attested/,
