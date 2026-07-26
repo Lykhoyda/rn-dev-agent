@@ -70606,6 +70606,13 @@ function persistLoaderObservation(kind, value, digest = null) {
   };
   writeRuntimeLoad(JSON.stringify(receipt) + '\\n', loadsPath);
 }
+const effectiveBaseNodeOptions = parseNodeOptions(
+  process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '',
+);
+persistLoaderObservation(
+  'semantics',
+  JSON.stringify({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
+);
 function recordLoaderViolation(value) {
   if (accumulatedViolations.has(value)) return;
   accumulatedViolations.add(value);
@@ -70743,16 +70750,15 @@ const safeValueNodeOptions = new Set(['--conditions', '--title']);
 function normalizeSafeNodeOption(args, index) {
   const argument = args[index];
   if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
-  const normalized = argument.replaceAll('_', '-');
-  const equals = normalized.indexOf('=');
-  const option = equals < 0 ? normalized : normalized.slice(0, equals);
+  const equals = argument.indexOf('=');
+  const option = (equals < 0 ? argument : argument.slice(0, equals)).replaceAll('_', '-');
   if (safeBooleanNodeOptions.has(option)) {
     if (equals >= 0) throw descendantError();
     return { index, value: option };
   }
   if (!safeValueNodeOptions.has(option)) throw descendantError();
   if (equals >= 0) {
-    const value = normalized.slice(equals + 1);
+    const value = argument.slice(equals + 1);
     if (value.length === 0) throw descendantError();
     return { index, value: option + '=' + value };
   }
@@ -72833,15 +72839,15 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     previousEvidenceSignature = load.signature;
     const key = `${load.kind}\0${load.value}`;
     runtimeEvidenceKeys.add(key);
+    if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
+    }
     if (load.kind === "launch" || load.kind === "attestation") {
       if (!/^[a-f0-9]{32}:(?:process|worker):\d+:[a-f0-9]{64}$/.test(load.value)) {
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
       }
       (load.kind === "launch" ? descendantLaunches : descendantAttestations).add(load.value);
       descendantSemanticDigests.add(load.value.slice(-64));
-      if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
-      }
       continue;
     }
     if (load.kind === "semantics") {
@@ -72860,9 +72866,6 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
       value: load.value,
       digest: load.digest
     });
-    if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
-    }
   }
   if (evidenceSequence === 0 || previousEvidenceSignature === null) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");

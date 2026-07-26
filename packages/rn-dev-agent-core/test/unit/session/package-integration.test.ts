@@ -453,6 +453,8 @@ test('Metro preload records child-process and worker-thread module loads', () =>
     writeFileSync(threadEntry, `require(${JSON.stringify(threadModule)});\n`);
     writeFileSync(postWorkerModule, 'module.exports = {};\n');
     const environment = metroPolicyEnvironment(adapterPath);
+    environment.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS = '--conditions=react_native';
+    environment.NODE_OPTIONS = `--conditions=react_native --require=${JSON.stringify(adapterPath)}`;
     const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
     evidenceDescriptor = openSync(runtimeLoads, 'a');
     environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
@@ -460,7 +462,7 @@ test('Metro preload records child-process and worker-thread module loads', () =>
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); for (const args of [['-e', 'process.exit(0)'], ['--eval=process.exit(0)'], ['--no-warnings'], ['--', '-'], ['--enable-source-maps'], ['--run=unsafe', ${JSON.stringify(childEntry)}], ['--env-file=unsafe.env', ${JSON.stringify(childEntry)}], ['--require=${childModule}', ${JSON.stringify(childEntry)}]]) { try { childProcess.spawnSync(process.execPath, args); process.exit(4); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const child = childProcess.spawnSync(process.execPath, ['--conditions=development', '--no-warnings', ${JSON.stringify(childEntry)}, '-profile'], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); try { childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv, execArgv: ['-e', 'process.exit(0)'] }); process.exit(7); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } const forked = childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv, execArgv: ['--no-warnings'] }); if (forked.stdout !== null) process.exit(6); await new Promise((resolve, reject) => { forked.once('error', reject); forked.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); const workerThreads = require('node:worker_threads'); for (const options of [{ eval: true }, { execArgv: ['--require', ${JSON.stringify(childModule)}] }]) { try { new workerThreads.Worker('void 0', options); process.exit(5); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const worker = new workerThreads.Worker(${JSON.stringify(threadEntry)}, { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); require(${JSON.stringify(postWorkerModule)}); })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); for (const args of [['-e', 'process.exit(0)'], ['--eval=process.exit(0)'], ['--no-warnings'], ['--', '-'], ['--enable-source-maps'], ['--run=unsafe', ${JSON.stringify(childEntry)}], ['--env-file=unsafe.env', ${JSON.stringify(childEntry)}], ['--require=${childModule}', ${JSON.stringify(childEntry)}]]) { try { childProcess.spawnSync(process.execPath, args); process.exit(4); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const child = childProcess.spawnSync(process.execPath, ['--conditions=react_native', '--no-warnings', ${JSON.stringify(childEntry)}, '-profile'], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); try { childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv, execArgv: ['-e', 'process.exit(0)'] }); process.exit(7); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } const forked = childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv, execArgv: ['--no-warnings'] }); if (forked.stdout !== null) process.exit(6); await new Promise((resolve, reject) => { forked.once('error', reject); forked.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); const workerThreads = require('node:worker_threads'); for (const options of [{ eval: true }, { execArgv: ['--require', ${JSON.stringify(childModule)}] }]) { try { new workerThreads.Worker('void 0', options); process.exit(5); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const worker = new workerThreads.Worker(${JSON.stringify(threadEntry)}, { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); require(${JSON.stringify(postWorkerModule)}); })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -510,7 +512,18 @@ test('Metro preload records child-process and worker-thread module loads', () =>
         (entry) =>
           entry.kind === 'semantics' &&
           entry.value.includes('"mode":"sync"') &&
-          entry.value.includes('"--conditions=development"'),
+          entry.value.includes('"--conditions=react_native"'),
+      ),
+    );
+    assert.ok(
+      observations.some(
+        (entry) =>
+          entry.kind === 'semantics' &&
+          entry.value ===
+            JSON.stringify({
+              mode: 'metro',
+              nodeOptions: ['--conditions=react_native'],
+            }),
       ),
     );
     const launches = new Set(

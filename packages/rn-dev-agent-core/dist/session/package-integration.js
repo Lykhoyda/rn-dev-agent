@@ -86,6 +86,13 @@ function persistLoaderObservation(kind, value, digest = null) {
   };
   writeRuntimeLoad(JSON.stringify(receipt) + '\\n', loadsPath);
 }
+const effectiveBaseNodeOptions = parseNodeOptions(
+  process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '',
+);
+persistLoaderObservation(
+  'semantics',
+  JSON.stringify({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
+);
 function recordLoaderViolation(value) {
   if (accumulatedViolations.has(value)) return;
   accumulatedViolations.add(value);
@@ -223,16 +230,15 @@ const safeValueNodeOptions = new Set(['--conditions', '--title']);
 function normalizeSafeNodeOption(args, index) {
   const argument = args[index];
   if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
-  const normalized = argument.replaceAll('_', '-');
-  const equals = normalized.indexOf('=');
-  const option = equals < 0 ? normalized : normalized.slice(0, equals);
+  const equals = argument.indexOf('=');
+  const option = (equals < 0 ? argument : argument.slice(0, equals)).replaceAll('_', '-');
   if (safeBooleanNodeOptions.has(option)) {
     if (equals >= 0) throw descendantError();
     return { index, value: option };
   }
   if (!safeValueNodeOptions.has(option)) throw descendantError();
   if (equals >= 0) {
-    const value = normalized.slice(equals + 1);
+    const value = argument.slice(equals + 1);
     if (value.length === 0) throw descendantError();
     return { index, value: option + '=' + value };
   }

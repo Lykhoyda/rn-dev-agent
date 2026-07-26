@@ -316,15 +316,15 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         previousEvidenceSignature = load.signature;
         const key = `${load.kind}\0${load.value}`;
         runtimeEvidenceKeys.add(key);
+        if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
+        }
         if (load.kind === 'launch' || load.kind === 'attestation') {
             if (!/^[a-f0-9]{32}:(?:process|worker):\d+:[a-f0-9]{64}$/.test(load.value)) {
                 throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
             }
             (load.kind === 'launch' ? descendantLaunches : descendantAttestations).add(load.value);
             descendantSemanticDigests.add(load.value.slice(-64));
-            if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-                throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
-            }
             continue;
         }
         if (load.kind === 'semantics') {
@@ -343,9 +343,6 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
             value: load.value,
             digest: load.digest,
         });
-        if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
-        }
     }
     if (evidenceSequence === 0 || previousEvidenceSignature === null) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty');

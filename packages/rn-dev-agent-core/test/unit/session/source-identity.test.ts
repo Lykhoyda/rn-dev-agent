@@ -536,6 +536,16 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     () => strictProofSourceIdentity(identity, dependencies),
     /descendant execution was not attested/,
   );
+  publishRuntimeLoads(
+    Array.from({ length: 50_001 }, (_, index) => ({
+      ...semanticsPayload,
+      value: String(index),
+    })),
+  );
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /runtime load evidence is unbounded/,
+  );
   publishRuntimeLoads([runtimeLoadPayload]);
   writeFileSync(runtimeFile, 'module.exports = "second";');
   assert.match(first.dirtyDigest, /^[a-f0-9]{64}$/);
