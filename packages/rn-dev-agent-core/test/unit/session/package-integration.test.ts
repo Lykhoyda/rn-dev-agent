@@ -755,6 +755,129 @@ test('Metro fences underlying descendant constructors and native IPC controls', 
   }
 });
 
+test('Metro seals native process handles and IPC read callbacks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-native-handle-boundaries-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const childEntry = join(root, 'child.cjs');
+    const probeEntry = join(root, 'probe.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(
+      childEntry,
+      "process.once('message', () => process.send({ acknowledged: true }, (error) => { if (error) process.exit(11); process.disconnect(); }));",
+    );
+    writeFileSync(probeEntry, 'process.exit(0);\n');
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `(async () => {
+          const compose = require(${JSON.stringify(adapterPath)});
+          compose({});
+          const childProcess = require('node:child_process');
+          const diagnosticsChannel = require('node:diagnostics_channel');
+          const unsupported = (run) => {
+            try {
+              run();
+              throw new Error('unsupported execution was accepted');
+            } catch (error) {
+              if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
+            }
+          };
+          const rawChild = new childProcess.ChildProcess();
+          const rawHandle = rawChild._handle;
+          const rawPrototype = Object.getPrototypeOf(rawHandle);
+          unsupported(() => rawHandle.spawn({ file: process.execPath, args: [process.execPath, ${JSON.stringify(probeEntry)}] }));
+          unsupported(() => rawPrototype.spawn.call(rawHandle, { file: process.execPath, args: [process.execPath, ${JSON.stringify(probeEntry)}] }));
+          unsupported(() => rawHandle.kill(0));
+          unsupported(() => new rawHandle.constructor());
+          const weakMapMethods = {
+            has: WeakMap.prototype.has,
+            get: WeakMap.prototype.get,
+            delete: WeakMap.prototype.delete,
+          };
+          try {
+            WeakMap.prototype.has = () => true;
+            WeakMap.prototype.get = () => ({ environment: process.env, receiver: rawChild });
+            WeakMap.prototype.delete = () => true;
+            unsupported(() => childProcess.ChildProcess.prototype.spawn.call(rawChild, { env: process.env }));
+          } finally {
+            WeakMap.prototype.has = weakMapMethods.has;
+            WeakMap.prototype.get = weakMapMethods.get;
+            WeakMap.prototype.delete = weakMapMethods.delete;
+          }
+          let receiverSealed = false;
+          diagnosticsChannel.subscribe('child_process', ({ process: constructed }) => {
+            try {
+              Object.defineProperty(constructed, 'spawn', {
+                value(options) {
+                  options.file = ${JSON.stringify(probeEntry)};
+                  return childProcess.ChildProcess.prototype.spawn.call(constructed, options);
+                },
+              });
+            } catch {
+              receiverSealed = true;
+            }
+          });
+          const probe = childProcess.spawn(process.execPath, [${JSON.stringify(probeEntry)}]);
+          await new Promise((resolve, reject) => {
+            probe.once('error', reject);
+            probe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn failed')));
+          });
+          if (!receiverSealed) throw new Error('spawn receiver was mutable');
+          const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'] });
+          const channelSymbol = Object.getOwnPropertySymbols(child).find((symbol) => symbol.description === 'kChannelHandle');
+          const channel = child[channelSymbol];
+          unsupported(() => channel.onread(new ArrayBuffer(0)));
+          const acknowledged = new Promise((resolve, reject) => {
+            child.once('error', reject);
+            child.once('message', (message) => message.acknowledged ? resolve() : reject(new Error('message changed')));
+          });
+          const exited = new Promise((resolve, reject) => {
+            child.once('error', reject);
+            child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('child failed')));
+          });
+          child.send({ ready: true });
+          await Promise.all([acknowledged, exited]);
+        })().catch((error) => {
+          console.error(error);
+          process.exit(1);
+        });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro lifecycle controls reject unowned targets and bind outcomes', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-lifecycle-outcomes-'));
   let evidenceDescriptor: number | undefined;

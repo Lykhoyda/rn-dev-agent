@@ -70595,11 +70595,38 @@ const { createHash, createHmac, randomBytes } = require('node:crypto');
 const childProcess = require('node:child_process');
 const { execFileSync } = childProcess;
 const diagnosticsChannel = require('node:diagnostics_channel');
+const { executionAsyncResource } = require('node:async_hooks');
 const moduleApi = require('node:module');
 const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
 const { deserialize, serialize } = require('node:v8');
 const workerThreads = require('node:worker_threads');
+const intrinsicDefineProperty = Object.defineProperty;
+const intrinsicReflectApply = Reflect.apply;
+const intrinsicWeakMapDelete = WeakMap.prototype.delete;
+const intrinsicWeakMapGet = WeakMap.prototype.get;
+const intrinsicWeakMapHas = WeakMap.prototype.has;
+const intrinsicWeakMapSet = WeakMap.prototype.set;
+const intrinsicWeakSetAdd = WeakSet.prototype.add;
+const intrinsicWeakSetHas = WeakSet.prototype.has;
+function privateWeakMapDelete(map, key) {
+  return intrinsicReflectApply(intrinsicWeakMapDelete, map, [key]);
+}
+function privateWeakMapGet(map, key) {
+  return intrinsicReflectApply(intrinsicWeakMapGet, map, [key]);
+}
+function privateWeakMapHas(map, key) {
+  return intrinsicReflectApply(intrinsicWeakMapHas, map, [key]);
+}
+function privateWeakMapSet(map, key, value) {
+  return intrinsicReflectApply(intrinsicWeakMapSet, map, [key, value]);
+}
+function privateWeakSetAdd(set, value) {
+  return intrinsicReflectApply(intrinsicWeakSetAdd, set, [value]);
+}
+function privateWeakSetHas(set, value) {
+  return intrinsicReflectApply(intrinsicWeakSetHas, set, [value]);
+}
 ${parseNodeOptions.toString()}
 ${hasNodeLoaderOption.toString()}
 ${hasUnsupportedNodeOption.toString()}
@@ -70903,7 +70930,9 @@ const workerMessageContexts = new WeakMap();
 const workerLifecycleContexts = new WeakMap();
 const portMessageContexts = new WeakMap();
 const processLifecycleTargets = new Map();
-const authorizedChildSpawnEnvironments = new WeakMap();
+const authorizedChildSpawns = new WeakMap();
+const authorizedNativeProcessSpawns = new WeakMap();
+const fencedNativeProcessPrototypes = new WeakSet();
 let activeChildSpawnAuthorization;
 function authenticatedMessage(context, value) {
   const snapshot = snapshotInvocation(value);
@@ -71034,16 +71063,52 @@ function withNativeChannelControl(context, run) {
     context.nativeControlDepth -= 1;
   }
 }
+function fenceNativeReadCallback(handle, descriptor) {
+  const implementation = descriptor.value;
+  let delegate = implementation;
+  const authenticatedRead = function (...args) {
+    if (executionAsyncResource() !== handle || this !== handle) {
+      throw descendantError();
+    }
+    return intrinsicReflectApply(delegate, handle, args);
+  };
+  intrinsicDefineProperty(handle, 'onread', {
+    configurable: false,
+    enumerable: descriptor.enumerable,
+    get() {
+      return authenticatedRead;
+    },
+    set(value) {
+      if (
+        executionAsyncResource() !== handle ||
+        this !== handle ||
+        typeof value !== 'function'
+      ) {
+        throw descendantError();
+      }
+      delegate = value;
+    },
+  });
+}
 function fenceNativeChannel(handle, context, allowedOwnControls = new Set()) {
   if (!handle || !context) throw descendantError();
-  nativeChannelContexts.set(handle, context);
+  privateWeakMapSet(nativeChannelContexts, handle, context);
+  const readDescriptor = Object.getOwnPropertyDescriptor(handle, 'onread');
+  const readCallback = handle.onread;
+  if (typeof readCallback === 'function') {
+    if (readDescriptor && !readDescriptor.configurable) throw descendantError();
+    fenceNativeReadCallback(handle, {
+      enumerable: readDescriptor?.enumerable ?? false,
+      value: readCallback,
+    });
+  }
   for (
     let owner = handle;
     owner && owner !== Object.prototype;
     owner = Object.getPrototypeOf(owner)
   ) {
-    if (fencedNativeChannelPrototypes.has(owner)) continue;
-    fencedNativeChannelPrototypes.add(owner);
+    if (privateWeakSetHas(fencedNativeChannelPrototypes, owner)) continue;
+    privateWeakSetAdd(fencedNativeChannelPrototypes, owner);
     for (const name of Object.getOwnPropertyNames(owner)) {
       const isWrite = name.startsWith('write');
       const isSupportedControl = [
@@ -71065,7 +71130,7 @@ function fenceNativeChannel(handle, context, allowedOwnControls = new Set()) {
         configurable: false,
         enumerable: false,
         value(...args) {
-          const channelContext = nativeChannelContexts.get(this);
+          const channelContext = privateWeakMapGet(nativeChannelContexts, this);
           if (channelContext && isWrite && channelContext.nativeWriteDepth <= 0) {
             throw descendantError();
           }
@@ -71089,6 +71154,42 @@ function fenceNativeChannel(handle, context, allowedOwnControls = new Set()) {
       });
     }
   }
+}
+function fenceNativeProcessHandle(handle) {
+  if (!handle) throw descendantError();
+  const prototype = Object.getPrototypeOf(handle);
+  if (privateWeakSetHas(fencedNativeProcessPrototypes, prototype)) return;
+  const spawn = Object.getOwnPropertyDescriptor(prototype, 'spawn')?.value;
+  if (typeof spawn !== 'function') throw descendantError();
+  privateWeakSetAdd(fencedNativeProcessPrototypes, prototype);
+  intrinsicDefineProperty(prototype, 'spawn', {
+    configurable: false,
+    enumerable: false,
+    value(...args) {
+      if (!privateWeakMapHas(authorizedNativeProcessSpawns, this)) {
+        throw descendantError();
+      }
+      privateWeakMapDelete(authorizedNativeProcessSpawns, this);
+      return intrinsicReflectApply(spawn, this, args);
+    },
+    writable: false,
+  });
+  intrinsicDefineProperty(prototype, 'kill', {
+    configurable: false,
+    enumerable: false,
+    value() {
+      throw descendantError();
+    },
+    writable: false,
+  });
+  intrinsicDefineProperty(prototype, 'constructor', {
+    configurable: false,
+    enumerable: false,
+    value: function FencedNativeProcess() {
+      throw descendantError();
+    },
+    writable: false,
+  });
 }
 function invocationCwd(cwd) {
   try {
@@ -71343,34 +71444,57 @@ function authenticatedLifecyclePromise(context, action, value, run) {
 function installMessageFences() {
   const childPrototype = childProcess.ChildProcess.prototype;
   const originalChildSpawn = childPrototype.spawn;
-  diagnosticsChannel.subscribe('child_process', ({ process: spawnedProcess }) => {
+  const childProcessChannel = diagnosticsChannel.channel('child_process');
+  if (childProcessChannel.hasSubscribers) throw descendantError();
+  const channelPrototype = Object.getPrototypeOf(childProcessChannel);
+  const channelSubscribe = channelPrototype.subscribe;
+  intrinsicReflectApply(channelSubscribe, childProcessChannel, [({ process: spawnedProcess }) => {
+    fenceNativeProcessHandle(spawnedProcess._handle);
     const authorization = activeChildSpawnAuthorization;
     if (!authorization || authorization.receiver) return;
     authorization.receiver = spawnedProcess;
-    authorizedChildSpawnEnvironments.set(spawnedProcess, authorization.environment);
-  });
+    privateWeakMapSet(authorizedChildSpawns, spawnedProcess, authorization);
+    intrinsicDefineProperty(spawnedProcess, 'spawn', {
+      configurable: false,
+      enumerable: true,
+      value(options) {
+        return intrinsicReflectApply(childPrototype.spawn, spawnedProcess, [options]);
+      },
+      writable: false,
+    });
+  }]);
   Object.defineProperty(childPrototype, 'spawn', {
     configurable: false,
     enumerable: true,
     value(options) {
+      const authorization = privateWeakMapGet(authorizedChildSpawns, this);
       if (
-        !authorizedChildSpawnEnvironments.has(this) ||
-        authorizedChildSpawnEnvironments.get(this) !== options?.env
+        !authorization ||
+        authorization.environment !== options?.env ||
+        authorization.receiver !== this
       ) {
         throw descendantError();
       }
-      authorizedChildSpawnEnvironments.delete(this);
-      return Reflect.apply(originalChildSpawn, this, [options]);
+      privateWeakMapDelete(authorizedChildSpawns, this);
+      const nativeHandle = this._handle;
+      privateWeakMapSet(authorizedNativeProcessSpawns, nativeHandle, options);
+      try {
+        return intrinsicReflectApply(originalChildSpawn, this, [options]);
+      } finally {
+        privateWeakMapDelete(authorizedNativeProcessSpawns, nativeHandle);
+      }
     },
     writable: false,
   });
   const authenticatedChildSend = function (message, sendHandle, options, callback) {
-    const implementation = childSendImplementations.get(this);
-    if (!implementation || !childMessageContexts.has(this)) throw descendantError();
+    const implementation = privateWeakMapGet(childSendImplementations, this);
+    if (!implementation || !privateWeakMapHas(childMessageContexts, this)) {
+      throw descendantError();
+    }
     return authenticatedIpcSend(
       implementation,
       this,
-      childMessageContexts.get(this),
+      privateWeakMapGet(childMessageContexts, this),
       message,
       sendHandle,
       options,
@@ -71383,24 +71507,28 @@ function installMessageFences() {
     get() {
       if (
         this !== childPrototype &&
-        (!childSendImplementations.has(this) || !childMessageContexts.has(this))
+        (!privateWeakMapHas(childSendImplementations, this) ||
+          !privateWeakMapHas(childMessageContexts, this))
       ) {
         return undefined;
       }
       return authenticatedChildSend;
     },
     set(value) {
-      if (typeof value !== 'function' || childSendImplementations.has(this)) {
+      if (
+        typeof value !== 'function' ||
+        privateWeakMapHas(childSendImplementations, this)
+      ) {
         throw descendantError();
       }
-      childSendImplementations.set(this, value);
+      privateWeakMapSet(childSendImplementations, this, value);
     },
   });
   const authenticatedChildSendPrimitive = function (message, sendHandle, options, callback) {
     return authenticatedIpcSend(
-      childSendPrimitiveImplementations.get(this),
+      privateWeakMapGet(childSendPrimitiveImplementations, this),
       this,
-      childMessageContexts.get(this),
+      privateWeakMapGet(childMessageContexts, this),
       message,
       sendHandle,
       options,
@@ -71414,17 +71542,21 @@ function installMessageFences() {
     get() {
       if (
         this !== childPrototype &&
-        (!childSendPrimitiveImplementations.has(this) || !childMessageContexts.has(this))
+        (!privateWeakMapHas(childSendPrimitiveImplementations, this) ||
+          !privateWeakMapHas(childMessageContexts, this))
       ) {
         return undefined;
       }
       return authenticatedChildSendPrimitive;
     },
     set(value) {
-      if (typeof value !== 'function' || childSendPrimitiveImplementations.has(this)) {
+      if (
+        typeof value !== 'function' ||
+        privateWeakMapHas(childSendPrimitiveImplementations, this)
+      ) {
         throw descendantError();
       }
-      childSendPrimitiveImplementations.set(this, value);
+      privateWeakMapSet(childSendPrimitiveImplementations, this, value);
     },
   });
   const workerPrototype = workerThreads.Worker.prototype;
@@ -71437,7 +71569,7 @@ function installMessageFences() {
       return authenticatedPostMessage(
         originalWorkerPostMessage,
         this,
-        workerMessageContexts.get(this),
+        privateWeakMapGet(workerMessageContexts, this),
         message,
         transferList,
       );
@@ -71449,7 +71581,7 @@ function installMessageFences() {
     enumerable: true,
     value() {
       return authenticatedLifecyclePromise(
-        workerLifecycleContexts.get(this),
+        privateWeakMapGet(workerLifecycleContexts, this),
         'terminate',
         undefined,
         () => Reflect.apply(originalWorkerTerminate, this, []),
@@ -71480,7 +71612,7 @@ function installMessageFences() {
     configurable: false,
     enumerable: true,
     value(signal) {
-      const target = childLifecycleTargets.get(this);
+      const target = privateWeakMapGet(childLifecycleTargets, this);
       return authenticatedLifecycleResult(
         target?.context,
         'kill',
@@ -71512,12 +71644,12 @@ function installMessageFences() {
   });
   const authenticatedChildDisconnect = function () {
     return authenticatedLifecycleResult(
-      childLifecycleContexts.get(this),
+      privateWeakMapGet(childLifecycleContexts, this),
       'disconnect',
       undefined,
       () =>
-        withNativeChannelControl(childMessageContexts.get(this), () =>
-          Reflect.apply(childDisconnectImplementations.get(this), this, []),
+        withNativeChannelControl(privateWeakMapGet(childMessageContexts, this), () =>
+          Reflect.apply(privateWeakMapGet(childDisconnectImplementations, this), this, []),
         ),
     );
   };
@@ -71527,7 +71659,8 @@ function installMessageFences() {
     get() {
       if (
         this !== childPrototype &&
-        (!childDisconnectImplementations.has(this) || !childLifecycleContexts.has(this))
+        (!privateWeakMapHas(childDisconnectImplementations, this) ||
+          !privateWeakMapHas(childLifecycleContexts, this))
       ) {
         return undefined;
       }
@@ -71535,7 +71668,7 @@ function installMessageFences() {
     },
     set(value) {
       if (typeof value !== 'function') throw descendantError();
-      childDisconnectImplementations.set(this, value);
+      privateWeakMapSet(childDisconnectImplementations, this, value);
     },
   });
   Object.defineProperty(process, 'kill', {
@@ -71563,7 +71696,7 @@ function installMessageFences() {
     configurable: false,
     enumerable: true,
     value(message, transferList) {
-      const context = portMessageContexts.get(this);
+      const context = privateWeakMapGet(portMessageContexts, this);
       if (!context) {
         return Reflect.apply(originalPortPostMessage, this, [message, transferList]);
       }
@@ -71581,8 +71714,8 @@ function installMessageFences() {
   class FencedMessageChannel extends OriginalMessageChannel {
     constructor() {
       super();
-      portMessageContexts.set(this.port1, { blocked: true });
-      portMessageContexts.set(this.port2, { blocked: true });
+      privateWeakMapSet(portMessageContexts, this.port1, { blocked: true });
+      privateWeakMapSet(portMessageContexts, this.port2, { blocked: true });
     }
   }
   Object.defineProperty(workerThreads, 'MessageChannel', {
@@ -71713,7 +71846,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
         if (spawnAuthorization) {
           activeChildSpawnAuthorization = undefined;
           if (spawnAuthorization.receiver) {
-            authorizedChildSpawnEnvironments.delete(spawnAuthorization.receiver);
+            privateWeakMapDelete(authorizedChildSpawns, spawnAuthorization.receiver);
           }
         }
       }
@@ -71728,8 +71861,8 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
           pid: typeof child?.pid === 'number' ? child.pid : undefined,
           context,
         };
-        childLifecycleContexts.set(child, context);
-        childLifecycleTargets.set(child, target);
+        privateWeakMapSet(childLifecycleContexts, child, context);
+        privateWeakMapSet(childLifecycleTargets, child, target);
         if (target.pid !== undefined) {
           const pid = target.pid;
           processLifecycleTargets.set(pid, target);
@@ -71750,7 +71883,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
           nativeControlDepth: 0,
           nativeControlContext: lifecycleContext('native-channel', nonce),
         };
-        childMessageContexts.set(child, messageContext);
+        privateWeakMapSet(childMessageContexts, child, messageContext);
         const channelHandleSymbol = Object.getOwnPropertySymbols(child).find(
           (symbol) => symbol.description === 'kChannelHandle',
         );
@@ -71843,12 +71976,16 @@ function fenceWorkers() {
       ],
       workerNewTarget,
     );
-    workerMessageContexts.set(worker, {
+    privateWeakMapSet(workerMessageContexts, worker, {
       mode: 'worker-message',
       recipient: nonce,
       sequence: 0,
     });
-    workerLifecycleContexts.set(worker, lifecycleContext('worker-lifecycle', nonce));
+    privateWeakMapSet(
+      workerLifecycleContexts,
+      worker,
+      lifecycleContext('worker-lifecycle', nonce),
+    );
     persistLoaderObservation(
       'launch',
       nonce + ':worker:' + worker.threadId + ':' + semantics,
@@ -71904,7 +72041,11 @@ if (canAuthenticateChildProcesses) {
       });
     }
     if (workerThreads.parentPort) {
-      portMessageContexts.set(workerThreads.parentPort, descendantMessageContext);
+      privateWeakMapSet(
+        portMessageContexts,
+        workerThreads.parentPort,
+        descendantMessageContext,
+      );
     }
   }
   fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
