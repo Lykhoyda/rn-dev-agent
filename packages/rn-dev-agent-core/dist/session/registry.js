@@ -134,7 +134,7 @@ export class SessionRegistry {
         this.#secureFiles();
         return { sessionId: input.sessionId, claimEpoch: 1 };
     }
-    claimResources(session, resources, options = {}) {
+    claimResources(session, resources) {
         const unique = new Map(resources.map((resource) => [`${resource.type}\0${resource.key}`, resource]));
         if (unique.size !== resources.length) {
             throw new SessionAuthorityError('DUPLICATE_RESOURCE_CLAIM', 'claim set contains duplicates');
@@ -143,7 +143,6 @@ export class SessionRegistry {
         const now = this.#now();
         return this.#transaction(() => {
             const owner = this.#requireSession(session);
-            const reclaim = new Set();
             for (const resource of resources) {
                 const claim = this.#findConflictingClaim(resource);
                 if (!claim ||
@@ -162,13 +161,8 @@ export class SessionRegistry {
                     }
                     throw claimConflict(claim);
                 }
-                if (options.allowReclaim === false) {
-                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-                }
-                reclaim.add(claim.session_id);
+                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
             }
-            for (const sessionId of reclaim)
-                this.#fenceSession(sessionId, now);
             const leaseUntil = now + this.#leaseMs;
             for (const resource of resources) {
                 this.#database

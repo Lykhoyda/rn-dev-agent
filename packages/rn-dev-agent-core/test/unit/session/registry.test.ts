@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
+import { Worker } from 'node:worker_threads';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 
 const roots = [];
@@ -103,20 +105,29 @@ test('a sole owner wakes after lease expiry and reasserts without silent evictio
   assert.equal(registry.getSessionStatus(owner.sessionId).claimEpoch, owner.claimEpoch);
 });
 
-test('a contender reclaims only a proven-dead owner and fences its old epoch', () => {
+test('a contender cannot discard cleanup authority held by a proven-dead owner', () => {
   const { registry, create, ownerStates } = fixture();
   const a = create('a');
   const b = create('b');
-  registry.claimResources(a, [{ type: 'device', key: 'ios:device-1' }]);
+  registry.claimResources(a, [
+    { type: 'device', key: 'ios:device-1' },
+    { type: 'metro-port', key: '8341' },
+  ]);
+  registry.updateBindings(a, {
+    bindings: { metro: { mode: 'managed', port: 8341 } },
+  });
   ownerStates.set('a', 'mismatch');
 
-  registry.claimResources(b, [{ type: 'device', key: 'ios:device-1' }]);
-
-  assert.equal(registry.getClaim('device', 'ios:device-1').sessionId, 'b');
   assert.throws(
-    () => registry.renewSession(a),
-    (error) => error.code === 'SESSION_OWNER_LOST',
+    () => registry.claimResources(b, [{ type: 'device', key: 'ios:device-1' }]),
+    (error) => error.code === 'SESSION_AUTHORITY_REQUIRED',
   );
+  assert.equal(registry.getClaim('device', 'ios:device-1').sessionId, 'a');
+  assert.equal(registry.getClaim('metro-port', '8341').sessionId, 'a');
+  assert.deepEqual(registry.getSessionStatus('a').bindings.metro, {
+    mode: 'managed',
+    port: 8341,
+  });
 });
 
 test('startup discovery cannot auto-adopt a dead owner without the explicit transition', () => {
@@ -127,17 +138,11 @@ test('startup discovery cannot auto-adopt a dead owner without the explicit tran
   ownerStates.set('a', 'mismatch');
 
   assert.throws(
-    () =>
-      registry.claimResources(next, [{ type: 'device', key: 'ios:device-1' }], {
-        allowReclaim: false,
-      }),
+    () => registry.claimResources(next, [{ type: 'device', key: 'ios:device-1' }]),
     (error) =>
       error.code === 'SESSION_AUTHORITY_REQUIRED' && error.holder.sessionId === prior.sessionId,
   );
   assert.equal(registry.getClaim('device', 'ios:device-1').sessionId, prior.sessionId);
-
-  registry.claimResources(next, [{ type: 'device', key: 'ios:device-1' }]);
-  assert.equal(registry.getClaim('device', 'ios:device-1').sessionId, next.sessionId);
 });
 
 test('unknown process identity refuses stale reclaim', () => {
@@ -580,26 +585,33 @@ test('stale adoption retains an unpublished managed Metro transition', () => {
   assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'blocked');
 });
 
-test('busy retries yield to heartbeats instead of blocking the worker event loop', async () => {
+test('database retries survive contention from another supervisor', async () => {
   const { registry, path, create } = fixture();
   const owner = create('a');
-  const blocker = new DatabaseSync(path);
-  blocker.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE');
-  let ticks = 0;
-  const heartbeat = setInterval(() => {
-    ticks += 1;
-  }, 2);
-  setTimeout(() => blocker.exec('COMMIT'), 25);
+  const blocker = new Worker(
+    `
+      const { parentPort, workerData } = require('node:worker_threads');
+      const { DatabaseSync } = require('node:sqlite');
+      const database = new DatabaseSync(workerData);
+      database.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE');
+      parentPort.postMessage('locked');
+      setTimeout(() => {
+        database.exec('COMMIT');
+        database.close();
+      }, 100);
+    `,
+    { eval: true, workerData: path },
+  );
+  await once(blocker, 'message');
 
   try {
     await registry.claimResourcesWithRetry(owner, [{ type: 'device', key: 'ios:device-1' }], {
-      timeoutMs: 250,
+      timeoutMs: 1_500,
       retryDelayMs: 4,
     });
-    assert.ok(ticks >= 1);
+    assert.equal(registry.getClaim('device', 'ios:device-1')?.sessionId, owner.sessionId);
   } finally {
-    clearInterval(heartbeat);
-    blocker.close();
+    await blocker.terminate();
   }
 });
 

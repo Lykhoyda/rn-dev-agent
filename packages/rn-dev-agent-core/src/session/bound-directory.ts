@@ -104,7 +104,7 @@ export interface BoundOperationDependencies {
 }
 
 const WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
-const WORKER_READY_TIMEOUT_MS = 15_000;
+const WORKER_READY_TIMEOUT_MS = 30_000;
 
 const BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');

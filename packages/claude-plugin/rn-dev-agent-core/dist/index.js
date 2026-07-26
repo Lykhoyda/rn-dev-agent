@@ -25773,7 +25773,7 @@ var init_registry = __esm({
         this.#secureFiles();
         return { sessionId: input.sessionId, claimEpoch: 1 };
       }
-      claimResources(session, resources, options = {}) {
+      claimResources(session, resources) {
         const unique = new Map(resources.map((resource) => [`${resource.type}\0${resource.key}`, resource]));
         if (unique.size !== resources.length) {
           throw new SessionAuthorityError("DUPLICATE_RESOURCE_CLAIM", "claim set contains duplicates");
@@ -25782,7 +25782,6 @@ var init_registry = __esm({
         const now = this.#now();
         return this.#transaction(() => {
           const owner = this.#requireSession(session);
-          const reclaim = /* @__PURE__ */ new Set();
           for (const resource of resources) {
             const claim = this.#findConflictingClaim(resource);
             if (!claim || claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch) {
@@ -25800,13 +25799,8 @@ var init_registry = __esm({
               }
               throw claimConflict(claim);
             }
-            if (options.allowReclaim === false) {
-              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale owner requires explicit adopt_stale before claims transfer", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-            }
-            reclaim.add(claim.session_id);
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale owner requires explicit adopt_stale before claims transfer", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
           }
-          for (const sessionId of reclaim)
-            this.#fenceSession(sessionId, now);
           const leaseUntil = now + this.#leaseMs;
           for (const resource of resources) {
             this.#database.prepare(`INSERT INTO claims(
@@ -28612,7 +28606,6 @@ function createMaestroRunHandler(deps = {}) {
         deviceId: requestedDeviceId,
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
       });
-      writeFileSync7(flowFile, validatedContent, "utf-8");
       const stdout = stageResults.map((result) => result.stdout).join("\n");
       const stderr = stageResults.map((result) => result.stderr).join("\n");
       const output = combineRunnerOutput(stdout, stderr);
@@ -28740,7 +28733,11 @@ function createMaestroRunHandler(deps = {}) {
       });
       return failResult(failAug.message, failAug.meta);
     } finally {
-      disposeRunnerReportDir(runnerReportDir);
+      try {
+        writeFileSync7(flowFile, validatedContent, "utf-8");
+      } finally {
+        disposeRunnerReportDir(runnerReportDir);
+      }
     }
   };
 }
@@ -53011,7 +53008,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
-var WORKER_READY_TIMEOUT_MS = 15e3;
+var WORKER_READY_TIMEOUT_MS = 3e4;
 var BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -73614,7 +73611,7 @@ function openIntegrationDirectories(appRoot) {
     throw error2;
   }
 }
-function rollbackWrites(writes) {
+function rollbackWrites(writes, dependencies) {
   const errors = [];
   for (const write of [...writes].reverse()) {
     try {
@@ -73626,7 +73623,7 @@ function rollbackWrites(writes) {
           replacement: write.snapshot.contents,
           mode: write.snapshot.mode
         }
-      ]);
+      ], dependencies);
       assertBoundCleanup(result);
     } catch (error2) {
       errors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
@@ -73726,7 +73723,7 @@ function applyPackageIntegration(input, dependencies = {}) {
         replacement: metroOutput,
         mode: metroSnapshot.mode
       }
-    ]);
+    ], dependencies.boundOperationDependencies);
     applied.push({
       snapshot: metroSnapshot,
       written: metroOutput,
@@ -73744,7 +73741,7 @@ function applyPackageIntegration(input, dependencies = {}) {
         replacement: packageOutput,
         mode: packageSnapshot.mode
       }
-    ]);
+    ], dependencies.boundOperationDependencies);
     applied.push({
       snapshot: packageSnapshot,
       written: packageOutput,
@@ -73757,7 +73754,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     assertBoundDirectoryCurrent(directories.integration);
     return preview;
   } catch (error2) {
-    const rollbackErrors = rollbackWrites(applied);
+    const rollbackErrors = rollbackWrites(applied, dependencies.boundOperationDependencies);
     primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
     throw primaryError;
   } finally {
@@ -74121,9 +74118,18 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         assertPackageIntegrationInactive(status2.bindings, input.action);
         applyPackageIntegration({ appRoot, sessionCli });
-        registry2.updateBindings(session, {
-          bindings: { packageIntegration: { applied: true } }
-        });
+        try {
+          registry2.updateBindings(session, {
+            bindings: { packageIntegration: { applied: true } }
+          });
+        } catch (error2) {
+          try {
+            restorePackageIntegrationFiles({ appRoot });
+          } catch (rollbackError) {
+            throw new AggregateError([error2, rollbackError]);
+          }
+          throw error2;
+        }
         return okResult({ applied: true, packagePath, manifestPath });
       }
       if (input.action === "accept_handoff") {
@@ -74373,11 +74379,9 @@ function bindNativeRunner(runtime, target) {
   }) !== "match") {
     throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "native runner process and capability could not be bound to this claim epoch");
   }
-  registry2.claimResources(session, [
-    { type: "runner", key: `${target.platform}:${target.deviceId}:${port}` }
-  ]);
   registry2.updateBindings(session, {
     state: status.bindings.bundle ? "ready" : "runtime_bound",
+    claimResources: [{ type: "runner", key: `${target.platform}:${target.deviceId}:${port}` }],
     bindings: {
       runner: {
         platform: target.platform,

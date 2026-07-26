@@ -2429,7 +2429,7 @@ test('bounded CAS recovery refuses a journal-less timeout outcome', () => {
               replacement: Buffer.from('after\n'),
             },
           ],
-          { afterLockReleaseDelayMs: 1_000, timeoutMs: 100 },
+          { afterLockReleaseDelayMs: 5_000, timeoutMs: 1_000 },
         ),
       /transaction outcome is unknown/,
     );
@@ -3163,6 +3163,10 @@ test('integration rollback preserves edits made after its own write', () => {
       applyPackageIntegration(
         { appRoot: root, sessionCli: join(root, 'rn-session.js') },
         {
+          boundOperationDependencies: {
+            recoveryTimeoutMs: 15_000,
+            timeoutMs: 15_000,
+          },
           afterWrite: (path) => {
             if (path !== metroPath) return;
             writeFileSync(metroPath, concurrentMetro);

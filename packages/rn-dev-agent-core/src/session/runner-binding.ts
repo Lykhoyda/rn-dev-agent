@@ -47,11 +47,9 @@ export function bindNativeRunner(
     );
   }
 
-  registry.claimResources(session, [
-    { type: 'runner', key: `${target.platform}:${target.deviceId}:${port}` },
-  ]);
   registry.updateBindings(session, {
     state: status.bindings.bundle ? 'ready' : 'runtime_bound',
+    claimResources: [{ type: 'runner', key: `${target.platform}:${target.deviceId}:${port}` }],
     bindings: {
       runner: {
         platform: target.platform,

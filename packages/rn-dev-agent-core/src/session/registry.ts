@@ -335,11 +335,7 @@ export class SessionRegistry {
     return { sessionId: input.sessionId, claimEpoch: 1 };
   }
 
-  claimResources(
-    session: SessionRef,
-    resources: readonly ResourceClaim[],
-    options: { allowReclaim?: boolean } = {},
-  ): SessionRef {
+  claimResources(session: SessionRef, resources: readonly ResourceClaim[]): SessionRef {
     const unique = new Map(
       resources.map((resource) => [`${resource.type}\0${resource.key}`, resource]),
     );
@@ -352,7 +348,6 @@ export class SessionRegistry {
 
     return this.#transaction(() => {
       const owner = this.#requireSession(session);
-      const reclaim = new Set<string>();
 
       for (const resource of resources) {
         const claim = this.#findConflictingClaim(resource);
@@ -378,17 +373,12 @@ export class SessionRegistry {
           }
           throw claimConflict(claim);
         }
-        if (options.allowReclaim === false) {
-          throw new SessionAuthorityError(
-            'SESSION_AUTHORITY_REQUIRED',
-            'a proven-stale owner requires explicit adopt_stale before claims transfer',
-            { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
-          );
-        }
-        reclaim.add(claim.session_id);
+        throw new SessionAuthorityError(
+          'SESSION_AUTHORITY_REQUIRED',
+          'a proven-stale owner requires explicit adopt_stale before claims transfer',
+          { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
+        );
       }
-
-      for (const sessionId of reclaim) this.#fenceSession(sessionId, now);
 
       const leaseUntil = now + this.#leaseMs;
       for (const resource of resources) {

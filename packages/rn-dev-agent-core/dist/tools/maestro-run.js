@@ -342,7 +342,6 @@ export function createMaestroRunHandler(deps = {}) {
                 deviceId: requestedDeviceId,
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
             });
-            writeFileSync(flowFile, validatedContent, 'utf-8');
             const stdout = stageResults.map((result) => result.stdout).join('\n');
             const stderr = stageResults.map((result) => result.stderr).join('\n');
             // combineRunnerOutput (not .trim()) so the step parser's leading-indent
@@ -513,7 +512,12 @@ export function createMaestroRunHandler(deps = {}) {
             return failResult(failAug.message, failAug.meta);
         }
         finally {
-            disposeRunnerReportDir(runnerReportDir);
+            try {
+                writeFileSync(flowFile, validatedContent, 'utf-8');
+            }
+            finally {
+                disposeRunnerReportDir(runnerReportDir);
+            }
         }
     };
 }

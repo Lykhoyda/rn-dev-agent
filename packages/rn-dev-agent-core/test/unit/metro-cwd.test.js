@@ -38,7 +38,7 @@ test('cwdForPort: composes pid→cwd via injected exec', () => {
     if (args.includes('-ti')) return '777\n';
     return 'p777\nfcwd\nn/repo/worktreeA\n';
   };
-  assert.equal(cwdForPort(8081, exec), '/repo/worktreeA');
+  assert.equal(cwdForPort(8081, exec, 'darwin'), '/repo/worktreeA');
 });
 
 test('cwdForPort: re-resolves PID and CWD every call so PID reuse cannot retain a stale root', () => {
@@ -53,8 +53,8 @@ test('cwdForPort: re-resolves PID and CWD every call so PID reuse cannot retain 
     cwdCalls++;
     return 'p777\nfcwd\nn/repo/worktreeA\n';
   };
-  cwdForPort(8081, exec);
-  cwdForPort(8081, exec);
+  cwdForPort(8081, exec, 'darwin');
+  cwdForPort(8081, exec, 'darwin');
   assert.equal(pidCalls, 2);
   assert.equal(cwdCalls, 2);
 });

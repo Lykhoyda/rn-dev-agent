@@ -2872,19 +2872,26 @@ interface AppliedWrite {
   directory: BoundDirectory;
 }
 
-function rollbackWrites(writes: readonly AppliedWrite[]): Error[] {
+function rollbackWrites(
+  writes: readonly AppliedWrite[],
+  dependencies?: BoundOperationDependencies,
+): Error[] {
   const errors: Error[] = [];
   for (const write of [...writes].reverse()) {
     try {
-      const result = casReplaceBoundBatch(write.directory, [
-        {
-          snapshot: write.snapshot,
-          expected: write.written,
-          expectedMode: write.writtenMode,
-          replacement: write.snapshot.contents,
-          mode: write.snapshot.mode,
-        },
-      ]);
+      const result = casReplaceBoundBatch(
+        write.directory,
+        [
+          {
+            snapshot: write.snapshot,
+            expected: write.written,
+            expectedMode: write.writtenMode,
+            replacement: write.snapshot.contents,
+            mode: write.snapshot.mode,
+          },
+        ],
+        dependencies,
+      );
       assertBoundCleanup(result);
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
@@ -2998,14 +3005,18 @@ export function applyPackageIntegration(
     }
     assertBoundCleanup(generatedResult);
     const metroOutput = Buffer.from(nextMetroSource);
-    const metroResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: metroSnapshot,
-        expected: metroSnapshot.contents,
-        replacement: metroOutput,
-        mode: metroSnapshot.mode,
-      },
-    ]);
+    const metroResult = casReplaceBoundBatch(
+      directories.app,
+      [
+        {
+          snapshot: metroSnapshot,
+          expected: metroSnapshot.contents,
+          replacement: metroOutput,
+          mode: metroSnapshot.mode,
+        },
+      ],
+      dependencies.boundOperationDependencies,
+    );
     applied.push({
       snapshot: metroSnapshot,
       written: metroOutput,
@@ -3015,14 +3026,18 @@ export function applyPackageIntegration(
     dependencies.afterWrite?.(metroConfigPath);
     assertBoundCleanup(metroResult);
     const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}\n`);
-    const packageResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: packageSnapshot,
-        expected: packageSnapshot.contents,
-        replacement: packageOutput,
-        mode: packageSnapshot.mode,
-      },
-    ]);
+    const packageResult = casReplaceBoundBatch(
+      directories.app,
+      [
+        {
+          snapshot: packageSnapshot,
+          expected: packageSnapshot.contents,
+          replacement: packageOutput,
+          mode: packageSnapshot.mode,
+        },
+      ],
+      dependencies.boundOperationDependencies,
+    );
     applied.push({
       snapshot: packageSnapshot,
       written: packageOutput,
@@ -3035,7 +3050,7 @@ export function applyPackageIntegration(
     assertBoundDirectoryCurrent(directories.integration);
     return preview;
   } catch (error) {
-    const rollbackErrors = rollbackWrites(applied);
+    const rollbackErrors = rollbackWrites(applied, dependencies.boundOperationDependencies);
     primaryError =
       rollbackErrors.length > 0 ? new AggregateError([error, ...rollbackErrors]) : error;
     throw primaryError;

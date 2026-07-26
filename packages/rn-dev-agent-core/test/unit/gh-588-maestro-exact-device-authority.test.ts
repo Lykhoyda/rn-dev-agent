@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   createMaestroRunHandler,
   executeMaestroAuthorityStages,
@@ -126,6 +127,7 @@ test('failed grouped UI stages invalidate target authority after partial dispatc
 
 test('later stage failures retain earlier device-authority evidence', async () => {
   let stage = 0;
+  let flowFile = '';
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
       name: 'exact',
@@ -138,7 +140,8 @@ test('later stage failures retain earlier device-authority evidence', async () =
     parkFlow: async (run) => run(),
     claimNativeOrigin: async () => undefined,
     completeNativeOrigin: async () => undefined,
-    execFile: async () => {
+    execFile: async (_file, args) => {
+      flowFile = args.find((argument) => argument.endsWith('.yaml')) ?? '';
       stage += 1;
       if (stage === 1) return { stdout: runnerLog(FOREIGN), stderr: '' };
       throw new Error('second stage failed before producing output');
@@ -154,6 +157,9 @@ test('later stage failures retain earlier device-authority evidence', async () =
 
   assert.equal(envelope.code, 'DEVICE_AUTHORITY_MISMATCH');
   assert.match(envelope.meta.output, new RegExp(FOREIGN));
+  const restoredFlow = readFileSync(flowFile, 'utf8');
+  assert.match(restoredFlow, /- launchApp/);
+  assert.match(restoredFlow, /tapOn: Continue/);
 });
 
 test('staged execution shares one flow timeout budget', async () => {

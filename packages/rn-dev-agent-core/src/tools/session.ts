@@ -472,9 +472,18 @@ export function createSessionHandler(
         }
         assertPackageIntegrationInactive(status.bindings, input.action);
         applyPackageIntegration({ appRoot, sessionCli });
-        registry.updateBindings(session, {
-          bindings: { packageIntegration: { applied: true } },
-        });
+        try {
+          registry.updateBindings(session, {
+            bindings: { packageIntegration: { applied: true } },
+          });
+        } catch (error) {
+          try {
+            restorePackageIntegrationFiles({ appRoot });
+          } catch (rollbackError) {
+            throw new AggregateError([error, rollbackError]);
+          }
+          throw error;
+        }
         return okResult({ applied: true, packagePath, manifestPath });
       }
 

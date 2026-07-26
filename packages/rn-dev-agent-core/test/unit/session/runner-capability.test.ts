@@ -15,6 +15,7 @@ import {
   androidHealthMatchesAuthority,
   buildInstrumentAuthorityArgs,
 } from '../../../dist/runners/rn-android-runner-client.js';
+import { bindNativeRunner } from '../../../dist/session/runner-binding.js';
 
 afterEach(() => {
   _setFetchForTest(globalThis.fetch);
@@ -174,4 +175,49 @@ test('verified runner cleanup clears local state without signalling the child ag
   clearFastRunnerAfterVerifiedStop(binding);
 
   assert.equal(getFastRunnerState(), null);
+});
+
+test('runner binding commits its claim and binding in one registry transaction', () => {
+  const processBirth = readProcessBirth(process.pid);
+  assert.ok(processBirth);
+  _setFastRunnerStateForTest({
+    schemaVersion: 1,
+    port: 9100,
+    pid: process.pid,
+    deviceId: 'device-1',
+    bundleId: 'dev.example',
+    startedAt: new Date().toISOString(),
+    protocolVersion: 1,
+    processBirth: processBirth.token,
+    instanceId: 'runner-1',
+    sessionId: 'session-1',
+    claimEpoch: 9,
+    capability: 'secret',
+  });
+  let update;
+  const status = {
+    bindings: {
+      device: { platform: 'ios', deviceId: 'device-1', appId: 'dev.example' },
+    },
+  };
+  const runtime = {
+    requireAvailable: () => ({
+      registry: {
+        getSessionStatus: () => status,
+        updateBindings: (_session, input) => {
+          update = input;
+        },
+      },
+      session: { sessionId: 'session-1', claimEpoch: 9 },
+    }),
+  };
+
+  bindNativeRunner(runtime, {
+    platform: 'ios',
+    deviceId: 'device-1',
+    appId: 'dev.example',
+  });
+
+  assert.deepEqual(update.claimResources, [{ type: 'runner', key: 'ios:device-1:9100' }]);
+  assert.equal(update.bindings.runner.instanceId, 'runner-1');
 });

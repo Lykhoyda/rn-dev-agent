@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1078,6 +1086,50 @@ test('integration application rejects active runtime authority', async () => {
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /releasing active runner authority/);
     assert.equal(existsSync(join(root, '.rn-agent')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('integration application rolls back files when its authority binding fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-binding-failure-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const packageBefore = `${JSON.stringify({
+      scripts: { ios: 'expo run:ios', android: 'expo run:android' },
+    })}\n`;
+    const metroPath = join(root, 'metro.config.js');
+    const metroBefore = 'module.exports = {};\n';
+    writeFileSync(packagePath, packageBefore);
+    writeFileSync(metroPath, metroBefore);
+    const status = {
+      sessionId: 'session-a',
+      source: { appRoot: root },
+      bindings: {},
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => {
+            throw new Error('binding commit failed');
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    });
+
+    const result = await handler({ action: 'apply_integration', confirmed: true });
+
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /binding commit failed/);
+    assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), JSON.parse(packageBefore));
+    assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
+    assert.equal(
+      existsSync(join(root, '.rn-agent', 'integration', 'rn-session-integration.json')),
+      false,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -85,7 +85,7 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                 { type: 'source', key: input.source.worktreeKey },
                 { type: 'metro-port', key: String(metroPort) },
                 { type: 'observe-port', key: String(observePort) },
-            ], { allowReclaim: false });
+            ]);
             return undefined;
         }
         catch (error) {

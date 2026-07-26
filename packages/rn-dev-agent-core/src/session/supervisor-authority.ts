@@ -125,15 +125,11 @@ export function createSupervisorAuthority(
   );
   const adoptionRequired = initialize(() => {
     try {
-      registry.claimResources(
-        session,
-        [
-          { type: 'source', key: input.source.worktreeKey },
-          { type: 'metro-port', key: String(metroPort) },
-          { type: 'observe-port', key: String(observePort) },
-        ],
-        { allowReclaim: false },
-      );
+      registry.claimResources(session, [
+        { type: 'source', key: input.source.worktreeKey },
+        { type: 'metro-port', key: String(metroPort) },
+        { type: 'observe-port', key: String(observePort) },
+      ]);
       return undefined;
     } catch (error) {
       if (error instanceof Error && 'holder' in error) {

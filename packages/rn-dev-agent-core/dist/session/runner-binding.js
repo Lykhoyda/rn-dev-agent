@@ -28,11 +28,9 @@ export function bindNativeRunner(runtime, target) {
         }) !== 'match') {
         throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'native runner process and capability could not be bound to this claim epoch');
     }
-    registry.claimResources(session, [
-        { type: 'runner', key: `${target.platform}:${target.deviceId}:${port}` },
-    ]);
     registry.updateBindings(session, {
         state: status.bindings.bundle ? 'ready' : 'runtime_bound',
+        claimResources: [{ type: 'runner', key: `${target.platform}:${target.deviceId}:${port}` }],
         bindings: {
             runner: {
                 platform: target.platform,

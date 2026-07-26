@@ -2743,7 +2743,7 @@ function openIntegrationDirectories(appRoot) {
         throw error;
     }
 }
-function rollbackWrites(writes) {
+function rollbackWrites(writes, dependencies) {
     const errors = [];
     for (const write of [...writes].reverse()) {
         try {
@@ -2755,7 +2755,7 @@ function rollbackWrites(writes) {
                     replacement: write.snapshot.contents,
                     mode: write.snapshot.mode,
                 },
-            ]);
+            ], dependencies);
             assertBoundCleanup(result);
         }
         catch (error) {
@@ -2856,7 +2856,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
                 replacement: metroOutput,
                 mode: metroSnapshot.mode,
             },
-        ]);
+        ], dependencies.boundOperationDependencies);
         applied.push({
             snapshot: metroSnapshot,
             written: metroOutput,
@@ -2873,7 +2873,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
                 replacement: packageOutput,
                 mode: packageSnapshot.mode,
             },
-        ]);
+        ], dependencies.boundOperationDependencies);
         applied.push({
             snapshot: packageSnapshot,
             written: packageOutput,
@@ -2887,7 +2887,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
         return preview;
     }
     catch (error) {
-        const rollbackErrors = rollbackWrites(applied);
+        const rollbackErrors = rollbackWrites(applied, dependencies.boundOperationDependencies);
         primaryError =
             rollbackErrors.length > 0 ? new AggregateError([error, ...rollbackErrors]) : error;
         throw primaryError;
