@@ -1269,6 +1269,15 @@ test('Metro lifecycle controls reject unowned targets and bind outcomes', () => 
   }
 });
 
+test('Metro native spawn defers only Node asynchronous error classes', () => {
+  const adapter = renderMetroIntegrationAdapter();
+  for (const code of ['UV_EACCES', 'UV_EAGAIN', 'UV_EMFILE', 'UV_ENFILE', 'UV_ENOENT']) {
+    assert.match(adapter, new RegExp(`result === intrinsicUvBinding\\.${code}`));
+  }
+  assert.match(adapter, /if \(slot && isAsynchronousNativeSpawnError\(result\)\)/);
+  assert.match(adapter, /else if \(slot\) \{\s*slot\.pendingSpawnError = undefined;/);
+});
+
 test('Metro preload linearizes evidence head barriers through the owner pipe', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-barrier-'));
   try {

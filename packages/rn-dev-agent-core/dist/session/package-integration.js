@@ -72,6 +72,17 @@ const intrinsicWeakSetAdd = WeakSet.prototype.add;
 const intrinsicWeakSetDelete = WeakSet.prototype.delete;
 const intrinsicWeakSetHas = WeakSet.prototype.has;
 const intrinsicProcessNextTick = process.nextTick;
+const intrinsicProcessBinding = process.binding;
+const intrinsicUvBinding = intrinsicReflectApply(intrinsicProcessBinding, process, ['uv']);
+function isAsynchronousNativeSpawnError(result) {
+  return (
+    result === intrinsicUvBinding.UV_EACCES ||
+    result === intrinsicUvBinding.UV_EAGAIN ||
+    result === intrinsicUvBinding.UV_EMFILE ||
+    result === intrinsicUvBinding.UV_ENFILE ||
+    result === intrinsicUvBinding.UV_ENOENT
+  );
+}
 function privateMapDelete(map, key) {
   return intrinsicReflectApply(intrinsicMapDelete, map, [key]);
 }
@@ -807,17 +818,16 @@ function exposeNativeProcessHandle(child, handle) {
       ) {
         throw descendantError();
       }
-      slot.exposed =
-        slot.deliveringSpawnError && slot.pendingSpawnError !== undefined
-          ? nativeHandleFacade(handle, 'onexit', (...args) => {
-              if (
-                args.length !== 1 ||
-                args[0] !== slot.pendingSpawnError
-              ) {
-                throw descendantError();
-              }
-            })
-          : null;
+      if (slot.deliveringSpawnError && slot.pendingSpawnError !== undefined) {
+        const deliveredSpawnError = slot.pendingSpawnError;
+        slot.exposed = nativeHandleFacade(handle, 'onexit', (...args) => {
+          if (args.length !== 1 || args[0] !== deliveredSpawnError) {
+            throw descendantError();
+          }
+        });
+      } else {
+        slot.exposed = null;
+      }
     },
   });
 }
@@ -955,7 +965,7 @@ function fenceNativeProcessHandle(handle, context) {
         privateWeakMapDelete(authorizedNativeProcessSpawns, this);
         const result = intrinsicReflectApply(spawn, this, args);
         const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
-        if (slot && result !== 0) {
+        if (slot && isAsynchronousNativeSpawnError(result)) {
           slot.pendingSpawnError = result;
           intrinsicReflectApply(intrinsicProcessNextTick, process, [
             () => {
@@ -965,9 +975,12 @@ function fenceNativeProcessHandle(handle, context) {
                 slot.invokeOnExit(result);
               } finally {
                 slot.deliveringSpawnError = false;
+                slot.pendingSpawnError = undefined;
               }
             },
           ]);
+        } else if (slot) {
+          slot.pendingSpawnError = undefined;
         }
         return result;
       },

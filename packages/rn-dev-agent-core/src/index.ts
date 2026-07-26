@@ -204,6 +204,7 @@ import {
 import { proveTargetDeviceAssociation } from './session/target-device-authority.js';
 import type { SessionStatus } from './session/registry.js';
 import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
+import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
 import { stopBoundRunner } from './session/process-cleanup.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
@@ -2372,13 +2373,12 @@ function proofAuthority(runId: string): ProofAuthority {
     : null;
   if (
     !secret?.signerCapability ||
-    typeof metro.instanceId !== 'string' ||
-    typeof metro.runtimeEvidencePath !== 'string' ||
-    typeof metro.runtimeEvidenceSocket !== 'string' ||
-    (metro.runtimeEvidenceAuthority !== 'reported-v1' &&
-      metro.runtimeEvidenceAuthority !== 'broker-v2')
+    !verifyManagedMetroManagementProof(metro, {
+      sessionId: status.sessionId,
+      signerCapability: secret.signerCapability,
+    })
   ) {
-    throw new Error('PROOF_AUTHORITY_MISMATCH: Metro runtime policy signer is unavailable');
+    throw new Error('PROOF_AUTHORITY_MISMATCH: Metro management proof is invalid');
   }
   const source = strictProofSourceIdentity(status.source as unknown as SourceIdentity, {
     metroRuntimePolicy: {

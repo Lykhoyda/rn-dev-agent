@@ -25,6 +25,7 @@ export interface ManagedMetroBinding extends MetroBinding {
   launcherBirth: string;
   managementProof: string;
   runtimeEvidenceAuthority: MetroRuntimeEvidenceAuthority;
+  runtimeEvidenceProtocol: 2;
   runtimeEvidencePath: string;
   runtimeEvidenceSocket: string;
 }
@@ -63,7 +64,7 @@ interface ManagedMetroProcessIdentity {
 const METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
-const { chmodSync, closeSync, openSync, rmSync, writeSync } = require('node:fs');
+const { chmodSync, closeSync, openSync, rmSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -161,11 +162,15 @@ const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
 const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
 const evidenceSocket = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET;
+const policyPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_POLICY;
 const capability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
 const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
 const childNodeOptions = process.env.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
-if (!executable || !evidencePath || !evidenceSocket || !capability || !sessionId || !metroInstanceId || !childNodeOptions) {
+const contentRoot = process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT;
+const appRoot = process.env.RN_DEV_AGENT_METRO_APP_ROOT;
+const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
+if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource) {
   process.exit(1);
 }
 const evidenceDescriptor = 9;
@@ -176,7 +181,7 @@ let buffered = '';
 function appendEvidence(payload) {
   const chainedPayload = {
     ...payload,
-    runtimeEvidenceAuthority: 'reported-v1',
+    runtimeEvidenceAuthority: 'broker-v2',
     sequence: ++sequence,
     previousSignature,
   };
@@ -189,7 +194,29 @@ function appendEvidence(payload) {
   );
   previousSignature = signature;
 }
+const violations = [];
+function publishPolicy() {
+  const payload = {
+    version: 1,
+    runtimeEvidenceAuthority: 'broker-v2',
+    sessionId,
+    metroInstanceId,
+    contentRoot,
+    appRoot,
+    runtimeInputs: [],
+    violations: [...violations],
+  };
+  const signature = createHmac('sha256', capability)
+    .update(canonicalAuthorityJson(payload))
+    .digest('hex');
+  writeFileSync(policyPath, canonicalAuthorityJson({ ...payload, signature }) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+}
 function appendViolation(value) {
+  if (!violations.includes(value)) violations.push(value);
+  publishPolicy();
   appendEvidence({
     version: 1,
     sessionId,
@@ -212,7 +239,7 @@ function closeHeadConnection(connection) {
 function respondWithHead(connection, challenge) {
   const payload = {
     version: 1,
-    runtimeEvidenceAuthority: 'reported-v1',
+    runtimeEvidenceAuthority: 'broker-v2',
     sessionId,
     metroInstanceId,
     challenge,
@@ -261,13 +288,29 @@ headServer.once('error', () => process.exit(1));
 headServer.listen(evidenceSocket, () => {
   if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
 });
+appendEvidence({
+  version: 1,
+  sessionId,
+  metroInstanceId,
+  kind: 'semantics',
+  value: canonicalAuthorityJson({
+    mode: 'managed-metro',
+    executable,
+    args,
+    nodeOptions: childNodeOptions,
+  }),
+  digest: null,
+});
+publishPolicy();
 const childEnvironment = {
-  ...process.env,
+  ...JSON.parse(childEnvironmentSource),
   NODE_OPTIONS: childNodeOptions,
   RN_DEV_AGENT_METRO_EVIDENCE_FD: String(evidenceDescriptor),
+  RN_DEV_AGENT_SESSION_ID: sessionId,
+  RN_DEV_AGENT_METRO_INSTANCE_ID: metroInstanceId,
+  RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD,
+  RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS,
 };
-delete childEnvironment.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
-delete childEnvironment.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
 child = spawn(executable, args, {
   cwd: process.cwd(),
   env: childEnvironment,
@@ -341,7 +384,7 @@ evidence.on('data', (chunk) => {
         }
         continue;
       }
-      appendEvidence(payload);
+      if (payload.kind === 'violation') appendViolation(payload.value);
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -532,6 +575,7 @@ function managementProof(
     runtimeEvidencePath: string;
     runtimeEvidenceSocket: string;
     runtimeEvidenceAuthority: MetroRuntimeEvidenceAuthority;
+    runtimeEvidenceProtocol: 2;
   },
   signerCapability: string,
 ): string {
@@ -548,16 +592,121 @@ function managementProof(
         runtimeEvidencePath: authority.runtimeEvidencePath,
         runtimeEvidenceSocket: authority.runtimeEvidenceSocket,
         runtimeEvidenceAuthority: authority.runtimeEvidenceAuthority,
+        runtimeEvidenceProtocol: authority.runtimeEvidenceProtocol,
       }),
     )
     .digest('hex');
+}
+
+const METRO_ENVIRONMENT_NAMES = new Set([
+  'ANDROID_HOME',
+  'ANDROID_SDK_ROOT',
+  'BABEL_ENV',
+  'CI',
+  'COMSPEC',
+  'DEVELOPER_DIR',
+  'FORCE_COLOR',
+  'HOME',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'JAVA_HOME',
+  'LANG',
+  'LOCALAPPDATA',
+  'LOGNAME',
+  'NO_COLOR',
+  'NO_PROXY',
+  'NODE_ENV',
+  'PATH',
+  'PATHEXT',
+  'SHELL',
+  'SYSTEMROOT',
+  'TEMP',
+  'TERM',
+  'TMP',
+  'TMPDIR',
+  'USER',
+  'USERPROFILE',
+  'WINDIR',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+]);
+
+const METRO_ENVIRONMENT_PREFIXES = [
+  'EXPO_',
+  'LC_',
+  'REACT_NATIVE_',
+  'RCT_',
+  'WATCHMAN_',
+  'XCODE_',
+] as const;
+
+export function managedMetroChildEnvironment(
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(environment).filter(
+      ([name, value]) =>
+        value !== undefined &&
+        !name.startsWith('RN_DEV_AGENT_') &&
+        (METRO_ENVIRONMENT_NAMES.has(name) ||
+          METRO_ENVIRONMENT_PREFIXES.some((prefix) => name.startsWith(prefix))),
+    ),
+  );
+}
+
+export function verifyManagedMetroManagementProof(
+  binding: Record<string, unknown>,
+  input: { sessionId: string; signerCapability: string },
+): binding is Record<string, unknown> & ManagedMetroBinding {
+  if (
+    binding.mode !== 'managed' ||
+    typeof binding.port !== 'number' ||
+    typeof binding.pid !== 'number' ||
+    typeof binding.birth !== 'string' ||
+    typeof binding.launcherPid !== 'number' ||
+    typeof binding.launcherBirth !== 'string' ||
+    typeof binding.instanceId !== 'string' ||
+    typeof binding.runtimeEvidencePath !== 'string' ||
+    typeof binding.runtimeEvidenceSocket !== 'string' ||
+    binding.runtimeEvidenceAuthority !== 'broker-v2' ||
+    binding.runtimeEvidenceProtocol !== 2 ||
+    typeof binding.managementProof !== 'string'
+  ) {
+    return false;
+  }
+  const expected = managementProof(
+    input.sessionId,
+    {
+      port: binding.port,
+      pid: binding.pid,
+      birth: binding.birth,
+      launcherPid: binding.launcherPid,
+      launcherBirth: binding.launcherBirth,
+      instanceId: binding.instanceId,
+      runtimeEvidencePath: binding.runtimeEvidencePath,
+      runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
+      runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+      runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol,
+    },
+    input.signerCapability,
+  );
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  const observedBuffer = Buffer.from(binding.managementProof, 'hex');
+  return (
+    expectedBuffer.length === observedBuffer.length &&
+    timingSafeEqual(expectedBuffer, observedBuffer)
+  );
 }
 
 function legacyManagementProof(
   sessionId: string,
   authority: Omit<
     Parameters<typeof managementProof>[1],
-    'runtimeEvidenceAuthority'
+    'runtimeEvidenceAuthority' | 'runtimeEvidenceProtocol'
   >,
   signerCapability: string,
 ): string {
@@ -637,6 +786,12 @@ export async function startManagedMetro(
   }
   const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
   const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');
+  const runtimePolicyPath = join(
+    input.appRoot,
+    '.rn-agent',
+    'integration',
+    'metro-runtime-policy.json',
+  );
   const runtimeEvidenceEndpointId = createHmac('sha256', input.signerCapability)
     .update(`metro-runtime-evidence\0${instanceId}`)
     .digest('hex')
@@ -649,16 +804,16 @@ export async function startManagedMetro(
     .filter(Boolean)
     .join(' ');
   const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
+  const metroEnvironment = managedMetroChildEnvironment(process.env);
   const child = (dependencies.spawnProcess ?? spawn)(
     process.execPath,
     ['-e', METRO_LAUNCHER_SOURCE],
     {
       cwd: input.appRoot,
       env: {
-        ...process.env,
+        ...metroEnvironment,
         RN_DEV_AGENT_METRO_EXECUTABLE: command.executable,
         RN_DEV_AGENT_METRO_ARGS: JSON.stringify([...command.args, '--port', String(input.port)]),
-        RCT_METRO_PORT: String(input.port),
         RN_DEV_AGENT_SESSION_ID: input.sessionId,
         RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
         RN_DEV_AGENT_METRO_POLICY_CAPABILITY: runtimePolicyCapability,
@@ -666,6 +821,10 @@ export async function startManagedMetro(
         RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
         RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE: runtimeEvidencePath,
         RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET: runtimeEvidenceSocket,
+        RN_DEV_AGENT_METRO_RUNTIME_POLICY: runtimePolicyPath,
+        RN_DEV_AGENT_METRO_CONTENT_ROOT: input.sourceRoot,
+        RN_DEV_AGENT_METRO_APP_ROOT: input.appRoot,
+        RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT: JSON.stringify(metroEnvironment),
         RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS: authorityNodeOptions,
         NODE_OPTIONS: baseNodeOptions,
       },
@@ -731,7 +890,8 @@ export async function startManagedMetro(
           launcherBirth: launcherBirth.token,
           runtimeEvidencePath,
           runtimeEvidenceSocket,
-          runtimeEvidenceAuthority: 'reported-v1',
+          runtimeEvidenceAuthority: 'broker-v2',
+          runtimeEvidenceProtocol: 2,
         } satisfies Omit<ManagedMetroBinding, 'managementProof'>;
         return {
           ...authority,
@@ -916,6 +1076,8 @@ export async function stopManagedMetro(
     (binding.runtimeEvidenceAuthority !== undefined &&
       binding.runtimeEvidenceAuthority !== 'reported-v1' &&
       binding.runtimeEvidenceAuthority !== 'broker-v2') ||
+    (binding.runtimeEvidenceAuthority === 'broker-v2' &&
+      binding.runtimeEvidenceProtocol !== 2) ||
     typeof binding.managementProof !== 'string'
   ) {
     return false;
@@ -933,11 +1095,22 @@ export async function stopManagedMetro(
   const expected =
     binding.runtimeEvidenceAuthority === undefined
       ? legacyManagementProof(input.sessionId, legacyAuthority, input.signerCapability)
-      : managementProof(
+      : binding.runtimeEvidenceAuthority === 'reported-v1'
+        ? createHmac('sha256', input.signerCapability)
+            .update(
+              canonicalAuthorityJson({
+                sessionId: input.sessionId,
+                ...legacyAuthority,
+                runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+              }),
+            )
+            .digest('hex')
+        : managementProof(
           input.sessionId,
           {
             ...legacyAuthority,
             runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+            runtimeEvidenceProtocol: 2,
           },
           input.signerCapability,
         );

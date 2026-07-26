@@ -3,11 +3,13 @@ import { test } from 'node:test';
 import {
   hasNodeLoaderOption,
   hasUnsupportedNodeOption,
+  managedMetroChildEnvironment,
   managedMetroListenerPid,
   probeManagedMetroListener,
   resolveManagedMetroCommand,
   startManagedMetro,
   stopManagedMetro,
+  verifyManagedMetroManagementProof,
 } from '../../../dist/session/managed-metro.js';
 
 test('managed Metro rejects every Node loader option alias', () => {
@@ -123,6 +125,24 @@ test('managed Metro selects only package-local Expo and bare RN CLIs', () => {
   );
 });
 
+test('managed Metro child environment excludes session authority', () => {
+  assert.deepEqual(
+    managedMetroChildEnvironment({
+      PATH: '/bin',
+      HOME: '/home/test',
+      EXPO_PUBLIC_MODE: 'test',
+      RN_DEV_AGENT_SESSION_SECRET_PATH: '/secret',
+      RN_DEV_AGENT_REGISTRY_PATH: '/registry',
+      DATABASE_URL: 'secret',
+    }),
+    {
+      PATH: '/bin',
+      HOME: '/home/test',
+      EXPO_PUBLIC_MODE: 'test',
+    },
+  );
+});
+
 test('managed Metro binds the actual listener rather than the launcher shim', async () => {
   const calls: Array<{
     executable: string;
@@ -198,13 +218,57 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(calls[0]?.env?.NODE_OPTIONS, (process.env.NODE_OPTIONS ?? '').trim());
   assert.equal(binding.runtimeEvidencePath, '/tmp/metro-runtime-evidence.jsonl');
   assert.equal(binding.runtimeEvidenceSocket, runtimeEvidenceSocket);
-  assert.equal(binding.runtimeEvidenceAuthority, 'reported-v1');
+  assert.equal(binding.runtimeEvidenceAuthority, 'broker-v2');
+  assert.equal(binding.runtimeEvidenceProtocol, 2);
+  assert.equal(calls[0]?.env?.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
+  assert.equal(calls[0]?.env?.RN_DEV_AGENT_REGISTRY_PATH, undefined);
+  assert.equal(
+    verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
+      sessionId: 'session-a',
+      signerCapability: 'signer',
+    }),
+    true,
+  );
+  assert.equal(
+    verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
+      sessionId: 'stale-session',
+      signerCapability: 'signer',
+    }),
+    false,
+  );
+  assert.equal(
+    verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
+      sessionId: 'session-a',
+      signerCapability: 'forged-signer',
+    }),
+    false,
+  );
+  for (const property of [
+    'instanceId',
+    'launcherBirth',
+    'runtimeEvidencePath',
+    'runtimeEvidenceSocket',
+    'runtimeEvidenceAuthority',
+    'runtimeEvidenceProtocol',
+  ] as const) {
+    assert.equal(
+      verifyManagedMetroManagementProof(
+        { ...binding, [property]: property === 'runtimeEvidenceProtocol' ? 1 : 'forged' },
+        { sessionId: 'session-a', signerCapability: 'signer' },
+      ),
+      false,
+      property,
+    );
+  }
   assert.match(calls[0]?.args[1] ?? '', /childOutcome === null \|\| !evidenceFinished/);
   assert.match(calls[0]?.args[1] ?? '', /rn-dev-agent:evidence-barrier/);
   assert.match(calls[0]?.args[1] ?? '', /stream ended before Metro exited/);
   assert.match(calls[0]?.args[1] ?? '', /connection\.setTimeout/);
   assert.match(calls[0]?.args[1] ?? '', /for \(const connection of headConnections\)/);
   assert.match(calls[0]?.args[1] ?? '', /journalSignature: previousSignature/);
+  assert.match(calls[0]?.args[1] ?? '', /runtimeEvidenceAuthority: 'broker-v2'/);
+  assert.match(calls[0]?.args[1] ?? '', /if \(payload\.kind === 'violation'\) appendViolation/);
+  assert.doesNotMatch(calls[0]?.args[1] ?? '', /\n\s+appendEvidence\(payload\);/);
 });
 
 test('managed Metro proves a cross-platform listener belongs to the spawned launcher', async () => {
