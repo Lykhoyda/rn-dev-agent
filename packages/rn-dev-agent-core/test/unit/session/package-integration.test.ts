@@ -612,7 +612,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     );
     assert.equal(syncSemantics.length, 3);
     assert.equal(workerSemantics.length, 4, JSON.stringify(semantics));
-    assert.equal(forkMessageSemantics.length, 12);
+    assert.equal(forkMessageSemantics.length, 18);
     assert.equal(workerMessageSemantics.length, 4);
     assert.equal(new Set(forkMessageSemantics.map((entry) => entry.recipient)).size, 4);
     assert.equal(new Set(workerMessageSemantics.map((entry) => entry.recipient)).size, 4);
@@ -624,7 +624,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     assert.ok(
       [...Map.groupBy(forkMessageSemantics, (entry) => entry.recipient).values()].every(
         (entries) =>
-          ['1,2', '1,2,3,4'].includes(
+          ['1,2,3', '1,2,3,4,5,6'].includes(
             entries.map((entry) => entry.sequence).join(','),
           ),
       ),
@@ -656,6 +656,88 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     assert.ok(
       lifecycleSemantics.some(
         (entry) => entry.mode === 'worker-lifecycle' && entry.sequence === 2,
+      ),
+    );
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro fences underlying descendant constructors and native IPC controls', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-underlying-boundaries-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const childEntry = join(root, 'child.cjs');
+    const workerEntry = join(root, 'worker.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(
+      childEntry,
+      "const channelSymbol = Object.getOwnPropertySymbols(process).find((symbol) => symbol.description === 'kChannelHandle'); const channel = process[channelSymbol]; for (const name of ['readStop', 'readStart']) { let owner = channel; while (owner && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner); if (owner) owner[name].call(channel); } process.once('message', () => process.send({ acknowledged: true }, (error) => { if (error) process.exit(11); }));",
+    );
+    writeFileSync(workerEntry, 'process.exit(0);\n');
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const workerThreads = require('node:worker_threads'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => new childProcess.ChildProcess().spawn({ file: process.execPath, args: [process.execPath, ${JSON.stringify(childEntry)}] })); const Worker = workerThreads.Worker; if (Object.getPrototypeOf(Worker) !== Function.prototype) throw new Error('Worker constructor prototype escaped'); const inheritedWorker = Worker.prototype.constructor; if (inheritedWorker !== Worker) throw new Error('Worker prototype constructor escaped'); unsupported(() => new inheritedWorker(${JSON.stringify(workerEntry)}, { execArgv: [], stdin: true })); const worker = new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('authenticated Worker failed'))); }); const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'] }); const channelSymbol = Object.getOwnPropertySymbols(child).find((symbol) => symbol.description === 'kChannelHandle'); const channel = child[channelSymbol]; let shutdownOwner = channel; while (shutdownOwner && !Object.hasOwn(shutdownOwner, 'shutdown')) shutdownOwner = Object.getPrototypeOf(shutdownOwner); if (shutdownOwner) unsupported(() => shutdownOwner.shutdown.call(channel, {})); for (const name of ['readStop', 'readStart']) { let owner = channel; while (owner && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner); if (owner) owner[name].call(channel); } const acknowledged = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', (message) => message.acknowledged ? resolve() : reject(new Error('child response changed'))); }); const completed = new Promise((resolve, reject) => child.send({ ready: true }, (error) => error ? reject(error) : resolve())); await Promise.all([acknowledged, completed]); let closeOwner = channel; while (closeOwner && !Object.hasOwn(closeOwner, 'close')) closeOwner = Object.getPrototypeOf(closeOwner); const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('child failed'))); }); closeOwner.close.call(channel); await exited; })().catch((error) => { console.error(error); process.exit(1); });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const messageSemantics = readFileSync(runtimeLoads, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.kind === 'semantics')
+      .map((entry) => JSON.parse(entry.value))
+      .filter((entry) => entry.mode === 'fork-message');
+    assert.equal(messageSemantics.length, 3);
+    assert.ok(
+      [...Map.groupBy(messageSemantics, (entry) => entry.recipient).values()].every(
+        (entries) => entries.map((entry) => entry.sequence).join(',') === '1,2,3',
+      ),
+    );
+    const nativeSemantics = readFileSync(runtimeLoads, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.kind === 'semantics')
+      .map((entry) => JSON.parse(entry.value))
+      .filter((entry) => entry.mode === 'native-channel');
+    assert.ok(nativeSemantics.length >= 10);
+    assert.ok(
+      [...Map.groupBy(nativeSemantics, (entry) => entry.recipient).values()].every(
+        (entries) =>
+          entries.map((entry) => entry.sequence).join(',') ===
+          Array.from({ length: entries.length }, (_, index) => index + 1).join(','),
       ),
     );
   } finally {

@@ -111,6 +111,11 @@ const descendantMessageContext = descendantNonce
       sequence: 0,
       sendDepth: 0,
       nativeWriteDepth: 0,
+      nativeControlDepth: 0,
+      nativeControlContext: lifecycleContext(
+        'native-channel',
+        'parent:' + descendantNonce,
+      ),
     }
   : undefined;
 if (descendantNonce) {
@@ -153,7 +158,10 @@ if (descendantNonce) {
           descendantLifecycleContext,
           'channel-close',
           undefined,
-          () => Reflect.apply(processChannelClose, processChannelHandle, []),
+          () =>
+            withNativeChannelControl(descendantMessageContext, () =>
+              Reflect.apply(processChannelClose, processChannelHandle, []),
+            ),
         );
       Object.defineProperty(processChannelHandle, 'close', {
         configurable: false,
@@ -166,7 +174,9 @@ if (descendantNonce) {
         enumerable: false,
         value() {
           if (descendantLifecycleContext.disconnectDepth > 0) {
-            return Reflect.apply(processDisconnectDelegate, process, []);
+            return withNativeChannelControl(descendantMessageContext, () =>
+              Reflect.apply(processDisconnectDelegate, process, []),
+            );
           }
           return authenticatedLifecycleResult(
             descendantLifecycleContext,
@@ -176,7 +186,9 @@ if (descendantNonce) {
               descendantLifecycleContext.disconnectDepth += 1;
               try {
                 process.connected = false;
-                return Reflect.apply(processDisconnectDelegate, process, []);
+                return withNativeChannelControl(descendantMessageContext, () =>
+                  Reflect.apply(processDisconnectDelegate, process, []),
+                );
               } finally {
                 descendantLifecycleContext.disconnectDepth -= 1;
               }
@@ -211,7 +223,7 @@ if (descendantNonce) {
         },
         writable: false,
       });
-      fenceNativeChannelWrites(processChannelHandle, descendantMessageContext);
+      fenceNativeChannel(processChannelHandle, descendantMessageContext, new Set(['close']));
     } else {
       Object.defineProperty(process, 'disconnect', {
         configurable: false,
@@ -317,6 +329,7 @@ const workerMessageContexts = new WeakMap();
 const workerLifecycleContexts = new WeakMap();
 const portMessageContexts = new WeakMap();
 const processLifecycleTargets = new Map();
+let childSpawnDepth = 0;
 function authenticatedMessage(context, value) {
   const snapshot = snapshotInvocation(value);
   context.sequence += 1;
@@ -370,6 +383,18 @@ function authenticatedIpcSend(
   }
   if (sendHandle !== undefined && sendHandle !== null) throw descendantError();
   const authenticated = authenticatedMessage(context, { message, options: nextOptions });
+  const completionCallback =
+    nextCallback === undefined || typeof nextCallback === 'function'
+      ? function (...callbackArgs) {
+          const authenticatedCompletion = authenticatedMessage(context, {
+            status: 'completed',
+            callbackArgs,
+          });
+          if (typeof nextCallback === 'function') {
+            return Reflect.apply(nextCallback, this, authenticatedCompletion.callbackArgs);
+          }
+        }
+      : nextCallback;
   context.sendDepth += 1;
   try {
     if (primitive) context.nativeWriteDepth += 1;
@@ -379,7 +404,7 @@ function authenticatedIpcSend(
         authenticated.message,
         undefined,
         authenticated.options,
-        nextCallback,
+        completionCallback,
       ]);
     } finally {
       if (primitive) context.nativeWriteDepth -= 1;
@@ -398,7 +423,16 @@ function authenticatedIpcSend(
     context.sendDepth -= 1;
   }
 }
-function fenceNativeChannelWrites(handle, context) {
+function withNativeChannelControl(context, run) {
+  if (!context) throw descendantError();
+  context.nativeControlDepth += 1;
+  try {
+    return run();
+  } finally {
+    context.nativeControlDepth -= 1;
+  }
+}
+function fenceNativeChannel(handle, context, allowedOwnControls = new Set()) {
   if (!handle || !context) throw descendantError();
   nativeChannelContexts.set(handle, context);
   for (
@@ -409,7 +443,11 @@ function fenceNativeChannelWrites(handle, context) {
     if (fencedNativeChannelPrototypes.has(owner)) continue;
     fencedNativeChannelPrototypes.add(owner);
     for (const name of Object.getOwnPropertyNames(owner)) {
-      if (!name.startsWith('write')) continue;
+      const isWrite = name.startsWith('write');
+      const isControl = ['close', 'readStart', 'readStop', 'shutdown'].includes(name);
+      if ((!isWrite && !isControl) || (owner === handle && allowedOwnControls.has(name))) {
+        continue;
+      }
       const descriptor = Object.getOwnPropertyDescriptor(owner, name);
       if (typeof descriptor?.value !== 'function') continue;
       const implementation = descriptor.value;
@@ -418,7 +456,18 @@ function fenceNativeChannelWrites(handle, context) {
         enumerable: false,
         value(...args) {
           const channelContext = nativeChannelContexts.get(this);
-          if (channelContext && channelContext.nativeWriteDepth <= 0) throw descendantError();
+          if (channelContext && isWrite && channelContext.nativeWriteDepth <= 0) {
+            throw descendantError();
+          }
+          if (channelContext && isControl && channelContext.nativeControlDepth <= 0) {
+            if (name === 'shutdown') throw descendantError();
+            return authenticatedLifecycleResult(
+              channelContext.nativeControlContext,
+              name,
+              undefined,
+              () => Reflect.apply(implementation, this, args),
+            );
+          }
           return Reflect.apply(implementation, this, args);
         },
         writable: false,
@@ -678,6 +727,16 @@ function authenticatedLifecyclePromise(context, action, value, run) {
 }
 function installMessageFences() {
   const childPrototype = childProcess.ChildProcess.prototype;
+  const originalChildSpawn = childPrototype.spawn;
+  Object.defineProperty(childPrototype, 'spawn', {
+    configurable: false,
+    enumerable: true,
+    value(options) {
+      if (childSpawnDepth <= 0) throw descendantError();
+      return Reflect.apply(originalChildSpawn, this, [options]);
+    },
+    writable: false,
+  });
   const authenticatedChildSend = function (message, sendHandle, options, callback) {
     const implementation = childSendImplementations.get(this);
     if (!implementation || !childMessageContexts.has(this)) throw descendantError();
@@ -829,7 +888,10 @@ function installMessageFences() {
       childLifecycleContexts.get(this),
       'disconnect',
       undefined,
-      () => Reflect.apply(childDisconnectImplementations.get(this), this, []),
+      () =>
+        withNativeChannelControl(childMessageContexts.get(this), () =>
+          Reflect.apply(childDisconnectImplementations.get(this), this, []),
+        ),
     );
   };
   Object.defineProperty(childPrototype, 'disconnect', {
@@ -1006,7 +1068,13 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       if (mode === 'fork') {
         options.execPath = nodeExecutable;
       }
-      const child = Reflect.apply(original, this, authenticatedArgs);
+      childSpawnDepth += 1;
+      let child;
+      try {
+        child = Reflect.apply(original, this, authenticatedArgs);
+      } finally {
+        childSpawnDepth -= 1;
+      }
       if (mode === 'sync') {
         recordChildLaunch(nonce, child, semantics);
       } else if (typeof child?.once === 'function') {
@@ -1037,12 +1105,14 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
           sequence: 0,
           sendDepth: 0,
           nativeWriteDepth: 0,
+          nativeControlDepth: 0,
+          nativeControlContext: lifecycleContext('native-channel', nonce),
         };
         childMessageContexts.set(child, messageContext);
         const channelHandleSymbol = Object.getOwnPropertySymbols(child).find(
           (symbol) => symbol.description === 'kChannelHandle',
         );
-        fenceNativeChannelWrites(child[channelHandleSymbol], messageContext);
+        fenceNativeChannel(child[channelHandleSymbol], messageContext);
       }
       return child;
     },
@@ -1062,44 +1132,46 @@ function rejectChildProcessMethod(name) {
 function fenceWorkers() {
   const OriginalWorker = workerThreads.Worker;
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
-  class AuthenticatedWorker extends OriginalWorker {
-    constructor(filename, options = {}) {
-      const capturedOptions = { ...options };
-      if (
-        capturedOptions.eval ||
-        (typeof filename === 'string' && filename.startsWith('data:')) ||
-        (filename instanceof URL && filename.protocol === 'data:')
-      ) {
-        throw descendantError();
-      }
-      const nonce = randomBytes(16).toString('hex');
-      const requestedExecArgv = Array.isArray(capturedOptions.execArgv)
-        ? [...capturedOptions.execArgv]
-        : [...process.execArgv];
-      const normalizedExecArgv = requireSafeExecArgv(requestedExecArgv);
-      if (Array.isArray(capturedOptions.transferList) && capturedOptions.transferList.length > 0) {
-        throw descendantError();
-      }
-      if (capturedOptions.stdin || capturedOptions.signal !== undefined) throw descendantError();
-      const entrypoint = requireFileBackedEntrypoint(
-        filename instanceof URL ? fileURLToPath(filename) : filename,
-      );
-      const invocationOptions = { ...capturedOptions };
-      delete invocationOptions.execArgv;
-      delete invocationOptions.transferList;
-      invocationOptions.env = Object.fromEntries(
-        snapshotInvocation(normalizedInvocationEnvironment(capturedOptions.env)).value,
-      );
-      const authenticatedInvocationOptions = snapshotInvocation(invocationOptions).value;
-      const semantics = executionSemantics(
-        'worker',
-        entrypoint,
-        normalizedExecArgv,
-        {
-          options: authenticatedInvocationOptions,
-        },
-      );
-      super(entrypoint, {
+  function AuthenticatedWorker(filename, options = {}) {
+    if (!new.target) throw descendantError();
+    const capturedOptions = { ...options };
+    if (
+      capturedOptions.eval ||
+      (typeof filename === 'string' && filename.startsWith('data:')) ||
+      (filename instanceof URL && filename.protocol === 'data:')
+    ) {
+      throw descendantError();
+    }
+    const nonce = randomBytes(16).toString('hex');
+    const requestedExecArgv = Array.isArray(capturedOptions.execArgv)
+      ? [...capturedOptions.execArgv]
+      : [...process.execArgv];
+    const normalizedExecArgv = requireSafeExecArgv(requestedExecArgv);
+    if (Array.isArray(capturedOptions.transferList) && capturedOptions.transferList.length > 0) {
+      throw descendantError();
+    }
+    if (capturedOptions.stdin || capturedOptions.signal !== undefined) throw descendantError();
+    const entrypoint = requireFileBackedEntrypoint(
+      filename instanceof URL ? fileURLToPath(filename) : filename,
+    );
+    const invocationOptions = { ...capturedOptions };
+    delete invocationOptions.execArgv;
+    delete invocationOptions.transferList;
+    invocationOptions.env = Object.fromEntries(
+      snapshotInvocation(normalizedInvocationEnvironment(capturedOptions.env)).value,
+    );
+    const authenticatedInvocationOptions = snapshotInvocation(invocationOptions).value;
+    const semantics = executionSemantics(
+      'worker',
+      entrypoint,
+      normalizedExecArgv,
+      {
+        options: authenticatedInvocationOptions,
+      },
+    );
+    const worker = Reflect.construct(OriginalWorker, [
+      entrypoint,
+      {
         ...authenticatedInvocationOptions,
         env: authenticatedChildEnvironment(
           Object.entries(authenticatedInvocationOptions.env),
@@ -1107,19 +1179,32 @@ function fenceWorkers() {
           semantics,
         ),
         execArgv: ['--require', authorityPreload, ...requestedExecArgv],
-      });
-      workerMessageContexts.set(this, {
-        mode: 'worker-message',
-        recipient: nonce,
-        sequence: 0,
-      });
-      workerLifecycleContexts.set(this, lifecycleContext('worker-lifecycle', nonce));
-      persistLoaderObservation(
-        'launch',
-        nonce + ':worker:' + this.threadId + ':' + semantics,
-      );
-    }
+      },
+    ]);
+    workerMessageContexts.set(worker, {
+      mode: 'worker-message',
+      recipient: nonce,
+      sequence: 0,
+    });
+    workerLifecycleContexts.set(worker, lifecycleContext('worker-lifecycle', nonce));
+    persistLoaderObservation(
+      'launch',
+      nonce + ':worker:' + worker.threadId + ':' + semantics,
+    );
+    return worker;
   }
+  Object.defineProperty(AuthenticatedWorker, 'prototype', {
+    configurable: false,
+    value: OriginalWorker.prototype,
+    writable: false,
+  });
+  Object.setPrototypeOf(AuthenticatedWorker, Function.prototype);
+  Object.defineProperty(OriginalWorker.prototype, 'constructor', {
+    configurable: false,
+    enumerable: false,
+    value: AuthenticatedWorker,
+    writable: false,
+  });
   Object.defineProperty(workerThreads, 'Worker', {
     configurable: false,
     enumerable: true,
