@@ -18,7 +18,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, fork, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import {
@@ -460,7 +460,7 @@ test('Metro preload records child-process and worker-thread module loads', () =>
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); for (const args of [['-e', 'process.exit(0)'], ['--eval=process.exit(0)'], ['--no-warnings'], ['--', '-'], ['--enable-source-maps']]) { try { childProcess.spawnSync(process.execPath, args); process.exit(4); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const child = childProcess.spawnSync(process.execPath, ['--no-warnings', ${JSON.stringify(childEntry)}, '-profile'], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); const forked = childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv }); if (forked.stdout !== null) process.exit(6); await new Promise((resolve, reject) => { forked.once('error', reject); forked.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); const workerThreads = require('node:worker_threads'); for (const options of [{ eval: true }, { execArgv: ['--require', ${JSON.stringify(childModule)}] }]) { try { new workerThreads.Worker('void 0', options); process.exit(5); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const worker = new workerThreads.Worker(${JSON.stringify(threadEntry)}, { execArgv: [] }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); require(${JSON.stringify(postWorkerModule)}); })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({ maxWorkers: 4 }); const childProcess = require('node:child_process'); const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['path', 'systemroot'].includes(key.toLowerCase()))); let rejected; try { childProcess.spawnSync('unauthenticated-descendant', []); } catch (error) { rejected = error; } if (rejected?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(3); for (const args of [['-e', 'process.exit(0)'], ['--eval=process.exit(0)'], ['--no-warnings'], ['--', '-'], ['--enable-source-maps'], ['--run=unsafe', ${JSON.stringify(childEntry)}], ['--env-file=unsafe.env', ${JSON.stringify(childEntry)}], ['--require=${childModule}', ${JSON.stringify(childEntry)}]]) { try { childProcess.spawnSync(process.execPath, args); process.exit(4); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const child = childProcess.spawnSync(process.execPath, ['--conditions=development', '--no-warnings', ${JSON.stringify(childEntry)}, '-profile'], { env: childEnv }); if (child.status !== 0) process.exit(child.status || 1); try { childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv, execArgv: ['-e', 'process.exit(0)'] }); process.exit(7); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } const forked = childProcess.fork(${JSON.stringify(childEntry)}, [], { env: childEnv, execArgv: ['--no-warnings'] }); if (forked.stdout !== null) process.exit(6); await new Promise((resolve, reject) => { forked.once('error', reject); forked.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); const workerThreads = require('node:worker_threads'); for (const options of [{ eval: true }, { execArgv: ['--require', ${JSON.stringify(childModule)}] }]) { try { new workerThreads.Worker('void 0', options); process.exit(5); } catch (error) { if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } } const worker = new workerThreads.Worker(${JSON.stringify(threadEntry)}, { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); require(${JSON.stringify(postWorkerModule)}); })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -517,6 +517,75 @@ test('Metro preload records child-process and worker-thread module loads', () =>
     if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
     rmSync(root, { force: true, recursive: true });
     rmSync(external, { force: true, recursive: true });
+  }
+});
+
+test('Metro preload linearizes evidence head barriers through the owner pipe', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-barrier-'));
+  try {
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const childEntry = join(root, 'child.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(childEntry, "process.send?.('ready'); setInterval(() => {}, 1000);\n");
+    const challenge = 'ab'.repeat(32);
+    const environment = metroPolicyEnvironment(adapterPath);
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const child = fork(childEntry, [], {
+      env: environment,
+      execArgv: ['--require', adapterPath],
+      silent: true,
+      stdio: [
+        'ignore',
+        'pipe',
+        'pipe',
+        'ipc',
+        'ignore',
+        'ignore',
+        'ignore',
+        'ignore',
+        'ignore',
+        'pipe',
+      ],
+    });
+    const evidence = child.stdio[9]!;
+    evidence.setEncoding('utf8');
+    let childStderr = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk) => {
+      childStderr += chunk;
+    });
+    const observed = new Promise<string>((resolve, reject) => {
+      let buffered = '';
+      evidence.on('data', (chunk) => {
+        buffered += chunk;
+        let newline;
+        while ((newline = buffered.indexOf('\n')) >= 0) {
+          const line = buffered.slice(0, newline);
+          buffered = buffered.slice(newline + 1);
+          if (line && JSON.parse(line).kind === 'barrier') resolve(line);
+        }
+      });
+      child.once('error', reject);
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once('message', (message) => {
+        if (message === 'ready') resolve();
+      });
+      child.once('exit', (code) => {
+        reject(new Error(`barrier fixture exited ${code}: ${childStderr}`));
+      });
+    });
+    child.send({ type: 'rn-dev-agent:evidence-barrier', challenge });
+    const payload = JSON.parse(await observed);
+    assert.equal(payload.kind, 'barrier');
+    assert.equal(payload.value, challenge);
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    child.kill();
+    await exited;
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 });
 

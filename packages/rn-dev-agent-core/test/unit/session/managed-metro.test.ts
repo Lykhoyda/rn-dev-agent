@@ -163,14 +163,10 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE,
     '/tmp/metro-runtime-evidence.jsonl',
   );
-  const runtimeEvidenceSocket =
-    process.platform === 'win32'
-      ? '\\\\.\\pipe\\rn-dev-agent-metro-a'
-      : '/tmp/metro-runtime-evidence.sock';
-  assert.equal(
-    calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET,
-    runtimeEvidenceSocket,
-  );
+  const runtimeEvidenceSocket = binding.runtimeEvidenceSocket;
+  assert.equal(calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET, runtimeEvidenceSocket);
+  assert.ok(runtimeEvidenceSocket.length < 100);
+  assert.doesNotMatch(runtimeEvidenceSocket, /metro-a/);
   assert.equal(
     calls[0]?.env?.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS,
     [
@@ -184,6 +180,10 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(binding.runtimeEvidencePath, '/tmp/metro-runtime-evidence.jsonl');
   assert.equal(binding.runtimeEvidenceSocket, runtimeEvidenceSocket);
   assert.match(calls[0]?.args[1] ?? '', /childOutcome === null \|\| !evidenceFinished/);
+  assert.match(calls[0]?.args[1] ?? '', /rn-dev-agent:evidence-barrier/);
+  assert.match(calls[0]?.args[1] ?? '', /stream ended before Metro exited/);
+  assert.match(calls[0]?.args[1] ?? '', /connection\.setTimeout/);
+  assert.match(calls[0]?.args[1] ?? '', /for \(const connection of headConnections\)/);
   assert.match(calls[0]?.args[1] ?? '', /journalSignature: previousSignature/);
 });
 

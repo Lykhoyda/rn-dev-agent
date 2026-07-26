@@ -62270,7 +62270,7 @@ init_process_birth();
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
-const { closeSync, openSync, rmSync, writeSync } = require('node:fs');
+const { chmodSync, closeSync, openSync, rmSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
@@ -62307,9 +62307,35 @@ function appendViolation(value) {
   });
 }
 if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+const headConnections = new Set();
+const pendingHeads = new Map();
+let child;
+function closeHeadConnection(connection) {
+  headConnections.delete(connection);
+  for (const [challenge, pending] of pendingHeads) {
+    if (pending === connection) pendingHeads.delete(challenge);
+  }
+}
+function respondWithHead(connection, challenge) {
+  const payload = {
+    version: 1,
+    sessionId,
+    metroInstanceId,
+    challenge,
+    sequence,
+    journalSignature: previousSignature,
+  };
+  const signature = createHmac('sha256', capability)
+    .update(JSON.stringify(payload))
+    .digest('hex');
+  connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+}
 const headServer = createServer((connection) => {
+  headConnections.add(connection);
   let request = '';
   connection.setEncoding('utf8');
+  connection.setTimeout(1500, () => connection.destroy());
+  connection.once('close', () => closeHeadConnection(connection));
   connection.on('data', (chunk) => {
     request += chunk;
     if (request.length > 256) {
@@ -62323,22 +62349,24 @@ const headServer = createServer((connection) => {
       connection.destroy();
       return;
     }
-    const payload = {
-      version: 1,
-      sessionId,
-      metroInstanceId,
-      challenge,
-      sequence,
-      journalSignature: previousSignature,
-    };
-    const signature = createHmac('sha256', capability)
-      .update(JSON.stringify(payload))
-      .digest('hex');
-    connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+    if (pendingHeads.has(challenge) || evidenceFinished || !child?.connected) {
+      connection.destroy();
+      return;
+    }
+    pendingHeads.set(challenge, connection);
+    try {
+      child.send({ type: 'rn-dev-agent:evidence-barrier', challenge }, (error) => {
+        if (error) connection.destroy();
+      });
+    } catch {
+      connection.destroy();
+    }
   });
 });
 headServer.once('error', () => process.exit(1));
-headServer.listen(evidenceSocket);
+headServer.listen(evidenceSocket, () => {
+  if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
+});
 const childEnvironment = {
   ...process.env,
   NODE_OPTIONS: childNodeOptions,
@@ -62346,10 +62374,10 @@ const childEnvironment = {
 };
 delete childEnvironment.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
 delete childEnvironment.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
-const child = spawn(executable, args, {
+child = spawn(executable, args, {
   cwd: process.cwd(),
   env: childEnvironment,
-  stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
+  stdio: ['inherit', 'inherit', 'inherit', 'ipc', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
 });
 const evidence = child.stdio[evidenceDescriptor];
 let childOutcome = null;
@@ -62359,6 +62387,8 @@ function finishLauncher() {
   if (launcherFinished || childOutcome === null || !evidenceFinished) return;
   launcherFinished = true;
   if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  for (const connection of headConnections) connection.destroy();
+  pendingHeads.clear();
   closeSync(journalDescriptor);
   headServer.close(() => {
     if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
@@ -62367,6 +62397,9 @@ function finishLauncher() {
 }
 function finishEvidence() {
   if (evidenceFinished) return;
+  if (child.exitCode === null && child.signalCode === null) {
+    appendViolation('Metro runtime evidence stream ended before Metro exited');
+  }
   evidenceFinished = true;
   finishLauncher();
 }
@@ -62389,13 +62422,21 @@ evidence.on('data', (chunk) => {
         payload.version !== 1 ||
         payload.sessionId !== sessionId ||
         payload.metroInstanceId !== metroInstanceId ||
-        !['input', 'violation', 'launch', 'attestation'].includes(payload.kind) ||
+        !['input', 'violation', 'launch', 'attestation', 'barrier'].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
           ? typeof payload.digest !== 'string'
           : payload.digest !== null)
       ) {
         throw new Error('invalid evidence');
+      }
+      if (payload.kind === 'barrier') {
+        const connection = pendingHeads.get(payload.value);
+        if (connection) {
+          pendingHeads.delete(payload.value);
+          respondWithHead(connection, payload.value);
+        }
+        continue;
       }
       appendEvidence(payload);
     } catch {
@@ -70556,6 +70597,18 @@ if (descendantNonce) {
   persistLoaderObservation('attestation', descendantNonce + ':' + identity);
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
 }
+if (workerThreads.isMainThread && typeof process.send === 'function') {
+  process.on('message', (message) => {
+    if (
+      message?.type === 'rn-dev-agent:evidence-barrier' &&
+      typeof message.challenge === 'string' &&
+      /^[a-f0-9]{64}$/.test(message.challenge)
+    ) {
+      persistLoaderObservation('barrier', message.challenge);
+    }
+  });
+  process.channel?.unref();
+}
 if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 function authenticatedChildEnvironment(environment, nonce) {
   const nextEnvironment = {};
@@ -70641,9 +70694,7 @@ function isInlineNodeOption(value) {
     option.startsWith('--input-type=')
   );
 }
-function requireFileBackedNodeArguments(args, cwd) {
-  if (!Array.isArray(args)) throw descendantError();
-  const booleanOptions = new Set([
+const safeBooleanNodeOptions = new Set([
     '--enable-source-maps',
     '--experimental-strip-types',
     '--experimental-transform-types',
@@ -70654,15 +70705,29 @@ function requireFileBackedNodeArguments(args, cwd) {
     '--trace-deprecation',
     '--trace-uncaught',
     '--trace-warnings',
-  ]);
-  const valueOptions = new Set([
-    '--conditions',
-    '--import',
-    '--loader',
-    '--require',
-    '--title',
-    '-r',
-  ]);
+]);
+const safeValueNodeOptions = new Set(['--conditions', '--title']);
+function consumeSafeNodeOption(args, index) {
+  const argument = args[index];
+  if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
+  const normalized = argument.replaceAll('_', '-');
+  const equals = normalized.indexOf('=');
+  const option = equals < 0 ? normalized : normalized.slice(0, equals);
+  if (safeBooleanNodeOptions.has(option)) {
+    if (equals >= 0) throw descendantError();
+    return index;
+  }
+  if (!safeValueNodeOptions.has(option)) throw descendantError();
+  if (equals >= 0) {
+    if (normalized.slice(equals + 1).length === 0) throw descendantError();
+    return index;
+  }
+  const value = args[index + 1];
+  if (typeof value !== 'string' || value.length === 0) throw descendantError();
+  return index + 1;
+}
+function requireFileBackedNodeArguments(args, cwd) {
+  if (!Array.isArray(args)) throw descendantError();
   let entrypoint;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -70675,16 +70740,7 @@ function requireFileBackedNodeArguments(args, cwd) {
       entrypoint = argument;
       break;
     }
-    const normalized = argument.replaceAll('_', '-');
-    const equals = normalized.indexOf('=');
-    const option = equals < 0 ? normalized : normalized.slice(0, equals);
-    if (equals >= 0 || booleanOptions.has(option)) continue;
-    if (valueOptions.has(option)) {
-      index += 1;
-      if (index >= args.length || typeof args[index] !== 'string') throw descendantError();
-      continue;
-    }
-    throw descendantError();
+    index = consumeSafeNodeOption(args, index);
   }
   requireFileBackedEntrypoint(entrypoint, cwd);
 }
@@ -70700,17 +70756,10 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
     throw descendantError();
   }
 }
-function requireSafeWorkerExecArgv(execArgv) {
-  if (execArgv.some(isInlineNodeOption)) throw descendantError();
-  for (const argument of execArgv) {
-    const option = typeof argument === 'string' ? argument.split('=', 1)[0] : '';
-    if (
-      ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(
-        option.replaceAll('_', '-'),
-      )
-    ) {
-      throw descendantError();
-    }
+function requireSafeExecArgv(execArgv) {
+  if (!Array.isArray(execArgv)) throw descendantError();
+  for (let index = 0; index < execArgv.length; index += 1) {
+    index = consumeSafeNodeOption(execArgv, index);
   }
 }
 function recordChildLaunch(nonce, child) {
@@ -70734,6 +70783,9 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       if (mode === 'fork') {
         if (options.execPath) requireNodeExecutable(options.execPath, options);
         requireFileBackedEntrypoint(args[0], options.cwd);
+        requireSafeExecArgv(
+          Array.isArray(options.execArgv) ? options.execArgv : process.execArgv,
+        );
         options.execPath = nodeExecutable;
         if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
           options.stdio[3] = 'ipc';
@@ -70776,7 +70828,7 @@ function fenceWorkers() {
       const requestedExecArgv = Array.isArray(options.execArgv)
         ? [...options.execArgv]
         : [...process.execArgv];
-      requireSafeWorkerExecArgv(requestedExecArgv);
+      requireSafeExecArgv(requestedExecArgv);
       super(filename, {
         ...options,
         env: authenticatedChildEnvironment(options.env, nonce),

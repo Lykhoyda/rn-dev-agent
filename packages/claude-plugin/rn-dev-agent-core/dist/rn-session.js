@@ -10690,7 +10690,7 @@ init_process_birth();
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHmac } = require('node:crypto');
-const { closeSync, openSync, rmSync, writeSync } = require('node:fs');
+const { chmodSync, closeSync, openSync, rmSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
 const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
@@ -10727,9 +10727,35 @@ function appendViolation(value) {
   });
 }
 if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
+const headConnections = new Set();
+const pendingHeads = new Map();
+let child;
+function closeHeadConnection(connection) {
+  headConnections.delete(connection);
+  for (const [challenge, pending] of pendingHeads) {
+    if (pending === connection) pendingHeads.delete(challenge);
+  }
+}
+function respondWithHead(connection, challenge) {
+  const payload = {
+    version: 1,
+    sessionId,
+    metroInstanceId,
+    challenge,
+    sequence,
+    journalSignature: previousSignature,
+  };
+  const signature = createHmac('sha256', capability)
+    .update(JSON.stringify(payload))
+    .digest('hex');
+  connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+}
 const headServer = createServer((connection) => {
+  headConnections.add(connection);
   let request = '';
   connection.setEncoding('utf8');
+  connection.setTimeout(1500, () => connection.destroy());
+  connection.once('close', () => closeHeadConnection(connection));
   connection.on('data', (chunk) => {
     request += chunk;
     if (request.length > 256) {
@@ -10743,22 +10769,24 @@ const headServer = createServer((connection) => {
       connection.destroy();
       return;
     }
-    const payload = {
-      version: 1,
-      sessionId,
-      metroInstanceId,
-      challenge,
-      sequence,
-      journalSignature: previousSignature,
-    };
-    const signature = createHmac('sha256', capability)
-      .update(JSON.stringify(payload))
-      .digest('hex');
-    connection.end(JSON.stringify({ ...payload, signature }) + '\n');
+    if (pendingHeads.has(challenge) || evidenceFinished || !child?.connected) {
+      connection.destroy();
+      return;
+    }
+    pendingHeads.set(challenge, connection);
+    try {
+      child.send({ type: 'rn-dev-agent:evidence-barrier', challenge }, (error) => {
+        if (error) connection.destroy();
+      });
+    } catch {
+      connection.destroy();
+    }
   });
 });
 headServer.once('error', () => process.exit(1));
-headServer.listen(evidenceSocket);
+headServer.listen(evidenceSocket, () => {
+  if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
+});
 const childEnvironment = {
   ...process.env,
   NODE_OPTIONS: childNodeOptions,
@@ -10766,10 +10794,10 @@ const childEnvironment = {
 };
 delete childEnvironment.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
 delete childEnvironment.RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS;
-const child = spawn(executable, args, {
+child = spawn(executable, args, {
   cwd: process.cwd(),
   env: childEnvironment,
-  stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
+  stdio: ['inherit', 'inherit', 'inherit', 'ipc', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
 });
 const evidence = child.stdio[evidenceDescriptor];
 let childOutcome = null;
@@ -10779,6 +10807,8 @@ function finishLauncher() {
   if (launcherFinished || childOutcome === null || !evidenceFinished) return;
   launcherFinished = true;
   if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  for (const connection of headConnections) connection.destroy();
+  pendingHeads.clear();
   closeSync(journalDescriptor);
   headServer.close(() => {
     if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
@@ -10787,6 +10817,9 @@ function finishLauncher() {
 }
 function finishEvidence() {
   if (evidenceFinished) return;
+  if (child.exitCode === null && child.signalCode === null) {
+    appendViolation('Metro runtime evidence stream ended before Metro exited');
+  }
   evidenceFinished = true;
   finishLauncher();
 }
@@ -10809,13 +10842,21 @@ evidence.on('data', (chunk) => {
         payload.version !== 1 ||
         payload.sessionId !== sessionId ||
         payload.metroInstanceId !== metroInstanceId ||
-        !['input', 'violation', 'launch', 'attestation'].includes(payload.kind) ||
+        !['input', 'violation', 'launch', 'attestation', 'barrier'].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
           ? typeof payload.digest !== 'string'
           : payload.digest !== null)
       ) {
         throw new Error('invalid evidence');
+      }
+      if (payload.kind === 'barrier') {
+        const connection = pendingHeads.get(payload.value);
+        if (connection) {
+          pendingHeads.delete(payload.value);
+          respondWithHead(connection, payload.value);
+        }
+        continue;
       }
       appendEvidence(payload);
     } catch {
@@ -10978,7 +11019,8 @@ async function startManagedMetro(input, dependencies = {}) {
   }
   const authorityPreload = join3(input.appRoot, ".rn-agent", "integration", "rn-session-metro.cjs");
   const runtimeEvidencePath = join3(input.runtimeRoot, "metro-runtime-evidence.jsonl");
-  const runtimeEvidenceSocket = process.platform === "win32" ? `\\\\.\\pipe\\rn-dev-agent-${instanceId.replace(/[^a-zA-Z0-9_-]/g, "-")}` : join3(input.runtimeRoot, "metro-runtime-evidence.sock");
+  const runtimeEvidenceEndpointId = createHmac3("sha256", input.signerCapability).update(`metro-runtime-evidence\0${instanceId}`).digest("hex").slice(0, 32);
+  const runtimeEvidenceSocket = process.platform === "win32" ? `\\\\.\\pipe\\rn-dev-agent-${runtimeEvidenceEndpointId}` : `/tmp/rn-dev-agent-${runtimeEvidenceEndpointId}.sock`;
   const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`].filter(Boolean).join(" ");
   const log = openSync(join3(input.runtimeRoot, "metro.log"), "a", 384);
   const child = (dependencies.spawnProcess ?? spawn)(process.execPath, ["-e", METRO_LAUNCHER_SOURCE], {

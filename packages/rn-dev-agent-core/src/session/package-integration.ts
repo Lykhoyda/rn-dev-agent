@@ -128,6 +128,18 @@ if (descendantNonce) {
   persistLoaderObservation('attestation', descendantNonce + ':' + identity);
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
 }
+if (workerThreads.isMainThread && typeof process.send === 'function') {
+  process.on('message', (message) => {
+    if (
+      message?.type === 'rn-dev-agent:evidence-barrier' &&
+      typeof message.challenge === 'string' &&
+      /^[a-f0-9]{64}$/.test(message.challenge)
+    ) {
+      persistLoaderObservation('barrier', message.challenge);
+    }
+  });
+  process.channel?.unref();
+}
 if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
 function authenticatedChildEnvironment(environment, nonce) {
   const nextEnvironment = {};
@@ -213,9 +225,7 @@ function isInlineNodeOption(value) {
     option.startsWith('--input-type=')
   );
 }
-function requireFileBackedNodeArguments(args, cwd) {
-  if (!Array.isArray(args)) throw descendantError();
-  const booleanOptions = new Set([
+const safeBooleanNodeOptions = new Set([
     '--enable-source-maps',
     '--experimental-strip-types',
     '--experimental-transform-types',
@@ -226,15 +236,29 @@ function requireFileBackedNodeArguments(args, cwd) {
     '--trace-deprecation',
     '--trace-uncaught',
     '--trace-warnings',
-  ]);
-  const valueOptions = new Set([
-    '--conditions',
-    '--import',
-    '--loader',
-    '--require',
-    '--title',
-    '-r',
-  ]);
+]);
+const safeValueNodeOptions = new Set(['--conditions', '--title']);
+function consumeSafeNodeOption(args, index) {
+  const argument = args[index];
+  if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
+  const normalized = argument.replaceAll('_', '-');
+  const equals = normalized.indexOf('=');
+  const option = equals < 0 ? normalized : normalized.slice(0, equals);
+  if (safeBooleanNodeOptions.has(option)) {
+    if (equals >= 0) throw descendantError();
+    return index;
+  }
+  if (!safeValueNodeOptions.has(option)) throw descendantError();
+  if (equals >= 0) {
+    if (normalized.slice(equals + 1).length === 0) throw descendantError();
+    return index;
+  }
+  const value = args[index + 1];
+  if (typeof value !== 'string' || value.length === 0) throw descendantError();
+  return index + 1;
+}
+function requireFileBackedNodeArguments(args, cwd) {
+  if (!Array.isArray(args)) throw descendantError();
   let entrypoint;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -247,16 +271,7 @@ function requireFileBackedNodeArguments(args, cwd) {
       entrypoint = argument;
       break;
     }
-    const normalized = argument.replaceAll('_', '-');
-    const equals = normalized.indexOf('=');
-    const option = equals < 0 ? normalized : normalized.slice(0, equals);
-    if (equals >= 0 || booleanOptions.has(option)) continue;
-    if (valueOptions.has(option)) {
-      index += 1;
-      if (index >= args.length || typeof args[index] !== 'string') throw descendantError();
-      continue;
-    }
-    throw descendantError();
+    index = consumeSafeNodeOption(args, index);
   }
   requireFileBackedEntrypoint(entrypoint, cwd);
 }
@@ -272,17 +287,10 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
     throw descendantError();
   }
 }
-function requireSafeWorkerExecArgv(execArgv) {
-  if (execArgv.some(isInlineNodeOption)) throw descendantError();
-  for (const argument of execArgv) {
-    const option = typeof argument === 'string' ? argument.split('=', 1)[0] : '';
-    if (
-      ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(
-        option.replaceAll('_', '-'),
-      )
-    ) {
-      throw descendantError();
-    }
+function requireSafeExecArgv(execArgv) {
+  if (!Array.isArray(execArgv)) throw descendantError();
+  for (let index = 0; index < execArgv.length; index += 1) {
+    index = consumeSafeNodeOption(execArgv, index);
   }
 }
 function recordChildLaunch(nonce, child) {
@@ -306,6 +314,9 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       if (mode === 'fork') {
         if (options.execPath) requireNodeExecutable(options.execPath, options);
         requireFileBackedEntrypoint(args[0], options.cwd);
+        requireSafeExecArgv(
+          Array.isArray(options.execArgv) ? options.execArgv : process.execArgv,
+        );
         options.execPath = nodeExecutable;
         if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
           options.stdio[3] = 'ipc';
@@ -348,7 +359,7 @@ function fenceWorkers() {
       const requestedExecArgv = Array.isArray(options.execArgv)
         ? [...options.execArgv]
         : [...process.execArgv];
-      requireSafeWorkerExecArgv(requestedExecArgv);
+      requireSafeExecArgv(requestedExecArgv);
       super(filename, {
         ...options,
         env: authenticatedChildEnvironment(options.env, nonce),
