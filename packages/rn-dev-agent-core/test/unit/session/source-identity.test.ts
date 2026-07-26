@@ -504,6 +504,22 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
   publishRuntimeLoads([runtimeLoadPayload, semanticsPayload]);
   const semanticIdentity = strictProofSourceIdentity(identity, dependencies);
   assert.notEqual(first.dirtyDigest, semanticIdentity.dirtyDigest);
+  const secondSemanticsPayload = {
+    ...semanticsPayload,
+    value: JSON.stringify({ mode: 'worker-message', invocationDigest: 'cd'.repeat(32) }),
+  };
+  publishRuntimeLoads([runtimeLoadPayload, semanticsPayload, secondSemanticsPayload]);
+  const orderedSemanticIdentity = strictProofSourceIdentity(identity, dependencies);
+  publishRuntimeLoads([runtimeLoadPayload, secondSemanticsPayload, semanticsPayload]);
+  assert.notEqual(
+    orderedSemanticIdentity.dirtyDigest,
+    strictProofSourceIdentity(identity, dependencies).dirtyDigest,
+  );
+  publishRuntimeLoads([runtimeLoadPayload, semanticsPayload, semanticsPayload]);
+  assert.notEqual(
+    semanticIdentity.dirtyDigest,
+    strictProofSourceIdentity(identity, dependencies).dirtyDigest,
+  );
   const launchPayload = {
     version: 1,
     sessionId: 'session',

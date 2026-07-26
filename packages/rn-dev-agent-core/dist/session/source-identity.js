@@ -266,6 +266,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     const descendantAttestations = new Set();
     const descendantSemanticDigests = new Set();
     const runtimeSemantics = new Set();
+    const orderedRuntimeSemantics = [];
     const runtimeEvidenceKeys = new Set();
     let evidenceSequence = 0;
     let previousEvidenceSignature = null;
@@ -332,6 +333,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
                 throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded');
             }
             runtimeSemantics.add(load.value);
+            orderedRuntimeSemantics.push(load.value);
             continue;
         }
         const prior = runtimeLoads.get(key);
@@ -413,7 +415,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
                 ? [candidate]
                 : [];
         }),
-        semantics: [...runtimeSemantics].sort(),
+        semantics: orderedRuntimeSemantics,
     };
 }
 function dependencyStoreRoots(identity, git, pathExists) {

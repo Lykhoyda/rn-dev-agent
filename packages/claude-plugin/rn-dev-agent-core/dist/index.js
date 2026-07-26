@@ -70706,8 +70706,8 @@ function normalizedInvocationEnvironment(environment) {
   }
   return entries.sort(([left], [right]) => left.localeCompare(right));
 }
-function authenticatedChildEnvironment(environment, nonce, semantics) {
-  const nextEnvironment = Object.fromEntries(normalizedInvocationEnvironment(environment));
+function authenticatedChildEnvironment(entries, nonce, semantics) {
+  const nextEnvironment = Object.fromEntries(entries);
   for (const [key, value] of authorityEnvironment) nextEnvironment[key] = value;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
@@ -70721,69 +70721,85 @@ function snapshotInvocation(value) {
     throw descendantError();
   }
   if (bytes.byteLength > 1024 * 1024) throw descendantError();
+  const cloned = deserialize(bytes);
+  const pending = [cloned];
+  const seen = new WeakSet();
+  while (pending.length > 0) {
+    const candidate = pending.pop();
+    if (candidate instanceof SharedArrayBuffer) throw descendantError();
+    if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) continue;
+    seen.add(candidate);
+    if (candidate instanceof Map) {
+      for (const [key, entry] of candidate) pending.push(key, entry);
+      continue;
+    }
+    if (candidate instanceof Set) {
+      pending.push(...candidate);
+      continue;
+    }
+    pending.push(...Object.values(candidate));
+  }
   return {
     digest: createHash('sha256').update(bytes).digest('hex'),
-    value: deserialize(bytes),
+    value: cloned,
   };
 }
 function digestInvocation(value) {
   return snapshotInvocation(value).digest;
 }
-function authenticatedMessage(mode, value) {
+const childMessageContexts = new WeakMap();
+const childSendImplementations = new WeakMap();
+const workerMessageContexts = new WeakMap();
+const portMessageContexts = new WeakMap();
+function authenticatedMessage(context, value) {
   const snapshot = snapshotInvocation(value);
+  context.sequence += 1;
   persistLoaderObservation(
     'semantics',
-    JSON.stringify({ mode, invocationDigest: snapshot.digest }),
+    JSON.stringify({
+      mode: context.mode,
+      recipient: context.recipient,
+      sequence: context.sequence,
+      invocationDigest: snapshot.digest,
+    }),
   );
   return snapshot.value;
 }
-function fencePostMessage(target, mode) {
-  const original = target?.postMessage;
-  if (typeof original !== 'function') return;
-  Object.defineProperty(target, 'postMessage', {
-    configurable: false,
-    enumerable: true,
-    value(message, transferList) {
-      if (transferList !== undefined) {
-        if (!Array.isArray(transferList) || transferList.length > 0) throw descendantError();
-      }
-      return Reflect.apply(original, this, [authenticatedMessage(mode, message)]);
-    },
-    writable: false,
-  });
+function authenticatedPostMessage(original, receiver, context, message, transferList) {
+  if (!context || context.blocked) throw descendantError();
+  if (transferList !== undefined) {
+    if (!Array.isArray(transferList) || transferList.length > 0) throw descendantError();
+  }
+  return Reflect.apply(original, receiver, [authenticatedMessage(context, message)]);
 }
-function fenceIpcSend(target, mode) {
-  const original = target?.send;
-  if (typeof original !== 'function') return;
-  Object.defineProperty(target, 'send', {
-    configurable: false,
-    enumerable: true,
-    value(message, sendHandle, options, callback) {
-      let nextCallback = callback;
-      let nextOptions = options;
-      if (typeof sendHandle === 'function') {
-        nextCallback = sendHandle;
-        sendHandle = undefined;
-        nextOptions = undefined;
-      } else if (typeof options === 'function') {
-        nextCallback = options;
-        nextOptions = undefined;
-      }
-      if (sendHandle !== undefined && sendHandle !== null) throw descendantError();
-      const snapshot = snapshotInvocation({ message, options: nextOptions });
-      persistLoaderObservation(
-        'semantics',
-        JSON.stringify({ mode, invocationDigest: snapshot.digest }),
-      );
-      return Reflect.apply(original, this, [
-        snapshot.value.message,
-        undefined,
-        snapshot.value.options,
-        nextCallback,
-      ]);
-    },
-    writable: false,
-  });
+function authenticatedIpcSend(
+  original,
+  receiver,
+  context,
+  message,
+  sendHandle,
+  options,
+  callback,
+) {
+  if (!context) throw descendantError();
+  let nextCallback = callback;
+  let nextOptions = options;
+  if (typeof sendHandle === 'function') {
+    nextCallback = sendHandle;
+    sendHandle = undefined;
+    nextOptions = undefined;
+  } else if (typeof options === 'function') {
+    nextCallback = options;
+    nextOptions = undefined;
+  }
+  if (sendHandle !== undefined && sendHandle !== null) throw descendantError();
+  const authenticated = authenticatedMessage(context, { message, options: nextOptions });
+  return Reflect.apply(original, receiver, [
+    authenticated.message,
+    undefined,
+    authenticated.options,
+    nextCallback,
+  ]);
 }
 function invocationCwd(cwd) {
   try {
@@ -70792,14 +70808,12 @@ function invocationCwd(cwd) {
     throw descendantError();
   }
 }
-function authenticatedChildArguments(args, optionsIndex, nonce, mode, semantics) {
+function authenticatedChildArguments(args, optionsIndex, options, nonce, semantics) {
   const nextArgs = [...args];
   const candidate = nextArgs[optionsIndex];
-  const options = candidate && typeof candidate === 'object' ? candidate : {};
   const authenticatedOptions = {
     ...options,
-    env: authenticatedChildEnvironment(options.env, nonce, semantics),
-    stdio: authenticatedChildStdio(options.stdio, mode, options.silent),
+    env: authenticatedChildEnvironment(Object.entries(options.env), nonce, semantics),
   };
   if (typeof candidate === 'function') {
     nextArgs.splice(optionsIndex, 0, authenticatedOptions);
@@ -70810,7 +70824,8 @@ function authenticatedChildArguments(args, optionsIndex, nonce, mode, semantics)
 }
 function authenticatedChildStdio(stdio, mode, silent) {
   const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
-  if (!Number.isInteger(evidenceDescriptor) || evidenceDescriptor < 3) return stdio;
+  const hasEvidenceDescriptor =
+    Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3;
   const normalized =
     Array.isArray(stdio)
       ? [...stdio]
@@ -70822,8 +70837,17 @@ function authenticatedChildStdio(stdio, mode, silent) {
             ? ['ignore', 'inherit', 'inherit']
             : [mode === 'sync' ? 'pipe' : 'ignore', 'pipe', 'pipe'];
   if (mode !== 'sync' && normalized[0] !== 'ignore') throw descendantError();
-  while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
-  normalized[evidenceDescriptor] = evidenceDescriptor;
+  if (hasEvidenceDescriptor) {
+    while (normalized.length <= evidenceDescriptor) normalized.push('ignore');
+  }
+  for (let index = 3; index < normalized.length; index += 1) {
+    const value = normalized[index];
+    if (hasEvidenceDescriptor && index === evidenceDescriptor) continue;
+    if (mode === 'fork' && index === 3 && value === 'ipc') continue;
+    if (value !== undefined && value !== null && value !== 'ignore') throw descendantError();
+  }
+  if (mode === 'fork') normalized[3] = 'ipc';
+  if (hasEvidenceDescriptor) normalized[evidenceDescriptor] = evidenceDescriptor;
   return normalized;
 }
 function descendantError() {
@@ -70967,6 +70991,90 @@ function recordChildLaunch(nonce, child, semantics) {
   if (!child || typeof child.pid !== 'number') return;
   persistLoaderObservation('launch', nonce + ':process:' + child.pid + ':' + semantics);
 }
+function installMessageFences() {
+  const childPrototype = childProcess.ChildProcess.prototype;
+  Object.defineProperty(childPrototype, 'send', {
+    configurable: false,
+    enumerable: true,
+    get() {
+      return function authenticatedChildSend(message, sendHandle, options, callback) {
+        return authenticatedIpcSend(
+          childSendImplementations.get(this),
+          this,
+          childMessageContexts.get(this),
+          message,
+          sendHandle,
+          options,
+          callback,
+        );
+      };
+    },
+    set(value) {
+      if (typeof value !== 'function') throw descendantError();
+      childSendImplementations.set(this, value);
+    },
+  });
+  const workerPrototype = workerThreads.Worker.prototype;
+  const originalWorkerPostMessage = workerPrototype.postMessage;
+  Object.defineProperty(workerPrototype, 'postMessage', {
+    configurable: false,
+    enumerable: true,
+    value(message, transferList) {
+      return authenticatedPostMessage(
+        originalWorkerPostMessage,
+        this,
+        workerMessageContexts.get(this),
+        message,
+        transferList,
+      );
+    },
+    writable: false,
+  });
+  const portPrototype = workerThreads.MessagePort.prototype;
+  const originalPortPostMessage = portPrototype.postMessage;
+  Object.defineProperty(portPrototype, 'postMessage', {
+    configurable: false,
+    enumerable: true,
+    value(message, transferList) {
+      const context = portMessageContexts.get(this);
+      if (!context) {
+        return Reflect.apply(originalPortPostMessage, this, [message, transferList]);
+      }
+      return authenticatedPostMessage(
+        originalPortPostMessage,
+        this,
+        context,
+        message,
+        transferList,
+      );
+    },
+    writable: false,
+  });
+  const OriginalMessageChannel = workerThreads.MessageChannel;
+  class FencedMessageChannel extends OriginalMessageChannel {
+    constructor() {
+      super();
+      portMessageContexts.set(this.port1, { blocked: true });
+      portMessageContexts.set(this.port2, { blocked: true });
+    }
+  }
+  Object.defineProperty(workerThreads, 'MessageChannel', {
+    configurable: false,
+    enumerable: true,
+    value: FencedMessageChannel,
+    writable: false,
+  });
+  if (workerThreads.BroadcastChannel) {
+    Object.defineProperty(workerThreads.BroadcastChannel.prototype, 'postMessage', {
+      configurable: false,
+      enumerable: true,
+      value() {
+        throw descendantError();
+      },
+      writable: false,
+    });
+  }
+}
 function fenceChildProcessMethod(name, optionsIndex, mode) {
   const original = childProcess[name];
   Object.defineProperty(childProcess, name, {
@@ -70980,40 +71088,51 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const candidate = args[index];
       const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
       if (candidate && typeof candidate === 'object') args[index] = rawOptions;
+      if (rawOptions.signal !== undefined) throw descendantError();
+      const cwd = invocationCwd(rawOptions.cwd);
+      const environmentEntries = snapshotInvocation(
+        normalizedInvocationEnvironment(rawOptions.env),
+      ).value;
+      const stdio = authenticatedChildStdio(rawOptions.stdio, mode, rawOptions.silent);
       let entrypoint;
       let execArgv;
       let applicationArgs;
       if (mode === 'node' || mode === 'sync') {
         requireNodeExecutable(args[0], rawOptions);
-        const invocation = requireFileBackedNodeArguments(args[1], rawOptions.cwd);
+        const invocation = requireFileBackedNodeArguments(args[1], cwd);
         entrypoint = invocation.entrypoint;
         execArgv = invocation.execArgv;
         applicationArgs = invocation.applicationArgs;
       }
       if (mode === 'fork') {
         if (rawOptions.execPath) requireNodeExecutable(rawOptions.execPath, rawOptions);
-        entrypoint = requireFileBackedEntrypoint(args[0], rawOptions.cwd);
+        entrypoint = requireFileBackedEntrypoint(args[0], cwd);
         execArgv = requireSafeExecArgv(
           Array.isArray(rawOptions.execArgv) ? rawOptions.execArgv : process.execArgv,
         );
         applicationArgs = Array.isArray(args[1]) ? [...args[1]] : [];
         if (applicationArgs.some((value) => typeof value !== 'string')) throw descendantError();
       }
+      const authenticatedOptions = snapshotInvocation({
+        ...rawOptions,
+        cwd,
+        env: Object.fromEntries(environmentEntries),
+        stdio,
+      }).value;
       const semantics = executionSemantics(mode, entrypoint, execArgv, {
         applicationArgs,
-        argv0: rawOptions.argv0,
-        cwd: invocationCwd(rawOptions.cwd),
-        environment: normalizedInvocationEnvironment(rawOptions.env),
-        input: rawOptions.input,
-        windowsVerbatimArguments: rawOptions.windowsVerbatimArguments,
+        options: authenticatedOptions,
       });
-      const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode, semantics);
+      const authenticatedArgs = authenticatedChildArguments(
+        args,
+        index,
+        authenticatedOptions,
+        nonce,
+        semantics,
+      );
       const options = authenticatedArgs[index];
       if (mode === 'fork') {
         options.execPath = nodeExecutable;
-        if (Array.isArray(options.stdio) && !options.stdio.includes('ipc')) {
-          options.stdio[3] = 'ipc';
-        }
       }
       const child = Reflect.apply(original, this, authenticatedArgs);
       if (mode === 'sync') {
@@ -71021,7 +71140,13 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       } else if (typeof child?.once === 'function') {
         child.once('spawn', () => recordChildLaunch(nonce, child, semantics));
       }
-      if (mode === 'fork') fenceIpcSend(child, 'fork-message');
+      if (mode === 'fork') {
+        childMessageContexts.set(child, {
+          mode: 'fork-message',
+          recipient: nonce,
+          sequence: 0,
+        });
+      }
       return child;
     },
     writable: false,
@@ -71058,29 +71183,39 @@ function fenceWorkers() {
       if (Array.isArray(capturedOptions.transferList) && capturedOptions.transferList.length > 0) {
         throw descendantError();
       }
+      if (capturedOptions.stdin || capturedOptions.signal !== undefined) throw descendantError();
       const entrypoint = requireFileBackedEntrypoint(
         filename instanceof URL ? fileURLToPath(filename) : filename,
       );
       const invocationOptions = { ...capturedOptions };
-      delete invocationOptions.env;
       delete invocationOptions.execArgv;
       delete invocationOptions.transferList;
+      invocationOptions.env = Object.fromEntries(
+        snapshotInvocation(normalizedInvocationEnvironment(capturedOptions.env)).value,
+      );
       const authenticatedInvocationOptions = snapshotInvocation(invocationOptions).value;
       const semantics = executionSemantics(
         'worker',
         entrypoint,
         normalizedExecArgv,
         {
-          environment: normalizedInvocationEnvironment(capturedOptions.env),
           options: authenticatedInvocationOptions,
         },
       );
       super(filename, {
         ...authenticatedInvocationOptions,
-        env: authenticatedChildEnvironment(capturedOptions.env, nonce, semantics),
+        env: authenticatedChildEnvironment(
+          Object.entries(authenticatedInvocationOptions.env),
+          nonce,
+          semantics,
+        ),
         execArgv: ['--require', authorityPreload, ...requestedExecArgv],
       });
-      fencePostMessage(this, 'worker-message');
+      workerMessageContexts.set(this, {
+        mode: 'worker-message',
+        recipient: nonce,
+        sequence: 0,
+      });
       persistLoaderObservation(
         'launch',
         nonce + ':worker:' + this.threadId + ':' + semantics,
@@ -71101,15 +71236,41 @@ const canAuthenticateChildProcesses =
   (Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD) ||
     (Boolean(metroPolicyCapability) && Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS)));
 if (canAuthenticateChildProcesses) {
+  installMessageFences();
   if (descendantNonce) {
-    fenceIpcSend(process, 'fork-message');
-    fencePostMessage(workerThreads.parentPort, 'worker-message');
+    const descendantMessageContext = {
+      mode: workerThreads.isMainThread ? 'fork-message' : 'worker-message',
+      recipient: 'parent:' + descendantNonce,
+      sequence: 0,
+    };
+    if (typeof process.send === 'function') {
+      const originalSend = process.send;
+      Object.defineProperty(process, 'send', {
+        configurable: false,
+        enumerable: true,
+        value(message, sendHandle, options, callback) {
+          return authenticatedIpcSend(
+            originalSend,
+            this,
+            descendantMessageContext,
+            message,
+            sendHandle,
+            options,
+            callback,
+          );
+        },
+        writable: false,
+      });
+    }
+    if (workerThreads.parentPort) {
+      portMessageContexts.set(workerThreads.parentPort, descendantMessageContext);
+    }
   }
   fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
   fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
-  fenceChildProcessMethod('execFile', optionalArgsIndex, 'node');
   fenceChildProcessMethod('fork', optionalArgsIndex, 'fork');
   rejectChildProcessMethod('exec');
+  rejectChildProcessMethod('execFile');
   rejectChildProcessMethod('execFileSync');
   rejectChildProcessMethod('execSync');
   fenceWorkers();
@@ -72989,6 +73150,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   const descendantAttestations = /* @__PURE__ */ new Set();
   const descendantSemanticDigests = /* @__PURE__ */ new Set();
   const runtimeSemantics = /* @__PURE__ */ new Set();
+  const orderedRuntimeSemantics = [];
   const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
   let evidenceSequence = 0;
   let previousEvidenceSignature = null;
@@ -73036,6 +73198,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded");
       }
       runtimeSemantics.add(load.value);
+      orderedRuntimeSemantics.push(load.value);
       continue;
     }
     const prior = runtimeLoads.get(key);
@@ -73104,7 +73267,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
       const candidate = realpathSync7(entry);
       return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
     }),
-    semantics: [...runtimeSemantics].sort()
+    semantics: orderedRuntimeSemantics
   };
 }
 function dependencyStoreRoots(identity2, git, pathExists) {

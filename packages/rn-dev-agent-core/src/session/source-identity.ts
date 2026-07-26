@@ -384,6 +384,7 @@ function metroRuntimeInputs(
   const descendantAttestations = new Set<string>();
   const descendantSemanticDigests = new Set<string>();
   const runtimeSemantics = new Set<string>();
+  const orderedRuntimeSemantics: string[] = [];
   const runtimeEvidenceKeys = new Set<string>();
   let evidenceSequence = 0;
   let previousEvidenceSignature: string | null = null;
@@ -472,6 +473,7 @@ function metroRuntimeInputs(
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded');
       }
       runtimeSemantics.add(load.value);
+      orderedRuntimeSemantics.push(load.value);
       continue;
     }
     const prior = runtimeLoads.get(key);
@@ -573,7 +575,7 @@ function metroRuntimeInputs(
         ? [candidate]
         : [];
     }),
-    semantics: [...runtimeSemantics].sort(),
+    semantics: orderedRuntimeSemantics,
   };
 }
 
