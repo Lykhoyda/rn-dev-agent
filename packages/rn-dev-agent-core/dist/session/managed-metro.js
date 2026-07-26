@@ -230,6 +230,58 @@ export function hasNodeLoaderOption(value) {
         return ['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(option.replaceAll('_', '-'));
     });
 }
+export function hasUnsupportedNodeOption(value) {
+    const booleanOptions = new Set([
+        '--enable-source-maps',
+        '--experimental-strip-types',
+        '--experimental-transform-types',
+        '--no-deprecation',
+        '--no-warnings',
+        '--preserve-symlinks',
+        '--preserve-symlinks-main',
+        '--trace-deprecation',
+        '--trace-uncaught',
+        '--trace-warnings',
+    ]);
+    const valueOptions = new Set([
+        '--conditions',
+        '--dns-result-order',
+        '--max-old-space-size',
+        '--max-semi-space-size',
+        '--stack-trace-limit',
+        '--title',
+        '--unhandled-rejections',
+    ]);
+    const optionalValueOptions = new Set(['--inspect', '--inspect-brk', '--inspect-wait']);
+    const tokens = parseNodeOptions(value);
+    for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        const equals = token.indexOf('=');
+        const option = (equals < 0 ? token : token.slice(0, equals)).replaceAll('_', '-');
+        if (booleanOptions.has(option)) {
+            if (equals >= 0)
+                return true;
+            continue;
+        }
+        if (optionalValueOptions.has(option)) {
+            if (equals >= 0 && token.slice(equals + 1).length === 0)
+                return true;
+            continue;
+        }
+        if (!valueOptions.has(option))
+            return true;
+        if (equals >= 0) {
+            if (token.slice(equals + 1).length === 0)
+                return true;
+            continue;
+        }
+        const optionValue = tokens[index + 1];
+        if (!optionValue || optionValue.startsWith('-'))
+            return true;
+        index += 1;
+    }
+    return false;
+}
 function parentPid(pid) {
     try {
         const output = process.platform === 'win32'
@@ -343,8 +395,8 @@ export async function startManagedMetro(input, dependencies = {}) {
         .update('metro-runtime-policy')
         .digest('base64url');
     const baseNodeOptions = (process.env.NODE_OPTIONS ?? '').trim();
-    if (hasNodeLoaderOption(baseNodeOptions)) {
-        throw new Error('METRO_START_UNAVAILABLE: NODE_OPTIONS loaders are unsupported');
+    if (hasNodeLoaderOption(baseNodeOptions) || hasUnsupportedNodeOption(baseNodeOptions)) {
+        throw new Error('METRO_START_UNAVAILABLE: NODE_OPTIONS contain unsupported execution inputs');
     }
     const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
     const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');

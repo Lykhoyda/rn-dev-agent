@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   hasNodeLoaderOption,
+  hasUnsupportedNodeOption,
   managedMetroListenerPid,
   probeManagedMetroListener,
   resolveManagedMetroCommand,
@@ -24,6 +25,21 @@ test('managed Metro rejects every Node loader option alias', () => {
     assert.equal(hasNodeLoaderOption(option), true, option);
   }
   assert.equal(hasNodeLoaderOption('--trace_warnings --title=\"metro worker\"'), false);
+});
+
+test('managed Metro rejects unmodeled NODE_OPTIONS inputs', () => {
+  for (const option of [
+    '--openssl-config=/tmp/openssl.cnf',
+    '--icu-data-dir /tmp/icu',
+    '--env-file=.env',
+    '--snapshot-blob=snapshot.blob',
+  ]) {
+    assert.equal(hasUnsupportedNodeOption(option), true, option);
+  }
+  assert.equal(
+    hasUnsupportedNodeOption('--conditions=react_native --max-old-space-size=4096'),
+    false,
+  );
 });
 
 test('managed Metro discovers listener PIDs with platform-native commands', () => {

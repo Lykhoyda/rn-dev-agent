@@ -541,6 +541,68 @@ test('Metro preload records child-process and worker-thread module loads', () =>
   }
 });
 
+test('Metro descendant semantics bind arguments and Worker inputs', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-invocation-semantics-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const childEntry = join(root, 'child.cjs');
+    const workerEntry = join(root, 'worker.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(childEntry, '');
+    writeFileSync(workerEntry, '');
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); for (const value of ['red', 'blue']) { const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}, value]); if (child.status !== 0) process.exit(child.status || 1); } const { Worker } = require('node:worker_threads'); for (const color of ['red', 'blue']) { const worker = new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'], workerData: { color } }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); } })().catch((error) => { console.error(error); process.exit(1); });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const semantics = readFileSync(runtimeLoads, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.kind === 'semantics')
+      .map((entry) => JSON.parse(entry.value));
+    const syncSemantics = semantics.filter((entry) => entry.mode === 'sync');
+    const workerSemantics = semantics.filter((entry) => entry.mode === 'worker');
+    assert.equal(syncSemantics.length, 2);
+    assert.equal(workerSemantics.length, 2);
+    assert.notEqual(syncSemantics[0].invocationDigest, syncSemantics[1].invocationDigest);
+    assert.notEqual(workerSemantics[0].invocationDigest, workerSemantics[1].invocationDigest);
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro preload linearizes evidence head barriers through the owner pipe', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-barrier-'));
   try {

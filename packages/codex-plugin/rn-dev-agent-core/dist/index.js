@@ -62492,6 +62492,58 @@ function hasNodeLoaderOption(value) {
     return ["--require", "-r", "--import", "--loader", "--experimental-loader"].includes(option.replaceAll("_", "-"));
   });
 }
+function hasUnsupportedNodeOption(value) {
+  const booleanOptions = /* @__PURE__ */ new Set([
+    "--enable-source-maps",
+    "--experimental-strip-types",
+    "--experimental-transform-types",
+    "--no-deprecation",
+    "--no-warnings",
+    "--preserve-symlinks",
+    "--preserve-symlinks-main",
+    "--trace-deprecation",
+    "--trace-uncaught",
+    "--trace-warnings"
+  ]);
+  const valueOptions = /* @__PURE__ */ new Set([
+    "--conditions",
+    "--dns-result-order",
+    "--max-old-space-size",
+    "--max-semi-space-size",
+    "--stack-trace-limit",
+    "--title",
+    "--unhandled-rejections"
+  ]);
+  const optionalValueOptions = /* @__PURE__ */ new Set(["--inspect", "--inspect-brk", "--inspect-wait"]);
+  const tokens = parseNodeOptions(value);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token2 = tokens[index];
+    const equals = token2.indexOf("=");
+    const option = (equals < 0 ? token2 : token2.slice(0, equals)).replaceAll("_", "-");
+    if (booleanOptions.has(option)) {
+      if (equals >= 0)
+        return true;
+      continue;
+    }
+    if (optionalValueOptions.has(option)) {
+      if (equals >= 0 && token2.slice(equals + 1).length === 0)
+        return true;
+      continue;
+    }
+    if (!valueOptions.has(option))
+      return true;
+    if (equals >= 0) {
+      if (token2.slice(equals + 1).length === 0)
+        return true;
+      continue;
+    }
+    const optionValue2 = tokens[index + 1];
+    if (!optionValue2 || optionValue2.startsWith("-"))
+      return true;
+    index += 1;
+  }
+  return false;
+}
 function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync8) {
   return probeMetroListener(port, platform, execute);
 }
@@ -70544,9 +70596,11 @@ const { execFileSync } = childProcess;
 const moduleApi = require('node:module');
 const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
+const { serialize } = require('node:v8');
 const workerThreads = require('node:worker_threads');
 ${parseNodeOptions.toString()}
 ${hasNodeLoaderOption.toString()}
+${hasUnsupportedNodeOption.toString()}
 const accumulatedRuntimeInputs = new Set();
 const accumulatedViolations = new Set();
 const observedLoaderDigests = new Map();
@@ -70649,17 +70703,38 @@ if (workerThreads.isMainThread && typeof process.send === 'function') {
   process.channel?.unref();
 }
 if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
-function authenticatedChildEnvironment(environment, nonce, semantics) {
-  const nextEnvironment = {};
+function normalizedInvocationEnvironment(environment) {
+  const entries = [];
   for (const [key, value] of Object.entries(environment || process.env)) {
     const normalizedKey = key.toUpperCase();
     if (normalizedKey === 'NODE_OPTIONS' || normalizedKey.startsWith('RN_DEV_AGENT_')) continue;
-    nextEnvironment[key] = value;
+    entries.push([key, value]);
   }
+  return entries.sort(([left], [right]) => left.localeCompare(right));
+}
+function authenticatedChildEnvironment(environment, nonce, semantics) {
+  const nextEnvironment = Object.fromEntries(normalizedInvocationEnvironment(environment));
   for (const [key, value] of authorityEnvironment) nextEnvironment[key] = value;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
   return nextEnvironment;
+}
+function digestInvocation(value) {
+  let bytes;
+  try {
+    bytes = serialize(value);
+  } catch {
+    throw descendantError();
+  }
+  if (bytes.byteLength > 1024 * 1024) throw descendantError();
+  return createHash('sha256').update(bytes).digest('hex');
+}
+function invocationCwd(cwd) {
+  try {
+    return fs.realpathSync(cwd || process.cwd());
+  } catch {
+    throw descendantError();
+  }
 }
 function authenticatedChildArguments(args, optionsIndex, nonce, mode, semantics) {
   const nextArgs = [...args];
@@ -70769,16 +70844,19 @@ function normalizeSafeNodeOption(args, index) {
 function requireFileBackedNodeArguments(args, cwd) {
   if (!Array.isArray(args)) throw descendantError();
   let entrypoint;
+  let entrypointIndex = -1;
   const execArgv = [];
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
     if (argument === '--') {
       entrypoint = args[index + 1];
+      entrypointIndex = index + 1;
       break;
     }
     if (!argument.startsWith('-')) {
       entrypoint = argument;
+      entrypointIndex = index;
       break;
     }
     const normalized = normalizeSafeNodeOption(args, index);
@@ -70788,6 +70866,10 @@ function requireFileBackedNodeArguments(args, cwd) {
   return {
     entrypoint: requireFileBackedEntrypoint(entrypoint, cwd),
     execArgv,
+    applicationArgs: args.slice(entrypointIndex + 1).map((value) => {
+      if (typeof value !== 'string') throw descendantError();
+      return value;
+    }),
   };
 }
 function requireFileBackedEntrypoint(entrypoint, cwd) {
@@ -70814,8 +70896,13 @@ function requireSafeExecArgv(execArgv) {
   }
   return normalized;
 }
-function executionSemantics(mode, entrypoint, execArgv) {
-  const value = JSON.stringify({ mode, entrypoint, execArgv });
+function executionSemantics(mode, entrypoint, execArgv, invocation) {
+  const value = JSON.stringify({
+    mode,
+    entrypoint,
+    execArgv,
+    invocationDigest: digestInvocation(invocation),
+  });
   persistLoaderObservation('semantics', value);
   return createHash('sha256').update(value).digest('hex');
 }
@@ -70828,18 +70915,23 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
   Object.defineProperty(childProcess, name, {
     configurable: false,
     enumerable: true,
-    value(...args) {
+    value(...receivedArgs) {
+      const args = [...receivedArgs];
+      if (Array.isArray(args[1])) args[1] = [...args[1]];
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
       const nonce = randomBytes(16).toString('hex');
       const candidate = args[index];
-      const rawOptions = candidate && typeof candidate === 'object' ? candidate : {};
+      const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
+      if (candidate && typeof candidate === 'object') args[index] = rawOptions;
       let entrypoint;
       let execArgv;
+      let applicationArgs;
       if (mode === 'node' || mode === 'sync') {
         requireNodeExecutable(args[0], rawOptions);
         const invocation = requireFileBackedNodeArguments(args[1], rawOptions.cwd);
         entrypoint = invocation.entrypoint;
         execArgv = invocation.execArgv;
+        applicationArgs = invocation.applicationArgs;
       }
       if (mode === 'fork') {
         if (rawOptions.execPath) requireNodeExecutable(rawOptions.execPath, rawOptions);
@@ -70847,8 +70939,15 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
         execArgv = requireSafeExecArgv(
           Array.isArray(rawOptions.execArgv) ? rawOptions.execArgv : process.execArgv,
         );
+        applicationArgs = Array.isArray(args[1]) ? [...args[1]] : [];
+        if (applicationArgs.some((value) => typeof value !== 'string')) throw descendantError();
       }
-      const semantics = executionSemantics(mode, entrypoint, execArgv);
+      const semantics = executionSemantics(mode, entrypoint, execArgv, {
+        applicationArgs,
+        cwd: invocationCwd(rawOptions.cwd),
+        environment: normalizedInvocationEnvironment(rawOptions.env),
+        input: rawOptions.input,
+      });
       const authenticatedArgs = authenticatedChildArguments(args, index, nonce, mode, semantics);
       const options = authenticatedArgs[index];
       if (mode === 'fork') {
@@ -70883,26 +70982,41 @@ function fenceWorkers() {
   const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
   class AuthenticatedWorker extends OriginalWorker {
     constructor(filename, options = {}) {
+      const capturedOptions = { ...options };
       if (
-        options.eval ||
+        capturedOptions.eval ||
         (typeof filename === 'string' && filename.startsWith('data:')) ||
         (filename instanceof URL && filename.protocol === 'data:')
       ) {
         throw descendantError();
       }
       const nonce = randomBytes(16).toString('hex');
-      const requestedExecArgv = Array.isArray(options.execArgv)
-        ? [...options.execArgv]
+      const requestedExecArgv = Array.isArray(capturedOptions.execArgv)
+        ? [...capturedOptions.execArgv]
         : [...process.execArgv];
       const normalizedExecArgv = requireSafeExecArgv(requestedExecArgv);
+      if (Array.isArray(capturedOptions.transferList) && capturedOptions.transferList.length > 0) {
+        throw descendantError();
+      }
+      const entrypoint = requireFileBackedEntrypoint(
+        filename instanceof URL ? fileURLToPath(filename) : filename,
+      );
+      const invocationOptions = { ...capturedOptions };
+      delete invocationOptions.env;
+      delete invocationOptions.execArgv;
+      delete invocationOptions.transferList;
       const semantics = executionSemantics(
         'worker',
-        filename instanceof URL ? filename.href : String(filename),
+        entrypoint,
         normalizedExecArgv,
+        {
+          environment: normalizedInvocationEnvironment(capturedOptions.env),
+          options: invocationOptions,
+        },
       );
       super(filename, {
-        ...options,
-        env: authenticatedChildEnvironment(options.env, nonce, semantics),
+        ...capturedOptions,
+        env: authenticatedChildEnvironment(capturedOptions.env, nonce, semantics),
         execArgv: ['--require', authorityPreload, ...requestedExecArgv],
       });
       persistLoaderObservation(
@@ -71234,9 +71348,10 @@ function runtimePolicy(config, callbackRuntimeInputs = []) {
     !authorityPreload ||
     !authorityPreloadMatches ||
     process.env.NODE_OPTIONS !== expectedNodeOptions ||
-    hasNodeLoaderOption(baseNodeOptions)
+    hasNodeLoaderOption(baseNodeOptions) ||
+    hasUnsupportedNodeOption(baseNodeOptions)
   ) {
-    violations.push('NODE_OPTIONS loaders are unsupported');
+    violations.push('NODE_OPTIONS contain unsupported execution inputs');
   }
   if (!initialCacheCaptured) {
     Object.keys(require.cache).forEach((value) => addPath(value, 'loaded Metro config module'));
