@@ -551,6 +551,9 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     const adapterPath = join(integration, 'rn-session-metro.cjs');
     const childEntry = join(root, 'child.cjs');
     const workerEntry = join(root, 'worker.cjs');
+    const lifecycleEntry = join(root, 'lifecycle.cjs');
+    const canonicalWorkerEntry = join(root, 'canonical-worker.cjs');
+    const alternateWorkerEntry = join(root, 'alternate-worker.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(
       childEntry,
@@ -560,6 +563,9 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
       workerEntry,
       "const { MessagePort, parentPort } = require('node:worker_threads'); parentPort.once('message', () => { MessagePort.prototype.postMessage.call(parentPort, { acknowledged: true }); parentPort.close(); });",
     );
+    writeFileSync(lifecycleEntry, 'setInterval(() => {}, 1000);\n');
+    writeFileSync(canonicalWorkerEntry, 'process.exit(0);\n');
+    writeFileSync(alternateWorkerEntry, 'process.exit(17);\n');
     const environment = metroPolicyEnvironment(adapterPath);
     const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
     evidenceDescriptor = openSync(runtimeLoads, 'a');
@@ -568,7 +574,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => childProcess.execFile(process.execPath, [${JSON.stringify(childEntry)}])); unsupported(() => childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] })); for (const value of ['red', 'blue']) { let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return value; } }); const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}, 'same'], { argv0: 'node-' + value, env, timeout: value === 'red' ? 1000 : 2000, windowsVerbatimArguments: false }); if (child.status !== 0 || environmentReads !== 1) process.exit(child.status || 1); } for (const color of ['red', 'blue']) { const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'], serialization: color === 'red' ? 'json' : 'advanced' }); childProcess.ChildProcess.prototype.send.call(child, { color }); await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); } const { BroadcastChannel, MessageChannel, Worker } = require('node:worker_threads'); const channel = new BroadcastChannel('unsupported'); unsupported(() => channel.postMessage({ color: 'red' })); channel.close(); const messageChannel = new MessageChannel(); unsupported(() => messageChannel.port1.postMessage({ color: 'red' })); messageChannel.port1.close(); messageChannel.port2.close(); unsupported(() => new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'], stdin: true })); for (const color of ['red', 'blue']) { const workerData = {}; Object.defineProperty(workerData, 'color', { enumerable: true, get: () => color }); let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return color; } }); const worker = new Worker(${JSON.stringify(workerEntry)}, { env, execArgv: ['--no-warnings'], workerData }); Worker.prototype.postMessage.call(worker, { color }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('message', resolve); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); if (environmentReads !== 1) throw new Error('Worker environment was read more than once'); } })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => childProcess.execFile(process.execPath, [${JSON.stringify(childEntry)}])); unsupported(() => childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}], { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] })); unsupported(() => childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { stdio: 'inherit' })); unsupported(() => childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { stdio: [0, 'pipe', 'pipe'] })); const inputChild = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}], { input: 'authenticated' }); if (inputChild.status !== 0) process.exit(inputChild.status || 1); const ordinaryChild = childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}]); if (ordinaryChild.send !== undefined) throw new Error('non-IPC child exposed send'); await new Promise((resolve, reject) => { ordinaryChild.once('error', reject); ordinaryChild.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn failed'))); }); for (const value of ['red', 'blue']) { let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return value; } }); const child = childProcess.spawnSync(process.execPath, [${JSON.stringify(childEntry)}, 'same'], { argv0: 'node-' + value, env, timeout: value === 'red' ? 1000 : 2000, windowsVerbatimArguments: false }); if (child.status !== 0 || environmentReads !== 1) process.exit(child.status || 1); } for (const color of ['red', 'blue']) { const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'], serialization: color === 'red' ? 'json' : 'advanced' }); childProcess.ChildProcess.prototype.send.call(child, { color }); await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('fork failed'))); }); } const workerThreads = require('node:worker_threads'); const { MessageChannel, Worker } = workerThreads; unsupported(() => new workerThreads.BroadcastChannel('unsupported')); if (typeof workerThreads.postMessageToThread === 'function') unsupported(() => workerThreads.postMessageToThread(1, { color: 'red' })); unsupported(() => workerThreads.setEnvironmentData('color', 'red')); const messageChannel = new MessageChannel(); unsupported(() => messageChannel.port1.postMessage({ color: 'red' })); messageChannel.port1.close(); messageChannel.port2.close(); unsupported(() => new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'], stdin: true })); const mutableWorkerUrl = require('node:url').pathToFileURL(${JSON.stringify(canonicalWorkerEntry)}); const mutableWorkerEnv = {}; Object.defineProperty(mutableWorkerEnv, 'COLOR', { enumerable: true, get: () => { mutableWorkerUrl.pathname = require('node:url').pathToFileURL(${JSON.stringify(alternateWorkerEntry)}).pathname; return 'canonical'; } }); const canonicalWorker = new Worker(mutableWorkerUrl, { env: mutableWorkerEnv, execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { canonicalWorker.once('error', reject); canonicalWorker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('mutable Worker entrypoint was used'))); }); for (const color of ['red', 'blue']) { const workerData = {}; Object.defineProperty(workerData, 'color', { enumerable: true, get: () => color }); let environmentReads = 0; const env = {}; Object.defineProperty(env, 'COLOR', { enumerable: true, get: () => { environmentReads += 1; return color; } }); const worker = new Worker(${JSON.stringify(workerEntry)}, { env, execArgv: ['--no-warnings'], workerData }); Worker.prototype.postMessage.call(worker, { color }); await new Promise((resolve, reject) => { worker.once('error', reject); worker.once('message', resolve); worker.once('exit', (code) => code === 0 ? resolve() : reject(new Error('worker failed'))); }); if (environmentReads !== 1) throw new Error('Worker environment was read more than once'); } const killedChild = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killedChild.once('error', reject); killedChild.once('spawn', resolve); }); const killedExit = new Promise((resolve) => killedChild.once('exit', resolve)); killedChild.kill('SIGTERM'); await killedExit; const processKilledChild = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { processKilledChild.once('error', reject); processKilledChild.once('spawn', resolve); }); const processKilledExit = new Promise((resolve) => processKilledChild.once('exit', resolve)); process.kill(processKilledChild.pid, 'SIGTERM'); await processKilledExit; const terminatedWorker = new Worker(${JSON.stringify(lifecycleEntry)}, { execArgv: ['--no-warnings'] }); await new Promise((resolve, reject) => { terminatedWorker.once('error', reject); terminatedWorker.once('online', resolve); }); await terminatedWorker.terminate(); })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -601,8 +607,8 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     const workerSemantics = semantics.filter((entry) => entry.mode === 'worker');
     const forkMessageSemantics = semantics.filter((entry) => entry.mode === 'fork-message');
     const workerMessageSemantics = semantics.filter((entry) => entry.mode === 'worker-message');
-    assert.equal(syncSemantics.length, 2);
-    assert.equal(workerSemantics.length, 2);
+    assert.equal(syncSemantics.length, 3);
+    assert.equal(workerSemantics.length, 4, JSON.stringify(semantics));
     assert.equal(forkMessageSemantics.length, 2);
     assert.equal(workerMessageSemantics.length, 4);
     assert.equal(new Set(forkMessageSemantics.map((entry) => entry.recipient)).size, 2);
@@ -614,6 +620,19 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     );
     assert.notEqual(syncSemantics[0].invocationDigest, syncSemantics[1].invocationDigest);
     assert.notEqual(workerSemantics[0].invocationDigest, workerSemantics[1].invocationDigest);
+    const lifecycleSemantics = semantics.filter((entry) =>
+      ['child-lifecycle', 'worker-lifecycle'].includes(entry.mode),
+    );
+    assert.deepEqual(
+      lifecycleSemantics.map((entry) => entry.mode),
+      [
+        'child-lifecycle',
+        'child-lifecycle',
+        'child-lifecycle',
+        'child-lifecycle',
+        'worker-lifecycle',
+      ],
+    );
   } finally {
     if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
     rmSync(root, { force: true, recursive: true });

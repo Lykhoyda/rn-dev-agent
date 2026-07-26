@@ -268,6 +268,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     const runtimeSemantics = new Set();
     const orderedRuntimeSemantics = [];
     const runtimeEvidenceKeys = new Set();
+    let runtimeEvidenceEntryCount = 0;
     let evidenceSequence = 0;
     let previousEvidenceSignature = null;
     for (const rawLoad of runtimeLoadsRaw.split('\n').filter(Boolean)) {
@@ -315,6 +316,10 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         }
         evidenceSequence = load.sequence;
         previousEvidenceSignature = load.signature;
+        runtimeEvidenceEntryCount += 1;
+        if (runtimeEvidenceEntryCount > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+            throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
+        }
         const key = `${load.kind}\0${load.value}`;
         runtimeEvidenceKeys.add(key);
         if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {

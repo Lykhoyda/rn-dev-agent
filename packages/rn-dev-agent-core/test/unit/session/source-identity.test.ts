@@ -553,9 +553,9 @@ test('strict proof authenticates signed external Metro runtime inputs', () => {
     /descendant execution was not attested/,
   );
   publishRuntimeLoads(
-    Array.from({ length: 50_001 }, (_, index) => ({
+    Array.from({ length: 50_001 }, () => ({
       ...semanticsPayload,
-      value: String(index),
+      value: 'x',
     })),
   );
   assert.throws(
