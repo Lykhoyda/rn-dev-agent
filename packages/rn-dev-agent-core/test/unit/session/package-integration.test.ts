@@ -799,6 +799,14 @@ test('Metro seals native process handles and IPC read callbacks', () => {
           unsupported(() => rawPrototype.spawn.call(rawHandle, { file: process.execPath, args: [process.execPath, ${JSON.stringify(probeEntry)}] }));
           unsupported(() => rawHandle.kill(0));
           unsupported(() => new rawHandle.constructor());
+          for (const name of ['close', 'hasRef', 'ref', 'unref']) {
+            let owner = rawHandle;
+            while (owner && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner);
+            if (owner) {
+              unsupported(() => rawHandle[name]());
+              unsupported(() => owner[name].call(rawHandle));
+            }
+          }
           const weakMapMethods = {
             has: WeakMap.prototype.has,
             get: WeakMap.prototype.get,
@@ -828,6 +836,12 @@ test('Metro seals native process handles and IPC read callbacks', () => {
             }
           });
           const probe = childProcess.spawn(process.execPath, [${JSON.stringify(probeEntry)}]);
+          const probeHandle = probe._handle;
+          probeHandle.unref();
+          probeHandle.ref();
+          if (typeof probeHandle.hasRef === 'function' && !probeHandle.hasRef()) {
+            throw new Error('authenticated process handle lost its reference');
+          }
           await new Promise((resolve, reject) => {
             probe.once('error', reject);
             probe.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn failed')));
@@ -839,12 +853,52 @@ test('Metro seals native process handles and IPC read callbacks', () => {
           unsupported(() => channel.onread(new ArrayBuffer(0)));
           const acknowledged = new Promise((resolve, reject) => {
             child.once('error', reject);
-            child.once('message', (message) => message.acknowledged ? resolve() : reject(new Error('message changed')));
+            child.once('message', (message) => {
+              unsupported(() => channel.onread(new ArrayBuffer(0)));
+              channel.onread = () => {};
+              unsupported(() => channel.onread(new ArrayBuffer(0)));
+              message.acknowledged ? resolve() : reject(new Error('message changed'));
+            });
           });
           const exited = new Promise((resolve, reject) => {
             child.once('error', reject);
             child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('child failed')));
           });
+          const mapMethods = {
+            delete: Map.prototype.delete,
+            get: Map.prototype.get,
+            has: Map.prototype.has,
+            set: Map.prototype.set,
+          };
+          const setMethods = {
+            add: Set.prototype.add,
+            has: Set.prototype.has,
+          };
+          try {
+            Map.prototype.delete = () => false;
+            Map.prototype.get = () => undefined;
+            Map.prototype.has = () => false;
+            Map.prototype.set = () => {
+              throw new Error('mutable Map authority was used');
+            };
+            Set.prototype.add = () => {
+              throw new Error('mutable Set authority was used');
+            };
+            Set.prototype.has = () => true;
+            if (!process.kill(child.pid, 0)) throw new Error('owned process lookup failed');
+            try {
+              process.dlopen();
+            } catch (error) {
+              if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON') throw error;
+            }
+          } finally {
+            Map.prototype.delete = mapMethods.delete;
+            Map.prototype.get = mapMethods.get;
+            Map.prototype.has = mapMethods.has;
+            Map.prototype.set = mapMethods.set;
+            Set.prototype.add = setMethods.add;
+            Set.prototype.has = setMethods.has;
+          }
           child.send({ ready: true });
           await Promise.all([acknowledged, exited]);
         })().catch((error) => {
@@ -872,6 +926,18 @@ test('Metro seals native process handles and IPC read callbacks', () => {
     );
 
     assert.equal(result.status, 0, result.stderr);
+    const evidence = readFileSync(runtimeLoads, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.ok(
+      evidence.some(
+        (entry) =>
+          entry.kind === 'violation' &&
+          entry.value === 'Metro runtime native addons are unsupported for strict proof',
+      ),
+    );
   } finally {
     if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
     rmSync(root, { force: true, recursive: true });
