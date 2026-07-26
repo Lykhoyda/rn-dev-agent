@@ -557,7 +557,7 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(
       childEntry,
-      "if (process.send) process.once('message', () => process.disconnect());",
+      "if (process.send) process.once('message', () => { try { process.disconnect(); process.exit(12); } catch (error) { process.exit(error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION' ? 0 : 13); } });",
     );
     writeFileSync(
       workerEntry,
@@ -623,14 +623,85 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
     const lifecycleSemantics = semantics.filter((entry) =>
       ['child-lifecycle', 'worker-lifecycle'].includes(entry.mode),
     );
-    assert.deepEqual(
-      lifecycleSemantics.map((entry) => entry.mode),
+    const lifecycleSequences = Map.groupBy(
+      lifecycleSemantics,
+      (entry) => `${entry.mode}:${entry.recipient}`,
+    );
+    assert.ok(
+      [...lifecycleSequences.entries()].every(
+        ([, entries]) =>
+          entries.map((entry) => entry.sequence).join(',') ===
+          Array.from({ length: entries.length }, (_, index) => index + 1).join(','),
+      ),
+    );
+    assert.ok(
+      lifecycleSemantics.some(
+        (entry) => entry.mode === 'worker-lifecycle' && entry.sequence === 2,
+      ),
+    );
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro lifecycle controls reject unowned targets and bind outcomes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-lifecycle-outcomes-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const lifecycleEntry = join(root, 'lifecycle.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(lifecycleEntry, 'setInterval(() => {}, 1000);\n');
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const result = spawnSync(
+      process.execPath,
       [
-        'child-lifecycle',
-        'child-lifecycle',
-        'child-lifecycle',
-        'child-lifecycle',
-        'worker-lifecycle',
+        '-e',
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const unsupported = (run) => { try { run(); throw new Error('unsupported execution was accepted'); } catch (error) { if (error.code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error; } }; unsupported(() => process.kill(0, 0)); unsupported(() => process.kill(-1, 0)); unsupported(() => process.kill(process.pid, 0)); const child = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); }); let rejected = false; try { process.kill(child.pid, 'SIGINVALID'); } catch { rejected = true; } if (!rejected) throw new Error('invalid signal was accepted'); const exited = new Promise((resolve) => child.once('exit', resolve)); if (process.kill(child.pid, 'SIGTERM') !== true) throw new Error('process.kill result changed'); await exited; unsupported(() => process.kill(child.pid, 0)); const killed = childProcess.spawn(process.execPath, [${JSON.stringify(lifecycleEntry)}]); await new Promise((resolve, reject) => { killed.once('error', reject); killed.once('spawn', resolve); }); const killedExit = new Promise((resolve) => killed.once('exit', resolve)); if (killed.kill('SIGTERM') !== true) throw new Error('child.kill result changed'); await killedExit; })().catch((error) => { console.error(error); process.exit(1); });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const lifecycleSemantics = readFileSync(runtimeLoads, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.kind === 'semantics')
+      .map((entry) => JSON.parse(entry.value))
+      .filter((entry) => entry.mode === 'child-lifecycle');
+    const sequences = Map.groupBy(lifecycleSemantics, (entry) => entry.recipient);
+    assert.deepEqual(
+      [...sequences.values()]
+        .map((entries) => entries.map((entry) => entry.sequence))
+        .sort((left, right) => left.length - right.length),
+      [
+        [1, 2],
+        [1, 2, 3, 4],
       ],
     );
   } finally {

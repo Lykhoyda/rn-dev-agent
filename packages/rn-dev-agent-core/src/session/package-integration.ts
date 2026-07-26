@@ -475,6 +475,54 @@ function authenticatedLifecycle(context, action, value) {
   if (!context) throw descendantError();
   return authenticatedMessage(context, { action, value });
 }
+function authenticatedLifecycleResult(context, action, value, run) {
+  const authenticated = authenticatedLifecycle(context, action, value);
+  try {
+    const result = run(authenticated.value);
+    return authenticatedMessage(context, {
+      action,
+      status: 'fulfilled',
+      result,
+    }).result;
+  } catch (error) {
+    authenticatedMessage(context, {
+      action,
+      status: 'rejected',
+      error,
+    });
+    throw error;
+  }
+}
+function authenticatedLifecyclePromise(context, action, value, run) {
+  const authenticated = authenticatedLifecycle(context, action, value);
+  let result;
+  try {
+    result = run(authenticated.value);
+  } catch (error) {
+    authenticatedMessage(context, {
+      action,
+      status: 'rejected',
+      error,
+    });
+    throw error;
+  }
+  return Promise.resolve(result).then(
+    (resolved) =>
+      authenticatedMessage(context, {
+        action,
+        status: 'fulfilled',
+        result: resolved,
+      }).result,
+    (error) => {
+      authenticatedMessage(context, {
+        action,
+        status: 'rejected',
+        error,
+      });
+      throw error;
+    },
+  );
+}
 function installMessageFences() {
   const childPrototype = childProcess.ChildProcess.prototype;
   const authenticatedChildSend = function (message, sendHandle, options, callback) {
@@ -526,8 +574,12 @@ function installMessageFences() {
     configurable: false,
     enumerable: true,
     value() {
-      authenticatedLifecycle(workerLifecycleContexts.get(this), 'terminate');
-      return Reflect.apply(originalWorkerTerminate, this, []);
+      return authenticatedLifecyclePromise(
+        workerLifecycleContexts.get(this),
+        'terminate',
+        undefined,
+        () => Reflect.apply(originalWorkerTerminate, this, []),
+      );
     },
     writable: false,
   });
@@ -536,23 +588,29 @@ function installMessageFences() {
     configurable: false,
     enumerable: true,
     value(signal) {
-      const authenticated = authenticatedLifecycle(
+      return authenticatedLifecycleResult(
         childLifecycleContexts.get(this),
         'kill',
         signal,
+        (authenticatedSignal) => {
+          childKillDepth += 1;
+          try {
+            return Reflect.apply(originalChildKill, this, [authenticatedSignal]);
+          } finally {
+            childKillDepth -= 1;
+          }
+        },
       );
-      childKillDepth += 1;
-      try {
-        return Reflect.apply(originalChildKill, this, [authenticated.value]);
-      } finally {
-        childKillDepth -= 1;
-      }
     },
     writable: false,
   });
   const authenticatedChildDisconnect = function () {
-    authenticatedLifecycle(childLifecycleContexts.get(this), 'disconnect');
-    return Reflect.apply(childDisconnectImplementations.get(this), this, []);
+    return authenticatedLifecycleResult(
+      childLifecycleContexts.get(this),
+      'disconnect',
+      undefined,
+      () => Reflect.apply(childDisconnectImplementations.get(this), this, []),
+    );
   };
   Object.defineProperty(childPrototype, 'disconnect', {
     configurable: false,
@@ -579,15 +637,14 @@ function installMessageFences() {
       if (childKillDepth > 0) {
         return Reflect.apply(originalProcessKill, process, [pid, signal]);
       }
-      const context =
-        processLifecycleContexts.get(pid) ||
-        lifecycleContext('process-lifecycle', 'pid:' + String(pid));
-      processLifecycleContexts.set(pid, context);
-      const authenticated = authenticatedLifecycle(context, 'kill', { pid, signal });
-      return Reflect.apply(originalProcessKill, process, [
-        authenticated.value.pid,
-        authenticated.value.signal,
-      ]);
+      const context = processLifecycleContexts.get(pid);
+      if (!context) throw descendantError();
+      return authenticatedLifecycleResult(context, 'kill', { pid, signal }, (authenticated) =>
+        Reflect.apply(originalProcessKill, process, [
+          authenticated.pid,
+          authenticated.signal,
+        ]),
+      );
     },
     writable: false,
   });
@@ -848,6 +905,27 @@ if (canAuthenticateChildProcesses) {
       recipient: 'parent:' + descendantNonce,
       sequence: 0,
     };
+    if (workerThreads.isMainThread) {
+      let processDisconnectImplementation =
+        typeof process.disconnect === 'function' ? process.disconnect : undefined;
+      const rejectedProcessDisconnect = function () {
+        if (!processDisconnectImplementation) throw descendantError();
+        throw descendantError();
+      };
+      Object.defineProperty(process, 'disconnect', {
+        configurable: false,
+        enumerable: true,
+        get() {
+          return processDisconnectImplementation
+            ? rejectedProcessDisconnect
+            : undefined;
+        },
+        set(value) {
+          if (typeof value !== 'function') throw descendantError();
+          processDisconnectImplementation = value;
+        },
+      });
+    }
     if (typeof process.send === 'function') {
       const originalSend = process.send;
       Object.defineProperty(process, 'send', {
