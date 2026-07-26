@@ -70688,12 +70688,13 @@ if (descendantNonce) {
     );
     let processDisconnectImplementation =
       typeof process.disconnect === 'function' ? process.disconnect : undefined;
+    let processDisconnectCaptured = Boolean(processDisconnectImplementation);
     const authenticatedProcessDisconnect = function () {
       return authenticatedLifecycleResult(
         descendantLifecycleContext,
         'disconnect',
         undefined,
-        () => Reflect.apply(processDisconnectImplementation, this, []),
+        () => Reflect.apply(processDisconnectImplementation, process, []),
       );
     };
     Object.defineProperty(process, 'disconnect', {
@@ -70705,8 +70706,11 @@ if (descendantNonce) {
           : undefined;
       },
       set(value) {
-        if (typeof value !== 'function') throw descendantError();
+        if (processDisconnectCaptured || typeof value !== 'function') {
+          throw descendantError();
+        }
         processDisconnectImplementation = value;
+        processDisconnectCaptured = true;
       },
     });
   }
@@ -71175,6 +71179,7 @@ function installMessageFences() {
         signal,
         (authenticatedSignal) => {
           const normalizedSignal = normalizeChildSignal(authenticatedSignal);
+          if (target.pid === undefined) return false;
           if (processLifecycleTargets.get(target.pid) !== target) return false;
           try {
             const result = Reflect.apply(originalProcessKill, process, [
@@ -71387,11 +71392,14 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       }
       if (mode !== 'sync') {
         const context = lifecycleContext('child-lifecycle', nonce);
+        const target = {
+          pid: typeof child?.pid === 'number' ? child.pid : undefined,
+          context,
+        };
         childLifecycleContexts.set(child, context);
-        if (typeof child?.pid === 'number') {
-          const pid = child.pid;
-          const target = { pid, context };
-          childLifecycleTargets.set(child, target);
+        childLifecycleTargets.set(child, target);
+        if (target.pid !== undefined) {
+          const pid = target.pid;
           processLifecycleTargets.set(pid, target);
           child.once?.('exit', () => {
             if (processLifecycleTargets.get(pid) === target) {
