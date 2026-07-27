@@ -807,7 +807,6 @@ export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, de
             authorityLost();
         }
     }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
-    heartbeatTimer.unref();
     const transitionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
     const persistTransition = async (transition) => {
         for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {

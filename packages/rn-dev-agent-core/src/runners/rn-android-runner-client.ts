@@ -1174,7 +1174,6 @@ export async function runBoundedAndroidRunnerRebuild<T>(
       authorityLost();
     }
   }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
-  heartbeatTimer.unref();
   const transitionAttempts = Math.max(
     1,
     dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS,

@@ -23347,7 +23347,6 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       authorityLost();
     }
   }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
-  heartbeatTimer2.unref();
   const transitionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
   const persistTransition = async (transition2) => {
     for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
