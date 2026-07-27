@@ -39,6 +39,8 @@ const ANDROID_REBUILD_LOCK_STALE_MS = 15 * 60_000;
 const ANDROID_REBUILD_HEARTBEAT_MS = 60_000;
 const ANDROID_REBUILD_COMPLETION_RETRY_MS = 1_000;
 const ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
+const ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 30_000;
+const ADB_CLEANUP_TIMEOUT_MS = 5_000;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 export function getAndroidRunnerState() {
@@ -506,7 +508,8 @@ export function consumePendingAndroidUpgradeNote() {
 // helper, which stops our runner then force-stops BOTH owned packages.
 // Dynamic import because release-android-slot.ts statically imports this
 // module — a static back-import would be a cycle.
-export async function reapMismatchedAndroidRunner(state, release, verify) {
+export async function reapMismatchedAndroidRunner(state, release, verify, signal) {
+    signal?.throwIfAborted();
     const deviceId = state?.deviceId;
     if (!deviceId) {
         throw new Error('RUNNER_CLEANUP_UNCONFIRMED: stale Android runner has no recorded device identity');
@@ -514,9 +517,10 @@ export async function reapMismatchedAndroidRunner(state, release, verify) {
     const releaseSlot = release ??
         (async (opts) => {
             const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
-            return releaseAndroidInteractionSlot(opts);
+            return releaseAndroidInteractionSlot({ ...opts, signal });
         });
     const receipt = await releaseSlot({ deviceId, includeLegacy: false });
+    signal?.throwIfAborted();
     const requiredPackages = [
         'dev.lykhoyda.rndevagent.androidrunner.test',
         'dev.lykhoyda.rndevagent.androidrunner',
@@ -529,15 +533,14 @@ export async function reapMismatchedAndroidRunner(state, release, verify) {
         (release
             ? async () => { }
             : async (expected) => {
-                const forwards = String((await execFileAsync('adb', ['forward', '--list'])).stdout);
-                const instrumentation = String((await execFileAsync('adb', [
-                    '-s',
-                    expected.deviceId,
-                    'shell',
-                    'dumpsys',
-                    'activity',
-                    'instrumentation',
-                ])).stdout);
+                const forwards = String((await execFileAsync('adb', ['forward', '--list'], {
+                    timeout: ADB_CLEANUP_TIMEOUT_MS,
+                    signal,
+                })).stdout);
+                const instrumentation = String((await execFileAsync('adb', ['-s', expected.deviceId, 'shell', 'dumpsys', 'activity', 'instrumentation'], {
+                    timeout: ADB_CLEANUP_TIMEOUT_MS,
+                    signal,
+                })).stdout);
                 const forwardRemains = forwards
                     .split('\n')
                     .filter((line) => line.startsWith(`${expected.deviceId} `))
@@ -555,7 +558,8 @@ export async function reapMismatchedAndroidRunner(state, release, verify) {
         deviceId,
         ...(state?.hostPort !== undefined ? { hostPort: state.hostPort } : {}),
         ...(state?.devicePort !== undefined ? { devicePort: state.devicePort } : {}),
-    });
+    }, signal);
+    signal?.throwIfAborted();
 }
 export async function reapActiveAndroidRunner(deviceId) {
     adoptPersistedAndroidState(deviceId);
@@ -602,9 +606,17 @@ function initializeAndroidRunnerRebuildState(databasePath) {
         plugin_version TEXT NOT NULL,
         status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
         owner_nonce TEXT,
-        lease_ms INTEGER NOT NULL
+        lease_ms INTEGER NOT NULL,
+        cleanup_unverified INTEGER NOT NULL DEFAULT 0
       )
     `);
+        const columns = store.database
+            .prepare(`PRAGMA table_info(android_runner_rebuild_attempt)`)
+            .all();
+        if (!columns.some((column) => column.name === 'cleanup_unverified')) {
+            store.database.exec(`ALTER TABLE android_runner_rebuild_attempt
+         ADD COLUMN cleanup_unverified INTEGER NOT NULL DEFAULT 0`);
+        }
         return store;
     }
     catch (cause) {
@@ -621,19 +633,26 @@ export function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(),
         try {
             const claimed = store.database
                 .prepare(`INSERT INTO android_runner_rebuild_attempt(
-             lock_name, plugin_version, status, owner_nonce, lease_ms
+             lock_name, plugin_version, status, owner_nonce, lease_ms, cleanup_unverified
            )
-           VALUES ('artifact', ?, 'in_progress', ?, ?)
+           VALUES ('artifact', ?, 'in_progress', ?, ?, 0)
            ON CONFLICT(lock_name) DO UPDATE SET
              plugin_version = excluded.plugin_version,
              status = 'in_progress',
              owner_nonce = excluded.owner_nonce,
-             lease_ms = excluded.lease_ms
+             lease_ms = excluded.lease_ms,
+             cleanup_unverified = 0
            WHERE
-             android_runner_rebuild_attempt.status != 'in_progress'
+             (
+               android_runner_rebuild_attempt.status != 'in_progress'
                AND android_runner_rebuild_attempt.plugin_version != excluded.plugin_version
-             OR android_runner_rebuild_attempt.status = 'in_progress'
+               AND android_runner_rebuild_attempt.cleanup_unverified = 0
+             )
+             OR (
+               android_runner_rebuild_attempt.status = 'in_progress'
                AND android_runner_rebuild_attempt.lease_ms <= ?
+               AND android_runner_rebuild_attempt.cleanup_unverified = 0
+             )
            RETURNING owner_nonce, plugin_version`)
                 .get(pluginVersion, ownerNonce, now, now - ANDROID_REBUILD_LOCK_STALE_MS);
             store.secureFiles();
@@ -680,18 +699,19 @@ export function heartbeatAndroidRunnerRebuildLock(lock, now = Date.now(), databa
         return false;
     }
 }
-function finishAndroidRunnerRebuildLock(lock, status, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+function finishAndroidRunnerRebuildLock(lock, status, cleanupUnverified, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
     try {
         const store = initializeAndroidRunnerRebuildState(databasePath);
         try {
             const finished = store.database
                 .prepare(`UPDATE android_runner_rebuild_attempt
-           SET status = ?, owner_nonce = NULL, lease_ms = ?
+           SET status = ?, owner_nonce = NULL, lease_ms = ?, cleanup_unverified = ?
            WHERE lock_name = 'artifact'
              AND plugin_version = ?
              AND status = 'in_progress'
+             AND (cleanup_unverified = 0 OR ? = 1)
              AND owner_nonce = ?`)
-                .run(status, now, lock.pluginVersion, lock.ownerNonce);
+                .run(status, now, cleanupUnverified ? 1 : 0, lock.pluginVersion, status === 'failed' ? 1 : 0, lock.ownerNonce);
             store.secureFiles();
             return finished.changes === 1;
         }
@@ -704,10 +724,37 @@ function finishAndroidRunnerRebuildLock(lock, status, now = Date.now(), database
     }
 }
 export function completeAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-    return finishAndroidRunnerRebuildLock(lock, 'completed', now, databasePath);
+    return finishAndroidRunnerRebuildLock(lock, 'completed', false, now, databasePath);
 }
 export function releaseAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
-    return finishAndroidRunnerRebuildLock(lock, 'failed', now, databasePath);
+    return finishAndroidRunnerRebuildLock(lock, 'failed', false, now, databasePath);
+}
+export function beginAndroidRunnerRebuildCleanup(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    try {
+        const store = initializeAndroidRunnerRebuildState(databasePath);
+        try {
+            const fenced = store.database
+                .prepare(`UPDATE android_runner_rebuild_attempt
+           SET cleanup_unverified = 1, lease_ms = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND cleanup_unverified = 0
+             AND owner_nonce = ?`)
+                .run(now, lock.pluginVersion, lock.ownerNonce);
+            store.secureFiles();
+            return fenced.changes === 1;
+        }
+        finally {
+            store.close();
+        }
+    }
+    catch {
+        return false;
+    }
+}
+export function markAndroidRunnerRebuildCleanupUnverified(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    return finishAndroidRunnerRebuildLock(lock, 'failed', true, now, databasePath);
 }
 function androidRebuildRefusal(error, detail) {
     return error instanceof AndroidAuthorityStaleError
@@ -726,12 +773,30 @@ export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, de
     const { lock } = claim;
     const heartbeat = dependencies.heartbeat ?? heartbeatAndroidRunnerRebuildLock;
     const complete = dependencies.complete ?? completeAndroidRunnerRebuildLock;
+    const beginCleanup = dependencies.beginCleanup ?? beginAndroidRunnerRebuildCleanup;
     const release = dependencies.release ?? releaseAndroidRunnerRebuildLock;
+    const markCleanupUnverified = dependencies.markCleanupUnverified ?? markAndroidRunnerRebuildCleanupUnverified;
     const controller = new AbortController();
+    let cleanupController;
+    let leaseAuthorityLost = false;
     const authorityLost = () => {
-        if (controller.signal.aborted)
+        if (leaseAuthorityLost)
             return;
-        controller.abort(androidRebuildRefusal(error, 'runner artifact rebuild authority was lost'));
+        leaseAuthorityLost = true;
+        const refusal = androidRebuildRefusal(error, 'runner artifact rebuild authority was lost');
+        if (!controller.signal.aborted)
+            controller.abort(refusal);
+        if (cleanupController && !cleanupController.signal.aborted)
+            cleanupController.abort(refusal);
+    };
+    const refreshAuthority = () => {
+        try {
+            if (heartbeat(lock))
+                return true;
+        }
+        catch { }
+        authorityLost();
+        return false;
     };
     const heartbeatTimer = setInterval(() => {
         try {
@@ -743,11 +808,30 @@ export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, de
         }
     }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
     heartbeatTimer.unref();
+    const transitionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
+    const persistTransition = async (transition) => {
+        for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
+            if (leaseAuthorityLost)
+                return false;
+            try {
+                if (transition(lock))
+                    return true;
+            }
+            catch { }
+            if (!refreshAuthority())
+                return false;
+            if (attempt + 1 < transitionAttempts) {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+                });
+            }
+        }
+        return false;
+    };
     try {
         const result = await rebuild(controller.signal);
         controller.signal.throwIfAborted();
-        const completionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
-        for (let attempt = 0; attempt < completionAttempts; attempt += 1) {
+        for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
             controller.signal.throwIfAborted();
             try {
                 if (complete(lock)) {
@@ -757,7 +841,7 @@ export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, de
                 }
             }
             catch { }
-            if (attempt + 1 < completionAttempts) {
+            if (attempt + 1 < transitionAttempts) {
                 await new Promise((resolve) => {
                     setTimeout(resolve, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
                 });
@@ -770,17 +854,37 @@ export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, de
         throw androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable');
     }
     catch (cause) {
-        clearInterval(heartbeatTimer);
-        try {
-            await cleanup();
+        if (leaseAuthorityLost) {
+            clearInterval(heartbeatTimer);
+            throw controller.signal.reason;
         }
-        catch {
-            throw androidRebuildRefusal(error, 'runner artifact cleanup could not be verified');
+        if (!(await persistTransition(beginCleanup))) {
+            clearInterval(heartbeatTimer);
+            throw leaseAuthorityLost
+                ? controller.signal.reason
+                : androidRebuildRefusal(error, 'runner artifact cleanup fence was not durable');
         }
+        cleanupController = new AbortController();
+        const cleanupTimer = setTimeout(() => cleanupController?.abort(androidRebuildRefusal(error, 'runner artifact cleanup exceeded its time limit')), dependencies.cleanupTimeoutMs ?? ANDROID_REBUILD_CLEANUP_TIMEOUT_MS);
+        let cleanupVerified = false;
         try {
-            release(lock);
+            await cleanup(cleanupController.signal);
+            cleanupController.signal.throwIfAborted();
+            cleanupVerified = true;
         }
         catch { }
+        clearTimeout(cleanupTimer);
+        cleanupController = undefined;
+        const terminalPersisted = await persistTransition(cleanupVerified ? release : markCleanupUnverified);
+        clearInterval(heartbeatTimer);
+        if (!terminalPersisted) {
+            throw leaseAuthorityLost
+                ? controller.signal.reason
+                : androidRebuildRefusal(error, 'runner artifact failure state was not durable');
+        }
+        if (!cleanupVerified) {
+            throw androidRebuildRefusal(error, 'runner artifact cleanup could not be verified');
+        }
         throw controller.signal.aborted ? controller.signal.reason : cause;
     }
 }
@@ -826,8 +930,8 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
                     _forceLocalBuild: true,
                     _rebuildSignal: signal,
                 });
-            }, async () => {
-                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+            }, async (signal) => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
             });
             pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
             return state;
@@ -845,8 +949,8 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
                     _forceLocalBuild: true,
                     _rebuildSignal: signal,
                 });
-            }, async () => {
-                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+            }, async (signal) => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
             });
             pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
             return state;
@@ -1071,7 +1175,8 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         });
     });
 }
-export async function stopAndroidRunner(deviceId) {
+export async function stopAndroidRunner(deviceId, signal) {
+    signal?.throwIfAborted();
     // GH #383 (review amendment): adopt first so a post-respawn stop finds the
     // persisted runner (empty in-memory state would otherwise leak the forward).
     adoptPersistedAndroidState(deviceId ?? undefined);
@@ -1081,7 +1186,7 @@ export async function stopAndroidRunner(deviceId) {
     if (typeof stoppedState?.hostPort === 'number') {
         const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
         try {
-            await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort));
+            await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort), { timeout: ADB_CLEANUP_TIMEOUT_MS, signal });
         }
         catch {
             /* non-fatal */

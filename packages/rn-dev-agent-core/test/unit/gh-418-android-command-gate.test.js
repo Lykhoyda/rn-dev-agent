@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import {
   acquireAndroidRunnerRebuildLock,
   AndroidAuthorityStaleError,
+  beginAndroidRunnerRebuildCleanup,
   completeAndroidRunnerRebuildLock,
   heartbeatAndroidRunnerRebuildLock,
   probeAndroidRunnerHealthInfo,
@@ -20,6 +21,7 @@ import {
   AndroidCommandsStaleError,
   androidRetryCleanupContext,
   runBoundedAndroidRunnerRebuild,
+  markAndroidRunnerRebuildCleanupUnverified,
   releaseAndroidRunnerRebuildLock,
   _setFetchForTest,
 } from '../../dist/runners/rn-android-runner-client.js';
@@ -75,7 +77,7 @@ test('Android authority upgrades use the bounded artifact rebuild owner', () => 
   assert.ok(err.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'));
   assert.match(
     runnerSource,
-    /err instanceof AndroidAuthorityStaleError[\s\S]*?runBoundedAndroidRunnerRebuild\(err, async \(signal\)[\s\S]*?signal\.throwIfAborted\(\)[\s\S]*?invalidateAndroidRunnerApks\(\)[\s\S]*?_forceLocalBuild: true[\s\S]*?_rebuildSignal: signal/,
+    /err instanceof AndroidAuthorityStaleError[\s\S]*?runBoundedAndroidRunnerRebuild\(\s*err,\s*async \(signal\)[\s\S]*?signal\.throwIfAborted\(\)[\s\S]*?invalidateAndroidRunnerApks\(\)[\s\S]*?_forceLocalBuild: true[\s\S]*?_rebuildSignal: signal/,
   );
   assert.match(
     runnerSource,
@@ -128,6 +130,7 @@ test('Android artifact rebuild preserves ownership mismatch after a failed rebui
           lock: { ownerNonce: 'lock-a', pluginVersion },
         }),
         heartbeat: () => true,
+        beginCleanup: () => true,
         complete: () => {
           assert.fail('failed rebuild must not be completed');
         },
@@ -158,6 +161,10 @@ test('Android artifact rebuild consumes a bounded attempt after failure', async 
           lock: { ownerNonce: 'lock-a', pluginVersion },
         }),
         heartbeat: () => true,
+        beginCleanup: () => {
+          events.push('fence');
+          return true;
+        },
         complete: () => {
           assert.fail('failed rebuild must not be completed');
         },
@@ -169,7 +176,7 @@ test('Android artifact rebuild consumes a bounded attempt after failure', async 
     ),
     /transient build failure/,
   );
-  assert.deepEqual(events, ['rebuild', 'cleanup', 'failed']);
+  assert.deepEqual(events, ['rebuild', 'fence', 'cleanup', 'failed']);
 });
 
 test('Android artifact rebuild lease heartbeats and finalizes under its nonce', () => {
@@ -217,6 +224,30 @@ test('Android artifact rebuild lease heartbeats and finalizes under its nonce', 
   }
 });
 
+test('Android cleanup fence blocks stale takeover until terminal persistence', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'rn-android-rebuild-cleanup-'));
+  const database = join(directory, 'lock.sqlite');
+  try {
+    const first = acquireAndroidRunnerRebuildLock('1.0.0', 1_000, 'owner-a', database);
+    assert.equal(first.status, 'acquired');
+    assert.equal(beginAndroidRunnerRebuildCleanup(first.lock, 2_000, database), true);
+    assert.deepEqual(
+      acquireAndroidRunnerRebuildLock('1.0.0', 2_000 + 15 * 60_000 + 1, 'owner-b', database),
+      { status: 'busy' },
+    );
+    assert.deepEqual(
+      acquireAndroidRunnerRebuildLock('2.0.0', 2_000 + 15 * 60_000 + 1, 'owner-b', database),
+      { status: 'busy' },
+    );
+    assert.equal(markAndroidRunnerRebuildCleanupUnverified(first.lock, 2_001, database), true);
+    assert.deepEqual(acquireAndroidRunnerRebuildLock('2.0.0', 2_002, 'owner-b', database), {
+      status: 'busy',
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('Android artifact rebuild heartbeats while the protected operation runs', async () => {
   let heartbeats = 0;
   const result = await runBoundedAndroidRunnerRebuild(
@@ -242,8 +273,10 @@ test('Android artifact rebuild heartbeats while the protected operation runs', a
   assert.ok(heartbeats >= 2);
 });
 
-test('Android artifact rebuild fences work when heartbeat authority is lost', async () => {
+test('Android stale rebuild owner skips cleanup and release after authority loss', async () => {
   let fenced = false;
+  let cleaned = false;
+  let released = false;
   await assert.rejects(
     runBoundedAndroidRunnerRebuild(
       new AndroidAuthorityStaleError('serial-a'),
@@ -258,7 +291,9 @@ test('Android artifact rebuild fences work when heartbeat authority is lost', as
             { once: true },
           );
         }),
-      noAndroidRebuildCleanup,
+      async () => {
+        cleaned = true;
+      },
       {
         acquire: (pluginVersion) => ({
           status: 'acquired',
@@ -266,7 +301,11 @@ test('Android artifact rebuild fences work when heartbeat authority is lost', as
         }),
         heartbeat: () => false,
         complete: () => assert.fail('authority-lost rebuild must not complete'),
-        release: () => true,
+        beginCleanup: () => assert.fail('stale owner must not start cleanup'),
+        release: () => {
+          released = true;
+          return true;
+        },
         heartbeatIntervalMs: 5,
       },
     ),
@@ -275,6 +314,8 @@ test('Android artifact rebuild fences work when heartbeat authority is lost', as
       error.message.includes('rebuild authority was lost'),
   );
   assert.equal(fenced, true);
+  assert.equal(cleaned, false);
+  assert.equal(released, false);
 });
 
 test('Android artifact completion is durable before exposing a ready runner', async () => {
@@ -325,6 +366,10 @@ test('Android artifact completion failure cleans up before releasing the lease',
           lock: { ownerNonce: 'lock-a', pluginVersion },
         }),
         heartbeat: () => true,
+        beginCleanup: () => {
+          events.push('fence');
+          return true;
+        },
         complete: () => {
           events.push('complete');
           return false;
@@ -341,51 +386,51 @@ test('Android artifact completion failure cleans up before releasing the lease',
       error instanceof AndroidAuthorityStaleError &&
       error.message.includes('completion was not durable'),
   );
-  assert.deepEqual(events, ['complete', 'complete', 'cleanup', 'release']);
+  assert.deepEqual(events, ['complete', 'complete', 'fence', 'cleanup', 'release']);
 });
 
-test('Android authority loss verifies device cleanup before releasing the lease', async () => {
+test('Android cleanup timeout persists cleanup-unverified before returning', async () => {
   const events = [];
   await assert.rejects(
     runBoundedAndroidRunnerRebuild(
       new AndroidAuthorityStaleError('serial-a'),
+      async () => {
+        throw new Error('build failed');
+      },
       (signal) =>
         new Promise((_resolve, reject) => {
-          signal.addEventListener(
-            'abort',
-            () => {
-              events.push('abort');
-              reject(signal.reason);
-            },
-            { once: true },
-          );
+          events.push('cleanup');
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         }),
-      async () => {
-        events.push('cleanup');
-      },
       {
         acquire: (pluginVersion) => ({
           status: 'acquired',
           lock: { ownerNonce: 'lock-a', pluginVersion },
         }),
-        heartbeat: () => false,
-        complete: () => assert.fail('authority-lost rebuild must not complete'),
-        release: () => {
-          events.push('release');
+        heartbeat: () => true,
+        beginCleanup: () => {
+          events.push('fence');
           return true;
         },
-        heartbeatIntervalMs: 5,
+        complete: () => assert.fail('failed rebuild must not complete'),
+        release: () => assert.fail('unverified cleanup must not be marked verified'),
+        markCleanupUnverified: () => {
+          events.push('cleanup-unverified');
+          return true;
+        },
+        cleanupTimeoutMs: 5,
       },
     ),
     (error) =>
       error instanceof AndroidAuthorityStaleError &&
-      error.message.includes('rebuild authority was lost'),
+      error.message.includes('cleanup could not be verified'),
   );
-  assert.deepEqual(events, ['abort', 'cleanup', 'release']);
+  assert.deepEqual(events, ['fence', 'cleanup', 'cleanup-unverified']);
 });
 
 test('Android rebuild refuses to release an attempt without verified cleanup', async () => {
   let released = false;
+  let cleanupUnverified = false;
   await assert.rejects(
     runBoundedAndroidRunnerRebuild(
       new AndroidAuthorityStaleError('serial-a'),
@@ -401,9 +446,14 @@ test('Android rebuild refuses to release an attempt without verified cleanup', a
           lock: { ownerNonce: 'lock-a', pluginVersion },
         }),
         heartbeat: () => true,
+        beginCleanup: () => true,
         complete: () => assert.fail('failed rebuild must not complete'),
         release: () => {
           released = true;
+          return true;
+        },
+        markCleanupUnverified: () => {
+          cleanupUnverified = true;
           return true;
         },
       },
@@ -413,6 +463,34 @@ test('Android rebuild refuses to release an attempt without verified cleanup', a
       error.message.includes('cleanup could not be verified'),
   );
   assert.equal(released, false);
+  assert.equal(cleanupUnverified, true);
+});
+
+test('Android rebuild refuses an undurable terminal failure state', async () => {
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      new AndroidAuthorityStaleError('serial-a'),
+      async () => {
+        throw new Error('build failed');
+      },
+      noAndroidRebuildCleanup,
+      {
+        acquire: (pluginVersion) => ({
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        }),
+        heartbeat: () => true,
+        beginCleanup: () => true,
+        complete: () => assert.fail('failed rebuild must not complete'),
+        release: () => false,
+        completionRetryIntervalMs: 1,
+        completionAttempts: 2,
+      },
+    ),
+    (error) =>
+      error instanceof AndroidAuthorityStaleError &&
+      error.message.includes('failure state was not durable'),
+  );
 });
 
 test('Android rebuild state initialization closes its store on schema failure', () => {

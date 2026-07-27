@@ -201,3 +201,24 @@ test('GH#237 release: resolveSerial throwing does not abort (best-effort, never 
   assert.deepEqual(r.forceStoppedPackages, []);
   assert.ok(r.warnings.some((w) => /resolveSerial failed/.test(w)));
 });
+
+test('GH#237 release: abort fences later destructive cleanup steps', async () => {
+  const controller = new AbortController();
+  const order = [];
+  await assert.rejects(
+    releaseAndroidInteractionSlot(
+      { deviceId: 'emulator-5554', includeLegacy: false, signal: controller.signal },
+      baseDeps({
+        stopOwnRunner: async () => {
+          order.push('stop');
+          controller.abort(new Error('authority lost'));
+        },
+        adbForceStop: async () => {
+          order.push('force-stop');
+        },
+      }),
+    ),
+    /authority lost/,
+  );
+  assert.deepEqual(order, ['stop']);
+});
