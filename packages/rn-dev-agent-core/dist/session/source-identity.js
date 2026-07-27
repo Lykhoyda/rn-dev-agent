@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { canonicalAuthorityJson } from './authority-json.js';
+import { verifyManagedMetroEnforcementReceipt } from './managed-metro-enforcement.js';
 function digest(parts) {
     const hash = createHash('sha256');
     for (const part of parts) {
@@ -213,7 +214,7 @@ function assertFinalMetroIntegration(identity) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block');
     }
 }
-function metroRuntimeInputs(identity, authority, readEvidenceHead) {
+function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntimeEnforcement) {
     if (!authority)
         return { paths: [], semantics: [] };
     if (authority.evidenceAuthority !== 'broker-v2') {
@@ -229,6 +230,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         contentRoot: receipt.contentRoot,
         appRoot: receipt.appRoot,
         runtimeEnforcement: receipt.runtimeEnforcement,
+        runtimeEnforcementReceipt: receipt.runtimeEnforcementReceipt,
         runtimeManifest: receipt.runtimeManifest,
         runtimeInputs: receipt.runtimeInputs,
         violations: receipt.violations,
@@ -249,6 +251,10 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
         !runtimeManifest ||
         runtimeManifest.version !== 1 ||
         typeof runtimeManifest.executable !== 'string' ||
+        typeof runtimeManifest.nodeExecutable !== 'string' ||
+        !Number.isSafeInteger(runtimeManifest.port) ||
+        runtimeManifest.port < 1 ||
+        runtimeManifest.port > 65_535 ||
         !Array.isArray(runtimeManifest.args) ||
         runtimeManifest.args.some((entry) => typeof entry !== 'string') ||
         typeof runtimeManifest.nodeOptions !== 'string' ||
@@ -278,6 +284,19 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead) {
     }
     if (receipt.runtimeEnforcement !== 'os-enforced-v1') {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable');
+    }
+    if (!verifyRuntimeEnforcement({
+        platform: process.platform,
+        appRoot: identity.appRoot,
+        sourceRoot: identity.contentRoot,
+        runtimeRoot: dirname(authority.evidencePath),
+        nodeExecutable: runtimeManifest.nodeExecutable,
+        commandExecutable: runtimeManifest.executable,
+        port: runtimeManifest.port,
+        instanceId: authority.metroInstanceId,
+        runtimeInputs: receipt.runtimeInputs,
+    }, receipt.runtimeEnforcementReceipt)) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid');
     }
     if (receipt.violations.length > 0) {
         throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt.violations[0]}`);
@@ -640,7 +659,8 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
     const pathExists = dependencies.exists ?? existsSync;
     assertFinalMetroIntegration(identity);
     const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
-    const runtimeInputs = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy, evidenceHeadReader);
+    const runtimeEnforcementVerifier = dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
+    const runtimeInputs = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
     const head = git(identity.contentRoot, ['rev-parse', 'HEAD']);
     const diff = git(identity.contentRoot, ['diff', '--binary', '--no-ext-diff', head, '--']);
     const untracked = git(identity.contentRoot, ['ls-files', '--others', '--exclude-standard', '-z'])
@@ -734,7 +754,7 @@ export function strictProofSourceIdentity(identity, dependencies = {}) {
         }
         throw new Error('STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink');
     }
-    const runtimeInputsAfter = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy, evidenceHeadReader);
+    const runtimeInputsAfter = metroRuntimeInputs(identity, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
     if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
         throw new Error('STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing');
     }

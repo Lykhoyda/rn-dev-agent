@@ -414,6 +414,8 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   const runtimeManifest = {
     version: 1,
     executable: process.execPath,
+    nodeExecutable: process.execPath,
+    port: 8341,
     args: ['metro', '--port', '8341'],
     nodeOptions: '',
     environmentDigest: 'ab'.repeat(32),
@@ -426,6 +428,20 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     dependencyRoots: [],
     runtimeInputs: [],
   };
+  const enforcementReceipt = {
+    version: 1,
+    kind: 'darwin-seatbelt-v1',
+    profileSha256: '12'.repeat(32),
+    sandboxExecutableSha256: '34'.repeat(32),
+    sandboxExecutableCdHash: '56'.repeat(20),
+    processCreationDenied: true,
+    unmanifestedReadDenied: true,
+    unmanifestedWriteDenied: true,
+    symlinkEscapeDenied: true,
+    unallocatedListenerDenied: true,
+    allocatedListenerAllowed: true,
+    networkOutboundDenied: true,
+  };
   const policyPayload = (runtimeEnforcement: 'os-enforced-v1' | 'unsupported') => ({
     version: 1,
     runtimeEvidenceAuthority: 'broker-v2',
@@ -434,6 +450,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     contentRoot: root,
     appRoot: root,
     runtimeEnforcement,
+    runtimeEnforcementReceipt: runtimeEnforcement === 'os-enforced-v1' ? enforcementReceipt : null,
     runtimeManifest,
     runtimeInputs: [],
     violations: [],
@@ -529,13 +546,26 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
         .digest('hex'),
     });
   };
-  const dependencies = { git, metroRuntimePolicy, readMetroEvidenceHead };
+  const dependencies = {
+    git,
+    metroRuntimePolicy,
+    readMetroEvidenceHead,
+    verifyMetroRuntimeEnforcement: () => true,
+  };
   publishPolicy('unsupported');
   assert.throws(
     () => strictProofSourceIdentity(identity, dependencies),
     /closed-world runtime enforcement is unavailable/,
   );
   publishPolicy('os-enforced-v1');
+  assert.throws(
+    () =>
+      strictProofSourceIdentity(identity, {
+        ...dependencies,
+        verifyMetroRuntimeEnforcement: () => false,
+      }),
+    /runtime enforcement attestation is invalid/,
+  );
   publishRuntimeLoads([runtimeLoadPayload]);
   const first = strictProofSourceIdentity(identity, dependencies);
   const semanticsValue = JSON.stringify({

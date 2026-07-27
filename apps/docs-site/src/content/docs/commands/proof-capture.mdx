@@ -1,13 +1,13 @@
 ---
 title: "proof-capture"
-description: "Capture interactive PR-ready video and screenshots; strict machine proof currently fails closed."
+description: "Capture PR-ready video and screenshots, with attested machine acceptance in strict mode."
 sidebar:
   order: 5
 ---
 
 Use the interactive workflow for video, screenshots, and a PR body. Strict
-machine proof is currently unavailable because the managed Metro launcher
-cannot yet provide the required closed-world runtime enforcement.
+machine proof runs through the proof controller and requires an independently
+attested `broker-v2` managed Metro runtime.
 
 ## Usage
 
@@ -26,11 +26,13 @@ cannot yet provide the required closed-world runtime enforcement.
 
 ## Strict Mode
 
-`--strict` fails closed with `STRICT_PROOF_UNVERIFIED_METRO_POLICY` before
-recording and never emits an accepted receipt. Do not substitute interactive
-artifacts when a machine receipt or merge-ready evidence is required. See
-[Parallel session authority](/rn-dev-agent/session-authority/) for the owned
-runtime-enforcement contract.
+`--strict` first loads the controller contract. On Darwin, a verified
+Apple-platform sandbox and a passing closed-world preflight can establish
+`broker-v2`; unsupported hosts, invalid receipts, and runtime violations fail
+closed with `STRICT_PROOF_UNVERIFIED_METRO_POLICY`. Do not substitute
+interactive artifacts when a machine receipt or merge-ready evidence is
+required. See [Parallel session authority](/rn-dev-agent/session-authority/)
+for the runtime-enforcement contract.
 
 ## Interactive Artifacts
 

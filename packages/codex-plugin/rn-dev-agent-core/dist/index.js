@@ -424,11 +424,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants4);
+          this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -445,10 +445,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants4);
+        this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -509,8 +509,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants4) {
-        this.code = optimizeExpr(this.code, names, constants4);
+      optimizeNames(names, constants5) {
+        this.code = optimizeExpr(this.code, names, constants5);
         return this;
       }
       get names() {
@@ -539,12 +539,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants4))
+          if (n.optimizeNames(names, constants5))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -597,12 +597,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
-        if (!(super.optimizeNames(names, constants4) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
+        if (!(super.optimizeNames(names, constants5) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants4);
+        this.condition = optimizeExpr(this.condition, names, constants5);
         return this;
       }
       get names() {
@@ -625,10 +625,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants4) {
-        if (!super.optimizeNames(names, constants4))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants4);
+        this.iteration = optimizeExpr(this.iteration, names, constants5);
         return this;
       }
       get names() {
@@ -664,10 +664,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants4) {
-        if (!super.optimizeNames(names, constants4))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants4);
+        this.iterable = optimizeExpr(this.iterable, names, constants5);
         return this;
       }
       get names() {
@@ -709,11 +709,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         var _a, _b;
-        super.optimizeNames(names, constants4);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
+        super.optimizeNames(names, constants5);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
         return this;
       }
       get names() {
@@ -1014,7 +1014,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants4) {
+    function optimizeExpr(expr, names, constants5) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1029,14 +1029,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants4[n.str];
+        const c = constants5[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants5[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve9.call(this, root, ref);
+      let _sch = resolve10.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve9(root, ref) {
+    function resolve10(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3750,7 +3750,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve9(baseURI, relativeURI, options) {
+    function resolve10(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -4007,7 +4007,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve9,
+      resolve: resolve10,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes8, createHash: createHash18 } = __require("crypto");
+    var { randomBytes: randomBytes8, createHash: createHash19 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash18("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash19("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash18 } = __require("crypto");
+    var { createHash: createHash19 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash18("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash19("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -16300,8 +16300,8 @@ var require_cst_visit = __commonJS({
     visit.REMOVE = REMOVE;
     visit.itemAtPath = (cst, path) => {
       let item = cst;
-      for (const [field, index] of path) {
-        const tok = item?.[field];
+      for (const [field2, index] of path) {
+        const tok = item?.[field2];
         if (tok && "items" in tok) {
           item = tok.items[index];
         } else
@@ -16311,8 +16311,8 @@ var require_cst_visit = __commonJS({
     };
     visit.parentCollection = (cst, path) => {
       const parent = visit.itemAtPath(cst, path.slice(0, -1));
-      const field = path[path.length - 1][0];
-      const coll = parent?.[field];
+      const field2 = path[path.length - 1][0];
+      const coll = parent?.[field2];
       if (coll && "items" in coll)
         return coll;
       throw new Error("Parent collection not found");
@@ -16321,11 +16321,11 @@ var require_cst_visit = __commonJS({
       let ctrl = visitor(item, path);
       if (typeof ctrl === "symbol")
         return ctrl;
-      for (const field of ["key", "value"]) {
-        const token2 = item[field];
+      for (const field2 of ["key", "value"]) {
+        const token2 = item[field2];
         if (token2 && "items" in token2) {
           for (let i = 0; i < token2.items.length; ++i) {
-            const ci = _visit(Object.freeze(path.concat([[field, i]])), token2.items[i], visitor);
+            const ci = _visit(Object.freeze(path.concat([[field2, i]])), token2.items[i], visitor);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -16335,7 +16335,7 @@ var require_cst_visit = __commonJS({
               i -= 1;
             }
           }
-          if (typeof ctrl === "function" && field === "key")
+          if (typeof ctrl === "function" && field2 === "key")
             ctrl = ctrl(item, path);
         }
       }
@@ -19914,7 +19914,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve9) => setTimeout(resolve9, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve10) => setTimeout(resolve10, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -21083,7 +21083,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -21101,7 +21101,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve9();
+        resolve10();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -21142,7 +21142,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -21207,7 +21207,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve9(state);
+      resolve10(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -21497,7 +21497,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve9) => spawnedChild.once("exit", () => resolve9())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve10) => spawnedChild.once("exit", () => resolve10())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -21690,7 +21690,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve9) => setTimeout(resolve9, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve10) => setTimeout(resolve10, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -22137,7 +22137,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve9) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve10) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -22163,7 +22163,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve9(ok);
+        resolve10(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -22232,7 +22232,7 @@ var init_no_change_tracker = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer as createServer2 } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer2();
       srv.once("error", (err) => {
@@ -22248,7 +22248,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve9(chosen));
+        srv.close(() => resolve10(chosen));
       });
     };
     tryListen(preferred, true);
@@ -22305,7 +22305,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync9(p),
     removeFile: (p) => unlinkSync4(p),
-    delay: (ms) => new Promise((resolve9) => setTimeout(resolve9, ms)),
+    delay: (ms) => new Promise((resolve10) => setTimeout(resolve10, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -22946,7 +22946,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     hostPort = await findFreePort(0);
     await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort));
   }
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
@@ -23012,7 +23012,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve9(state);
+      resolve10(state);
     };
     child.on("error", (err) => {
       removeForward();
@@ -24965,13 +24965,13 @@ async function detect(resolvers) {
   } catch {
     version2 = null;
   }
-  let sha256 = null;
+  let sha2562 = null;
   try {
-    sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
   } catch {
-    sha256 = null;
+    sha2562 = null;
   }
-  const cls = classifyEnginePin({ installed: true, version: version2, sha256 }, platformKey);
+  const cls = classifyEnginePin({ installed: true, version: version2, sha256: sha2562 }, platformKey);
   return buildReplayEngineStatus(cls, version2, cliPresent);
 }
 function getEngineStatus(resolvers) {
@@ -25195,8 +25195,8 @@ async function probeFreshness(client2, timeoutMs = FRESHNESS_PROBE_MS) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve9) => {
-        probeTimer = setTimeout(() => resolve9({ error: "timeout" }), timeoutMs);
+      new Promise((resolve10) => {
+        probeTimer = setTimeout(() => resolve10({ error: "timeout" }), timeoutMs);
       })
     ]);
     if (probeTimer)
@@ -25241,8 +25241,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve9) => {
-        timer = setTimeout(() => resolve9({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve10) => {
+        timer = setTimeout(() => resolve10({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -27241,7 +27241,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve9) => setTimeout(resolve9, retryDelayMs));
+            await new Promise((resolve10) => setTimeout(resolve10, retryDelayMs));
           }
         }
       }
@@ -27552,17 +27552,17 @@ function requireDeviceTransition(status, args) {
     }
   }
 }
-function bindExactArgument(args, field, expected, code) {
+function bindExactArgument(args, field2, expected, code) {
   if (expected === void 0 || expected === null || expected === "")
     return;
-  const supplied = args[field];
+  const supplied = args[field2];
   if (supplied !== void 0 && supplied !== expected) {
-    throw new SessionAuthorityError(code, `${field} contradicts the active session binding`, void 0, {
+    throw new SessionAuthorityError(code, `${field2} contradicts the active session binding`, void 0, {
       expected: shortAuthorityIdentity(expected),
       observed: shortAuthorityIdentity(supplied)
     });
   }
-  args[field] = expected;
+  args[field2] = expected;
 }
 function bindSourcePaths(status, args) {
   let appRoot;
@@ -27573,24 +27573,24 @@ function bindSourcePaths(status, args) {
   } catch {
     throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "active session app root is unavailable");
   }
-  for (const field of ["projectRoot", "flowPath", "flowDir", "scanDir"]) {
-    const supplied = args[field];
+  for (const field2 of ["projectRoot", "flowPath", "flowDir", "scanDir"]) {
+    const supplied = args[field2];
     if (supplied === void 0)
       continue;
     if (typeof supplied !== "string" || supplied.length === 0) {
-      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field} must be a non-empty path within the active app root`);
+      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} must be a non-empty path within the active app root`);
     }
     let candidate;
     try {
       candidate = realpathSync3(isAbsolute2(supplied) ? supplied : resolve2(appRoot, supplied));
     } catch {
-      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field} cannot be resolved within the active app root`);
+      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
     const child = relative(appRoot, candidate);
     if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute2(child)) {
-      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field} is outside the active session app root`);
+      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} is outside the active session app root`);
     }
-    args[field] = candidate;
+    args[field2] = candidate;
   }
 }
 function bindSessionArguments(status, profile, args) {
@@ -29300,7 +29300,7 @@ function defaultDeps2() {
     },
     fileExists: (path) => existsSync16(path),
     removeFile: (path) => unlinkSync6(path),
-    delay: (ms) => new Promise((resolve9) => setTimeout(resolve9, ms)),
+    delay: (ms) => new Promise((resolve10) => setTimeout(resolve10, ms)),
     listApps: (udid) => execFileSync6("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
@@ -31778,9 +31778,9 @@ function snapshotToSearchText(raw) {
     if (Array.isArray(nodes)) {
       const lines = [];
       for (const n of nodes) {
-        for (const field of [n?.label, n?.identifier]) {
-          if (typeof field === "string" && field.trim().length > 0)
-            lines.push(field.trim());
+        for (const field2 of [n?.label, n?.identifier]) {
+          if (typeof field2 === "string" && field2.trim().length > 0)
+            lines.push(field2.trim());
         }
       }
       return lines.join("\n");
@@ -32168,12 +32168,12 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash17, createHmac as createHmac5, randomUUID as randomUUID8 } from "node:crypto";
-import { readFileSync as readFileSync38, rmSync as rmSync10 } from "node:fs";
+import { createHash as createHash18, createHmac as createHmac5, randomUUID as randomUUID8 } from "node:crypto";
+import { readFileSync as readFileSync39, rmSync as rmSync11 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
-import { dirname as dirname21, join as join54 } from "node:path";
+import { dirname as dirname22, join as join54 } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -37960,10 +37960,10 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     const shape = def.shape;
     const propValues = {};
     for (const key in shape) {
-      const field = shape[key]._zod;
-      if (field.values) {
+      const field2 = shape[key]._zod;
+      if (field2.values) {
         propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
-        for (const v of field.values)
+        for (const v of field2.values)
           propValues[key].add(v);
       }
     }
@@ -44266,7 +44266,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
+        await new Promise((resolve10) => setTimeout(resolve10, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -44283,7 +44283,7 @@ var Protocol = class {
    */
   request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve10, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -44361,7 +44361,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve9(parseResult.data);
+            resolve10(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -44622,12 +44622,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve10, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve9, interval);
+      const timeoutId = setTimeout(resolve10, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -45727,7 +45727,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
+      await new Promise((resolve10) => setTimeout(resolve10, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -45770,11 +45770,11 @@ var McpServer = class {
       return EMPTY_COMPLETION_RESULT;
     }
     const promptShape = getObjectShape(prompt.argsSchema);
-    const field = promptShape?.[request2.params.argument.name];
-    if (!isCompletable(field)) {
+    const field2 = promptShape?.[request2.params.argument.name];
+    if (!isCompletable(field2)) {
       return EMPTY_COMPLETION_RESULT;
     }
-    const completer = getCompleter(field);
+    const completer = getCompleter(field2);
     if (!completer) {
       return EMPTY_COMPLETION_RESULT;
     }
@@ -46047,8 +46047,8 @@ var McpServer = class {
     };
     this._registeredPrompts[name] = registeredPrompt;
     if (argsSchema) {
-      const hasCompletable = Object.values(argsSchema).some((field) => {
-        const inner = field instanceof ZodOptional ? field._def?.innerType : field;
+      const hasCompletable = Object.values(argsSchema).some((field2) => {
+        const inner = field2 instanceof ZodOptional ? field2._def?.innerType : field2;
         return isCompletable(inner);
       });
       if (hasCompletable) {
@@ -46257,9 +46257,9 @@ function promptArgumentsFromSchema(schema) {
   const shape = getObjectShape(schema);
   if (!shape)
     return [];
-  return Object.entries(shape).map(([name, field]) => {
-    const description = getSchemaDescription(field);
-    const isOptional = isSchemaOptional(field);
+  return Object.entries(shape).map(([name, field2]) => {
+    const description = getSchemaDescription(field2);
+    const isOptional = isSchemaOptional(field2);
     return {
       name,
       description,
@@ -46376,12 +46376,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve9) => {
+    return new Promise((resolve10) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve9();
+        resolve10();
       } else {
-        this._stdout.once("drain", resolve9);
+        this._stdout.once("drain", resolve10);
       }
     });
   }
@@ -46933,7 +46933,7 @@ var MetroEventsClient = class {
   async connectOnce() {
     this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-    return new Promise((resolve9) => {
+    return new Promise((resolve10) => {
       const ws = new wrapper_default(url, {
         headers: { Origin: metroOrigin(url) }
       });
@@ -46947,7 +46947,7 @@ var MetroEventsClient = class {
         this._connectionEpoch += 1;
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
-        resolve9();
+        resolve10();
       };
       const onFail = (reason) => {
         if (outcome !== null)
@@ -46955,7 +46955,7 @@ var MetroEventsClient = class {
         outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
-        resolve9();
+        resolve10();
       };
       ws.once("open", onOpen);
       ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -47133,7 +47133,7 @@ var CDPMultiplexer = class {
     logger.info(this.opts.logTag, "multiplexer stopped");
   }
   startConsumerServer() {
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve10, reject) => {
       this.httpServer = createServer();
       this.wss = new import_websocket_server.default({
         server: this.httpServer,
@@ -47165,12 +47165,12 @@ var CDPMultiplexer = class {
           return;
         }
         this.boundPort = addr.port;
-        resolve9(addr.port);
+        resolve10(addr.port);
       });
     });
   }
   connectHermes() {
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve10, reject) => {
       const ws = new wrapper_default(this.opts.hermesUrl, {
         headers: { Origin: metroOrigin(this.opts.hermesUrl) }
       });
@@ -47181,7 +47181,7 @@ var CDPMultiplexer = class {
           ws.send(msg3);
         this.hermesBuffer = [];
         logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-        resolve9();
+        resolve10();
       };
       const onError = (err) => {
         ws.off("open", onOpen);
@@ -47359,8 +47359,8 @@ var CDPMultiplexer = class {
       this.wss = null;
     }
     if (this.httpServer) {
-      await new Promise((resolve9) => {
-        this.httpServer?.close(() => resolve9());
+      await new Promise((resolve10) => {
+        this.httpServer?.close(() => resolve10());
       });
       this.httpServer = null;
     }
@@ -50690,13 +50690,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve9, reject, timer });
+    pending2.set(id, { resolve: resolve10, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -51075,7 +51075,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
   throw new Error(formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null));
 }
 function connectWs(ctx, url) {
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const ws = new wrapper_default(url, {
       handshakeTimeout: 5e3,
       maxPayload: 100 * 1024 * 1024,
@@ -51097,7 +51097,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve9();
+      resolve10();
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -57056,10 +57056,10 @@ function createDeviceBatchHandler(getClient2) {
       let stepTimedOut = false;
       const result = await Promise.race([
         executeStep(step, getClient2),
-        new Promise((resolve9) => {
+        new Promise((resolve10) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
-            resolve9(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
+            resolve10(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
           }, stepTimeout);
         })
       ]);
@@ -60499,7 +60499,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -60568,7 +60568,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve9(entries);
+        resolve10(entries);
       }
     });
     proc.on("error", (err) => {
@@ -60633,7 +60633,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -60701,7 +60701,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve9(entries);
+        resolve10(entries);
       }
     });
     proc.on("error", (err) => {
@@ -62000,11 +62000,11 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 import { execFile as execFile23 } from "node:child_process";
-import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync27 } from "node:fs";
+import { createHash as createHash9 } from "node:crypto";
+import { existsSync as existsSync28 } from "node:fs";
 import { promisify as promisify25 } from "node:util";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { dirname as dirname14, join as join33 } from "node:path";
+import { dirname as dirname15, join as join33 } from "node:path";
 init_process_birth();
 
 // packages/rn-dev-agent-core/dist/session/runtime.js
@@ -62158,8 +62158,8 @@ import { promisify as promisify24 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync8, spawn as spawn6 } from "node:child_process";
-import { createHash as createHash7, createHmac, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync4, existsSync as existsSync26, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync5, rmSync as rmSync9 } from "node:fs";
+import { createHash as createHash8, createHmac, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { closeSync as closeSync5, existsSync as existsSync27, mkdirSync as mkdirSync16, openSync as openSync5, readFileSync as readFileSync24, realpathSync as realpathSync6, rmSync as rmSync10 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
 init_metro_cwd();
@@ -62356,6 +62356,236 @@ function canonicalAuthorityJson(value) {
   return encode(value);
 }
 
+// packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
+import { spawnSync as spawnSync3 } from "node:child_process";
+import { createHash as createHash7 } from "node:crypto";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync26, mkdirSync as mkdirSync15, openSync as openSync4, readFileSync as readFileSync23, realpathSync as realpathSync5, rmSync as rmSync9, statSync as statSync10, symlinkSync, writeSync as writeSync2 } from "node:fs";
+import { dirname as dirname14, resolve as resolve5 } from "node:path";
+var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
+var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
+function sha256(value) {
+  return createHash7("sha256").update(value).digest("hex");
+}
+function defaultRun2(command, args) {
+  const result = spawnSync3(command, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5e3
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? result.error?.message ?? ""
+  };
+}
+function field(details, name) {
+  const prefix = `${name}=`;
+  return details.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length).trim() ?? null;
+}
+function verifiedSandboxExecutable(dependencies) {
+  const exists = dependencies.exists ?? existsSync26;
+  const canonicalize = dependencies.canonicalize ?? realpathSync5;
+  const stat2 = dependencies.stat ?? statSync10;
+  const readBytes = dependencies.readBytes ?? readFileSync23;
+  const run = dependencies.run ?? defaultRun2;
+  try {
+    if (!exists(DARWIN_SANDBOX_EXECUTABLE))
+      return null;
+    if (canonicalize(DARWIN_SANDBOX_EXECUTABLE) !== DARWIN_SANDBOX_EXECUTABLE)
+      return null;
+    const metadata = stat2(DARWIN_SANDBOX_EXECUTABLE);
+    if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 18) !== 0)
+      return null;
+    const verification = run(DARWIN_CODESIGN_EXECUTABLE, [
+      "--verify",
+      "--strict",
+      DARWIN_SANDBOX_EXECUTABLE
+    ]);
+    if (verification.status !== 0)
+      return null;
+    const details = run(DARWIN_CODESIGN_EXECUTABLE, [
+      "-dv",
+      "--verbose=4",
+      DARWIN_SANDBOX_EXECUTABLE
+    ]);
+    const authorities = details.stderr.split("\n").filter((line) => line.startsWith("Authority="));
+    const cdHash = field(details.stderr, "CDHash");
+    if (details.status !== 0 || field(details.stderr, "Identifier") !== "com.apple.sandbox-exec" || !/^\d+$/.test(field(details.stderr, "Platform identifier") ?? "") || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") || !authorities.includes("Authority=Software Signing") || !authorities.includes("Authority=Apple Code Signing Certification Authority") || !authorities.includes("Authority=Apple Root CA")) {
+      return null;
+    }
+    return {
+      path: DARWIN_SANDBOX_EXECUTABLE,
+      sha256: sha256(readBytes(DARWIN_SANDBOX_EXECUTABLE)),
+      cdHash
+    };
+  } catch {
+    return null;
+  }
+}
+function sandboxString(value) {
+  if (value.includes("\0"))
+    throw new Error("METRO_RUNTIME_ENFORCEMENT_PATH_INVALID");
+  return JSON.stringify(value);
+}
+function canonicalPath(path, canonicalize) {
+  try {
+    return canonicalize(path);
+  } catch {
+    return resolve5(path);
+  }
+}
+function pathFilters(paths) {
+  return paths.flatMap((path) => [
+    `    (literal ${sandboxString(path)})`,
+    `    (subpath ${sandboxString(path)})`
+  ]).join("\n");
+}
+function managedMetroSandboxProfile(input) {
+  const readRoots = [...new Set(input.readRoots)].sort();
+  const writeRoots = [...new Set(input.writeRoots)].sort();
+  const executablePaths = [...new Set(input.executablePaths)].sort();
+  const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
+  const pathAncestors = [.../* @__PURE__ */ new Set([...readRoots, ...writeRoots])].sort();
+  return `(version 1)
+(deny default)
+(import "system.sb")
+(deny process-fork)
+(deny network-outbound)
+(deny file-map-executable
+${pathFilters(executableMapDenyRoots)})
+(allow process-exec
+${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
+(allow file-read* file-test-existence
+${pathFilters(readRoots)})
+(allow file-read-metadata file-test-existence
+${pathAncestors.map((path) => `    (path-ancestors ${sandboxString(path)})`).join("\n")})
+(allow file-write* file-test-existence
+${pathFilters(writeRoots)})
+(allow network-bind
+    (local tcp ${sandboxString(`*:${input.port}`)}))
+(allow network-inbound
+    (local tcp ${sandboxString(`*:${input.port}`)}))
+`;
+}
+function prepareManagedMetroEnforcement(input, dependencies = {}) {
+  if (input.platform !== "darwin") {
+    return { status: "unsupported", reason: "host-enforcement-unavailable" };
+  }
+  const sandbox = verifiedSandboxExecutable(dependencies);
+  if (!sandbox) {
+    return { status: "unsupported", reason: "sandbox-executable-unverified" };
+  }
+  const canonicalize = dependencies.canonicalize ?? realpathSync5;
+  const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
+  const appRoot = canonicalPath(input.appRoot, canonicalize);
+  const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
+  const nodeExecutable = canonicalPath(input.nodeExecutable, canonicalize);
+  const commandExecutable = canonicalPath(input.commandExecutable, canonicalize);
+  const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
+  const expoStateRoot = resolve5(appRoot, ".expo");
+  const readRoots = [
+    sourceRoot,
+    appRoot,
+    runtimeRoot,
+    dirname14(dirname14(nodeExecutable)),
+    nodeExecutable,
+    commandExecutable,
+    ...runtimeInputs
+  ];
+  const executablePaths = [
+    nodeExecutable,
+    commandExecutable,
+    "/usr/bin/env",
+    "/bin/sh",
+    "/bin/bash"
+  ];
+  const profile = managedMetroSandboxProfile({
+    readRoots,
+    writeRoots: [runtimeRoot, expoStateRoot],
+    executablePaths,
+    executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
+    port: input.port
+  });
+  const canaryId = sha256(`${input.instanceId}\0${input.port}`).slice(0, 32);
+  return {
+    status: "enforced",
+    kind: "darwin-seatbelt-v1",
+    sandboxExecutable: sandbox.path,
+    sandboxExecutableSha256: sandbox.sha256,
+    sandboxExecutableCdHash: sandbox.cdHash,
+    profile,
+    profileSha256: sha256(profile),
+    canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
+    symlinkCanaryPath: resolve5(runtimeRoot, `enforcement-${canaryId}.canary`),
+    port: input.port,
+    unallocatedPort: input.port === 65535 ? input.port - 1 : input.port + 1,
+    nodeExecutable
+  };
+}
+var PREFLIGHT_SOURCE = String.raw`
+const { spawnSync } = require('node:child_process');
+const { readFileSync, writeFileSync } = require('node:fs');
+const { createConnection, createServer } = require('node:net');
+const input = JSON.parse(process.argv[1]);
+const denied = (run) => {
+  try {
+    run();
+    return false;
+  } catch (error) {
+    return error && (error.code === 'EPERM' || error.code === 'EACCES');
+  }
+};
+const processResult = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+const processCreationDenied =
+  processResult.status === null &&
+  processResult.error &&
+  (processResult.error.code === 'EPERM' || processResult.error.code === 'EACCES');
+const unmanifestedReadDenied = denied(() => readFileSync(input.canaryPath));
+const unmanifestedWriteDenied = denied(() => writeFileSync(input.canaryPath, 'forged'));
+const symlinkEscapeDenied = denied(() => readFileSync(input.symlinkCanaryPath));
+const listen = (port) =>
+  new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', (error) => resolve({ ok: false, code: error.code }));
+    server.listen(port, '127.0.0.1', () =>
+      server.close((error) => resolve({ ok: !error, code: error && error.code })),
+    );
+  });
+(async () => {
+  const allocated = await listen(input.port);
+  const unallocated = await listen(input.unallocatedPort);
+  const networkOutboundDenied = await new Promise((resolve) => {
+    const connection = createConnection(input.port, '127.0.0.1');
+    connection.once('connect', () => {
+      connection.destroy();
+      resolve(false);
+    });
+    connection.once('error', (error) =>
+      resolve(error.code === 'EPERM' || error.code === 'EACCES'),
+    );
+  });
+  const receipt = {
+    processCreationDenied: Boolean(processCreationDenied),
+    unmanifestedReadDenied,
+    unmanifestedWriteDenied,
+    symlinkEscapeDenied,
+    unallocatedListenerDenied:
+      !unallocated.ok && (unallocated.code === 'EPERM' || unallocated.code === 'EACCES'),
+    allocatedListenerAllowed: allocated.ok,
+    networkOutboundDenied,
+  };
+  process.stdout.write(JSON.stringify(receipt));
+  process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
+})().catch(() => process.exit(1));
+`;
+function verifyManagedMetroEnforcementReceipt(input, receipt2) {
+  if (!receipt2 || typeof receipt2 !== "object")
+    return false;
+  const observed = receipt2;
+  const plan = prepareManagedMetroEnforcement(input);
+  return plan.status === "enforced" && observed.version === 1 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.processCreationDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true;
+}
+
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
@@ -62467,10 +62697,36 @@ const contentRoot = process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT;
 const appRoot = process.env.RN_DEV_AGENT_METRO_APP_ROOT;
 const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
 const runtimeManifestSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST;
-if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource) {
+const runtimeEnforcementSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT;
+if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource || !runtimeEnforcementSource) {
   process.exit(1);
 }
 const runtimeManifest = JSON.parse(runtimeManifestSource);
+const runtimeEnforcement = JSON.parse(runtimeEnforcementSource);
+const enforcementReceipt = runtimeEnforcement.receipt;
+const brokerEnforced =
+  runtimeEnforcement.status === 'enforced' &&
+  runtimeEnforcement.kind === 'darwin-seatbelt-v1' &&
+  runtimeEnforcement.sandboxExecutable === '/usr/bin/sandbox-exec' &&
+  typeof runtimeEnforcement.profile === 'string' &&
+  /^[a-f0-9]{64}$/.test(runtimeEnforcement.profileSha256 || '') &&
+  createHash('sha256').update(runtimeEnforcement.profile).digest('hex') ===
+    runtimeEnforcement.profileSha256 &&
+  enforcementReceipt?.version === 1 &&
+  enforcementReceipt.kind === runtimeEnforcement.kind &&
+  enforcementReceipt.profileSha256 === runtimeEnforcement.profileSha256 &&
+  enforcementReceipt.sandboxExecutableSha256 ===
+    runtimeEnforcement.sandboxExecutableSha256 &&
+  enforcementReceipt.sandboxExecutableCdHash ===
+    runtimeEnforcement.sandboxExecutableCdHash &&
+  enforcementReceipt.processCreationDenied === true &&
+  enforcementReceipt.unmanifestedReadDenied === true &&
+  enforcementReceipt.unmanifestedWriteDenied === true &&
+  enforcementReceipt.symlinkEscapeDenied === true &&
+  enforcementReceipt.unallocatedListenerDenied === true &&
+  enforcementReceipt.allocatedListenerAllowed === true &&
+  enforcementReceipt.networkOutboundDenied === true;
+const runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -62479,7 +62735,7 @@ let buffered = '';
 function appendEvidence(payload) {
   const chainedPayload = {
     ...payload,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority,
     sequence: ++sequence,
     previousSignature,
   };
@@ -62496,12 +62752,13 @@ const violations = [];
 function publishPolicy() {
   const payload = {
     version: 1,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority,
     sessionId,
     metroInstanceId,
     contentRoot,
     appRoot,
-    runtimeEnforcement: 'unsupported',
+    runtimeEnforcement: brokerEnforced ? 'os-enforced-v1' : 'unsupported',
+    runtimeEnforcementReceipt: brokerEnforced ? enforcementReceipt : null,
     runtimeManifest,
     runtimeInputs: runtimeManifest.runtimeInputs,
     violations: [...violations],
@@ -62539,7 +62796,7 @@ function closeHeadConnection(connection) {
 function respondWithHead(connection, challenge) {
   const payload = {
     version: 1,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority,
     sessionId,
     metroInstanceId,
     challenge,
@@ -62602,7 +62859,11 @@ appendEvidence({
   digest: null,
 });
 publishPolicy();
-child = spawn(executable, args, {
+const sandboxExecutable = runtimeEnforcement.sandboxExecutable;
+const sandboxArgs = brokerEnforced
+  ? ['-p', runtimeEnforcement.profile, executable, ...args]
+  : args;
+child = spawn(brokerEnforced ? sandboxExecutable : executable, sandboxArgs, {
   cwd: process.cwd(),
   env: childEnvironment,
   stdio: ['inherit', 'inherit', 'inherit', 'ipc', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
@@ -62689,12 +62950,28 @@ evidence.on('data', (chunk) => {
           appendViolation('Metro runtime input could not be observed by the broker');
           continue;
         }
-        if (!runtimeManifest.runtimeInputs.includes(candidate) || digest !== payload.digest) {
+        const allowedRoots = [
+          runtimeManifest.contentRoot,
+          runtimeManifest.appRoot,
+          ...runtimeManifest.runtimeInputs,
+        ];
+        const withinManifest = allowedRoots.some(
+          (root) =>
+            candidate === root ||
+            candidate.startsWith(root.endsWith('/') ? root : root + '/'),
+        );
+        if (!withinManifest || digest !== payload.digest) {
           appendViolation('Metro runtime input is outside the broker manifest');
+          continue;
         }
+        if (brokerEnforced) appendEvidence({ ...payload, value: candidate });
         continue;
       }
-      appendViolation('Metro runtime execution is not independently broker-observed');
+      if (brokerEnforced) {
+        appendEvidence(payload);
+      } else {
+        appendViolation('Metro runtime execution is not independently broker-observed');
+      }
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -62812,7 +63089,7 @@ function managementProof(sessionId, authority, signerCapability) {
   })).digest("hex");
 }
 function verifyManagedMetroManagementProof(binding, input) {
-  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "broker-v2" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "broker-v2" && binding.runtimeEvidenceAuthority !== "reported-v1" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, {
@@ -62869,7 +63146,7 @@ function removeManagedMetroEvidenceSocket(path) {
   if (!/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path)) {
     throw new Error("METRO_EVIDENCE_SOCKET_INVALID");
   }
-  rmSync9(path, { force: true });
+  rmSync10(path, { force: true });
 }
 function removeManagedMetroEvidenceSocketSafely(path, dependencies) {
   try {
@@ -62890,7 +63167,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve9) => setTimeout(resolve9, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve10) => setTimeout(resolve10, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -62954,7 +63231,16 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
       sessionId: input.sessionId,
       ...legacyAuthority,
       runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority
-    })).digest("hex")
+    })).digest("hex"),
+    ...binding.runtimeEvidenceProtocol === 2 && typeof binding.servingRoot === "string" && Number.isSafeInteger(binding.buildGeneration) && binding.buildGeneration >= 0 ? [
+      managementProof(input.sessionId, {
+        ...legacyAuthority,
+        runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+        runtimeEvidenceProtocol: 2,
+        servingRoot: binding.servingRoot,
+        buildGeneration: binding.buildGeneration
+      }, input.signerCapability)
+    ] : []
   ] : [
     brokerV2ManagementProofV1(input.sessionId, {
       ...legacyAuthority,
@@ -63002,7 +63288,7 @@ async function waitForExactStopped(probe, deadlineMs, code, message) {
     if (Date.now() >= deadlineMs) {
       throw new SessionAuthorityError(code, message);
     }
-    await new Promise((resolve9) => setTimeout(resolve9, 25));
+    await new Promise((resolve10) => setTimeout(resolve10, 25));
   }
 }
 async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request2 = fetch) {
@@ -63252,7 +63538,7 @@ function compactUnique2(paths) {
   }
   return out;
 }
-function candidateRecordScripts(baseDir = dirname14(fileURLToPath2(import.meta.url))) {
+function candidateRecordScripts(baseDir = dirname15(fileURLToPath2(import.meta.url))) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
@@ -63268,12 +63554,12 @@ function candidateRecordScripts(baseDir = dirname14(fileURLToPath2(import.meta.u
     join33(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
-function resolveRecordScript(baseDir = dirname14(fileURLToPath2(import.meta.url))) {
+function resolveRecordScript(baseDir = dirname15(fileURLToPath2(import.meta.url))) {
   if (process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT) {
     return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
   }
   const candidates = candidateRecordScripts(baseDir);
-  return candidates.find((path) => existsSync27(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync28(path)) ?? candidates[0];
 }
 function getRecordScript() {
   return resolveRecordScript();
@@ -63317,7 +63603,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash8("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash9("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -63594,14 +63880,14 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash10, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID7 } from "node:crypto";
 import { execFileSync as execFileSync9 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync5, existsSync as existsSync28, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync15, openSync as openSync5, readFileSync as readFileSync24, realpathSync as realpathSync6, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
-import { basename as basename5, dirname as dirname15, extname, isAbsolute as isAbsolute4, join as join34, relative as relative2, resolve as resolve5, sep as sep5 } from "node:path";
+import { chmodSync as chmodSync4, closeSync as closeSync6, existsSync as existsSync29, fsyncSync, lstatSync as lstatSync7, mkdirSync as mkdirSync17, openSync as openSync6, readFileSync as readFileSync25, realpathSync as realpathSync7, renameSync as renameSync7, unlinkSync as unlinkSync9, writeFileSync as writeFileSync14 } from "node:fs";
+import { basename as basename5, dirname as dirname16, extname, isAbsolute as isAbsolute4, join as join34, relative as relative2, resolve as resolve6, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
@@ -63675,14 +63961,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash9("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash10("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash9("sha256").update(bytes).digest("hex");
+  return createHash10("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -63714,8 +64000,8 @@ function observedAuthorityReceiptHash(result) {
 function stringField(value, fields) {
   if (!value || typeof value !== "object")
     return null;
-  for (const field of fields) {
-    const candidate = value[field];
+  for (const field2 of fields) {
+    const candidate = value[field2];
     if (typeof candidate === "string" && candidate.length > 0)
       return candidate;
   }
@@ -64227,7 +64513,7 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash10("sha256").update(bytes).digest("hex");
+  return createHash11("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -64235,14 +64521,14 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let coreBundleSha256 = null;
   try {
     if (typeof argv[1] === "string" && isAbsolute4(argv[1])) {
-      executedEntrypointPath = realpathSync6(argv[1]);
+      executedEntrypointPath = realpathSync7(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync6(fileURLToPath3(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync7(fileURLToPath3(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -64259,7 +64545,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 var proofWorkerStartup = captureProofWorkerStartup();
 function realpathOrSelf(path) {
   try {
-    return realpathSync6(path);
+    return realpathSync7(path);
   } catch {
     return path;
   }
@@ -64267,7 +64553,7 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync6(candidateRoot);
+    root = realpathSync7(candidateRoot);
   } catch {
     return null;
   }
@@ -64276,7 +64562,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   let arg;
   try {
-    arg = realpathSync6(authorityArg);
+    arg = realpathSync7(authorityArg);
   } catch {
     return null;
   }
@@ -64303,7 +64589,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
       };
     }
     if (host === "codex-plugin" && arg === realpathOrSelf(join34(hostRoot, "bin", "cdp-supervisor.js"))) {
-      if (!existsSync28(coreIndex) || !existsSync28(coreSupervisor))
+      if (!existsSync29(coreIndex) || !existsSync29(coreSupervisor))
         return null;
       return {
         host,
@@ -64324,7 +64610,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     if (!value || !isAbsolute4(value))
       return value ? null : "";
     try {
-      return realpathSync6(value);
+      return realpathSync7(value);
     } catch {
       return null;
     }
@@ -64346,7 +64632,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync6(candidateRoot);
+    const root = realpathSync7(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -64359,7 +64645,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync6(artifactPath);
+      const resolvedArtifactPath = realpathSync7(artifactPath);
       const artifactRelativePath = relative2(root, resolvedArtifactPath).split(sep5).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
@@ -64368,7 +64654,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       const headBytes = execFileSync9("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
-      const artifactBytes = readFileSync24(resolvedArtifactPath);
+      const artifactBytes = readFileSync25(resolvedArtifactPath);
       if (hashBytes(artifactBytes) !== hashBytes(headBytes))
         return null;
       verifiedBytes.push(artifactBytes);
@@ -64379,7 +64665,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync6(resolve5(candidateRoot));
+  const root = realpathSync7(resolve6(candidateRoot));
   const sha = execFileSync9("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -64447,23 +64733,23 @@ function sameProofAction(left, right) {
 function readProofActionIdentity(appProjectRoot, actionId) {
   try {
     const path = actionPathFor(appProjectRoot, actionId);
-    const bytesBefore = readFileSync24(path);
+    const bytesBefore = readFileSync25(path);
     const action = loadAction(appProjectRoot, actionId);
-    const bytesAfter = readFileSync24(path);
+    const bytesAfter = readFileSync25(path);
     if (!action || action.metadata.id !== actionId || !bytesBefore.equals(bytesAfter) || !Number.isInteger(action.state.revision) || action.state.revision < 1) {
       return null;
     }
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash10("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash11("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute4(root) || !isAbsolute4(path) || resolve5(root) !== root || resolve5(path) !== path) {
+  if (!isAbsolute4(root) || !isAbsolute4(path) || resolve6(root) !== root || resolve6(path) !== path) {
     return false;
   }
   const fromRoot = relative2(root, path);
@@ -64472,7 +64758,7 @@ function isNormalizedDescendant(root, path) {
 function hasExistingSymlink(root, path) {
   const parts = relative2(root, path).split(sep5);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve5(root, ...parts.slice(0, length));
+    const candidate = resolve6(root, ...parts.slice(0, length));
     try {
       if (lstatSync7(candidate).isSymbolicLink())
         return true;
@@ -64482,7 +64768,7 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve5(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve6(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
@@ -64510,7 +64796,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute4(detectedProjectRoot) || resolve5(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute4(detectedProjectRoot) || resolve6(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -64518,7 +64804,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute4(root) && resolve5(root) === root ? root : null;
+    return root && isAbsolute4(root) && resolve6(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -64634,14 +64920,14 @@ function traceFor(storyboard, events) {
   return validateTrace([...required3, ...allowedExtras], events);
 }
 function readProofContractAt(moduleUrl = import.meta.url) {
-  const moduleDir = dirname15(fileURLToPath3(moduleUrl));
+  const moduleDir = dirname16(fileURLToPath3(moduleUrl));
   const candidates = [
-    resolve5(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve5(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve6(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve6(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
-      const bytes = readFileSync24(path, "utf8");
+      const bytes = readFileSync25(path, "utf8");
       return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
     } catch {
     }
@@ -64649,22 +64935,22 @@ function readProofContractAt(moduleUrl = import.meta.url) {
   throw new Error("PROOF_CONTRACT_MISSING");
 }
 function writeProofReceiptAtomic(path, receipt2) {
-  const directory = dirname15(path);
-  mkdirSync15(directory, { recursive: true, mode: 448 });
-  const temporary = resolve5(directory, `.${randomUUID7()}.proof-receipt.tmp`);
+  const directory = dirname16(path);
+  mkdirSync17(directory, { recursive: true, mode: 448 });
+  const temporary = resolve6(directory, `.${randomUUID7()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
-    descriptor = openSync5(temporary, "wx", 384);
+    descriptor = openSync6(temporary, "wx", 384);
     writeFileSync14(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
-    closeSync5(descriptor);
+    closeSync6(descriptor);
     descriptor = null;
     renameSync7(temporary, path);
     chmodSync4(path, 384);
   } catch (error2) {
     if (descriptor !== null)
-      closeSync5(descriptor);
+      closeSync6(descriptor);
     try {
       unlinkSync9(temporary);
     } catch {
@@ -65434,11 +65720,11 @@ function createProofCaptureHandler(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir10 } from "node:os";
-import { dirname as dirname16, join as join35 } from "node:path";
+import { dirname as dirname17, join as join35 } from "node:path";
 var MediaFailure = class extends Error {
   reason;
   constructor(reason) {
@@ -65477,7 +65763,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash11("sha256");
+  const hash = createHash12("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -65672,7 +65958,7 @@ async function buildContactSheet(process3, selectedFramePaths, contactSheetPath)
     await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
   }
   try {
-    await mkdir2(dirname16(contactSheetPath), { recursive: true });
+    await mkdir2(dirname17(contactSheetPath), { recursive: true });
     await rm(contactSheetPath, { force: true });
   } catch {
     fail2("MEDIA_IO_FAILED");
@@ -66902,7 +67188,7 @@ init_maestro_validator();
 init_maestro_run();
 import { execFile as execFileCb20 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
-import { existsSync as existsSync29, readFileSync as readFileSync25, writeFileSync as writeFileSync15, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync30, readFileSync as readFileSync26, writeFileSync as writeFileSync15, readdirSync as readdirSync7 } from "node:fs";
 import { join as join36 } from "node:path";
 import { homedir as homedir10 } from "node:os";
 var execFile24 = promisify26(execFileCb20);
@@ -66967,7 +67253,7 @@ async function isOnAuthScreen(client2) {
 function findLoginFlow(projectRoot) {
   const searchDirs = [join36(projectRoot, ".maestro", "subflows"), join36(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
-    if (!existsSync29(dir))
+    if (!existsSync30(dir))
       continue;
     let files;
     try {
@@ -67018,7 +67304,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
-  const originalContent = readFileSync25(flowPath, "utf-8");
+  const originalContent = readFileSync26(flowPath, "utf-8");
   const flowContent = stripClearState(originalContent);
   let validatedCommands;
   try {
@@ -67056,7 +67342,7 @@ async function handleAutoLogin(client2, opts = {}) {
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync15(wrapperPath, wrapperContent, "utf-8");
   const runnerPath = join36(homedir10(), ".maestro-runner", "bin", "maestro-runner");
-  if (!existsSync29(runnerPath)) {
+  if (!existsSync30(runnerPath)) {
     return {
       loggedIn: false,
       reason: "maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
@@ -67463,10 +67749,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve9) => {
+    const timeout = new Promise((resolve10) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve9();
+        resolve10();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -67477,11 +67763,11 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 import { execFileSync as execFileSync11 } from "node:child_process";
-import { closeSync as closeSync6, existsSync as existsSync30, mkdirSync as mkdirSync16, openSync as openSync6, readFileSync as readFileSync26, statSync as statSync10, unlinkSync as unlinkSync10, writeFileSync as writeFileSync16, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync7, existsSync as existsSync31, mkdirSync as mkdirSync18, openSync as openSync7, readFileSync as readFileSync27, statSync as statSync11, unlinkSync as unlinkSync10, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir11, userInfo as userInfo2 } from "node:os";
-import { join as join37, resolve as resolve6 } from "node:path";
+import { join as join37, resolve as resolve7 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var DEFAULT_STALE_MS2 = 9e4;
@@ -67525,7 +67811,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash12("md5").update(resolve6(projectRoot)).digest("hex").slice(0, 8);
+  return createHash13("md5").update(resolve7(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -67608,7 +67894,7 @@ var Lockfile = class {
     if (!this.acquired)
       return;
     try {
-      if (existsSync30(this.lockPath)) {
+      if (existsSync31(this.lockPath)) {
         const body = this.readExisting();
         if (body?.pid === this.opts.pid) {
           unlinkSync10(this.lockPath);
@@ -67642,10 +67928,10 @@ var Lockfile = class {
     return true;
   }
   readExisting() {
-    if (!existsSync30(this.lockPath))
+    if (!existsSync31(this.lockPath))
       return null;
     try {
-      const raw = readFileSync26(this.lockPath, "utf8");
+      const raw = readFileSync27(this.lockPath, "utf8");
       const parsed = JSON.parse(raw);
       if (!isValidLockBody(parsed))
         return null;
@@ -67680,7 +67966,7 @@ var Lockfile = class {
   }
   ageOfLockFile() {
     try {
-      const st = statSync10(this.lockPath);
+      const st = statSync11(this.lockPath);
       return this.opts.clock() - st.mtimeMs;
     } catch {
       return null;
@@ -67696,14 +67982,14 @@ var Lockfile = class {
       version: this.opts.version || void 0
     };
     const dir = this.opts.tmpDir;
-    if (!existsSync30(dir)) {
-      mkdirSync16(dir, { recursive: true });
+    if (!existsSync31(dir)) {
+      mkdirSync18(dir, { recursive: true });
     }
-    const fd = openSync6(this.lockPath, "wx");
+    const fd = openSync7(this.lockPath, "wx");
     try {
-      writeSync2(fd, JSON.stringify(body, null, 2));
+      writeSync3(fd, JSON.stringify(body, null, 2));
     } finally {
-      closeSync6(fd);
+      closeSync7(fd);
     }
   }
 };
@@ -67772,7 +68058,7 @@ init_maestro_run();
 init_utils();
 init_storage();
 init_maestro_validator();
-import { existsSync as existsSync31, mkdirSync as mkdirSync17, writeFileSync as writeFileSync17 } from "node:fs";
+import { existsSync as existsSync32, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join38 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
@@ -67833,8 +68119,8 @@ function createMaestroGenerateHandler() {
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
-    if (!existsSync31(outputDir)) {
-      mkdirSync17(outputDir, { recursive: true });
+    if (!existsSync32(outputDir)) {
+      mkdirSync19(outputDir, { recursive: true });
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
@@ -67882,12 +68168,12 @@ init_authority_gate();
 init_registry();
 import { execFile as execFileCb22 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
-import { existsSync as existsSync32, readdirSync as readdirSync8, readFileSync as readFileSync27, writeFileSync as writeFileSync18 } from "node:fs";
+import { existsSync as existsSync33, readdirSync as readdirSync8, readFileSync as readFileSync28, writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join39 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
 var execFile25 = promisify28(execFileCb22);
 function discoverFlows(dir, pattern) {
-  if (!existsSync32(dir))
+  if (!existsSync33(dir))
     return [];
   const files = readdirSync8(dir, { recursive: true });
   const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join39(dir, f)).sort();
@@ -67945,7 +68231,7 @@ function createMaestroTestAllHandler() {
       let parsedCommands = [];
       let parsedAppId;
       try {
-        const yamlText = readFileSync27(flow, "utf-8");
+        const yamlText = readFileSync28(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
         planMaestroAuthorityStages(parsed.commands);
         parsedCommands = parsed.commands;
@@ -68106,7 +68392,7 @@ function createMaestroTestAllHandler() {
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
 init_agent_device_wrapper();
 init_utils();
-import { readFileSync as readFileSync28, readdirSync as readdirSync9, lstatSync as lstatSync8 } from "node:fs";
+import { readFileSync as readFileSync29, readdirSync as readdirSync9, lstatSync as lstatSync8 } from "node:fs";
 import { join as join40, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
@@ -68143,7 +68429,7 @@ function discoverTestIDs(dir) {
         }
         if (!SCAN_EXTENSIONS.has(extname2(entry)))
           continue;
-        const src = readFileSync28(full, "utf8");
+        const src = readFileSync29(full, "utf8");
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id)
@@ -68363,8 +68649,8 @@ init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
-import { createHash as createHash13 } from "node:crypto";
-import { lstatSync as lstatSync9, readFileSync as readFileSync29, readdirSync as readdirSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync7, statSync as statSync11 } from "node:fs";
+import { createHash as createHash14 } from "node:crypto";
+import { lstatSync as lstatSync9, readFileSync as readFileSync30, readdirSync as readdirSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync8, statSync as statSync12 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join41, relative as relative3 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
@@ -68383,7 +68669,7 @@ function runBuffer(command, args) {
   });
 }
 function digest(parts) {
-  const hash = createHash13("sha256");
+  const hash = createHash14("sha256");
   for (const part of parts) {
     hash.update(`${part.byteLength}:`);
     hash.update(part);
@@ -68448,7 +68734,7 @@ function captureInstallGeneration(target, dependencies = {}) {
     if (!executable) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
     }
-    const stat2 = dependencies.stat ?? statSync11;
+    const stat2 = dependencies.stat ?? statSync12;
     const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
       const path = join41(appPath, entry);
       const value = stat2(path);
@@ -68477,7 +68763,7 @@ function captureInstallGeneration(target, dependencies = {}) {
 function captureInstalledArtifact(target, dependencies = {}) {
   const text = dependencies.runText ?? runText;
   const buffer = dependencies.runBuffer ?? runBuffer;
-  const read = dependencies.read ?? readFileSync29;
+  const read = dependencies.read ?? readFileSync30;
   if (target.platform === "ios") {
     const appPath = text("xcrun", [
       "simctl",
@@ -68504,7 +68790,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync9;
     const readLink = dependencies.readLink ?? readlinkSync2;
-    const realpath = dependencies.realpath ?? realpathSync7;
+    const realpath = dependencies.realpath ?? realpathSync8;
     const artifactParts = [];
     for (const entry of files) {
       const path = join41(appPath, entry);
@@ -68812,9 +69098,9 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync30 } from "node:fs";
+import { readFileSync as readFileSync31 } from "node:fs";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-import { dirname as dirname17, join as join43 } from "node:path";
+import { dirname as dirname18, join as join43 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
 import { randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
@@ -68847,7 +69133,7 @@ function isPostAllowed(req, token2) {
 // packages/rn-dev-agent-core/dist/observability/server.js
 init_logger();
 var HOST = "127.0.0.1";
-var __dir = dirname17(fileURLToPath4(import.meta.url));
+var __dir = dirname18(fileURLToPath4(import.meta.url));
 var ObservabilityServer = class {
   recorder;
   e2e;
@@ -69079,7 +69365,7 @@ var ObservabilityServer = class {
   }
   index(res) {
     try {
-      let html = readFileSync30(join43(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync31(join43(__dir, "web-dist", "index.html"), "utf8");
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -69099,20 +69385,20 @@ var ObservabilityServer = class {
   // handle() fire-and-forgets the async routes, so a rejecting await here
   // would crash the process on an oversized/aborted request (GH #438 review).
   readBody(req) {
-    return new Promise((resolve9) => {
+    return new Promise((resolve10) => {
       let body = "";
       let bytes = 0;
       req.on("data", (chunk) => {
         bytes += chunk.length;
         if (bytes > 65536) {
           req.destroy();
-          resolve9(null);
+          resolve10(null);
           return;
         }
         body += chunk.toString();
       });
-      req.on("end", () => resolve9(body));
-      req.on("error", () => resolve9(null));
+      req.on("end", () => resolve10(body));
+      req.on("error", () => resolve10(null));
     });
   }
   json(res, status, obj) {
@@ -69243,7 +69529,7 @@ var ObservabilityServer = class {
   }
 };
 function listen(server3, port) {
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -69252,7 +69538,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve9(typeof addr === "object" && addr ? addr.port : port);
+      resolve10(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -69540,7 +69826,7 @@ var RestartGate = class {
 var SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
 var IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-var sleep5 = (ms) => new Promise((resolve9) => setTimeout(resolve9, ms));
+var sleep5 = (ms) => new Promise((resolve10) => setTimeout(resolve10, ms));
 var scheduleAfter = (fn, delayMs) => {
   if (delayMs <= 0)
     setImmediate(fn);
@@ -69549,8 +69835,8 @@ var scheduleAfter = (fn, delayMs) => {
 };
 var defaultSpawn = (cmd, args) => spawn7(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
 async function detectIdb(execFileFn = execFile26) {
-  return new Promise((resolve9) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve9(!err));
+  return new Promise((resolve10) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve10(!err));
   });
 }
 function isEnoent(err) {
@@ -69681,7 +69967,7 @@ var IosSimctlLoopSource = class {
 };
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     execFile26(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -69690,7 +69976,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile2(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve9(buf);
+        resolve10(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -70078,12 +70364,12 @@ function buildMirrorTargetResolver(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync33 } from "node:fs";
+import { readFileSync as readFileSync34 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname18, join as join46 } from "node:path";
-import { mkdirSync as mkdirSync18, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync31, readdirSync as readdirSync11, existsSync as existsSync33 } from "node:fs";
-import { createHash as createHash14 } from "node:crypto";
+import { dirname as dirname19, join as join46 } from "node:path";
+import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync19, renameSync as renameSync8, readFileSync as readFileSync32, readdirSync as readdirSync11, existsSync as existsSync34 } from "node:fs";
+import { createHash as createHash15 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
   return join46(projectRoot, ".rn-agent", "e2e");
@@ -70115,11 +70401,11 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash14("sha256").update(s).digest("hex");
+  return createHash15("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
-  mkdirSync18(dirname18(filePath), { recursive: true });
+  mkdirSync20(dirname19(filePath), { recursive: true });
   const meta = {
     id: source.id,
     intent: source.intent,
@@ -70139,13 +70425,13 @@ function freezeLockedTest(projectRoot, source, ctx) {
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
-  if (!existsSync33(filePath))
+  if (!existsSync34(filePath))
     return null;
-  return parseLockedTest(readFileSync31(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync32(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
-  if (!existsSync33(dir))
+  if (!existsSync34(dir))
     return [];
   return readdirSync11(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
@@ -70158,38 +70444,38 @@ function parseLockedTest(text, filePath) {
   const headerText = text.slice(0, sentinelIdx);
   const flowStart = text.indexOf("\n", sentinelIdx);
   const flow = flowStart >= 0 ? text.slice(flowStart + 1) : "";
-  const field = (k) => {
+  const field2 = (k) => {
     const m = headerText.match(new RegExp(`^#\\s*${k}:\\s*(.*)$`, "m"));
     const v = m?.[1]?.trim();
     return v ? v : void 0;
   };
-  const id = field("id");
-  const intent = field("intent");
+  const id = field2("id");
+  const intent = field2("intent");
   if (!id || !intent)
     return null;
-  const paramsRaw = field("params");
+  const paramsRaw = field2("params");
   return {
     id,
     intent,
-    sourceActionId: field("sourceActionId") ?? id,
-    lockedAt: field("lockedAt") ?? "",
-    lockedGitSha: field("lockedGitSha") ?? null,
-    sourceContentHash: field("sourceContentHash") ?? "",
+    sourceActionId: field2("sourceActionId") ?? id,
+    lockedAt: field2("lockedAt") ?? "",
+    lockedGitSha: field2("lockedGitSha") ?? null,
+    sourceContentHash: field2("sourceContentHash") ?? "",
     status: "locked",
     params: paramsRaw ? paramsRaw.split(",").map((s) => s.trim()).filter(Boolean) : void 0,
-    appId: field("appId"),
+    appId: field2("appId"),
     flow,
     filePath
   };
 }
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync32 } from "node:fs";
+import { readFileSync as readFileSync33 } from "node:fs";
 import { join as join47 } from "node:path";
 function loadE2eConfig(projectRoot) {
   const filePath = join47(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync32(filePath, "utf8");
+    const raw = readFileSync33(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -70257,7 +70543,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync33(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync34(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -70320,7 +70606,7 @@ function createLockE2eTestHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
 import { join as join48 } from "node:path";
-import { mkdirSync as mkdirSync19, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync34, existsSync as existsSync34 } from "node:fs";
+import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync35, existsSync as existsSync35 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -70378,17 +70664,17 @@ function e2eRunsDirFor(projectRoot) {
   return join48(sessionStateDirectory(projectRoot), "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync19(join48(file, ".."), { recursive: true });
+  mkdirSync21(join48(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync20(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync9(tmp, file);
 }
 function loadIndex(projectRoot) {
   const file = join48(e2eRunsDirFor(projectRoot), "index.json");
-  if (!existsSync34(file))
+  if (!existsSync35(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync34(file, "utf8"));
+    const parsed = JSON.parse(readFileSync35(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -70410,10 +70696,10 @@ function writeRunRecord(projectRoot, rec) {
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
   const file = join48(e2eRunsDirFor(projectRoot), `${runId}.json`);
-  if (!existsSync34(file))
+  if (!existsSync35(file))
     return null;
   try {
-    return JSON.parse(readFileSync34(file, "utf8"));
+    return JSON.parse(readFileSync35(file, "utf8"));
   } catch {
     return null;
   }
@@ -70430,7 +70716,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join49 } from "node:path";
-import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync35, readdirSync as readdirSync12, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync36, readdirSync as readdirSync12, existsSync as existsSync36 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -70446,17 +70732,17 @@ function requestPath(projectRoot, runId) {
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
-  mkdirSync20(requestsDir(projectRoot), { recursive: true });
+  mkdirSync22(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync21(tmp, JSON.stringify(req, null, 2), "utf8");
   renameSync10(tmp, file);
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
-  if (!existsSync35(file))
+  if (!existsSync36(file))
     return null;
   try {
-    return JSON.parse(readFileSync35(file, "utf8"));
+    return JSON.parse(readFileSync36(file, "utf8"));
   } catch {
     return null;
   }
@@ -70471,7 +70757,7 @@ function updateRequest(projectRoot, runId, patch) {
 }
 function listRequests(projectRoot) {
   const dir = requestsDir(projectRoot);
-  if (!existsSync35(dir))
+  if (!existsSync36(dir))
     return [];
   const out = [];
   for (const f of readdirSync12(dir)) {
@@ -70736,15 +71022,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve9) => {
+  return new Promise((resolve10) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve9((res.statusCode ?? 500) < 500);
+      resolve10((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve9(false));
+    req.on("error", () => resolve10(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve9(false);
+      resolve10(false);
     });
     req.end();
   });
@@ -70889,8 +71175,8 @@ function createBuildLaunchPlan(input) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { closeSync as closeSync7, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync7, readFileSync as readFileSync36 } from "node:fs";
-import { basename as basename6, isAbsolute as isAbsolute6, join as join51, relative as relative4, resolve as resolve7, sep as sep6 } from "node:path";
+import { closeSync as closeSync8, constants as constants4, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync8, readFileSync as readFileSync37 } from "node:fs";
+import { basename as basename6, isAbsolute as isAbsolute6, join as join51, relative as relative4, resolve as resolve8, sep as sep6 } from "node:path";
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
@@ -73297,7 +73583,7 @@ function previewPackageIntegration(packageJson, existing, sessionCli) {
   if (existing && packageJson.scripts?.ios === SENTINELS.ios && packageJson.scripts?.android === SENTINELS.android) {
     return {
       packageJson,
-      manifest: sessionCli ? { ...existing, sessionCli: resolve7(sessionCli) } : existing
+      manifest: sessionCli ? { ...existing, sessionCli: resolve8(sessionCli) } : existing
     };
   }
   const ios = packageJson.scripts?.ios;
@@ -73308,7 +73594,7 @@ function previewPackageIntegration(packageJson, existing, sessionCli) {
   const manifest = {
     version: 1,
     adapter: ADAPTER,
-    ...sessionCli ? { sessionCli: resolve7(sessionCli) } : {},
+    ...sessionCli ? { sessionCli: resolve8(sessionCli) } : {},
     originalScripts: {
       ios: parseSupportedScript(ios, "ios"),
       android: parseSupportedScript(android, "android")
@@ -73531,16 +73817,16 @@ function regularFileIdentity(root, candidate) {
 }
 function readRegularFile(root, candidate) {
   const before = regularFileIdentity(root, candidate);
-  const descriptor = openSync7(candidate, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
+  const descriptor = openSync8(candidate, constants4.O_RDONLY | (constants4.O_NOFOLLOW ?? 0) | (constants4.O_NONBLOCK ?? 0));
   try {
     const opened = fstatSync3(descriptor, { bigint: true });
     const after = regularFileIdentity(root, candidate);
     if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
     }
-    return readFileSync36(descriptor, "utf8");
+    return readFileSync37(descriptor, "utf8");
   } finally {
-    closeSync7(descriptor);
+    closeSync8(descriptor);
   }
 }
 function readOptionalRegularFile(root, candidate) {
@@ -73556,7 +73842,7 @@ function readOptionalRegularFileNoFollow(root, candidate) {
   return readOptionalRegularFile(root, candidate);
 }
 function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
-  const appRoot = resolve7(appRootInput);
+  const appRoot = resolve8(appRootInput);
   const app = openBoundDirectory(appRoot);
   let agent = null;
   let integration = null;
@@ -73632,7 +73918,7 @@ function rollbackWrites(writes, dependencies) {
   return errors;
 }
 function applyPackageIntegration(input, dependencies = {}) {
-  const appRoot = resolve7(input.appRoot);
+  const appRoot = resolve8(input.appRoot);
   const packagePath = join51(appRoot, "package.json");
   let metroConfigPath;
   for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join51(appRoot, name))) {
@@ -73762,7 +74048,7 @@ function applyPackageIntegration(input, dependencies = {}) {
   }
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
-  const appRoot = resolve7(input.appRoot);
+  const appRoot = resolve8(input.appRoot);
   const packagePath = join51(appRoot, "package.json");
   const directories = openIntegrationDirectories(appRoot);
   const generatedNames = [
@@ -73859,7 +74145,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname19, join as join52 } from "node:path";
+import { dirname as dirname20, join as join52 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 init_process_birth();
 init_device_arbiter();
@@ -74082,7 +74368,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
         }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join52(dirname19(fileURLToPath5(import.meta.url)), "..", "rn-session.js");
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join52(dirname20(fileURLToPath5(import.meta.url)), "..", "rn-session.js");
         if (input.action === "restore_integration") {
           if (input.confirmed !== true) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "restore_integration requires confirmed=true");
@@ -74424,7 +74710,7 @@ init_authority_gate();
 init_discovery();
 init_metro_cwd();
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
@@ -74459,12 +74745,12 @@ init_process_birth();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash15, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
+import { createHash as createHash16, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { closeSync as closeSync8, existsSync as existsSync36, lstatSync as lstatSync11, openSync as openSync8, readdirSync as readdirSync14, readFileSync as readFileSync37, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync8 } from "node:fs";
-import { dirname as dirname20, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve8 } from "node:path";
+import { closeSync as closeSync9, existsSync as existsSync37, lstatSync as lstatSync11, openSync as openSync9, readdirSync as readdirSync14, readFileSync as readFileSync38, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync9 } from "node:fs";
+import { dirname as dirname21, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve9 } from "node:path";
 function digest2(parts) {
-  const hash = createHash15("sha256");
+  const hash = createHash16("sha256");
   for (const part of parts) {
     hash.update(part);
     hash.update("\0");
@@ -74538,7 +74824,7 @@ function updateFramed(hash, part) {
 }
 function updateFramedFile(hash, path, size) {
   hash.update(`${size}:`);
-  const descriptor = openSync8(path, "r");
+  const descriptor = openSync9(path, "r");
   const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(size, 1)));
   try {
     let offset = 0;
@@ -74551,7 +74837,7 @@ function updateFramedFile(hash, path, size) {
       offset += bytesRead;
     }
   } finally {
-    closeSync8(descriptor);
+    closeSync9(descriptor);
   }
 }
 function fileDigest(path) {
@@ -74559,8 +74845,8 @@ function fileDigest(path) {
   if (!stat2.isFile() || stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
   }
-  const hash = createHash15("sha256");
-  const descriptor = openSync8(path, "r");
+  const hash = createHash16("sha256");
+  const descriptor = openSync9(path, "r");
   const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(stat2.size, 1)));
   try {
     let offset = 0;
@@ -74573,7 +74859,7 @@ function fileDigest(path) {
       offset += bytesRead;
     }
   } finally {
-    closeSync8(descriptor);
+    closeSync9(descriptor);
   }
   return hash.digest("hex");
 }
@@ -74593,7 +74879,7 @@ function updateDependencyPath(hash, path, label, state) {
     updateFramed(hash, String(stat2.mode & 511));
     if (stat2.isSymbolicLink()) {
       const link = readlinkSync3(current.path);
-      const target = realpathSync8(current.path);
+      const target = realpathSync9(current.path);
       state.totalBytes += Buffer.byteLength(link);
       if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
         throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
@@ -74609,7 +74895,7 @@ function updateDependencyPath(hash, path, label, state) {
       continue;
     }
     if (stat2.isDirectory()) {
-      const canonical = realpathSync8(current.path);
+      const canonical = realpathSync9(current.path);
       if (state.visitedDirectories.has(canonical)) {
         updateFramed(hash, "directory-reference");
         updateFramed(hash, canonical);
@@ -74649,23 +74935,23 @@ function isExcludedRuntimePath(root, candidate) {
   return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded || entry.startsWith(`${excluded}/`) || entry.endsWith(`/${excluded}`) || entry.includes(`/${excluded}/`));
 }
 function assertFinalMetroIntegration(identity2) {
-  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join53(identity2.appRoot, entry)).filter(existsSync36);
+  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join53(identity2.appRoot, entry)).filter(existsSync37);
   if (candidates.length === 0)
     return;
-  const source = readFileSync37(candidates[0], "utf8");
+  const source = readFileSync38(candidates[0], "utf8");
   const start = source.indexOf(METRO_INTEGRATION_START);
   const end = source.indexOf(METRO_INTEGRATION_END);
   if (start < 0 || end < start || source.indexOf(METRO_INTEGRATION_START, start + METRO_INTEGRATION_START.length) >= 0 || source.indexOf(METRO_INTEGRATION_END, end + METRO_INTEGRATION_END.length) >= 0 || source.slice(start, end + METRO_INTEGRATION_END.length) !== METRO_INTEGRATION_BLOCK || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
   }
 }
-function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
+function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntimeEnforcement) {
   if (!authority)
     return { paths: [], semantics: [] };
   if (authority.evidenceAuthority !== "broker-v2") {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: reported Metro evidence cannot grant strict authority");
   }
-  const raw = readFileSync37(join53(identity2.appRoot, METRO_RUNTIME_POLICY2), "utf8");
+  const raw = readFileSync38(join53(identity2.appRoot, METRO_RUNTIME_POLICY2), "utf8");
   const receipt2 = JSON.parse(raw);
   const payload = {
     version: receipt2.version,
@@ -74675,6 +74961,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     contentRoot: receipt2.contentRoot,
     appRoot: receipt2.appRoot,
     runtimeEnforcement: receipt2.runtimeEnforcement,
+    runtimeEnforcementReceipt: receipt2.runtimeEnforcementReceipt,
     runtimeManifest: receipt2.runtimeManifest,
     runtimeInputs: receipt2.runtimeInputs,
     violations: receipt2.violations
@@ -74682,11 +74969,24 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   const expected = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
   const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
   const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual7(observed, expected)) {
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual7(observed, expected)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
   }
   if (receipt2.runtimeEnforcement !== "os-enforced-v1") {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable");
+  }
+  if (!verifyRuntimeEnforcement({
+    platform: process.platform,
+    appRoot: identity2.appRoot,
+    sourceRoot: identity2.contentRoot,
+    runtimeRoot: dirname21(authority.evidencePath),
+    nodeExecutable: runtimeManifest.nodeExecutable,
+    commandExecutable: runtimeManifest.executable,
+    port: runtimeManifest.port,
+    instanceId: authority.metroInstanceId,
+    runtimeInputs: receipt2.runtimeInputs
+  }, receipt2.runtimeEnforcementReceipt)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid");
   }
   if (receipt2.violations.length > 0) {
     throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
@@ -74699,7 +74999,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
       throw new Error("runtime load evidence is not a bounded regular file");
     }
-    runtimeLoadsRaw = readFileSync37(runtimeLoadsPath, "utf8");
+    runtimeLoadsRaw = readFileSync38(runtimeLoadsPath, "utf8");
   } catch (error2) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
       cause: error2
@@ -74832,7 +75132,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
     }
   }
-  const observedSemanticDigests = new Set([...runtimeSemantics].map((value) => createHash15("sha256").update(value).digest("hex")));
+  const observedSemanticDigests = new Set([...runtimeSemantics].map((value) => createHash16("sha256").update(value).digest("hex")));
   for (const semantics of descendantSemanticDigests) {
     if (!observedSemanticDigests.has(semantics)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
@@ -74842,7 +75142,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
     if (load.kind === "violation") {
       throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
     }
-    const candidate = realpathSync8(load.value);
+    const candidate = realpathSync9(load.value);
     if (fileDigest(candidate) !== load.digest) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution");
     }
@@ -74850,7 +75150,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead) {
   }
   return {
     paths: [...runtimeInputs].sort().flatMap((entry) => {
-      const candidate = realpathSync8(entry);
+      const candidate = realpathSync9(entry);
       return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
     }),
     semantics: orderedRuntimeSemantics
@@ -74880,7 +75180,7 @@ function dependencyStoreRoots(identity2, git, pathExists) {
     pnpRoots.push(pnpRoot);
     if (pnpRoot === identity2.contentRoot)
       break;
-    const parent = dirname20(pnpRoot);
+    const parent = dirname21(pnpRoot);
     if (parent === pnpRoot || !isContained(identity2.contentRoot, parent))
       break;
     pnpRoot = parent;
@@ -74889,17 +75189,17 @@ function dependencyStoreRoots(identity2, git, pathExists) {
   if (pnpLoaders.length > 0) {
     throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
   }
-  let ancestor = dirname20(identity2.contentRoot);
+  let ancestor = dirname21(identity2.contentRoot);
   while (true) {
     if (pathExists(join53(ancestor, "node_modules"))) {
       throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
     }
-    const parent = dirname20(ancestor);
+    const parent = dirname21(ancestor);
     if (parent === ancestor)
       break;
     ancestor = parent;
   }
-  const roots = [...new Set(entries.map((entry) => resolve8(identity2.contentRoot, entry)))].sort();
+  const roots = [...new Set(entries.map((entry) => resolve9(identity2.contentRoot, entry)))].sort();
   for (const root of roots) {
     assertContained(identity2.contentRoot, root, "STRICT_PROOF_DEPENDENCY_PATH_ESCAPE");
   }
@@ -74944,13 +75244,13 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
     throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
   }
-  const contentRoot = canonicalize(resolve8(dependencies.declaredRoot));
+  const contentRoot = canonicalize(resolve9(dependencies.declaredRoot));
   assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
   const manifestParts = [];
   for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve8(contentRoot, entry));
+    const manifest = canonicalize(resolve9(contentRoot, entry));
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
-    manifestParts.push(relative5(contentRoot, manifest), readFileSync37(manifest));
+    manifestParts.push(relative5(contentRoot, manifest), readFileSync38(manifest));
   }
   const manifestDigest = digest2(manifestParts);
   const appRelative = relative5(contentRoot, appRoot) || ".";
@@ -74966,8 +75266,8 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   };
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync8;
-  const appRoot = canonicalize(resolve8(inputRoot));
+  const canonicalize = dependencies.canonicalize ?? realpathSync9;
+  const appRoot = canonicalize(resolve9(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
     const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
@@ -74999,10 +75299,11 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
   }
   const git = dependencies.git ?? defaultGit;
-  const pathExists = dependencies.exists ?? existsSync36;
+  const pathExists = dependencies.exists ?? existsSync37;
   assertFinalMetroIntegration(identity2);
   const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
-  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader);
+  const runtimeEnforcementVerifier = dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
+  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
   const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
   const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
   const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
@@ -75020,7 +75321,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     return match?.[1] ? [match[1]] : [];
   });
   for (const entry of gitlinks) {
-    const submodule = resolve8(identity2.contentRoot, entry);
+    const submodule = resolve9(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
     const status = git(submodule, [
       "status",
@@ -75032,7 +75333,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
     }
   }
-  const dirtyHash = createHash15("sha256");
+  const dirtyHash = createHash16("sha256");
   updateFramed(dirtyHash, "git-dirty-v3");
   updateFramed(dirtyHash, diff);
   for (const semantics of runtimeInputs.semantics) {
@@ -75049,7 +75350,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   }
   let totalBytes = 0;
   for (const [classification, entry] of sourceEntries) {
-    const file = resolve8(identity2.contentRoot, entry);
+    const file = resolve9(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
     const stat2 = lstatSync11(file);
     updateFramed(dirtyHash, classification);
@@ -75067,7 +75368,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       continue;
     }
     if (stat2.isSymbolicLink()) {
-      const target = realpathSync8(file);
+      const target = realpathSync9(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
       const link = readlinkSync3(file);
       const targetStat = lstatSync11(target);
@@ -75088,7 +75389,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     }
     throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
   }
-  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader);
+  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
   if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
     throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
   }
@@ -75139,7 +75440,7 @@ async function proveTargetDeviceAssociations(input, dependencies) {
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 function identity(value) {
-  return createHash16("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash17("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -75520,8 +75821,8 @@ async function pinExactDevClient(input, dependencies) {
 }
 
 // packages/rn-dev-agent-core/dist/index.js
-var pkgPath = join54(dirname21(fileURLToPath6(import.meta.url)), "..", "package.json");
-var pkgVersion = JSON.parse(readFileSync38(pkgPath, "utf8")).version;
+var pkgPath = join54(dirname22(fileURLToPath6(import.meta.url)), "..", "package.json");
+var pkgVersion = JSON.parse(readFileSync39(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
 var noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
@@ -75636,7 +75937,7 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
-      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash17("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash18("sha256").update(runner.capability).digest("hex") : void 0,
       runnerPort: runner?.port,
       runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
       deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -75827,7 +76128,7 @@ var liveDeps = buildLiveDeps({
   readRoute: (c) => readLiveRoute(c),
   readShotFile: (path) => {
     try {
-      const buf = readFileSync38(path);
+      const buf = readFileSync39(path);
       const isPng = buf.length >= 4 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
       return { buf, contentType: isPng ? "image/png" : "image/jpeg" };
     } catch {
@@ -76002,7 +76303,7 @@ var sessionHandler = createSessionHandler(authorityRuntime, {
       return null;
     if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
       return null;
-    const secretPath = sessionId ? join54(dirname21(dirname21(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
+    const secretPath = sessionId ? join54(dirname22(dirname22(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
     return readJsonStateFile(secretPath)?.signerCapability ?? null;
   },
   pinDevClient: pinSessionDevClient
@@ -76362,7 +76663,7 @@ trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots.
       const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
       if (probe.value === true)
         return true;
-      await new Promise((resolve9) => setTimeout(resolve9, 250));
+      await new Promise((resolve10) => setTimeout(resolve10, 250));
     }
     return false;
   }
@@ -76542,7 +76843,7 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash17("sha256").update(errorBytes).digest("hex"),
+    errorSha256: createHash18("sha256").update(errorBytes).digest("hex"),
     device: identity2.device,
     runtime: identity2.runtime
   };
@@ -76653,7 +76954,7 @@ var proofCaptureHandler = createProofCaptureHandler({
   validateMedia,
   now: () => /* @__PURE__ */ new Date(),
   writeReceipt: writeProofReceiptAtomic,
-  removeArtifact: (path) => rmSync10(path, { force: true })
+  removeArtifact: (path) => rmSync11(path, { force: true })
 });
 trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCapturePublishedInputSchema, proofCaptureHandler);
 trackedTool("device_record", "Record the exact authority-bound device for proof capture. Start validates that the claimed device is currently available and always forwards its literal identifier.", {

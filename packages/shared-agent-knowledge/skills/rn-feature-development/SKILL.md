@@ -419,10 +419,11 @@ run its Protocol steps with `<feature-slug>`. The pipeline adds these deltas:
 
 **Strict factory routing**: when the run is unattended, the PR will auto-merge,
 or a machine receipt or merge-ready evidence is required, follow
-`/rn-dev-agent:proof-capture --strict`. Its command contract currently fails
-closed before recording because closed-world Metro runtime enforcement is
-unavailable. Do not substitute interactive artifacts or report merge-ready
-evidence.
+`/rn-dev-agent:proof-capture --strict`. Its command contract fails
+closed unless the proof controller verifies an independently attested
+`broker-v2` managed Metro runtime. Follow every controller transition and do
+not substitute interactive artifacts or report merge-ready evidence without
+its finalized accepted receipt.
 
 1. **The flow source is the architect's E2E Proof Flow table** from Phase 4 —
    execute it mechanically. Do NOT improvise, skip, or simplify steps; the

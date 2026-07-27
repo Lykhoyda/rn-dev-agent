@@ -14,6 +14,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { canonicalAuthorityJson } from './authority-json.js';
 import type { MetroRuntimeEvidenceAuthority } from './managed-metro.js';
+import { verifyManagedMetroEnforcementReceipt } from './managed-metro-enforcement.js';
 
 export interface GitSourceIdentity {
   kind: 'git';
@@ -43,6 +44,7 @@ interface SourceIdentityDependencies {
   canonicalize?: (path: string) => string;
   exists?: (path: string) => boolean;
   readMetroEvidenceHead?: (socket: string, challenge: string) => string;
+  verifyMetroRuntimeEnforcement?: typeof verifyManagedMetroEnforcementReceipt;
   metroRuntimePolicy?: {
     sessionId: string;
     metroInstanceId: string;
@@ -320,6 +322,7 @@ function metroRuntimeInputs(
   identity: GitSourceIdentity,
   authority: SourceIdentityDependencies['metroRuntimePolicy'],
   readEvidenceHead: (socket: string, challenge: string) => string,
+  verifyRuntimeEnforcement: typeof verifyManagedMetroEnforcementReceipt,
 ): { paths: string[]; semantics: string[] } {
   if (!authority) return { paths: [], semantics: [] };
   if (authority.evidenceAuthority !== 'broker-v2') {
@@ -336,6 +339,7 @@ function metroRuntimeInputs(
     contentRoot?: unknown;
     appRoot?: unknown;
     runtimeEnforcement?: unknown;
+    runtimeEnforcementReceipt?: unknown;
     runtimeManifest?: unknown;
     runtimeInputs?: unknown;
     violations?: unknown;
@@ -349,6 +353,7 @@ function metroRuntimeInputs(
     contentRoot: receipt.contentRoot,
     appRoot: receipt.appRoot,
     runtimeEnforcement: receipt.runtimeEnforcement,
+    runtimeEnforcementReceipt: receipt.runtimeEnforcementReceipt,
     runtimeManifest: receipt.runtimeManifest,
     runtimeInputs: receipt.runtimeInputs,
     violations: receipt.violations,
@@ -372,6 +377,10 @@ function metroRuntimeInputs(
     !runtimeManifest ||
     runtimeManifest.version !== 1 ||
     typeof runtimeManifest.executable !== 'string' ||
+    typeof runtimeManifest.nodeExecutable !== 'string' ||
+    !Number.isSafeInteger(runtimeManifest.port as number) ||
+    (runtimeManifest.port as number) < 1 ||
+    (runtimeManifest.port as number) > 65_535 ||
     !Array.isArray(runtimeManifest.args) ||
     runtimeManifest.args.some((entry) => typeof entry !== 'string') ||
     typeof runtimeManifest.nodeOptions !== 'string' ||
@@ -403,6 +412,26 @@ function metroRuntimeInputs(
   if (receipt.runtimeEnforcement !== 'os-enforced-v1') {
     throw new Error(
       'STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable',
+    );
+  }
+  if (
+    !verifyRuntimeEnforcement(
+      {
+        platform: process.platform,
+        appRoot: identity.appRoot,
+        sourceRoot: identity.contentRoot,
+        runtimeRoot: dirname(authority.evidencePath),
+        nodeExecutable: runtimeManifest.nodeExecutable as string,
+        commandExecutable: runtimeManifest.executable as string,
+        port: runtimeManifest.port as number,
+        instanceId: authority.metroInstanceId,
+        runtimeInputs: receipt.runtimeInputs as string[],
+      },
+      receipt.runtimeEnforcementReceipt,
+    )
+  ) {
+    throw new Error(
+      'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid',
     );
   }
   if (receipt.violations.length > 0) {
@@ -847,7 +876,11 @@ export function strictProofSourceIdentity(
   identity: SourceIdentity,
   dependencies: Pick<
     SourceIdentityDependencies,
-    'git' | 'exists' | 'metroRuntimePolicy' | 'readMetroEvidenceHead'
+    | 'git'
+    | 'exists'
+    | 'metroRuntimePolicy'
+    | 'readMetroEvidenceHead'
+    | 'verifyMetroRuntimeEnforcement'
   > = {},
 ): {
   kind: 'git-strict-proof';
@@ -864,10 +897,13 @@ export function strictProofSourceIdentity(
   const pathExists = dependencies.exists ?? existsSync;
   assertFinalMetroIntegration(identity);
   const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
+  const runtimeEnforcementVerifier =
+    dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
   const runtimeInputs = metroRuntimeInputs(
     identity,
     dependencies.metroRuntimePolicy,
     evidenceHeadReader,
+    runtimeEnforcementVerifier,
   );
   const head = git(identity.contentRoot, ['rev-parse', 'HEAD']);
   const diff = git(identity.contentRoot, ['diff', '--binary', '--no-ext-diff', head, '--']);
@@ -972,6 +1008,7 @@ export function strictProofSourceIdentity(
     identity,
     dependencies.metroRuntimePolicy,
     evidenceHeadReader,
+    runtimeEnforcementVerifier,
   );
   if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
     throw new Error('STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing');

@@ -1,6 +1,6 @@
 ---
 command: proof-capture
-description: Capture interactive PR-ready proof artifacts for a feature. Strict machine proof is fail-closed until closed-world Metro runtime enforcement is available.
+description: Capture PR-ready proof artifacts for a feature, with an attested fail-closed controller in strict mode.
 argument-hint: [--strict] <feature-slug> [description of flow to execute]
 ---
 
@@ -14,10 +14,13 @@ Require `proof_capture` and all declared storyboard tools in the active task. If
 they are absent or their advertised schema has no required `action`, stop and
 use read-only discovery/schema diagnosis. Raw Maestro is not equivalent proof.
 
-With `--strict`, stop with `STRICT_PROOF_UNVERIFIED_METRO_POLICY`: the shipped
-managed Metro launcher does not yet provide the closed-world runtime enforcement
-required to issue an accepted receipt. Do not start recording, substitute
-interactive artifacts, or report merge-ready evidence.
+With `--strict`, call `proof_capture` with `action: "contract"` and execute the
+returned controller protocol exactly. The controller accepts only an
+independently attested `broker-v2` managed Metro runtime and remains fail-closed
+with `STRICT_PROOF_UNVERIFIED_METRO_POLICY` when host enforcement, the broker
+receipt, or runtime evidence is unavailable or invalid. Do not record before
+the controller permits it, substitute interactive artifacts, or report
+merge-ready evidence without its finalized accepted receipt.
 
 Otherwise, load the **capturing-proof** domain skill and execute its Protocol
 (Steps 1–9) inline in this parent task. The skill owns the interactive rehearsal

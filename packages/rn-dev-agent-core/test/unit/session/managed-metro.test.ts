@@ -176,6 +176,34 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     {
       readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
       exists: () => true,
+      prepareEnforcement: () => ({
+        status: 'enforced',
+        kind: 'darwin-seatbelt-v1',
+        sandboxExecutable: '/usr/bin/sandbox-exec',
+        sandboxExecutableSha256: 'a'.repeat(64),
+        sandboxExecutableCdHash: 'b'.repeat(40),
+        profile: '(version 1)\n(deny default)\n',
+        profileSha256: 'c'.repeat(64),
+        canaryPath: '/private/tmp/rn-dev-agent-metro-test.canary',
+        symlinkCanaryPath: '/runtime/session/enforcement-test.canary',
+        port: 8341,
+        unallocatedPort: 8342,
+        nodeExecutable: process.execPath,
+      }),
+      preflightEnforcement: (plan) => ({
+        version: 1,
+        kind: plan.kind,
+        profileSha256: plan.profileSha256,
+        sandboxExecutableSha256: plan.sandboxExecutableSha256,
+        sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
+        processCreationDenied: true,
+        unmanifestedReadDenied: true,
+        unmanifestedWriteDenied: true,
+        symlinkEscapeDenied: true,
+        unallocatedListenerDenied: true,
+        allocatedListenerAllowed: true,
+        networkOutboundDenied: true,
+      }),
       spawnProcess: (executable, args, options) => {
         calls.push({ executable, args, env: options.env });
         return child;
@@ -230,6 +258,11 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_REGISTRY_PATH, undefined);
   assert.equal(calls[0]?.env?.RCT_METRO_PORT, '8341');
+  const runtimeEnforcement = JSON.parse(
+    calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT ?? '{}',
+  ) as Record<string, unknown>;
+  assert.equal(runtimeEnforcement.status, 'enforced');
+  assert.equal(runtimeEnforcement.profileSha256, 'c'.repeat(64));
   const childEnvironment = JSON.parse(
     calls[0]?.env?.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT ?? '{}',
   ) as NodeJS.ProcessEnv;
@@ -298,13 +331,73 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.match(calls[0]?.args[1] ?? '', /connection\.setTimeout/);
   assert.match(calls[0]?.args[1] ?? '', /for \(const connection of headConnections\)/);
   assert.match(calls[0]?.args[1] ?? '', /journalSignature: previousSignature/);
-  assert.match(calls[0]?.args[1] ?? '', /runtimeEvidenceAuthority: 'broker-v2'/);
-  assert.match(calls[0]?.args[1] ?? '', /runtimeEnforcement: 'unsupported'/);
+  assert.match(
+    calls[0]?.args[1] ?? '',
+    /runtimeEvidenceAuthority = brokerEnforced \? 'broker-v2' : 'reported-v1'/,
+  );
+  assert.match(calls[0]?.args[1] ?? '', /runtimeEnforcement: brokerEnforced/);
+  assert.match(calls[0]?.args[1] ?? '', /spawn\(brokerEnforced \? sandboxExecutable : executable/);
   assert.match(
     calls[0]?.args[1] ?? '',
     /if \(payload\.kind === 'violation'\) \{\s+appendViolation/,
   );
-  assert.doesNotMatch(calls[0]?.args[1] ?? '', /\n\s+appendEvidence\(payload\);/);
+  assert.match(calls[0]?.args[1] ?? '', /if \(brokerEnforced\) \{\s+appendEvidence\(payload\);/);
+});
+
+test('managed Metro cannot claim broker-v2 when runtime enforcement is unavailable', async () => {
+  const calls: NodeJS.ProcessEnv[] = [];
+  const child = {
+    pid: process.pid,
+    exitCode: null,
+    signalCode: null,
+    kill: () => true,
+    unref: () => {},
+  };
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      prepareEnforcement: () => ({
+        status: 'unsupported',
+        reason: 'host-enforcement-unavailable',
+      }),
+      spawnProcess: (_executable, _args, options) => {
+        calls.push(options.env ?? {});
+        return child;
+      },
+      listenerPid: () => 4242,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'listener-birth',
+        servingRoot: '/app',
+      }),
+    },
+  );
+
+  assert.equal(binding.runtimeEvidenceAuthority, 'reported-v1');
+  assert.deepEqual(JSON.parse(calls[0]?.RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT ?? '{}'), {
+    status: 'unsupported',
+    reason: 'host-enforcement-unavailable',
+  });
+  assert.equal(
+    verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
+      sessionId: 'session-a',
+      signerCapability: 'signer',
+    }),
+    true,
+  );
 });
 
 test('managed Metro proves a cross-platform listener belongs to the spawned launcher', async () => {

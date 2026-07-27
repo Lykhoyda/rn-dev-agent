@@ -1,17 +1,19 @@
 ---
 command: proof-capture
-description: Capture interactive PR-ready proof artifacts for a feature. Strict machine proof is fail-closed until closed-world Metro runtime enforcement is available.
+description: Capture PR-ready proof artifacts for a feature, with an attested fail-closed controller in strict mode.
 argument-hint: [--strict] <feature-slug> [description of flow to execute]
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 ---
 
 Capture PR proof artifacts for: $ARGUMENTS
 
-If `$ARGUMENTS` contains `--strict`, stop with
-`STRICT_PROOF_UNVERIFIED_METRO_POLICY`: the shipped managed Metro launcher does
-not yet provide the closed-world runtime enforcement required to issue an
-accepted receipt. Do not start recording, substitute interactive artifacts, or
-report merge-ready evidence.
+If `$ARGUMENTS` contains `--strict`, call `proof_capture(action="contract")`
+and execute the returned controller protocol exactly. The controller accepts
+only an independently attested `broker-v2` managed Metro runtime and remains
+fail-closed with `STRICT_PROOF_UNVERIFIED_METRO_POLICY` when host enforcement,
+the broker receipt, or runtime evidence is unavailable or invalid. Do not
+record before the controller permits it, substitute interactive artifacts, or
+report merge-ready evidence without its finalized accepted receipt.
 
 Otherwise, load the **capturing-proof** skill and execute its Protocol (Steps
 1–9) inline in this parent session. Use the first argument as

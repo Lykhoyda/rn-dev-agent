@@ -74,10 +74,11 @@ walk only the novel remainder. Persist a verified novel flow under
 
 ### Strict proof
 
-Strict proof is fail-closed and currently unavailable because the managed Metro
-launcher cannot provide closed-world runtime enforcement. A
-`$rn-dev-agent:proof-capture --strict` request stops before recording; never
-substitute interactive artifacts or report merge-ready evidence.
+Strict proof is fail-closed and requires an independently attested `broker-v2`
+managed Metro runtime. `$rn-dev-agent:proof-capture --strict` follows the proof
+controller contract; unsupported hosts, invalid enforcement receipts, or
+runtime violations stop before acceptance. Never substitute interactive
+artifacts or report merge-ready evidence without a finalized accepted receipt.
 
 ### Recovery truth
 
