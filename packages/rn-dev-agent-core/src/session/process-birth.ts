@@ -1,7 +1,23 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
-import { dirname, join } from 'node:path';
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  linkSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  rmSync,
+  type Stats,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export interface ProcessBirth {
@@ -19,13 +35,30 @@ interface ProcessBirthDependencies {
   platform?: NodeJS.Platform;
   read?: (path: string) => string;
   readBinary?: (path: string) => Buffer;
+  readDescriptor?: (fd: number) => Buffer;
   run?: (command: string, args: readonly string[]) => string;
+  runWithDescriptor?: (command: string, args: readonly string[], fd: number) => string;
   canonicalize?: (path: string) => string;
   lstat?: (path: string) => Pick<Stats, 'dev' | 'ino' | 'mode' | 'size' | 'uid'> & {
     isFile(): boolean;
   };
   helperPath?: () => string;
+  open?: (path: string, flags: number) => number;
+  close?: (fd: number) => void;
+  fstat?: (fd: number) => Pick<Stats, 'dev' | 'ino' | 'mode' | 'size' | 'uid'> & {
+    isFile(): boolean;
+  };
+  stage?: (
+    helperPath: string,
+    opened: Pick<Stats, 'dev' | 'ino' | 'mode' | 'size' | 'uid'> & { isFile(): boolean },
+  ) => { path: string; cleanup(): void };
   uid?: number;
+}
+
+export interface VerifiedDarwinProcessBirthHelper {
+  fd: number;
+  path: string;
+  cleanup(): void;
 }
 
 const DARWIN_HELPER_MANIFEST = {
@@ -54,6 +87,14 @@ function defaultRun(command: string, args: readonly string[]): string {
     }
     throw error;
   }
+}
+
+function defaultRunWithDescriptor(command: string, args: readonly string[], fd: number): string {
+  return execFileSync(command, [...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore', fd],
+    timeout: 2_000,
+  });
 }
 
 function token(parts: readonly string[]): string {
@@ -85,15 +126,57 @@ function sameFile(
   );
 }
 
+function stageDarwinProcessBirthHelper(
+  helperPath: string,
+  opened: Pick<Stats, 'dev' | 'ino' | 'mode' | 'size' | 'uid'> & { isFile(): boolean },
+): { path: string; cleanup(): void } {
+  const directory = mkdtempSync(join(tmpdir(), 'rn-dev-agent-process-birth-'));
+  const stagedPath = join(directory, basename(helperPath));
+  const cleanup = (): void => {
+    try {
+      chmodSync(directory, 0o700);
+      rmSync(directory, { recursive: true, force: true });
+    } catch {}
+  };
+  try {
+    linkSync(helperPath, stagedPath);
+    if (!sameFile(opened, lstatSync(stagedPath))) {
+      throw new Error('Darwin process-birth helper staging identity is invalid');
+    }
+    chmodSync(directory, 0o500);
+    return { path: stagedPath, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
 function verifyDarwinProcessBirthHelper(
   dependencies: ProcessBirthDependencies,
-  run: (command: string, args: readonly string[]) => string,
-): string {
+  runWithDescriptor: (command: string, args: readonly string[], fd: number) => string,
+): VerifiedDarwinProcessBirthHelper {
   const helper = (dependencies.helperPath ?? darwinProcessBirthHelperPath)();
   const manifestPath = `${helper}.json`;
   const canonicalize = dependencies.canonicalize ?? realpathSync;
   const metadata = dependencies.lstat ?? lstatSync;
+  const descriptorMetadata = dependencies.fstat ?? fstatSync;
   const readBinary = dependencies.readBinary ?? ((path: string) => readFileSync(path));
+  const readDescriptor =
+    dependencies.readDescriptor ??
+    ((fd: number) => {
+      const size = descriptorMetadata(fd).size;
+      const buffer = Buffer.alloc(size);
+      let offset = 0;
+      while (offset < size) {
+        const bytesRead = readSync(fd, buffer, offset, size - offset, offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      return buffer.subarray(0, offset);
+    });
+  const open = dependencies.open ?? openSync;
+  const close = dependencies.close ?? closeSync;
+  const stage = dependencies.stage ?? stageDarwinProcessBirthHelper;
   const uid = dependencies.uid ?? process.getuid?.();
 
   if (canonicalize(helper) !== helper || canonicalize(manifestPath) !== manifestPath) {
@@ -113,25 +196,61 @@ function verifyDarwinProcessBirthHelper(
   ) {
     throw new Error('Darwin process-birth helper metadata is untrusted');
   }
-  const helperBytes = readBinary(helper);
   const manifestBytes = readBinary(manifestPath);
   const manifest = JSON.parse(manifestBytes.toString('utf8')) as Record<string, unknown>;
   if (
     Object.keys(DARWIN_HELPER_MANIFEST).some(
       (key) => manifest[key] !== DARWIN_HELPER_MANIFEST[key as keyof typeof DARWIN_HELPER_MANIFEST],
-    ) ||
-    createHash('sha256').update(helperBytes).digest('hex') !== DARWIN_HELPER_MANIFEST.binarySha256
+    )
   ) {
     throw new Error('Darwin process-birth helper provenance is invalid');
   }
-  if (!sameFile(helperBefore, metadata(helper)) || !sameFile(manifestBefore, metadata(manifestPath))) {
-    throw new Error('Darwin process-birth helper changed during verification');
+
+  const fd = open(helper, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = descriptorMetadata(fd);
+    if (
+      !opened.isFile() ||
+      !sameFile(helperBefore, opened) ||
+      createHash('sha256').update(readDescriptor(fd)).digest('hex') !==
+        DARWIN_HELPER_MANIFEST.binarySha256 ||
+      !sameFile(manifestBefore, metadata(manifestPath))
+    ) {
+      throw new Error('Darwin process-birth helper changed during verification');
+    }
+    const staged = stage(helper, opened);
+    try {
+      runWithDescriptor('/usr/bin/codesign', ['--verify', '--strict', staged.path], fd);
+      if (!sameFile(opened, metadata(staged.path))) {
+        throw new Error('Darwin process-birth helper staging changed during verification');
+      }
+      return {
+        fd,
+        path: staged.path,
+        cleanup: () => {
+          close(fd);
+          staged.cleanup();
+        },
+      };
+    } catch (error) {
+      staged.cleanup();
+      throw error;
+    }
+  } catch (error) {
+    close(fd);
+    throw error;
   }
-  run('/usr/bin/codesign', ['--verify', '--strict', helper]);
-  if (!sameFile(helperBefore, metadata(helper))) {
-    throw new Error('Darwin process-birth helper changed after signature verification');
+}
+
+export async function withVerifiedDarwinProcessBirthHelper<T>(
+  callback: (helper: VerifiedDarwinProcessBirthHelper) => Promise<T>,
+): Promise<T> {
+  const helper = verifyDarwinProcessBirthHelper({}, defaultRunWithDescriptor);
+  try {
+    return await callback(helper);
+  } finally {
+    helper.cleanup();
   }
-  return helper;
 }
 
 export function readProcessBirth(
@@ -151,14 +270,20 @@ export function probeProcessBirth(
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path: string) => readFileSync(path, 'utf8'));
   const run = dependencies.run ?? defaultRun;
+  const runWithDescriptor = dependencies.runWithDescriptor ?? defaultRunWithDescriptor;
 
   try {
     if (platform === 'darwin') {
       const observedPid = run('/bin/ps', ['-p', String(pid), '-o', 'pid=']).trim();
       if (observedPid.length === 0) return { status: 'absent' };
       if (Number(observedPid) !== pid) return { status: 'unknown' };
-      const helper = verifyDarwinProcessBirthHelper(dependencies, run);
-      const processInfo = run(helper, [String(pid)]).trim();
+      const helper = verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor);
+      let processInfo: string;
+      try {
+        processInfo = runWithDescriptor(helper.path, [String(pid)], helper.fd).trim();
+      } finally {
+        helper.cleanup();
+      }
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid) return { status: 'unknown' };
       const bootSession = run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']).trim();

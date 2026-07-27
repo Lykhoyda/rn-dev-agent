@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
-import { darwinProcessBirthHelperPath, probeProcessBirth } from '../session/process-birth.js';
+import { probeProcessBirth } from '../session/process-birth.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
-import { stopBoundRecorder } from '../session/process-cleanup.js';
+import { runRecordProofScript, stopBoundRecorder } from '../session/process-cleanup.js';
 // Safe by construction: only execFile (argv-based, no shell), never exec.
 // Mirrors the pattern in device-permission.ts and other shell-wrapping tools.
 const execFileAsync = promisify(execFile);
@@ -283,13 +283,7 @@ async function runStart(args, runtime) {
             },
             claimResources: [{ type: 'recorder', key: claimKey }],
         });
-        const { stdout } = await execFileAsync(script, scriptArgs, {
-            timeout: START_TIMEOUT_MS,
-            env: {
-                ...process.env,
-                RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath(),
-            },
-        });
+        const { stdout } = await runRecordProofScript(script, scriptArgs, START_TIMEOUT_MS);
         const parsed = parseStartOutput(stdout);
         if (!parsed) {
             throw new Error(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
@@ -448,9 +442,7 @@ async function runStop(args, runtime) {
     });
 }
 async function readScopedStatus(script, scope) {
-    const { stdout } = await execFileAsync(script, ['status', scope], {
-        timeout: STATUS_TIMEOUT_MS,
-    });
+    const { stdout } = await runRecordProofScript(script, ['status', scope], STATUS_TIMEOUT_MS);
     return parseStatusOutput(stdout);
 }
 async function runStatus(args, runtime) {

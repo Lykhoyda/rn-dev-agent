@@ -1,10 +1,76 @@
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { OWNED_PACKAGES } from '../runners/release-android-slot.js';
 import { probeManagedMetroListener } from './managed-metro.js';
-import { darwinProcessBirthHelperPath, probeProcessBirth, } from './process-birth.js';
+import { probeProcessBirth, withVerifiedDarwinProcessBirthHelper, } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 const execFile = promisify(execFileCb);
+function executeRecorderScript(script, args, options) {
+    return new Promise((resolve, reject) => {
+        const stdio = options.helperFd === undefined
+            ? ['ignore', 'pipe', 'pipe']
+            : ['ignore', 'pipe', 'pipe', options.helperFd];
+        const child = spawn(script, args, { env: options.env, stdio });
+        const stdout = [];
+        const stderr = [];
+        let outputBytes = 0;
+        let settled = false;
+        let timer;
+        const finish = (error, result) => {
+            if (settled)
+                return;
+            settled = true;
+            if (timer)
+                clearTimeout(timer);
+            if (error)
+                reject(error);
+            else
+                resolve(result);
+        };
+        const collect = (target) => (chunk) => {
+            outputBytes += chunk.length;
+            if (outputBytes > 8 * 1024 * 1024) {
+                child.kill('SIGTERM');
+                finish(new Error('record_proof.sh output exceeded 8 MiB'));
+                return;
+            }
+            target.push(chunk);
+        };
+        child.stdout?.on('data', collect(stdout));
+        child.stderr?.on('data', collect(stderr));
+        child.on('error', (error) => finish(error));
+        child.on('close', (code, signal) => {
+            const result = {
+                stdout: Buffer.concat(stdout).toString('utf8'),
+                stderr: Buffer.concat(stderr).toString('utf8'),
+            };
+            if (code === 0) {
+                finish(undefined, result);
+                return;
+            }
+            finish(new Error(`record_proof.sh exited with ${code ?? signal ?? 'unknown'}: ${result.stderr.trim()}`));
+        });
+        timer = setTimeout(() => {
+            child.kill('SIGTERM');
+            finish(new Error(`record_proof.sh timed out after ${options.timeout}ms`));
+        }, options.timeout);
+    });
+}
+export async function runRecordProofScript(script, args, timeout = 60_000, dependencies = {}) {
+    const execute = dependencies.execute ?? executeRecorderScript;
+    if ((dependencies.platform ?? process.platform) !== 'darwin') {
+        return execute(script, args, { timeout, env: { ...process.env } });
+    }
+    const withHelper = dependencies.withHelper ?? withVerifiedDarwinProcessBirthHelper;
+    return withHelper((helper) => execute(script, args, {
+        timeout,
+        env: {
+            ...process.env,
+            RN_DEV_AGENT_PROCESS_BIRTH_HELPER: helper.path,
+        },
+        helperFd: helper.fd,
+    }));
+}
 async function waitForExactStopped(probe, deadlineMs, code, message) {
     while (true) {
         const status = probe();
@@ -140,15 +206,7 @@ export async function stopBoundRunner(binding, processProbe = probeProcessBirth,
         throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', `Android device-side runner termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
-export async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args) => execFile(script, args, {
-    timeout: 60_000,
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
-    env: {
-        ...process.env,
-        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: darwinProcessBirthHelperPath(),
-    },
-})) {
+export async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args) => runRecordProofScript(script, args)) {
     const script = String(binding.script ?? '');
     const scope = String(binding.scope ?? '');
     const pid = Number(binding.pid);

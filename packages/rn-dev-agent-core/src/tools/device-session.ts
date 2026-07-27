@@ -414,6 +414,9 @@ export function createDeviceSnapshotHandler(
         if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
           return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
         }
+        if (msg.startsWith('RUNNER_OWNERSHIP_MISMATCH')) {
+          return failResult(msg, 'RUNNER_OWNERSHIP_MISMATCH');
+        }
         const code = lockPlatform === 'ios' ? 'RN_FAST_RUNNER_DOWN' : 'RN_ANDROID_RUNNER_DOWN';
         return failResult(`Failed to start device runner: ${msg}`, code);
       }

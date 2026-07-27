@@ -53,6 +53,18 @@ test('gh-383: open catch surfaces RUNNER_PROTOCOL_MISMATCH before the generic ru
   assert.ok(mismatch < generic, 'mismatch check must run BEFORE the generic mapping');
 });
 
+test('Android open preserves runner ownership mismatch after rebuild', () => {
+  const catchBlock = sessionSrc.slice(
+    sessionSrc.indexOf('// Ensure runner + launch.'),
+    sessionSrc.indexOf('// Set session LAST'),
+  );
+  const ownership = catchBlock.indexOf("msg.startsWith('RUNNER_OWNERSHIP_MISMATCH')");
+  const generic = catchBlock.indexOf("'RN_ANDROID_RUNNER_DOWN'");
+
+  assert.ok(ownership !== -1);
+  assert.ok(generic === -1 || ownership < generic);
+});
+
 test('gh-383: open catch discards a pending Android upgrade note before the mismatch check (non-mismatch failures must not leak a stale note)', () => {
   const section = sessionSrc.slice(
     sessionSrc.indexOf('// Ensure runner + launch.'),

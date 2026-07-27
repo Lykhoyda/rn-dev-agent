@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { stopBoundObserve, stopBoundRunner } from '../../../dist/session/process-cleanup.js';
+import {
+  runRecordProofScript,
+  stopBoundObserve,
+  stopBoundRunner,
+} from '../../../dist/session/process-cleanup.js';
 
 const binding = {
   port: 7333,
@@ -103,5 +107,29 @@ test('Android runner cleanup refuses release while instrumentation remains', asy
       }),
     ),
     /device-side runner termination is unproven/,
+  );
+});
+
+test('Darwin recorder scripts use an authenticated staged helper', async () => {
+  let observedOptions;
+  const result = await runRecordProofScript('record_proof.sh', ['status', 'scope'], 1_000, {
+    platform: 'darwin',
+    withHelper: async (callback) =>
+      callback({
+        fd: 41,
+        path: '/trusted/staged/darwin-process-birth',
+        cleanup: () => {},
+      }),
+    execute: async (_script, _args, options) => {
+      observedOptions = options;
+      return { stdout: 'ok', stderr: '' };
+    },
+  });
+
+  assert.deepEqual(result, { stdout: 'ok', stderr: '' });
+  assert.equal(observedOptions.helperFd, 41);
+  assert.equal(
+    observedOptions.env.RN_DEV_AGENT_PROCESS_BIRTH_HELPER,
+    '/trusted/staged/darwin-process-birth',
   );
 });

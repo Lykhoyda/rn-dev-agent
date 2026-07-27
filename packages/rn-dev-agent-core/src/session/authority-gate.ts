@@ -341,6 +341,21 @@ function resultIsCanonicalSuccess(result: unknown): boolean {
   }
 }
 
+function proofDiscardConfirmed(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const content = (result as ToolResult).content;
+  if (!Array.isArray(content) || typeof content[0]?.text !== 'string') return false;
+  try {
+    const envelope = JSON.parse(content[0].text) as {
+      ok?: boolean;
+      data?: { discarded?: boolean };
+    };
+    return envelope.ok === true && envelope.data?.discarded === true;
+  } catch {
+    return false;
+  }
+}
+
 function receipt(
   status: SessionStatus,
   profile: AuthorityProfile,
@@ -1176,6 +1191,12 @@ export function createAuthorityGate(
               ok?: boolean;
             };
             if (envelope.ok === true) {
+              if (args.action === 'discard' && !proofDiscardConfirmed(result)) {
+                throw new SessionAuthorityError(
+                  'PROOF_AUTHORITY_MISMATCH',
+                  'durable proof cleanup was not confirmed by the recorder lifecycle',
+                );
+              }
               registry.endOperationWithBindings(operation, { proof: null });
               operation = null;
             }
@@ -1207,7 +1228,7 @@ export function createAuthorityGate(
           if (publishedProofFinalize) {
             try {
               const rollback = await handler({ action: 'discard' });
-              if (!resultIsCanonicalSuccess(rollback)) {
+              if (!proofDiscardConfirmed(rollback)) {
                 throw new Error('PROOF_AUTHORITY_MISMATCH: finalized proof rollback was rejected');
               }
               if (!registry || !operation) {

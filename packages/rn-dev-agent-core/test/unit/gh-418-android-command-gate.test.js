@@ -14,6 +14,7 @@ import {
   _androidRunnerApkPathsForTest,
   AndroidCommandsStaleError,
   androidRetryCleanupContext,
+  runBoundedAndroidRunnerRebuild,
   _setFetchForTest,
 } from '../../dist/runners/rn-android-runner-client.js';
 import {
@@ -62,13 +63,89 @@ test('gh-418 android: AndroidCommandsStaleError message carries the typed prefix
   assert.deepEqual(err.missing, ['dismissKeyboard']);
 });
 
-test('Android authority upgrades invalidate and rebuild the artifact once', () => {
+test('Android authority upgrades use the bounded artifact rebuild owner', () => {
   const err = new AndroidAuthorityStaleError();
   assert.ok(err.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'));
   assert.match(
     runnerSource,
-    /err instanceof AndroidAuthorityStaleError[\s\S]*?invalidateAndroidRunnerApks\(\)[\s\S]*?_forceReinstall: true,[\s\S]*?_forceLocalBuild: true,[\s\S]*?return state/,
+    /err instanceof AndroidAuthorityStaleError[\s\S]*?runBoundedAndroidRunnerRebuild\(err,[\s\S]*?invalidateAndroidRunnerApks\(\)[\s\S]*?_forceLocalBuild: true/,
   );
+});
+
+test('Android artifact rebuild is serialized and budgeted once', async () => {
+  const events = [];
+  const budget = {
+    alreadyRebuiltFor: () => false,
+    recordRebuild: () => events.push('budget'),
+  };
+  const result = await runBoundedAndroidRunnerRebuild(
+    new AndroidAuthorityStaleError('serial-a'),
+    async () => {
+      events.push('rebuild');
+      return 'ready';
+    },
+    {
+      acquire: () => {
+        events.push('acquire');
+        return true;
+      },
+      release: () => events.push('release'),
+      budget,
+    },
+  );
+
+  assert.equal(result, 'ready');
+  assert.deepEqual(events, ['acquire', 'budget', 'rebuild', 'release']);
+});
+
+test('Android artifact rebuild preserves ownership mismatch after a failed rebuild', async () => {
+  const mismatch = new AndroidAuthorityStaleError('serial-a');
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      mismatch,
+      async () => {
+        throw mismatch;
+      },
+      {
+        acquire: () => true,
+        release: () => {},
+        budget: {
+          alreadyRebuiltFor: () => false,
+          recordRebuild: () => {},
+        },
+      },
+    ),
+    (error) =>
+      error instanceof AndroidAuthorityStaleError &&
+      error.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'),
+  );
+});
+
+test('Android artifact rebuild budget refuses repeated ownership upgrades', async () => {
+  const mismatch = new AndroidAuthorityStaleError('serial-a');
+  let rebuildAttempted = false;
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      mismatch,
+      async () => {
+        rebuildAttempted = true;
+      },
+      {
+        acquire: () => {
+          assert.fail('lock should not be acquired after the rebuild budget is exhausted');
+        },
+        release: () => {},
+        budget: {
+          alreadyRebuiltFor: () => true,
+          recordRebuild: () => {},
+        },
+      },
+    ),
+    (error) =>
+      error instanceof AndroidAuthorityStaleError &&
+      error.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'),
+  );
+  assert.equal(rebuildAttempted, false);
 });
 
 test('Android retry cleanup preserves the attempted device before runner readiness', () => {

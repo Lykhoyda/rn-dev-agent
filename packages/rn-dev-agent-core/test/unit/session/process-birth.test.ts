@@ -10,38 +10,41 @@ import {
 } from '../../../dist/session/process-birth.js';
 
 test('macOS process identity uses full kernel start time and boot session', () => {
-  const runForBoot =
-    (bootSession, startMicroseconds = '345678') =>
-    (command, args) => {
+  const runForBoot = (bootSession, startMicroseconds = '345678') => ({
+    run: (command, args) => {
       if (command === '/bin/ps') {
         assert.deepEqual(args, ['-p', '123', '-o', 'pid=']);
         return '123\n';
-      }
-      if (command.endsWith('/native/darwin-process-birth')) {
-        assert.deepEqual(args, ['123']);
-        return `123:1784792468:${startMicroseconds}\n`;
-      }
-      if (command === '/usr/bin/codesign') {
-        assert.equal(args[0], '--verify');
-        return '';
       }
       if (command === '/usr/sbin/sysctl') {
         assert.deepEqual(args, ['-n', 'kern.bootsessionuuid']);
         return `${bootSession}\n`;
       }
       throw new Error(`unexpected command ${command}`);
-    };
+    },
+    runWithDescriptor: (command, args) => {
+      if (command === '/usr/bin/codesign') {
+        assert.equal(args[0], '--verify');
+        assert.equal(args[1], '--strict');
+        assert.match(args[2], /darwin-process-birth$/);
+        return '';
+      }
+      assert.match(command, /darwin-process-birth$/);
+      assert.deepEqual(args, ['123']);
+      return `123:1784792468:${startMicroseconds}\n`;
+    },
+  });
   const before = readProcessBirth(123, {
     platform: 'darwin',
-    run: runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
+    ...runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
   const after = readProcessBirth(123, {
     platform: 'darwin',
-    run: runForBoot('D9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
+    ...runForBoot('D9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
   const sameMillisecond = readProcessBirth(123, {
     platform: 'darwin',
-    run: runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F', '345679'),
+    ...runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F', '345679'),
   });
 
   assert.equal(before?.source, 'darwin-libproc');
@@ -84,6 +87,53 @@ test('macOS process identity refuses a replaced helper manifest', () => {
 
   assert.deepEqual(birth, { status: 'unknown' });
   assert.equal(helperExecuted, false);
+});
+
+test('macOS process identity executes the verified descriptor, not the helper path', () => {
+  const helperBytes = readFileSync(
+    new URL('../../../dist/native/darwin-process-birth', import.meta.url),
+  );
+  const metadata = {
+    dev: 1,
+    ino: 2,
+    mode: 0o100500,
+    size: helperBytes.length,
+    uid: 501,
+    isFile: () => true,
+  };
+  const commands: string[] = [];
+  const birth = readProcessBirth(123, {
+    platform: 'darwin',
+    helperPath: () => '/trusted/darwin-process-birth',
+    canonicalize: (path) => path,
+    lstat: () => metadata,
+    open: () => 17,
+    fstat: () => metadata,
+    close: () => {},
+    stage: () => ({
+      path: '/trusted/staged/darwin-process-birth',
+      cleanup: () => {},
+    }),
+    uid: 501,
+    readDescriptor: () => helperBytes,
+    readBinary: () =>
+      Buffer.from(
+        JSON.stringify({
+          sourceSha256: '54b3387a83580c5a782f3aedfb1984b62ed84faeadeca295fb90e533d9ecc137',
+          recipeSha256: 'ff4a62e1c242f6123eb7232eae6e823ee808d18d9e138814dbe19f516cae2313',
+          stableBinarySha256: 'cb08e04b81369c8f1acb5d52508841f72317c30b15bcf966f2963f54e0033ff1',
+          binarySha256: '08a196d403db4245ff162d8d7585aa4c2c6e784029a4a6fab8ac69b14951d9dc',
+        }),
+      ),
+    run: (command) => (command === '/bin/ps' ? '123\n' : 'C9D056AF-6F25-47A3-8A9A-63B86EF8519F\n'),
+    runWithDescriptor: (command) => {
+      commands.push(command);
+      return command === '/usr/bin/codesign' ? '' : '123:1784792468:345678\n';
+    },
+  });
+
+  assert.equal(birth?.source, 'darwin-libproc');
+  assert.deepEqual(commands, ['/usr/bin/codesign', '/trusted/staged/darwin-process-birth']);
 });
 
 test('Linux process identity handles process names containing spaces', () => {

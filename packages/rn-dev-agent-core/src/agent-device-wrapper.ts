@@ -860,8 +860,6 @@ const PROTOCOL_STALE_REASONS = new Set([
   'missing-commands',
 ]);
 
-const REBUILD_ELIGIBLE_STALE_REASONS = new Set(['missing-commands', 'authority-mismatch']);
-
 // GH #418: the open-path rebuild tier. A respawn reuses the same build
 // artifact, so 'missing-commands' can only be fixed by invalidating
 // DerivedData and paying the cold rebuild — allowed at device_snapshot
@@ -958,12 +956,7 @@ export async function ensureRunnerForCommand(
   const first = await probe();
   // GH #418: artifact staleness at open — a respawn launches the same stale
   // .xctestrun, so skip it and invalidate up front (multi-LLM review amendment).
-  if (
-    first.staleReason &&
-    REBUILD_ELIGIBLE_STALE_REASONS.has(first.staleReason) &&
-    deps.allowArtifactRebuild &&
-    deviceId
-  ) {
+  if (first.staleReason === 'missing-commands' && deps.allowArtifactRebuild && deviceId) {
     return rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps);
   }
   const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
@@ -1003,7 +996,10 @@ export async function ensureRunnerForCommand(
   await ensure(decision.action === 'spawn' ? decision.deviceId : deviceId!, bundleId);
   const after = await probe();
   if (after.liveness === 'alive') {
-    if (first.staleReason && PROTOCOL_STALE_REASONS.has(first.staleReason)) {
+    if (
+      first.staleReason &&
+      (PROTOCOL_STALE_REASONS.has(first.staleReason) || first.staleReason === 'authority-mismatch')
+    ) {
       return {
         ok: true,
         note:
@@ -1011,7 +1007,7 @@ export async function ensureRunnerForCommand(
             ? 'runner upgraded (stale command surface)'
             : first.staleReason === 'authority-mismatch'
               ? 'runner upgraded (authority identity mismatch)'
-            : 'runner upgraded (protocol/version mismatch)',
+              : 'runner upgraded (protocol/version mismatch)',
       };
     }
     return { ok: true };
@@ -1020,7 +1016,7 @@ export async function ensureRunnerForCommand(
   // stale — mid-flow callers refuse fast (never a silent multi-minute build).
   if (
     after.staleReason &&
-    REBUILD_ELIGIBLE_STALE_REASONS.has(after.staleReason)
+    (after.staleReason === 'missing-commands' || after.staleReason === 'authority-mismatch')
   ) {
     // Open path, dead-runner-spawned-from-stale-prebuilt case: the first
     // probe said 'dead', so the up-front short-circuit couldn't fire — the
@@ -1645,6 +1641,9 @@ export async function runNative(
         // actionable failure — surface it rather than the generic runner-down.
         if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
           return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        if (msg.startsWith('RUNNER_OWNERSHIP_MISMATCH')) {
+          return failResult(msg, 'RUNNER_OWNERSHIP_MISMATCH');
         }
         return failResult(`rn-android-runner did not start: ${msg}`, 'RN_ANDROID_RUNNER_DOWN');
       }

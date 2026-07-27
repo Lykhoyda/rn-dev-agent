@@ -4,7 +4,7 @@
  */
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync, existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
@@ -32,6 +32,10 @@ const RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir('rn-android-runner');
 const GRADLEW = join(RN_ANDROID_RUNNER_DIR, 'gradlew');
 const APK_APP = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
 const APK_TEST = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'androidTest', 'debug', 'app-debug-androidTest.apk');
+const ANDROID_REBUILD_ROOT = join(RN_ANDROID_RUNNER_DIR, 'app', 'build');
+const ANDROID_REBUILD_LOCK_DIR = join(ANDROID_REBUILD_ROOT, '.authority-rebuild-lock');
+const ANDROID_REBUILD_BUDGET_FILE = join(ANDROID_REBUILD_ROOT, 'authority-rebuild.json');
+const ANDROID_REBUILD_LOCK_STALE_MS = 15 * 60_000;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 export function getAndroidRunnerState() {
@@ -560,20 +564,97 @@ function classifyAndroidHealth(info) {
 // RUNNER_PROTOCOL_MISMATCH.
 export class AndroidCommandsStaleError extends Error {
     missing;
+    bundleId;
     deviceId;
-    constructor(missing, bundleId, deviceId) {
-        super(`RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands ` +
-            `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
-            `(device_snapshot action=open appId=${bundleId ?? '<your.app.id>'} platform=android) to rebuild it.`);
+    constructor(missing, bundleId, deviceId, detail) {
+        super(`RUNNER_COMMANDS_STALE: ${detail ??
+            `installed rn-android-runner lacks required commands ` +
+                `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
+                `(device_snapshot action=open appId=${bundleId ?? '<your.app.id>'} platform=android) to rebuild it.`}`);
         this.missing = missing;
+        this.bundleId = bundleId;
         this.deviceId = deviceId;
     }
 }
 export class AndroidAuthorityStaleError extends Error {
     deviceId;
-    constructor(deviceId) {
-        super('RUNNER_OWNERSHIP_MISMATCH: installed Android runner lacks current authority identity');
+    constructor(deviceId, detail) {
+        super(`RUNNER_OWNERSHIP_MISMATCH: ${detail ?? 'installed Android runner lacks current authority identity'}`);
         this.deviceId = deviceId;
+    }
+}
+export function acquireAndroidRunnerRebuildLock() {
+    try {
+        mkdirSync(ANDROID_REBUILD_ROOT, { recursive: true });
+    }
+    catch {
+        return false;
+    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            mkdirSync(ANDROID_REBUILD_LOCK_DIR);
+            return true;
+        }
+        catch (error) {
+            if (error.code !== 'EEXIST')
+                return false;
+            try {
+                if (Date.now() - statSync(ANDROID_REBUILD_LOCK_DIR).mtimeMs <
+                    ANDROID_REBUILD_LOCK_STALE_MS) {
+                    return false;
+                }
+                rmSync(ANDROID_REBUILD_LOCK_DIR, { recursive: true, force: true });
+            }
+            catch {
+                return false;
+            }
+        }
+    }
+    return false;
+}
+export function releaseAndroidRunnerRebuildLock() {
+    try {
+        rmSync(ANDROID_REBUILD_LOCK_DIR, { recursive: true, force: true });
+    }
+    catch { }
+}
+export const androidRunnerRebuildBudget = {
+    alreadyRebuiltFor(pluginVersion) {
+        try {
+            const parsed = JSON.parse(readFileSync(ANDROID_REBUILD_BUDGET_FILE, 'utf8'));
+            return parsed.pluginVersion === pluginVersion;
+        }
+        catch {
+            return false;
+        }
+    },
+    recordRebuild(pluginVersion) {
+        mkdirSync(ANDROID_REBUILD_ROOT, { recursive: true });
+        writeFileSync(ANDROID_REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: new Date().toISOString() }));
+    },
+};
+function androidRebuildRefusal(error, detail) {
+    return error instanceof AndroidAuthorityStaleError
+        ? new AndroidAuthorityStaleError(error.deviceId, detail)
+        : new AndroidCommandsStaleError(error.missing, error.bundleId, error.deviceId, detail);
+}
+export async function runBoundedAndroidRunnerRebuild(error, rebuild, dependencies = {}) {
+    const pluginVersion = getPluginVersion() ?? 'unknown';
+    const budget = dependencies.budget ?? androidRunnerRebuildBudget;
+    if (budget.alreadyRebuiltFor(pluginVersion)) {
+        throw androidRebuildRefusal(error, `runner artifact was already rebuilt once for plugin v${pluginVersion}`);
+    }
+    const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
+    if (!acquire()) {
+        throw androidRebuildRefusal(error, 'another session is rebuilding the shared runner artifact');
+    }
+    const release = dependencies.release ?? releaseAndroidRunnerRebuildLock;
+    try {
+        budget.recordRebuild(pluginVersion);
+        return await rebuild();
+    }
+    finally {
+        release();
     }
 }
 export function androidRetryCleanupContext(state, error) {
@@ -609,11 +690,13 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
     }
     catch (err) {
         if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-            await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
-            invalidateAndroidRunnerApks();
-            const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
-                _forceReinstall: true,
-                _forceLocalBuild: true,
+            const state = await runBoundedAndroidRunnerRebuild(err, async () => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+                invalidateAndroidRunnerApks();
+                return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+                    _forceReinstall: true,
+                    _forceLocalBuild: true,
+                });
             });
             pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
             return state;
@@ -622,11 +705,13 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             // Killing the local adb child does NOT free the device-side
             // UiAutomation slot (#237) — reap through the slot-release path so the
             // rebuilt instrumentation can bind.
-            await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
-            invalidateAndroidRunnerApks();
-            const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
-                _forceReinstall: true,
-                _forceLocalBuild: true,
+            const state = await runBoundedAndroidRunnerRebuild(err, async () => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+                invalidateAndroidRunnerApks();
+                return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+                    _forceReinstall: true,
+                    _forceLocalBuild: true,
+                });
             });
             pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
             return state;

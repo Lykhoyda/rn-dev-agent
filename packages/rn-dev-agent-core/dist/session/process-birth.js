@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { chmodSync, closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, rmSync, } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const DARWIN_HELPER_MANIFEST = {
     sourceSha256: '54b3387a83580c5a782f3aedfb1984b62ed84faeadeca295fb90e533d9ecc137',
@@ -28,6 +29,13 @@ function defaultRun(command, args) {
         throw error;
     }
 }
+function defaultRunWithDescriptor(command, args, fd) {
+    return execFileSync(command, [...args], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore', fd],
+        timeout: 2_000,
+    });
+}
 function token(parts) {
     return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
@@ -50,12 +58,52 @@ function sameFile(before, after) {
         before.size === after.size &&
         before.uid === after.uid);
 }
-function verifyDarwinProcessBirthHelper(dependencies, run) {
+function stageDarwinProcessBirthHelper(helperPath, opened) {
+    const directory = mkdtempSync(join(tmpdir(), 'rn-dev-agent-process-birth-'));
+    const stagedPath = join(directory, basename(helperPath));
+    const cleanup = () => {
+        try {
+            chmodSync(directory, 0o700);
+            rmSync(directory, { recursive: true, force: true });
+        }
+        catch { }
+    };
+    try {
+        linkSync(helperPath, stagedPath);
+        if (!sameFile(opened, lstatSync(stagedPath))) {
+            throw new Error('Darwin process-birth helper staging identity is invalid');
+        }
+        chmodSync(directory, 0o500);
+        return { path: stagedPath, cleanup };
+    }
+    catch (error) {
+        cleanup();
+        throw error;
+    }
+}
+function verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor) {
     const helper = (dependencies.helperPath ?? darwinProcessBirthHelperPath)();
     const manifestPath = `${helper}.json`;
     const canonicalize = dependencies.canonicalize ?? realpathSync;
     const metadata = dependencies.lstat ?? lstatSync;
+    const descriptorMetadata = dependencies.fstat ?? fstatSync;
     const readBinary = dependencies.readBinary ?? ((path) => readFileSync(path));
+    const readDescriptor = dependencies.readDescriptor ??
+        ((fd) => {
+            const size = descriptorMetadata(fd).size;
+            const buffer = Buffer.alloc(size);
+            let offset = 0;
+            while (offset < size) {
+                const bytesRead = readSync(fd, buffer, offset, size - offset, offset);
+                if (bytesRead === 0)
+                    break;
+                offset += bytesRead;
+            }
+            return buffer.subarray(0, offset);
+        });
+    const open = dependencies.open ?? openSync;
+    const close = dependencies.close ?? closeSync;
+    const stage = dependencies.stage ?? stageDarwinProcessBirthHelper;
     const uid = dependencies.uid ?? process.getuid?.();
     if (canonicalize(helper) !== helper || canonicalize(manifestPath) !== manifestPath) {
         throw new Error('Darwin process-birth helper path is not canonical');
@@ -72,21 +120,54 @@ function verifyDarwinProcessBirthHelper(dependencies, run) {
         (helperBefore.mode & 0o111) === 0) {
         throw new Error('Darwin process-birth helper metadata is untrusted');
     }
-    const helperBytes = readBinary(helper);
     const manifestBytes = readBinary(manifestPath);
     const manifest = JSON.parse(manifestBytes.toString('utf8'));
-    if (Object.keys(DARWIN_HELPER_MANIFEST).some((key) => manifest[key] !== DARWIN_HELPER_MANIFEST[key]) ||
-        createHash('sha256').update(helperBytes).digest('hex') !== DARWIN_HELPER_MANIFEST.binarySha256) {
+    if (Object.keys(DARWIN_HELPER_MANIFEST).some((key) => manifest[key] !== DARWIN_HELPER_MANIFEST[key])) {
         throw new Error('Darwin process-birth helper provenance is invalid');
     }
-    if (!sameFile(helperBefore, metadata(helper)) || !sameFile(manifestBefore, metadata(manifestPath))) {
-        throw new Error('Darwin process-birth helper changed during verification');
+    const fd = open(helper, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+        const opened = descriptorMetadata(fd);
+        if (!opened.isFile() ||
+            !sameFile(helperBefore, opened) ||
+            createHash('sha256').update(readDescriptor(fd)).digest('hex') !==
+                DARWIN_HELPER_MANIFEST.binarySha256 ||
+            !sameFile(manifestBefore, metadata(manifestPath))) {
+            throw new Error('Darwin process-birth helper changed during verification');
+        }
+        const staged = stage(helper, opened);
+        try {
+            runWithDescriptor('/usr/bin/codesign', ['--verify', '--strict', staged.path], fd);
+            if (!sameFile(opened, metadata(staged.path))) {
+                throw new Error('Darwin process-birth helper staging changed during verification');
+            }
+            return {
+                fd,
+                path: staged.path,
+                cleanup: () => {
+                    close(fd);
+                    staged.cleanup();
+                },
+            };
+        }
+        catch (error) {
+            staged.cleanup();
+            throw error;
+        }
     }
-    run('/usr/bin/codesign', ['--verify', '--strict', helper]);
-    if (!sameFile(helperBefore, metadata(helper))) {
-        throw new Error('Darwin process-birth helper changed after signature verification');
+    catch (error) {
+        close(fd);
+        throw error;
     }
-    return helper;
+}
+export async function withVerifiedDarwinProcessBirthHelper(callback) {
+    const helper = verifyDarwinProcessBirthHelper({}, defaultRunWithDescriptor);
+    try {
+        return await callback(helper);
+    }
+    finally {
+        helper.cleanup();
+    }
 }
 export function readProcessBirth(pid, dependencies = {}) {
     const probe = probeProcessBirth(pid, dependencies);
@@ -98,6 +179,7 @@ export function probeProcessBirth(pid, dependencies = {}) {
     const platform = dependencies.platform ?? process.platform;
     const read = dependencies.read ?? ((path) => readFileSync(path, 'utf8'));
     const run = dependencies.run ?? defaultRun;
+    const runWithDescriptor = dependencies.runWithDescriptor ?? defaultRunWithDescriptor;
     try {
         if (platform === 'darwin') {
             const observedPid = run('/bin/ps', ['-p', String(pid), '-o', 'pid=']).trim();
@@ -105,8 +187,14 @@ export function probeProcessBirth(pid, dependencies = {}) {
                 return { status: 'absent' };
             if (Number(observedPid) !== pid)
                 return { status: 'unknown' };
-            const helper = verifyDarwinProcessBirthHelper(dependencies, run);
-            const processInfo = run(helper, [String(pid)]).trim();
+            const helper = verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor);
+            let processInfo;
+            try {
+                processInfo = runWithDescriptor(helper.path, [String(pid)], helper.fd).trim();
+            }
+            finally {
+                helper.cleanup();
+            }
             const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
             if (!processMatch || Number(processMatch[1]) !== pid)
                 return { status: 'unknown' };

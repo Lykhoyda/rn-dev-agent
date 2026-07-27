@@ -958,6 +958,21 @@ test('proof rehearsal refuses a durable active binding before dispatch', async (
   assert.equal(dispatched, false);
 });
 
+test('proof discard retains its durable binding when in-memory cleanup is absent', async () => {
+  const { runtime, status } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('proof_capture', async () =>
+    okResult({ stage: 'idle', discarded: false }),
+  )({ action: 'discard' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'PROOF_AUTHORITY_MISMATCH');
+  assert.deepEqual(status.bindings.proof, { runId: 'proof' });
+});
+
 test('handoff cancellation requires controller authority and runs as a fenced transition', async () => {
   const { runtime, status, calls } = fixture();
   status.state = 'handoff';
