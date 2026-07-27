@@ -85,6 +85,16 @@ test('Android authority upgrades use the bounded artifact rebuild owner', () => 
   );
 });
 
+test('Android rebuild cleanup calls are bound to lease authority', () => {
+  const retrySource = runnerSource.slice(
+    runnerSource.indexOf('export async function startAndroidRunner('),
+    runnerSource.indexOf('async function startAndroidRunnerAttempt('),
+  );
+  const reapCalls = [...retrySource.matchAll(/await reapMismatchedAndroidRunner\(([\s\S]*?)\);/g)];
+  assert.equal(reapCalls.length, 4);
+  for (const call of reapCalls) assert.match(call[1], /\bsignal\b/);
+});
+
 test('Android artifact rebuild is serialized and budgeted once', async () => {
   const events = [];
   const result = await runBoundedAndroidRunnerRebuild(

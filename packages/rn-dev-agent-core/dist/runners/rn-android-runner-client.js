@@ -922,7 +922,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
     catch (err) {
         if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
             const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
                 signal.throwIfAborted();
                 invalidateAndroidRunnerApks();
                 return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
@@ -941,7 +941,7 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
             // UiAutomation slot (#237) — reap through the slot-release path so the
             // rebuilt instrumentation can bind.
             const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
                 signal.throwIfAborted();
                 invalidateAndroidRunnerApks();
                 return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {

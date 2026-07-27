@@ -1331,7 +1331,12 @@ export async function startAndroidRunner(
       const state = await runBoundedAndroidRunnerRebuild(
         err,
         async (signal) => {
-          await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+          await reapMismatchedAndroidRunner(
+            androidRetryCleanupContext(runnerState, err),
+            undefined,
+            undefined,
+            signal,
+          );
           signal.throwIfAborted();
           invalidateAndroidRunnerApks();
           return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
@@ -1359,7 +1364,12 @@ export async function startAndroidRunner(
       const state = await runBoundedAndroidRunnerRebuild(
         err,
         async (signal) => {
-          await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+          await reapMismatchedAndroidRunner(
+            androidRetryCleanupContext(runnerState, err),
+            undefined,
+            undefined,
+            signal,
+          );
           signal.throwIfAborted();
           invalidateAndroidRunnerApks();
           return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {

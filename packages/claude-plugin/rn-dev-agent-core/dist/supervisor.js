@@ -22969,7 +22969,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
   } catch (err) {
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
       const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err));
+        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
         signal.throwIfAborted();
         invalidateAndroidRunnerApks();
         return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
@@ -22985,7 +22985,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
     }
     if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
       const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err));
+        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err), void 0, void 0, signal);
         signal.throwIfAborted();
         invalidateAndroidRunnerApks();
         return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
