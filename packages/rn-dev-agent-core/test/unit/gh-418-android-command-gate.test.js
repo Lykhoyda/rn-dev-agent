@@ -62,12 +62,12 @@ test('gh-418 android: AndroidCommandsStaleError message carries the typed prefix
   assert.deepEqual(err.missing, ['dismissKeyboard']);
 });
 
-test('Android authority upgrades force-reinstall the current artifact once', () => {
+test('Android authority upgrades invalidate and rebuild the artifact once', () => {
   const err = new AndroidAuthorityStaleError();
   assert.ok(err.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'));
   assert.match(
     runnerSource,
-    /err instanceof AndroidAuthorityStaleError[\s\S]*?_forceReinstall: true[\s\S]*?return state/,
+    /err instanceof AndroidAuthorityStaleError[\s\S]*?invalidateAndroidRunnerApks\(\)[\s\S]*?_forceReinstall: true,[\s\S]*?_forceLocalBuild: true,[\s\S]*?return state/,
   );
 });
 

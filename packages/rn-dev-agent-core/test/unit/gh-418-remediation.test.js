@@ -12,6 +12,10 @@ const MISSING = {
   staleReason: 'missing-commands',
   missingCommands: ['keyboardDismiss'],
 };
+const AUTHORITY_MISMATCH = {
+  liveness: 'stale',
+  staleReason: 'authority-mismatch',
+};
 const freshBudget = () => {
   const rebuilt = new Set();
   return {
@@ -80,6 +84,29 @@ test('gh-418: at open, invalidate FIRST (no wasted stale respawn) → single ens
   assert.deepEqual(res, {
     ok: true,
     note: 'runner artifact rebuilt (missing commands: keyboardDismiss)',
+  });
+});
+
+test('at open, authority mismatch invalidates and cold-rebuilds the artifact', async () => {
+  const probes = [AUTHORITY_MISMATCH, { liveness: 'alive' }];
+  let invalidated = 0;
+  let ensured = 0;
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    allowArtifactRebuild: true,
+    probe: async () => probes.shift(),
+    ensure: async (_deviceId, _bundleId, opts) => {
+      ensured++;
+      assert.equal(opts.forceLocalBuild, true);
+    },
+    invalidateArtifact: () => invalidated++,
+  });
+
+  assert.equal(invalidated, 1);
+  assert.equal(ensured, 1);
+  assert.deepEqual(res, {
+    ok: true,
+    note: 'runner artifact rebuilt (authority identity mismatch)',
   });
 });
 

@@ -891,7 +891,7 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
                 res.deviceId !== state.deviceId ||
                 res.appId !== state.bundleId)) {
             lastKnownCapabilities = [];
-            return { liveness: 'stale', staleReason: 'health' };
+            return { liveness: 'stale', staleReason: 'authority-mismatch' };
         }
         const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
         const compat = classifyRunnerCompatibility({

@@ -610,10 +610,12 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
     catch (err) {
         if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
             await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+            invalidateAndroidRunnerApks();
             const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
                 _forceReinstall: true,
+                _forceLocalBuild: true,
             });
-            pendingUpgradeNote = 'runner upgraded (authority identity mismatch)';
+            pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
             return state;
         }
         if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {

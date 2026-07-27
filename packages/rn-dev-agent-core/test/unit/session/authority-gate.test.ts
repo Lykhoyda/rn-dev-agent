@@ -921,6 +921,7 @@ test('unbound CDP disconnect is an idempotent authoritative operation', async ()
 test('failed proof binding discards the rehearsal state created by the handler', async () => {
   const { runtime, registry, status } = fixture();
   const actions: string[] = [];
+  status.bindings.proof = null;
   (registry as typeof registry & { updateBindings(): never }).updateBindings = () => {
     throw new Error('registry write failed');
   };
@@ -937,7 +938,24 @@ test('failed proof binding discards the rehearsal state created by the handler',
   assert.equal(envelope.ok, false);
   assert.match(envelope.error, /registry write failed/);
   assert.deepEqual(actions, ['begin_rehearsal', 'discard']);
-  assert.equal(status.bindings.proof.runId, 'proof');
+  assert.equal(status.bindings.proof, null);
+});
+
+test('proof rehearsal refuses a durable active binding before dispatch', async () => {
+  const { runtime } = fixture();
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('proof_capture', async () => {
+    dispatched = true;
+    return okResult({ rehearsing: true });
+  })({ action: 'begin_rehearsal', runId: 'proof-new' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'PROOF_AUTHORITY_MISMATCH');
+  assert.equal(dispatched, false);
 });
 
 test('handoff cancellation requires controller authority and runs as a fenced transition', async () => {

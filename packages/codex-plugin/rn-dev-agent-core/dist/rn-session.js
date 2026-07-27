@@ -7455,7 +7455,7 @@ var init_metro_cwd = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync, readFileSync as readFileSync2 } from "node:fs";
+import { existsSync, lstatSync as lstatSync2, readFileSync as readFileSync2, realpathSync as realpathSync3 } from "node:fs";
 import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -7487,6 +7487,40 @@ function darwinProcessBirthHelperPath() {
   }
   return candidates[0];
 }
+function sameFile(before, after) {
+  return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.uid === after.uid;
+}
+function verifyDarwinProcessBirthHelper(dependencies, run) {
+  const helper = (dependencies.helperPath ?? darwinProcessBirthHelperPath)();
+  const manifestPath = `${helper}.json`;
+  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const metadata = dependencies.lstat ?? lstatSync2;
+  const readBinary = dependencies.readBinary ?? ((path) => readFileSync2(path));
+  const uid = dependencies.uid ?? process.getuid?.();
+  if (canonicalize(helper) !== helper || canonicalize(manifestPath) !== manifestPath) {
+    throw new Error("Darwin process-birth helper path is not canonical");
+  }
+  const helperBefore = metadata(helper);
+  const manifestBefore = metadata(manifestPath);
+  const trustedOwners = /* @__PURE__ */ new Set([0, ...uid === void 0 ? [] : [uid]]);
+  if (!helperBefore.isFile() || !manifestBefore.isFile() || !trustedOwners.has(helperBefore.uid) || !trustedOwners.has(manifestBefore.uid) || (helperBefore.mode & 18) !== 0 || (manifestBefore.mode & 18) !== 0 || (helperBefore.mode & 73) === 0) {
+    throw new Error("Darwin process-birth helper metadata is untrusted");
+  }
+  const helperBytes = readBinary(helper);
+  const manifestBytes = readBinary(manifestPath);
+  const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  if (Object.keys(DARWIN_HELPER_MANIFEST).some((key) => manifest[key] !== DARWIN_HELPER_MANIFEST[key]) || createHash2("sha256").update(helperBytes).digest("hex") !== DARWIN_HELPER_MANIFEST.binarySha256) {
+    throw new Error("Darwin process-birth helper provenance is invalid");
+  }
+  if (!sameFile(helperBefore, metadata(helper)) || !sameFile(manifestBefore, metadata(manifestPath))) {
+    throw new Error("Darwin process-birth helper changed during verification");
+  }
+  run("/usr/bin/codesign", ["--verify", "--strict", helper]);
+  if (!sameFile(helperBefore, metadata(helper))) {
+    throw new Error("Darwin process-birth helper changed after signature verification");
+  }
+  return helper;
+}
 function readProcessBirth(pid, dependencies = {}) {
   const probe = probeProcessBirth(pid, dependencies);
   return probe.status === "present" ? probe.birth : null;
@@ -7504,7 +7538,8 @@ function probeProcessBirth(pid, dependencies = {}) {
         return { status: "absent" };
       if (Number(observedPid) !== pid)
         return { status: "unknown" };
-      const processInfo = run(darwinProcessBirthHelperPath(), [String(pid)]).trim();
+      const helper = verifyDarwinProcessBirthHelper(dependencies, run);
+      const processInfo = run(helper, [String(pid)]).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid)
         return { status: "unknown" };
@@ -7561,14 +7596,21 @@ function probeProcessBirth(pid, dependencies = {}) {
   }
   return { status: "unknown" };
 }
+var DARWIN_HELPER_MANIFEST;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
+    DARWIN_HELPER_MANIFEST = {
+      sourceSha256: "54b3387a83580c5a782f3aedfb1984b62ed84faeadeca295fb90e533d9ecc137",
+      recipeSha256: "ff4a62e1c242f6123eb7232eae6e823ee808d18d9e138814dbe19f516cae2313",
+      stableBinarySha256: "cb08e04b81369c8f1acb5d52508841f72317c30b15bcf966f2963f54e0033ff1",
+      binarySha256: "08a196d403db4245ff162d8d7585aa4c2c6e784029a4a6fab8ac69b14951d9dc"
+    };
   }
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
+import { chmodSync, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname as dirname4 } from "node:path";
 function loadAuthoritySqlite() {
@@ -7581,7 +7623,7 @@ function loadAuthoritySqlite() {
 }
 function assertPrivateDirectory(path) {
   mkdirSync3(path, { mode: 448, recursive: true });
-  const link = lstatSync2(path);
+  const link = lstatSync3(path);
   if (link.isSymbolicLink() || !link.isDirectory()) {
     throw new Error("authority state root must be a real directory");
   }
@@ -7594,7 +7636,7 @@ function assertPrivateDirectory(path) {
 function secureDatabaseFiles(path) {
   for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
     try {
-      const link = lstatSync2(candidate);
+      const link = lstatSync3(candidate);
       if (link.isSymbolicLink() || !link.isFile()) {
         throw new Error("authority database path is not a regular file");
       }
@@ -7653,7 +7695,7 @@ function openAuthorityStore(path, options = {}) {
   try {
     assertPrivateDirectory(dirname4(path));
     try {
-      const existing = lstatSync2(path);
+      const existing = lstatSync3(path);
       if (existing.isSymbolicLink() || !existing.isFile()) {
         throw new Error("authority database path is not a regular file");
       }
@@ -9310,7 +9352,7 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync6, writeFileSync, unlinkSync, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync4 } from "node:fs";
+import { readFileSync as readFileSync6, writeFileSync, unlinkSync, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync5 } from "node:fs";
 import { join as join5, dirname as dirname6 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
@@ -9324,7 +9366,7 @@ function getStateDir() {
 }
 function readJsonStateFile(path) {
   try {
-    const stat = lstatSync4(path);
+    const stat = lstatSync5(path);
     if (stat.isSymbolicLink())
       return null;
     return JSON.parse(readFileSync6(path, "utf8"));
@@ -10678,7 +10720,7 @@ async function captureMetroBinding(input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync2, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync4, realpathSync as realpathSync4, rmSync as rmSync2 } from "node:fs";
+import { closeSync as closeSync2, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync4, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 init_process_birth();
 
@@ -10775,7 +10817,7 @@ function canonicalAuthorityJson(value) {
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { closeSync, constants, existsSync as existsSync2, mkdirSync, openSync, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync as existsSync2, mkdirSync, openSync, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
 import { dirname as dirname2, resolve as resolve2 } from "node:path";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
@@ -10800,7 +10842,7 @@ function field(details, name) {
 }
 function verifiedSandboxExecutable(dependencies) {
   const exists = dependencies.exists ?? existsSync2;
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
   const stat = dependencies.stat ?? statSync2;
   const readBytes = dependencies.readBytes ?? readFileSync3;
   const run = dependencies.run ?? defaultRun2;
@@ -10874,7 +10916,7 @@ function defaultRuntimeCache(exists) {
   ].find(exists) ?? null;
 }
 function attestRuntimeFile(path, dependencies) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
   const stat = dependencies.stat ?? statSync2;
   const readBytes = dependencies.readBytes ?? readFileSync3;
   const run = dependencies.run ?? defaultRun2;
@@ -10978,7 +11020,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
   if (!sandbox) {
     return { status: "unsupported", reason: "sandbox-executable-unverified" };
   }
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
   const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
   const appRoot = canonicalPath(input.appRoot, canonicalize);
   const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
@@ -11778,7 +11820,7 @@ function dependencyRoots(appRoot, sourceRoot, exists) {
 }
 function canonicalRuntimeInput(path) {
   try {
-    return realpathSync4(path);
+    return realpathSync5(path);
   } catch {
     return resolve3(path);
   }
@@ -12211,7 +12253,7 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { closeSync as closeSync3, existsSync as existsSync4, lstatSync as lstatSync3, openSync as openSync3, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync5 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync4, lstatSync as lstatSync4, openSync as openSync3, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve4 } from "node:path";
 function digest2(parts) {
   const hash = createHash6("sha256");
@@ -12311,7 +12353,7 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   };
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync5;
+  const canonicalize = dependencies.canonicalize ?? realpathSync6;
   const appRoot = canonicalize(resolve4(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
@@ -12343,7 +12385,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -12351,7 +12393,7 @@ function fail(code, detail) {
 function ensurePrivateDirectory(path) {
   try {
     mkdirSync5(path, { recursive: true, mode: 448 });
-    const link = lstatSync5(path);
+    const link = lstatSync6(path);
     const stat = statSync4(path);
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
@@ -12404,7 +12446,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     } finally {
       rmSync3(temporary, { force: true });
     }
-    const link = lstatSync5(path);
+    const link = lstatSync6(path);
     const stat = statSync4(path);
     const key = readFileSync7(path);
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
@@ -12432,7 +12474,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync4, constants as constants2, existsSync as existsSync5, fstatSync, lstatSync as lstatSync6, mkdtempSync, openSync as openSync4, readFileSync as readFileSync8, realpathSync as realpathSync6, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync4, constants as constants2, existsSync as existsSync5, fstatSync, lstatSync as lstatSync7, mkdtempSync, openSync as openSync4, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -13717,8 +13759,8 @@ function runBoundOperation(directory, request, dependencies = {}) {
   let current;
   let currentRealPath;
   try {
-    current = lstatSync6(directory.path, { bigint: true });
-    currentRealPath = realpathSync6(directory.path);
+    current = lstatSync7(directory.path, { bigint: true });
+    currentRealPath = realpathSync7(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
@@ -13834,14 +13876,14 @@ function openValidatedDirectory(path, expected) {
   let descriptor;
   let worker;
   try {
-    const before = lstatSync6(path, { bigint: true });
+    const before = lstatSync7(path, { bigint: true });
     if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
     }
     descriptor = openSync4(path, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     const opened = fstatSync(descriptor, { bigint: true });
-    const after = lstatSync6(path, { bigint: true });
-    const realPath = realpathSync6(path);
+    const after = lstatSync7(path, { bigint: true });
+    const realPath = realpathSync7(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }

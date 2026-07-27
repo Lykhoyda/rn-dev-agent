@@ -1159,7 +1159,10 @@ function clearStateFileIfMatches(expected: StateSnapshot): void {
   if (clearedCurrent) lastKnownCapabilities = [];
 }
 
-export type FastRunnerStaleReason = 'health' | RunnerIncompatibilityReason;
+export type FastRunnerStaleReason =
+  | 'health'
+  | 'authority-mismatch'
+  | RunnerIncompatibilityReason;
 
 export interface FastRunnerLivenessDetail {
   liveness: FastRunnerLiveness;
@@ -1203,7 +1206,7 @@ export async function probeFastRunnerLivenessDetailed(
         res.appId !== state.bundleId)
     ) {
       lastKnownCapabilities = [];
-      return { liveness: 'stale', staleReason: 'health' };
+      return { liveness: 'stale', staleReason: 'authority-mismatch' };
     }
     const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
     const compat = classifyRunnerCompatibility(

@@ -860,6 +860,8 @@ const PROTOCOL_STALE_REASONS = new Set([
   'missing-commands',
 ]);
 
+const REBUILD_ELIGIBLE_STALE_REASONS = new Set(['missing-commands', 'authority-mismatch']);
+
 // GH #418: the open-path rebuild tier. A respawn reuses the same build
 // artifact, so 'missing-commands' can only be fixed by invalidating
 // DerivedData and paying the cold rebuild — allowed at device_snapshot
@@ -872,25 +874,28 @@ async function rebuildStaleRunnerArtifact(
   bundleId: string,
   deps: EnsureRunnerDeps,
 ): Promise<EnsureRunnerResult> {
+  const authorityMismatch = first.staleReason === 'authority-mismatch';
   const missing = (first.missingCommands ?? []).join(', ') || 'unknown';
+  const code = authorityMismatch ? 'RUNNER_OWNERSHIP_MISMATCH' : 'RUNNER_COMMANDS_STALE';
   const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
   const budget = deps.rebuildBudget ?? runnerRebuildBudget;
   if (plugin !== null && budget.alreadyRebuiltFor(plugin)) {
     return {
       ok: false,
-      code: 'RUNNER_COMMANDS_STALE',
-      message:
-        `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
-        `required commands (missing: ${missing}). If that rebuild failed transiently (sim ` +
-        `not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker ` +
-        `and re-open to retry; otherwise update or reinstall the plugin.`,
+      code,
+      message: authorityMismatch
+        ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch.`
+        : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
+          `required commands (missing: ${missing}). If that rebuild failed transiently (sim ` +
+          `not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker ` +
+          `and re-open to retry; otherwise update or reinstall the plugin.`,
     };
   }
   const acquire = deps.acquireBuildLock ?? acquireRunnerRebuildLock;
   if (!acquire()) {
     return {
       ok: false,
-      code: 'RUNNER_COMMANDS_STALE',
+      code,
       message:
         'another session is rebuilding the shared runner artifact — retry this open in a few minutes.',
     };
@@ -915,15 +920,21 @@ async function rebuildStaleRunnerArtifact(
   const probe = deps.probe ?? probeFastRunnerLivenessDetailed;
   const rebuilt = await probe();
   if (rebuilt.liveness === 'alive') {
-    return { ok: true, note: `runner artifact rebuilt (missing commands: ${missing})` };
+    return {
+      ok: true,
+      note: authorityMismatch
+        ? 'runner artifact rebuilt (authority identity mismatch)'
+        : `runner artifact rebuilt (missing commands: ${missing})`,
+    };
   }
   return {
     ok: false,
-    code: 'RUNNER_COMMANDS_STALE',
-    message:
-      `rn-fast-runner still lacks required commands after a cold rebuild ` +
-      `(missing: ${(rebuilt.missingCommands ?? first.missingCommands ?? []).join(', ') || 'unknown'}). ` +
-      `The plugin checkout itself may be outdated — update the plugin, then re-open the device session.`,
+    code,
+    message: authorityMismatch
+      ? 'rn-fast-runner still reports an authority identity mismatch after a cold rebuild.'
+      : `rn-fast-runner still lacks required commands after a cold rebuild ` +
+        `(missing: ${(rebuilt.missingCommands ?? first.missingCommands ?? []).join(', ') || 'unknown'}). ` +
+        `The plugin checkout itself may be outdated — update the plugin, then re-open the device session.`,
   };
 }
 
@@ -947,7 +958,12 @@ export async function ensureRunnerForCommand(
   const first = await probe();
   // GH #418: artifact staleness at open — a respawn launches the same stale
   // .xctestrun, so skip it and invalidate up front (multi-LLM review amendment).
-  if (first.staleReason === 'missing-commands' && deps.allowArtifactRebuild && deviceId) {
+  if (
+    first.staleReason &&
+    REBUILD_ELIGIBLE_STALE_REASONS.has(first.staleReason) &&
+    deps.allowArtifactRebuild &&
+    deviceId
+  ) {
     return rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps);
   }
   const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
@@ -972,6 +988,15 @@ export async function ensureRunnerForCommand(
           `to rebuild it (cold build, several minutes).`,
       };
     }
+    if (first.staleReason === 'authority-mismatch') {
+      return {
+        ok: false,
+        code: 'RUNNER_OWNERSHIP_MISMATCH',
+        message:
+          `rn-fast-runner authority identity does not match this session. ` +
+          `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it.`,
+      };
+    }
     return { ok: false, message: decision.message };
   }
 
@@ -984,6 +1009,8 @@ export async function ensureRunnerForCommand(
         note:
           first.staleReason === 'missing-commands'
             ? 'runner upgraded (stale command surface)'
+            : first.staleReason === 'authority-mismatch'
+              ? 'runner upgraded (authority identity mismatch)'
             : 'runner upgraded (protocol/version mismatch)',
       };
     }
@@ -991,13 +1018,25 @@ export async function ensureRunnerForCommand(
   }
   // GH #418: 'missing-commands' surviving a respawn means the ARTIFACT is
   // stale — mid-flow callers refuse fast (never a silent multi-minute build).
-  if (after.staleReason === 'missing-commands') {
+  if (
+    after.staleReason &&
+    REBUILD_ELIGIBLE_STALE_REASONS.has(after.staleReason)
+  ) {
     // Open path, dead-runner-spawned-from-stale-prebuilt case: the first
     // probe said 'dead', so the up-front short-circuit couldn't fire — the
     // rebuild tier must still run here or the first open after an upgrade
     // errors and only the SECOND open heals (device-verify finding).
     if (deps.allowArtifactRebuild && deviceId) {
       return rebuildStaleRunnerArtifact(after, deviceId, bundleId, deps);
+    }
+    if (after.staleReason === 'authority-mismatch') {
+      return {
+        ok: false,
+        code: 'RUNNER_OWNERSHIP_MISMATCH',
+        message:
+          `rn-fast-runner authority identity does not match this session. ` +
+          `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it.`,
+      };
     }
     const missing = (after.missingCommands ?? []).join(', ') || 'unknown';
     return {

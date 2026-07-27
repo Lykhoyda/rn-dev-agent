@@ -559,8 +559,15 @@ export function createAuthorityGate(
             let status: SessionStatus = initialStatus;
             let runtimeTargetChanged = false;
             const initialAuthorityVersion = status.authorityVersion;
+            const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
             bindSessionArguments(status, profile, args);
             if (tool === 'device_snapshot') requireDeviceTransition(status, args);
+            if (gateCommitsProof && status.bindings.proof) {
+              throw new SessionAuthorityError(
+                'PROOF_AUTHORITY_MISMATCH',
+                'an active proof run must be finalized or discarded before beginning another',
+              );
+            }
             const transitionAxes =
               tool === 'device_snapshot'
                 ? args.action === 'open'
@@ -625,7 +632,6 @@ export function createAuthorityGate(
                 authorityTransition: true,
               });
             }
-            const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
             if (!gateCommitsProof) {
               registry.verifyOperation(operation);
               const nextStatus = runtime.status();

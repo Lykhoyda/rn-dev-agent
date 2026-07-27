@@ -21,6 +21,10 @@ test('macOS process identity uses full kernel start time and boot session', () =
         assert.deepEqual(args, ['123']);
         return `123:1784792468:${startMicroseconds}\n`;
       }
+      if (command === '/usr/bin/codesign') {
+        assert.equal(args[0], '--verify');
+        return '';
+      }
       if (command === '/usr/sbin/sysctl') {
         assert.deepEqual(args, ['-n', 'kern.bootsessionuuid']);
         return `${bootSession}\n`;
@@ -61,6 +65,25 @@ test('macOS process probes distinguish confirmed absence from unreadable identit
     }),
     { status: 'unknown' },
   );
+});
+
+test('macOS process identity refuses a replaced helper manifest', () => {
+  let helperExecuted = false;
+  const birth = probeProcessBirth(123, {
+    platform: 'darwin',
+    readBinary: (path) =>
+      path.endsWith('.json')
+        ? Buffer.from('{}')
+        : readFileSync(new URL('../../../dist/native/darwin-process-birth', import.meta.url)),
+    run: (command) => {
+      if (command === '/bin/ps') return '123\n';
+      if (command.endsWith('/native/darwin-process-birth')) helperExecuted = true;
+      return '';
+    },
+  });
+
+  assert.deepEqual(birth, { status: 'unknown' });
+  assert.equal(helperExecuted, false);
 });
 
 test('Linux process identity handles process names containing spaces', () => {
