@@ -62,6 +62,11 @@ interface ManagedMetroDependencies {
   probeListener?: (port: number) => ManagedMetroListenerProbe;
   signalTree?: (input: ManagedMetroSignal) => void;
   removeEvidenceSocket?: (path: string) => void;
+  verifyRuntimeAdmission?: (
+    path: string,
+    capability: string,
+    expected: ManagedMetroRuntimeAdmissionExpectation,
+  ) => boolean;
   prepareEnforcement?: typeof prepareManagedMetroEnforcement;
   preflightEnforcement?: typeof runManagedMetroEnforcementPreflight;
   wait?: (ms: number) => Promise<void>;
@@ -77,6 +82,15 @@ interface ManagedMetroSignal {
 interface ManagedMetroProcessIdentity {
   pid: number;
   birth: string;
+}
+
+interface ManagedMetroRuntimeAdmissionExpectation {
+  sessionId: string;
+  metroInstanceId: string;
+  contentRoot: string;
+  appRoot: string;
+  runtimeManifest: Record<string, unknown>;
+  enforcementReceipt: ManagedMetroEnforcementReceipt;
 }
 
 const METRO_LAUNCHER_SOURCE = String.raw`
@@ -197,34 +211,40 @@ const runtimeManifest = JSON.parse(runtimeManifestSource);
 const runtimeEnforcement = JSON.parse(runtimeEnforcementSource);
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
 const enforcementReceipt = runtimeEnforcement.receipt;
-const hashDescriptor = (descriptor) => {
-  const size = fstatSync(descriptor).size;
-  const contents = Buffer.alloc(size);
-  let offset = 0;
-  while (offset < size) {
-    const count = readSync(descriptor, contents, offset, size - offset, offset);
-    if (count === 0) break;
-    offset += count;
-  }
-  return createHash('sha256').update(contents.subarray(0, offset)).digest('hex');
-};
-const bindAttestedFiles = (entries, firstDescriptor) => {
+const snapshotAttestedFiles = (entries, arguments_, firstDescriptor) => {
   if (!Array.isArray(entries)) throw new Error('invalid command-chain attestation');
-  const descriptors = [];
+  const snapshots = [];
   const paths = new Map();
+  const argumentPaths = new Set(
+    arguments_.map((argument) =>
+      argument.startsWith(logicalArgumentPrefix)
+        ? argument.slice(logicalArgumentPrefix.length)
+        : argument,
+    ),
+  );
   for (const entry of entries) {
     if (typeof entry.path !== 'string' || typeof entry.sha256 !== 'string') {
       throw new Error('invalid command-chain attestation');
     }
+    if (!argumentPaths.has(entry.path)) continue;
     const descriptor = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    if (hashDescriptor(descriptor) !== entry.sha256) {
-      closeSync(descriptor);
+    const size = fstatSync(descriptor).size;
+    const contents = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const count = readSync(descriptor, contents, offset, size - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    closeSync(descriptor);
+    const snapshot = contents.subarray(0, offset);
+    if (createHash('sha256').update(snapshot).digest('hex') !== entry.sha256) {
       throw new Error('command-chain identity mismatch');
     }
-    paths.set(entry.path, '/dev/fd/' + (firstDescriptor + descriptors.length));
-    descriptors.push(descriptor);
+    paths.set(entry.path, '/dev/fd/' + (firstDescriptor + snapshots.length));
+    snapshots.push(snapshot);
   }
-  return { descriptors, paths };
+  return { snapshots, paths };
 };
 const liveCodeIdentityMatches = (pid, identity) => {
   if (
@@ -268,14 +288,15 @@ const waitForLiveNodeIdentity = (pid, identity) => {
   return false;
 };
 let child;
-let commandChainBinding = null;
+let commandChainSnapshot = null;
 try {
-  commandChainBinding = bindAttestedFiles(
+  commandChainSnapshot = snapshotAttestedFiles(
     enforcementReceipt?.commandChainAttestation ?? [],
+    args,
     10,
   );
 } catch {
-  commandChainBinding = null;
+  commandChainSnapshot = null;
 }
 let brokerEnforced =
   runtimeEnforcement.status === 'enforced' &&
@@ -305,7 +326,7 @@ let brokerEnforced =
   enforcementReceipt.resolvedCommandAllowed === true &&
   enforcementReceipt.commandCleanupConfirmed === true &&
   enforcementReceipt.commandChainStable === true &&
-  commandChainBinding !== null &&
+  commandChainSnapshot !== null &&
   canonicalAuthorityJson(enforcementReceipt.nodeRuntimeAttestation) ===
     canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation) &&
   canonicalAuthorityJson(enforcementReceipt.commandChainAttestation) ===
@@ -433,11 +454,12 @@ const environmentDigest = createHash('sha256')
   .update(canonicalAuthorityJson(childEnvironment))
   .digest('hex');
 if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
+if (runtimeEnforcement.status === 'enforced' && !brokerEnforced) process.exit(1);
 const sandboxExecutable = runtimeEnforcement.sandboxExecutable;
 const boundArgs = args.map((argument) =>
   argument.startsWith(logicalArgumentPrefix)
     ? argument.slice(logicalArgumentPrefix.length)
-    : commandChainBinding?.paths.get(argument) ?? argument,
+    : commandChainSnapshot?.paths.get(argument) ?? argument,
 );
 const sandboxArgs = brokerEnforced
   ? ['-p', runtimeEnforcement.profile, executable, ...boundArgs]
@@ -456,11 +478,13 @@ child = spawn(brokerEnforced ? sandboxExecutable : executable, sandboxArgs, {
     'ignore',
     'ignore',
     'pipe',
-    ...(commandChainBinding?.descriptors ?? []),
+    ...(commandChainSnapshot?.snapshots.map(() => 'pipe') ?? []),
   ],
 });
-for (const descriptor of commandChainBinding?.descriptors ?? []) closeSync(descriptor);
 if (!Number.isSafeInteger(child.pid)) process.exit(1);
+for (let index = 0; index < (commandChainSnapshot?.snapshots.length ?? 0); index += 1) {
+  child.stdio[10 + index].end(commandChainSnapshot.snapshots[index]);
+}
 if (
   brokerEnforced &&
   !waitForLiveNodeIdentity(
@@ -478,6 +502,7 @@ if (
       child.kill('SIGKILL');
     } catch {}
   }
+  process.exit(1);
 }
 runtimeManifest.descendantAuthority.rootIdentity = 'process:' + child.pid;
 appendEvidence({
@@ -904,6 +929,60 @@ export function managedMetroChildEnvironment(environment: NodeJS.ProcessEnv): No
   );
 }
 
+function verifyManagedMetroRuntimeAdmission(
+  path: string,
+  capability: string,
+  expected: ManagedMetroRuntimeAdmissionExpectation,
+): boolean {
+  try {
+    const admission = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    const signature = admission.signature;
+    if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) return false;
+    const payload = { ...admission };
+    delete payload.signature;
+    const computed = createHmac('sha256', capability)
+      .update(canonicalAuthorityJson(payload))
+      .digest('hex');
+    const computedBytes = Buffer.from(computed, 'hex');
+    const signatureBytes = Buffer.from(signature, 'hex');
+    const observedManifest = structuredClone(payload.runtimeManifest) as Record<string, unknown>;
+    const expectedManifest = structuredClone(expected.runtimeManifest);
+    const observedDescendantAuthority = observedManifest.descendantAuthority as
+      | Record<string, unknown>
+      | undefined;
+    const expectedDescendantAuthority = expectedManifest.descendantAuthority as
+      | Record<string, unknown>
+      | undefined;
+    if (
+      !observedDescendantAuthority ||
+      !expectedDescendantAuthority ||
+      typeof observedDescendantAuthority.rootIdentity !== 'string' ||
+      !/^process:\d+$/.test(observedDescendantAuthority.rootIdentity)
+    ) {
+      return false;
+    }
+    delete observedDescendantAuthority.rootIdentity;
+    delete expectedDescendantAuthority.rootIdentity;
+    return (
+      computedBytes.length === signatureBytes.length &&
+      timingSafeEqual(computedBytes, signatureBytes) &&
+      payload.runtimeEvidenceAuthority === 'broker-v2' &&
+      payload.runtimeEnforcement === 'os-enforced-v1' &&
+      payload.sessionId === expected.sessionId &&
+      payload.metroInstanceId === expected.metroInstanceId &&
+      payload.contentRoot === expected.contentRoot &&
+      payload.appRoot === expected.appRoot &&
+      Array.isArray(payload.violations) &&
+      payload.violations.length === 0 &&
+      canonicalAuthorityJson(observedManifest) === canonicalAuthorityJson(expectedManifest) &&
+      canonicalAuthorityJson(payload.runtimeEnforcementReceipt) ===
+        canonicalAuthorityJson(expected.enforcementReceipt)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function verifyManagedMetroManagementProof(
   binding: Record<string, unknown>,
   input: { sessionId: string; signerCapability: string },
@@ -1240,6 +1319,11 @@ export async function startManagedMetro(
   }
   const runtimeEvidenceAuthority: MetroRuntimeEvidenceAuthority =
     runtimeEnforcement.status === 'enforced' ? 'broker-v2' : 'reported-v1';
+  const requiresBrokerAdmission = runtimeEnforcement.status === 'enforced';
+  const enforcementReceiptForAdmission =
+    runtimeEnforcement.status === 'enforced' && 'receipt' in runtimeEnforcement
+      ? runtimeEnforcement.receipt
+      : null;
   const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
   const child = (dependencies.spawnProcess ?? spawn)(
     launchCommand.nodeExecutable,
@@ -1311,6 +1395,26 @@ export async function startManagedMetro(
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
       }
       try {
+        if (
+          requiresBrokerAdmission &&
+          (!enforcementReceiptForAdmission ||
+            !(dependencies.verifyRuntimeAdmission ?? verifyManagedMetroRuntimeAdmission)(
+              runtimePolicyPath,
+              runtimePolicyCapability,
+              {
+                sessionId: input.sessionId,
+                metroInstanceId: instanceId,
+                contentRoot: resolve(input.sourceRoot),
+                appRoot: resolve(input.appRoot),
+                runtimeManifest,
+                enforcementReceipt: enforcementReceiptForAdmission,
+              },
+            ))
+        ) {
+          throw new Error(
+            'METRO_RUNTIME_ADMISSION_UNAVAILABLE: launcher did not admit broker-v2',
+          );
+        }
         const binding = await capture(
           {
             port: input.port,

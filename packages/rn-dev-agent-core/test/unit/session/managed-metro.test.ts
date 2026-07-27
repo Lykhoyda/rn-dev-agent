@@ -173,6 +173,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     loadedRuntimeFiles: [],
     executableMappings: [],
   };
+  let runtimeAdmissionChecked = false;
   const binding = await startManagedMetro(
     {
       appRoot: '/app',
@@ -223,6 +224,10 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
         networkOutboundDenied: true,
         nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
       }),
+      verifyRuntimeAdmission: () => {
+        runtimeAdmissionChecked = true;
+        return true;
+      },
       spawnProcess: (executable, args, options) => {
         calls.push({ executable, args, env: options.env });
         return child;
@@ -274,6 +279,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(binding.runtimeEvidenceSocket, runtimeEvidenceSocket);
   assert.equal(binding.runtimeEvidenceAuthority, 'broker-v2');
   assert.equal(binding.runtimeEvidenceProtocol, 2);
+  assert.equal(runtimeAdmissionChecked, true);
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_REGISTRY_PATH, undefined);
   assert.equal(calls[0]?.env?.RCT_METRO_PORT, '8341');
@@ -376,6 +382,12 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     /runtimeEvidenceAuthority = brokerEnforced \? 'broker-v2' : 'reported-v1'/,
   );
   assert.match(calls[0]?.args[1] ?? '', /runtimeEnforcement: brokerEnforced/);
+  assert.match(
+    calls[0]?.args[1] ?? '',
+    /runtimeEnforcement\.status === 'enforced' && !brokerEnforced/,
+  );
+  assert.match(calls[0]?.args[1] ?? '', /snapshots\.map\(\(\) => 'pipe'\)/);
+  assert.match(calls[0]?.args[1] ?? '', /\.end\(commandChainSnapshot\.snapshots\[index\]\)/);
   assert.match(calls[0]?.args[1] ?? '', /spawn\(brokerEnforced \? sandboxExecutable : executable/);
   assert.match(
     calls[0]?.args[1] ?? '',

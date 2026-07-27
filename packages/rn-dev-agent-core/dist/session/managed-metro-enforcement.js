@@ -332,17 +332,6 @@ const { spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, writeFileSync } = require('node:fs');
 const { createConnection, createServer } = require('node:net');
-const hashDescriptor = (descriptor) => {
-  const size = fstatSync(descriptor).size;
-  const contents = Buffer.alloc(size);
-  let offset = 0;
-  while (offset < size) {
-    const count = readSync(descriptor, contents, offset, size - offset, offset);
-    if (count === 0) break;
-    offset += count;
-  }
-  return createHash('sha256').update(contents.subarray(0, offset)).digest('hex');
-};
 const input = JSON.parse(process.argv[1]);
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
 const denied = (run) => {
@@ -386,16 +375,33 @@ const processGroupExists = (pid) => {
   }
 };
 (async () => {
-  const commandDescriptors = [];
+  const commandSnapshots = [];
   const boundPaths = new Map();
+  const argumentPaths = new Set(
+    input.commandArguments.map((argument) =>
+      argument.startsWith(logicalArgumentPrefix)
+        ? argument.slice(logicalArgumentPrefix.length)
+        : argument,
+    ),
+  );
   for (const entry of input.commandChainAttestation) {
+    if (!argumentPaths.has(entry.path)) continue;
     const descriptor = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    if (hashDescriptor(descriptor) !== entry.sha256) {
-      closeSync(descriptor);
+    const size = fstatSync(descriptor).size;
+    const contents = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const count = readSync(descriptor, contents, offset, size - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    closeSync(descriptor);
+    const snapshot = contents.subarray(0, offset);
+    if (createHash('sha256').update(snapshot).digest('hex') !== entry.sha256) {
       throw new Error('command-chain identity mismatch');
     }
-    boundPaths.set(entry.path, '/dev/fd/' + (10 + commandDescriptors.length));
-    commandDescriptors.push(descriptor);
+    boundPaths.set(entry.path, '/dev/fd/' + (10 + commandSnapshots.length));
+    commandSnapshots.push(snapshot);
   }
   const allocated = await listen(input.port);
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
@@ -403,7 +409,7 @@ const processGroupExists = (pid) => {
   const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio.push('pipe');
-  stdio.push(...commandDescriptors);
+  stdio.push(...commandSnapshots.map(() => 'pipe'));
   const command = spawn(
     input.commandExecutable,
     input.commandArguments.map((argument) =>
@@ -418,7 +424,9 @@ const processGroupExists = (pid) => {
     stdio,
     },
   );
-  for (const descriptor of commandDescriptors) closeSync(descriptor);
+  for (let index = 0; index < commandSnapshots.length; index += 1) {
+    command.stdio[10 + index].end(commandSnapshots[index]);
+  }
   command.stdio[9].resume();
   command.once('error', () => {});
   const resolvedCommandAllowed = await waitUntil(async () => {
