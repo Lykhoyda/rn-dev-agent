@@ -2457,9 +2457,26 @@ export class SessionRegistry {
     session: SessionRef,
     operation: { operationId: string; tool: string; profile: string },
   ): OperationRef {
+    return this.#beginOperation(session, operation, false);
+  }
+
+  beginHandoffCancellationOperation(
+    session: SessionRef,
+    operation: { operationId: string; tool: string; profile: string },
+  ): OperationRef {
+    return this.#beginOperation(session, operation, true);
+  }
+
+  #beginOperation(
+    session: SessionRef,
+    operation: { operationId: string; tool: string; profile: string },
+    handoffCancellation: boolean,
+  ): OperationRef {
     const now = this.#now();
     return this.#transaction(() => {
-      const owner = this.#requireFenceableSession(session);
+      const owner = handoffCancellation
+        ? this.#requireHandoffSession(session)
+        : this.#requireSession(session);
       const active = this.#database
         .prepare(
           `SELECT operation_id FROM operations

@@ -55,6 +55,15 @@ function fixture() {
         authorityVersion: 9,
       };
     },
+    beginHandoffCancellationOperation: (_session, input) => {
+      calls.push(`begin-handoff-cancellation:${input.tool}`);
+      return {
+        operationId: input.operationId,
+        sessionId: 'session-a',
+        claimEpoch: 4,
+        authorityVersion: 9,
+      };
+    },
     verifyOperation: () => calls.push('cas'),
     runWithOperation: async (_operation, callback) => callback(),
     commitPlatformAuthorityReceipts: () => calls.push('commit-receipts'),
@@ -73,8 +82,10 @@ function fixture() {
       calls.push('refresh-operation');
       return { ...operation, authorityVersion: status.authorityVersion };
     },
-    replaceBindingsDuringOperation: (operation) => {
+    replaceBindingsDuringOperation: (operation, input) => {
       calls.push('replace-binding');
+      status.bindings = { ...status.bindings, ...input.bindings };
+      status.authorityVersion += 1;
       return { ...operation, authorityVersion: operation.authorityVersion + 1 };
     },
   };
@@ -922,7 +933,7 @@ test('failed proof binding discards the rehearsal state created by the handler',
   const { runtime, registry, status } = fixture();
   const actions: string[] = [];
   status.bindings.proof = null;
-  (registry as typeof registry & { updateBindings(): never }).updateBindings = () => {
+  registry.replaceBindingsDuringOperation = () => {
     throw new Error('registry write failed');
   };
   const gate = createAuthorityGate(runtime, {
@@ -939,6 +950,29 @@ test('failed proof binding discards the rehearsal state created by the handler',
   assert.match(envelope.error, /registry write failed/);
   assert.deepEqual(actions, ['begin_rehearsal', 'discard']);
   assert.equal(status.bindings.proof, null);
+});
+
+test('failed rehearsal rollback retains its operation fence', async () => {
+  const { calls, runtime, registry, status } = fixture();
+  status.bindings.proof = null;
+  registry.replaceBindingsDuringOperation = () => {
+    throw new Error('registry write failed');
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('proof_capture', async (args: { action: string }) =>
+    args.action === 'discard'
+      ? okResult({ discarded: false })
+      : okResult({ rehearsing: true }),
+  )({ action: 'begin_rehearsal', runId: 'proof-new' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.match(envelope.error, /rehearsal rollback failed/);
+  assert.equal(calls.includes('end'), false);
+  assert.equal(calls.includes('cancel'), false);
 });
 
 test('proof rehearsal refuses a durable active binding before dispatch', async () => {

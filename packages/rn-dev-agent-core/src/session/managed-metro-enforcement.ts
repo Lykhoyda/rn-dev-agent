@@ -54,6 +54,7 @@ export interface ManagedMetroEnforcementInput {
   commandProbeArguments?: readonly string[];
   commandExecutableMappings?: readonly string[];
   commandChainInputs?: readonly string[];
+  protectedRuntimeRoots?: readonly string[];
   port: number;
   instanceId: string;
   runtimeInputs: readonly string[];
@@ -98,6 +99,7 @@ export interface ManagedMetroEnforcementReceipt {
   allocatedListenerAllowed: true;
   networkOutboundDenied: true;
   resolvedCommandAllowed: true;
+  commandCleanupConfirmed: true;
   nodeRuntimeAttestation: ManagedMetroNodeRuntimeAttestation;
   commandChainAttestation: ManagedMetroRuntimeFileAttestation[];
 }
@@ -118,8 +120,10 @@ export interface ManagedMetroEnforcementPlan {
   port: number;
   unallocatedPort: number;
   nodeExecutable: string;
+  appRoot: string;
   commandExecutable: string;
-  commandProbeArguments: string[];
+  commandArguments: string[];
+  preflightEnvironmentPath: string;
   nodeRuntimeAttestation: ManagedMetroNodeRuntimeAttestation;
   commandChainAttestation: ManagedMetroRuntimeFileAttestation[];
 }
@@ -143,7 +147,7 @@ function defaultRun(command: string, args: readonly string[]): CommandResult {
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 5_000,
+    timeout: 25_000,
   });
   return {
     status: result.status,
@@ -366,6 +370,7 @@ function managedMetroSandboxProfile(input: {
   executablePaths: readonly string[];
   executableMapPaths: readonly string[];
   executableMapDenyRoots: readonly string[];
+  protectedRuntimeRoots: readonly string[];
   port: number;
 }): string {
   const readRoots = [...new Set(input.readRoots)].sort();
@@ -373,6 +378,7 @@ function managedMetroSandboxProfile(input: {
   const executablePaths = [...new Set(input.executablePaths)].sort();
   const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
   const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
+  const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
   const pathAncestors = [...new Set([...readRoots, ...writeRoots])].sort();
   return `(version 1)
 (deny default)
@@ -391,6 +397,8 @@ ${pathFilters(readRoots)})
 ${pathAncestors.map((path) => `    (path-ancestors ${sandboxString(path)})`).join('\n')})
 (allow file-write* file-test-existence
 ${pathFilters(writeRoots)})
+${protectedRuntimeRoots.length > 0 ? `(deny file-write* file-test-existence
+${pathFilters(protectedRuntimeRoots)})` : ''}
 (allow network-bind
     (local tcp ${sandboxString(`*:${input.port}`)}))
 (allow network-inbound
@@ -416,11 +424,13 @@ export function prepareManagedMetroEnforcement(
   const nodeExecutable = canonicalPath(input.nodeExecutable, canonicalize);
   const commandExecutable = canonicalPath(input.commandExecutable, canonicalize);
   const commandArguments = [...(input.commandArguments ?? [])];
-  const commandProbeArguments = [...(input.commandProbeArguments ?? [])];
   const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) =>
     canonicalPath(path, canonicalize),
   );
   const commandChainInputs = (input.commandChainInputs ?? []).map((path) =>
+    canonicalPath(path, canonicalize),
+  );
+  const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) =>
     canonicalPath(path, canonicalize),
   );
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
@@ -471,6 +481,7 @@ export function prepareManagedMetroEnforcement(
       ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path),
     ],
     executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
+    protectedRuntimeRoots,
     port: input.port,
   });
   const canaryId = sha256(`${input.instanceId}\0${input.port}`).slice(0, 32);
@@ -486,7 +497,7 @@ export function prepareManagedMetroEnforcement(
     resolvedCommandSha256: sha256(
       canonicalAuthorityJson({
         executable: commandExecutable,
-        arguments: commandProbeArguments,
+        arguments: commandArguments,
       }),
     ),
     profile,
@@ -497,15 +508,17 @@ export function prepareManagedMetroEnforcement(
     port: input.port,
     unallocatedPort: 0,
     nodeExecutable,
+    appRoot,
     commandExecutable,
-    commandProbeArguments,
+    commandArguments,
+    preflightEnvironmentPath: resolve(runtimeRoot, `preflight-environment-${canaryId}.json`),
     nodeRuntimeAttestation,
     commandChainAttestation,
   };
 }
 
 const PREFLIGHT_SOURCE = String.raw`
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { createConnection, createServer } = require('node:net');
 const input = JSON.parse(process.argv[1]);
@@ -517,9 +530,6 @@ const denied = (run) => {
     return error && (error.code === 'EPERM' || error.code === 'EACCES');
   }
 };
-const resolvedCommand = spawnSync(input.commandExecutable, input.commandProbeArguments);
-const resolvedCommandAllowed = resolvedCommand.status === 0;
-const descendantCreationAllowed = resolvedCommandAllowed;
 const unauthorizedResult = spawnSync('/usr/bin/true', []);
 const unauthorizedExecutableDenied =
   unauthorizedResult.status === null &&
@@ -536,8 +546,57 @@ const listen = (port) =>
       server.close((error) => resolve({ ok: !error, code: error && error.code })),
     );
   });
+const waitUntil = async (predicate, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+};
+const processGroupExists = (pid) => {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error && error.code !== 'ESRCH';
+  }
+};
 (async () => {
   const allocated = await listen(input.port);
+  if (!allocated.ok) throw new Error('allocated listener unavailable before command');
+  const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
+  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
+  while (stdio.length < 9) stdio.push('ignore');
+  stdio.push('pipe');
+  const command = spawn(input.commandExecutable, input.commandArguments, {
+    cwd: input.appRoot,
+    detached: true,
+    env: commandEnvironment,
+    stdio,
+  });
+  command.stdio[9].resume();
+  command.once('error', () => {});
+  const resolvedCommandAllowed = await waitUntil(async () => {
+    const probe = await listen(input.port);
+    return !probe.ok && probe.code === 'EADDRINUSE';
+  }, 15000);
+  let commandCleanupConfirmed = false;
+  if (Number.isSafeInteger(command.pid)) {
+    try {
+      process.kill(-command.pid, 'SIGTERM');
+    } catch {}
+    commandCleanupConfirmed = await waitUntil(() => !processGroupExists(command.pid), 2000);
+    if (!commandCleanupConfirmed) {
+      try {
+        process.kill(-command.pid, 'SIGKILL');
+      } catch {}
+      commandCleanupConfirmed = await waitUntil(() => !processGroupExists(command.pid), 2000);
+    }
+  }
+  const released = await listen(input.port);
+  commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
   const networkOutboundDenied = await new Promise((resolve) => {
     const connection = createConnection(input.port, '127.0.0.1');
@@ -560,6 +619,7 @@ const listen = (port) =>
     allocatedListenerAllowed: allocated.ok,
     networkOutboundDenied,
     resolvedCommandAllowed,
+    commandCleanupConfirmed,
   };
   process.stdout.write(JSON.stringify(receipt));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
@@ -570,6 +630,7 @@ interface ManagedMetroPreflightDependencies {
   writeCanary?: (path: string, contents: string) => void;
   removeCanary?: (path: string) => void;
   run?: (command: string, args: readonly string[]) => CommandResult;
+  environment?: NodeJS.ProcessEnv;
 }
 
 export function runManagedMetroEnforcementPreflight(
@@ -594,10 +655,17 @@ export function runManagedMetroEnforcementPreflight(
     dependencies.removeCanary ?? ((path: string) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun;
   let canaryCreated = false;
+  let environmentCreated = false;
   let symlinkCreated = false;
   try {
     writeCanary(plan.canaryPath, 'rn-dev-agent sandbox canary');
     canaryCreated = true;
+    mkdirSync(dirname(plan.preflightEnvironmentPath), { recursive: true });
+    writeCanary(
+      plan.preflightEnvironmentPath,
+      canonicalAuthorityJson(dependencies.environment ?? process.env),
+    );
+    environmentCreated = true;
     mkdirSync(dirname(plan.symlinkCanaryPath), { recursive: true });
     rmSync(plan.symlinkCanaryPath, { force: true });
     symlinkSync(plan.canaryPath, plan.symlinkCanaryPath);
@@ -612,7 +680,9 @@ export function runManagedMetroEnforcementPreflight(
         canaryPath: plan.canaryPath,
         symlinkCanaryPath: plan.symlinkCanaryPath,
         commandExecutable: plan.commandExecutable,
-        commandProbeArguments: plan.commandProbeArguments,
+        commandArguments: plan.commandArguments,
+        preflightEnvironmentPath: plan.preflightEnvironmentPath,
+        appRoot: plan.appRoot,
         port: plan.port,
         unallocatedPort: plan.unallocatedPort,
       }),
@@ -630,7 +700,8 @@ export function runManagedMetroEnforcementPreflight(
       observed.unallocatedListenerDenied !== true ||
       observed.allocatedListenerAllowed !== true ||
       observed.networkOutboundDenied !== true ||
-      observed.resolvedCommandAllowed !== true
+      observed.resolvedCommandAllowed !== true ||
+      observed.commandCleanupConfirmed !== true
     ) {
       throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete');
     }
@@ -651,6 +722,7 @@ export function runManagedMetroEnforcementPreflight(
       allocatedListenerAllowed: true,
       networkOutboundDenied: true,
       resolvedCommandAllowed: true,
+      commandCleanupConfirmed: true,
       nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
       commandChainAttestation: plan.commandChainAttestation,
     };
@@ -663,6 +735,7 @@ export function runManagedMetroEnforcementPreflight(
     });
   } finally {
     if (symlinkCreated) rmSync(plan.symlinkCanaryPath, { force: true });
+    if (environmentCreated) removeCanary(plan.preflightEnvironmentPath);
     if (canaryCreated) removeCanary(plan.canaryPath);
   }
 }
@@ -693,6 +766,7 @@ export function verifyManagedMetroEnforcementReceipt(
     observed.allocatedListenerAllowed === true &&
     observed.networkOutboundDenied === true &&
     observed.resolvedCommandAllowed === true &&
+    observed.commandCleanupConfirmed === true &&
     canonicalAuthorityJson(observed.nodeRuntimeAttestation) ===
       canonicalAuthorityJson(plan.nodeRuntimeAttestation) &&
     canonicalAuthorityJson(observed.commandChainAttestation) ===

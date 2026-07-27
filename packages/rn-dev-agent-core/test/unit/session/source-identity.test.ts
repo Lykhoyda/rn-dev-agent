@@ -422,6 +422,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     commandProbeArguments: ['--version'],
     commandExecutableMappings: [],
     commandChainInputs: [process.execPath],
+    protectedRuntimeRoots: [],
     nodeOptions: '',
     environmentDigest: 'ab'.repeat(32),
     contentRoot: root,
@@ -456,6 +457,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     allocatedListenerAllowed: true,
     networkOutboundDenied: true,
     resolvedCommandAllowed: true,
+    commandCleanupConfirmed: true,
     nodeRuntimeAttestation: {
       version: 1,
       executable: {

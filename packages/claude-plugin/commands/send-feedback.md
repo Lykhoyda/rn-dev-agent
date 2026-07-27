@@ -35,8 +35,8 @@ Then collect the following (skip what was already provided via $ARGUMENTS):
 
 ## Step 2: Collect environment context (automated)
 
-Call `rn_session` with `action: "status"` first. If it returns an exact
-session, retain its opaque `sessionId` locally and pass it only to the
+Call `rn_session` with `action: "status"` first. Its public authority projection
+returns the exact session's opaque `sessionId`; retain it locally and pass it only to the
 collector process as `RN_DEV_AGENT_SESSION_ID`; do not include the ID in the
 preview or submission. This keeps feedback authority aligned after a handoff,
 when multiple released sessions can share one worktree.

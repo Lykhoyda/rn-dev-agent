@@ -383,6 +383,7 @@ interface Harness {
   setGitInfo: (fn: () => { sha: string | null; dirty: boolean; changes: TestGitChange[] }) => void;
   setProofRootTracked: (value: boolean) => void;
   setReadiness: (fn: () => Promise<ProofReadiness>) => void;
+  setAuthorityVersion: (value: number) => void;
   setActionIdentity: (value: { id: string; version: string; sha256: string } | null) => void;
   setActionIdentityReader: (
     fn: (actionId: string) => { id: string; version: string; sha256: string } | null,
@@ -458,6 +459,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     trustedActionIdentity();
   let actionIdentityReader = () => structuredClone(actionIdentity);
   let readinessImpl = async (): Promise<ProofReadiness> => structuredClone(readiness);
+  let authorityVersion = 2;
   let recordedOutput = beginArgs(expectedProjectRoot).videoPath;
   let recordImpl = async (args: DeviceRecordArgs): Promise<ToolResult> => {
     if (args.action === 'status') return okResult({ action: 'status', active: [] });
@@ -487,7 +489,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     authority: (runId) => ({
       sessionId: 'session-test',
       claimEpoch: 1,
-      authorityVersion: 2,
+      authorityVersion,
       controller: {
         instanceId: 'worker-test',
         pid: 42,
@@ -580,6 +582,9 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     },
     setReadiness: (fn) => {
       readinessImpl = fn;
+    },
+    setAuthorityVersion: (value) => {
+      authorityVersion = value;
     },
     setActionIdentity: (value) => {
       actionIdentity = value;
@@ -1725,6 +1730,22 @@ test('finalize rejects a review bound to another mechanical receipt', async (t) 
   });
 
   assert.ok(reasons(result).includes('EVIDENCE_REVIEW_TARGET_MISMATCH'), result.content[0]!.text);
+  assert.equal(harness.written.length, 0);
+});
+
+test('finalize rejects authority changed after mechanical validation', async (t) => {
+  const harness = createHarness(t);
+  await stoppedCapture(harness);
+  const validation = await harness.handler({ action: 'validate' });
+  assert.equal(envelope(validation).ok, true);
+  harness.setAuthorityVersion(3);
+
+  const result = await harness.handler({
+    action: 'finalize',
+    evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+  });
+
+  assert.ok(reasons(result).includes('PROOF_AUTHORITY_CHANGED'), result.content[0]!.text);
   assert.equal(harness.written.length, 0);
 });
 

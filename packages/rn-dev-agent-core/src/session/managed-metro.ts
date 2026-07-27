@@ -1,7 +1,10 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
+  chmodSync,
   closeSync,
+  constants as fsConstants,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -9,7 +12,7 @@ import {
   realpathSync,
   rmSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   captureMetroBinding,
   metroListenerPid,
@@ -195,6 +198,19 @@ if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capabilit
 const runtimeManifest = JSON.parse(runtimeManifestSource);
 const runtimeEnforcement = JSON.parse(runtimeEnforcementSource);
 const enforcementReceipt = runtimeEnforcement.receipt;
+const attestedFilesCurrent = (entries) =>
+  Array.isArray(entries) &&
+  entries.every((entry) => {
+    try {
+      return (
+        typeof entry.path === 'string' &&
+        typeof entry.sha256 === 'string' &&
+        createHash('sha256').update(readFileSync(entry.path)).digest('hex') === entry.sha256
+      );
+    } catch {
+      return false;
+    }
+  });
 const brokerEnforced =
   runtimeEnforcement.status === 'enforced' &&
   runtimeEnforcement.kind === 'darwin-seatbelt-v2' &&
@@ -221,6 +237,10 @@ const brokerEnforced =
   enforcementReceipt.allocatedListenerAllowed === true &&
   enforcementReceipt.networkOutboundDenied === true &&
   enforcementReceipt.resolvedCommandAllowed === true &&
+  enforcementReceipt.commandCleanupConfirmed === true &&
+  attestedFilesCurrent(enforcementReceipt.commandChainAttestation) &&
+  attestedFilesCurrent(enforcementReceipt.nodeRuntimeAttestation?.loadedRuntimeFiles) &&
+  attestedFilesCurrent(enforcementReceipt.nodeRuntimeAttestation?.executableMappings) &&
   canonicalAuthorityJson(enforcementReceipt.nodeRuntimeAttestation) ===
     canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation) &&
   canonicalAuthorityJson(enforcementReceipt.commandChainAttestation) ===
@@ -651,13 +671,16 @@ export function resolveManagedMetroCommand(
   throw new Error('METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native');
 }
 
-interface ManagedMetroLaunchCommand {
+export interface ManagedMetroLaunchCommand {
   sourceExecutable: string;
   executable: string;
+  nodeExecutable: string;
   args: string[];
   probeArgs: string[];
   executableMappings: string[];
   chainInputs: string[];
+  protectedRuntimeRoots: string[];
+  binPath?: string;
 }
 
 function resolveManagedMetroLaunchCommand(
@@ -673,20 +696,24 @@ function resolveManagedMetroLaunchCommand(
     return {
       sourceExecutable: command.executable,
       executable: command.executable,
+      nodeExecutable: process.execPath,
       args: command.args,
       probeArgs: ['--version'],
       executableMappings: [],
       chainInputs: [command.executable],
+      protectedRuntimeRoots: [],
     };
   }
   if (/^#!\s*\/usr\/bin\/env\s+node(?:\s|$)/.test(firstLine)) {
     return {
       sourceExecutable: command.executable,
       executable: process.execPath,
+      nodeExecutable: process.execPath,
       args: [command.executable, ...command.args],
       probeArgs: [command.executable, '--version'],
       executableMappings: [],
       chainInputs: [command.executable, process.execPath],
+      protectedRuntimeRoots: [],
     };
   }
   if (/^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(firstLine)) {
@@ -698,19 +725,91 @@ function resolveManagedMetroLaunchCommand(
     return {
       sourceExecutable: command.executable,
       executable: shellExecutable,
+      nodeExecutable: process.execPath,
       args: [command.executable, ...command.args],
       probeArgs: [command.executable, '--version'],
       executableMappings: [process.execPath, ...shellHelpers],
       chainInputs: [command.executable, shellExecutable, process.execPath, ...shellHelpers],
+      protectedRuntimeRoots: [],
     };
   }
   return {
     sourceExecutable: command.executable,
     executable: command.executable,
+    nodeExecutable: process.execPath,
     args: command.args,
     probeArgs: ['--version'],
     executableMappings: [],
     chainInputs: [command.executable],
+    protectedRuntimeRoots: [],
+  };
+}
+
+export function sealManagedMetroLaunchCommand(
+  command: ManagedMetroLaunchCommand,
+  runtimeRoot: string,
+  instanceId: string,
+): ManagedMetroLaunchCommand {
+  const sealedRoot = join(
+    runtimeRoot,
+    `metro-command-${createHash('sha256').update(instanceId).digest('hex').slice(0, 16)}`,
+  );
+  rmSync(sealedRoot, { force: true, recursive: true });
+  const binRoot = join(sealedRoot, 'bin');
+  mkdirSync(binRoot, { recursive: true, mode: 0o700 });
+  const copies = new Map<string, string>();
+  const seal = (source: string, destination: string): string => {
+    const canonical = canonicalRuntimeInput(source);
+    const existing = copies.get(canonical);
+    if (existing) return existing;
+    copyFileSync(canonical, destination, fsConstants.COPYFILE_FICLONE);
+    chmodSync(destination, 0o500);
+    copies.set(canonical, destination);
+    return destination;
+  };
+  const nodeExecutable = seal(command.nodeExecutable, join(binRoot, 'node'));
+  const sourceExecutable = seal(command.sourceExecutable, join(sealedRoot, 'command'));
+  const executable =
+    canonicalRuntimeInput(command.executable) === canonicalRuntimeInput(command.nodeExecutable)
+      ? nodeExecutable
+      : seal(command.executable, join(binRoot, 'command-runtime'));
+  const executableMappings = command.executableMappings.map((mapping) =>
+    canonicalRuntimeInput(mapping) === canonicalRuntimeInput(command.nodeExecutable)
+      ? nodeExecutable
+      : seal(mapping, join(binRoot, basename(mapping))),
+  );
+  const chainInputs = command.chainInputs.map((input, index) => {
+    const canonical = canonicalRuntimeInput(input);
+    if (canonical === canonicalRuntimeInput(command.nodeExecutable)) return nodeExecutable;
+    if (canonical === canonicalRuntimeInput(command.sourceExecutable)) return sourceExecutable;
+    if (canonical === canonicalRuntimeInput(command.executable)) return executable;
+    return seal(input, join(binRoot, `chain-${index}`));
+  });
+  let args = command.args.map((argument) =>
+    argument === command.sourceExecutable ? sourceExecutable : argument,
+  );
+  if (
+    canonicalRuntimeInput(command.executable) !== canonicalRuntimeInput(command.nodeExecutable) &&
+    command.args[0] === command.sourceExecutable
+  ) {
+    args = [
+      '-c',
+      'script=$1; shift; . "$script"',
+      command.sourceExecutable,
+      sourceExecutable,
+      ...command.args.slice(1),
+    ];
+  }
+  return {
+    sourceExecutable,
+    executable,
+    nodeExecutable,
+    args,
+    probeArgs: args,
+    executableMappings,
+    chainInputs,
+    protectedRuntimeRoots: [sealedRoot],
+    binPath: binRoot,
   };
 }
 
@@ -934,7 +1033,11 @@ export async function startManagedMetro(
   dependencies: ManagedMetroDependencies = {},
 ): Promise<ManagedMetroBinding> {
   const command = resolveManagedMetroCommand(input.appRoot, dependencies);
-  const launchCommand = resolveManagedMetroLaunchCommand(command, dependencies);
+  const resolvedLaunchCommand = resolveManagedMetroLaunchCommand(command, dependencies);
+  const launchCommand =
+    process.platform === 'darwin' && !dependencies.spawnProcess
+      ? sealManagedMetroLaunchCommand(resolvedLaunchCommand, input.runtimeRoot, input.instanceId)
+      : resolvedLaunchCommand;
   const instanceId = input.instanceId;
   const runtimePolicyCapability = createHmac('sha256', input.signerCapability)
     .update('metro-runtime-policy')
@@ -999,6 +1102,11 @@ export async function startManagedMetro(
   });
   const childEnvironment = {
     ...metroEnvironment,
+    ...(launchCommand.binPath
+      ? {
+          PATH: [launchCommand.binPath, metroEnvironment.PATH].filter(Boolean).join(':'),
+        }
+      : {}),
     NODE_OPTIONS: authorityNodeOptions,
     RN_DEV_AGENT_METRO_EVIDENCE_FD: '9',
     RN_DEV_AGENT_SESSION_ID: input.sessionId,
@@ -1029,7 +1137,8 @@ export async function startManagedMetro(
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
     commandChainInputs: launchCommand.chainInputs.map(canonicalRuntimeInput),
-    nodeExecutable: canonicalRuntimeInput(process.execPath),
+    protectedRuntimeRoots: launchCommand.protectedRuntimeRoots.map(canonicalRuntimeInput),
+    nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
     nodeVersion: process.version,
     port: input.port,
     args: metroArgs,
@@ -1059,13 +1168,14 @@ export async function startManagedMetro(
     appRoot: input.appRoot,
     sourceRoot: input.sourceRoot,
     runtimeRoot: input.runtimeRoot,
-    nodeExecutable: process.execPath,
+    nodeExecutable: launchCommand.nodeExecutable,
     nodeVersion: process.version,
     commandExecutable: launchCommand.executable,
     commandArguments: metroArgs,
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings,
     commandChainInputs: launchCommand.chainInputs,
+    protectedRuntimeRoots: launchCommand.protectedRuntimeRoots,
     port: input.port,
     instanceId,
     runtimeInputs,
@@ -1078,7 +1188,7 @@ export async function startManagedMetro(
     try {
       runtimeEnforcement = {
         ...preparedEnforcement,
-        receipt: preflightEnforcement(preparedEnforcement),
+        receipt: preflightEnforcement(preparedEnforcement, { environment: childEnvironment }),
       };
     } catch {
       runtimeEnforcement = {
@@ -1091,7 +1201,7 @@ export async function startManagedMetro(
     runtimeEnforcement.status === 'enforced' ? 'broker-v2' : 'reported-v1';
   const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
   const child = (dependencies.spawnProcess ?? spawn)(
-    process.execPath,
+    launchCommand.nodeExecutable,
     ['-e', METRO_LAUNCHER_SOURCE],
     {
       cwd: input.appRoot,

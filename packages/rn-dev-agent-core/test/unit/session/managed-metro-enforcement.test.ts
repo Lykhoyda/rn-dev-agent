@@ -19,6 +19,7 @@ import {
   verifyManagedMetroEnforcementReceipt,
 } from '../../../dist/session/managed-metro-enforcement.js';
 import {
+  sealManagedMetroLaunchCommand,
   startManagedMetro,
   stopManagedMetro,
   verifyManagedMetroManagementProof,
@@ -258,6 +259,7 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
     allocatedListenerAllowed: true,
     networkOutboundDenied: true,
     resolvedCommandAllowed: true,
+    commandCleanupConfirmed: true,
     nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
     commandChainAttestation: plan.commandChainAttestation,
   };
@@ -291,6 +293,47 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
   );
 });
 
+test('managed Metro launches from sealed command-chain bytes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-metro-command-seal-'));
+  roots.push(root);
+  const runtimeRoot = join(root, 'runtime');
+  const nodeExecutable = join(root, 'node');
+  const shellExecutable = join(root, 'sh');
+  const sourceExecutable = join(root, 'expo');
+  const helperExecutable = join(root, 'dirname');
+  for (const [path, contents] of [
+    [nodeExecutable, 'node-v1'],
+    [shellExecutable, 'shell-v1'],
+    [sourceExecutable, 'shim-v1'],
+    [helperExecutable, 'helper-v1'],
+  ]) {
+    writeFileSync(path, contents);
+    chmodSync(path, 0o755);
+  }
+  const sealed = sealManagedMetroLaunchCommand(
+    {
+      sourceExecutable,
+      executable: shellExecutable,
+      nodeExecutable,
+      args: [sourceExecutable, 'start'],
+      probeArgs: [sourceExecutable, '--version'],
+      executableMappings: [nodeExecutable, helperExecutable],
+      chainInputs: [sourceExecutable, shellExecutable, nodeExecutable, helperExecutable],
+      protectedRuntimeRoots: [],
+    },
+    runtimeRoot,
+    'metro-instance',
+  );
+  writeFileSync(sourceExecutable, 'shim-v2');
+  writeFileSync(nodeExecutable, 'node-v2');
+
+  assert.equal(readFileSync(sealed.sourceExecutable, 'utf8'), 'shim-v1');
+  assert.equal(readFileSync(sealed.nodeExecutable, 'utf8'), 'node-v1');
+  assert.notEqual(sealed.sourceExecutable, sourceExecutable);
+  assert.ok(sealed.chainInputs.every((path) => path.startsWith(runtimeRoot)));
+  assert.deepEqual(sealed.protectedRuntimeRoots, [dirname(sealed.sourceExecutable)]);
+});
+
 test(
   'managed Metro Darwin preflight proves allowed bind and denied escapes',
   { skip: process.platform !== 'darwin' },
@@ -300,7 +343,10 @@ test(
     const sourceRoot = realpathSync(root);
     const runtimeRoot = join(sourceRoot, 'runtime');
     const commandExecutable = join(sourceRoot, 'metro-entry.js');
-    writeFileSync(commandExecutable, 'process.exit(0);');
+    writeFileSync(
+      commandExecutable,
+      "require('node:net').createServer(() => {}).listen(Number(process.argv[2]), '127.0.0.1'); setInterval(() => {}, 1 << 30);",
+    );
     const port = await new Promise<number>((resolve, reject) => {
       const server = createServer();
       server.once('error', reject);
@@ -322,7 +368,8 @@ test(
       nodeExecutable: process.execPath,
       nodeVersion: process.version,
       commandExecutable: process.execPath,
-      commandProbeArguments: [commandExecutable],
+      commandArguments: [commandExecutable, String(port)],
+      commandProbeArguments: [commandExecutable, '--version'],
       commandChainInputs: [process.execPath, commandExecutable],
       port,
       instanceId: 'integration',
@@ -350,6 +397,7 @@ test(
       allocatedListenerAllowed: true,
       networkOutboundDenied: true,
       resolvedCommandAllowed: true,
+      commandCleanupConfirmed: true,
       nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
       commandChainAttestation: plan.commandChainAttestation,
     });
@@ -471,6 +519,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         commandProbeArguments: runtimeManifest.commandProbeArguments as string[],
         commandExecutableMappings: runtimeManifest.commandExecutableMappings as string[],
         commandChainInputs: runtimeManifest.commandChainInputs as string[],
+        protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots as string[],
         port: runtimeManifest.port as number,
         instanceId: 'integration-metro',
         runtimeInputs: policy.runtimeInputs as string[],
@@ -500,6 +549,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         'allocatedListenerAllowed',
         'networkOutboundDenied',
         'resolvedCommandAllowed',
+        'commandCleanupConfirmed',
       ]) {
         assert.equal(observedReceipt[field], true, field);
       }

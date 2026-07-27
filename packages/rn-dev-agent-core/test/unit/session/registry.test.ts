@@ -933,6 +933,29 @@ test('handoff cancellation controller lookup does not widen operational access',
   assert.equal(registry.getHandoffCancellationControllerBinding(owner).sessionId, owner.sessionId);
 });
 
+test('handoff donor admits only the dedicated cancellation operation', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+
+  assert.throws(
+    () =>
+      registry.beginOperation(owner, {
+        operationId: 'donor-release',
+        tool: 'rn_session',
+        profile: 'transition:CS>CS',
+      }),
+    (error) => error.code === 'SESSION_OWNER_LOST',
+  );
+  const cancellation = registry.beginHandoffCancellationOperation(owner, {
+    operationId: 'donor-cancel',
+    tool: 'rn_session',
+    profile: 'transition:CS>CS',
+  });
+  assert.equal(cancellation.sessionId, owner.sessionId);
+  registry.cancelOperation(cancellation);
+});
+
 test('opaque recovery handles authorize only their bounded transition', () => {
   const { registry, create } = fixture();
   const owner = create('a', 'shared-worktree');

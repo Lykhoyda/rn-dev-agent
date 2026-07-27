@@ -199,7 +199,7 @@ export function createSessionHandler(
       const authority = runtime.status();
       return okResult({
         authoritative: false,
-        authority: projectPublicAuthorityStatus(authority),
+        authority: projectPublicAuthorityStatus(authority, { includeSessionId: true }),
       });
     }
 

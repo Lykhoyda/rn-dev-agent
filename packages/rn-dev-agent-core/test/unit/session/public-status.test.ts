@@ -41,6 +41,29 @@ test('public authority status excludes capabilities and literal authority identi
   }
 });
 
+test('session status can include its opaque session identity', () => {
+  const projected = projectPublicAuthorityStatus(
+    {
+      available: true,
+      sessionId: 'session-exact',
+      sourceKey: 'source-secret',
+      worktreeKey: 'worktree-secret',
+      appRootKey: 'path-secret',
+      state: 'ready',
+      claimEpoch: 2,
+      authorityVersion: 9,
+      leaseUntilMs: 100,
+      source: { kind: 'git' },
+      bindings: {},
+      claims: [],
+      worker: { instanceId: 'worker-secret', pid: 1, birthAvailable: true },
+    },
+    { includeSessionId: true },
+  );
+
+  assert.equal(projected.sessionId, 'session-exact');
+});
+
 test('blocked public status exposes only bounded opaque recovery handles', () => {
   const projected = projectPublicAuthorityStatus({
     available: true,

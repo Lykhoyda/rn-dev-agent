@@ -564,6 +564,7 @@ export function createAuthorityGate(
         if (profile.kind === 'transition') {
           let operation: OperationRef | null = null;
           let registry: SessionRegistry | null = null;
+          let retainProofCleanupFence = false;
           try {
             const available = runtime.requireAvailable();
             registry = available.registry;
@@ -613,11 +614,15 @@ export function createAuthorityGate(
                         }
                       : { before: [...profile.axes], after: [...profile.axes] };
             requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
-            operation = registry.beginOperation(available.session, {
+            const operationInput = {
               operationId: randomUUID(),
               tool,
               profile: `transition:${transitionAxes.before.join('')}>${transitionAxes.after.join('')}`,
-            });
+            };
+            operation =
+              tool === 'rn_session' && args.action === 'cancel_handoff'
+                ? registry.beginHandoffCancellationOperation(available.session, operationInput)
+                : registry.beginOperation(available.session, operationInput);
             const before = await Promise.all(
               transitionAxes.before.map((axis) =>
                 dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
@@ -718,18 +723,20 @@ export function createAuthorityGate(
                 ok?: boolean;
               };
               if (envelope.ok !== true) return result;
-              const current = runtime.requireAvailable();
-              registry.endOperation(operation);
-              operation = null;
               try {
-                current.registry.updateBindings(current.session, {
+                operation = registry.replaceBindingsDuringOperation(operation, {
                   bindings: { proof: { runId } },
-                  expectedAuthorityVersion: status.authorityVersion,
                 });
               } catch (bindingError) {
                 try {
-                  await handler({ action: 'discard' });
+                  const rollback = await handler({ action: 'discard' });
+                  if (!proofDiscardConfirmed(rollback)) {
+                    throw new Error(
+                      'PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected',
+                    );
+                  }
                 } catch (rollbackError) {
+                  retainProofCleanupFence = operation !== null;
                   throw new AggregateError(
                     [bindingError, rollbackError],
                     'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed after binding rejection',
@@ -751,7 +758,7 @@ export function createAuthorityGate(
           } catch (error) {
             return authorityFailure(error);
           } finally {
-            if (registry && operation) {
+            if (registry && operation && !retainProofCleanupFence) {
               try {
                 registry.endOperation(operation);
               } catch {

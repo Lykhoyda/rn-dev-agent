@@ -1854,11 +1854,22 @@ export function createProofCaptureHandler(
       if (review.evidenceSha256 !== hashProofValue(active.mechanicalReceipt)) {
         return proofFailure(['EVIDENCE_REVIEW_TARGET_MISMATCH'], active.stage);
       }
+      const acceptedAuthority = currentAuthority(active);
+      if (!acceptedAuthority) {
+        return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
+      }
+      if (
+        hashProofValue(acceptedAuthority) !==
+        hashProofValue(active.mechanicalReceipt.authority)
+      ) {
+        return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
+      }
       const { verdict: _mechanicalVerdict, ...acceptedEvidence } = active.mechanicalReceipt;
       let finalReceipt: FinalProofReceipt;
       try {
         finalReceipt = finalProofReceiptSchema.parse({
           ...acceptedEvidence,
+          authority: acceptedAuthority,
           evidenceReview: review,
           verdict: 'accepted',
         });
@@ -1866,6 +1877,13 @@ export function createProofCaptureHandler(
         return proofFailure(['RECEIPT_CONSTRUCTION_FAILED'], active.stage);
       }
       if (!contextIsCurrent(active)) return rejectPathDrift(active);
+      const writeAuthority = currentAuthority(active);
+      if (!writeAuthority) {
+        return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
+      }
+      if (hashProofValue(writeAuthority) !== hashProofValue(finalReceipt.authority)) {
+        return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
+      }
       try {
         deps.writeReceipt(active.context.receiptPath, finalReceipt);
       } catch {

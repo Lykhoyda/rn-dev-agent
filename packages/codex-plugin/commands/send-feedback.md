@@ -33,8 +33,8 @@ Ask in normal conversation; do not assume a host-specific question tool:
 
 ## 2. Collect and sanitize
 
-Call `rn_session({action: "status"})` first when available. If it returns an
-exact session, retain its opaque `sessionId` only in memory. Run the collector
+Call `rn_session({action: "status"})` first when available. Its public authority
+projection returns the exact session's opaque `sessionId`; retain it only in memory. Run the collector
 from the exact project root with that ID set only for the collector process as
 `RN_DEV_AGENT_SESSION_ID`. Never include the ID in a preview or submission.
 This prevents a completed handoff from making the collector ambiguous when

@@ -13,6 +13,31 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 
+test('session status returns the exact opaque session identity', async () => {
+  const handler = createSessionHandler({
+    status: () => ({
+      available: true,
+      sessionId: 'session-exact',
+      sourceKey: 'source',
+      worktreeKey: 'worktree',
+      appRootKey: 'app',
+      state: 'ready',
+      claimEpoch: 1,
+      authorityVersion: 1,
+      leaseUntilMs: 100,
+      source: { kind: 'git' },
+      bindings: {},
+      claims: [],
+      worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+    }),
+  } as never);
+
+  const result = await handler({ action: 'status' });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.data.authority.sessionId, 'session-exact');
+});
+
 function cleanupRuntime(
   finish: () => void,
   includeObserve = true,

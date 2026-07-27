@@ -3,6 +3,7 @@ import type { WorkerAuthorityStatus } from './runtime.js';
 
 export function projectPublicAuthorityStatus(
   status: WorkerAuthorityStatus,
+  options: { includeSessionId?: boolean } = {},
 ): Record<string, unknown> {
   if (!status.available) {
     return {
@@ -38,6 +39,7 @@ export function projectPublicAuthorityStatus(
       : undefined;
   return {
     available: true,
+    ...(options.includeSessionId ? { sessionId: status.sessionId } : {}),
     state: status.state,
     sourceKind: status.source.kind,
     metroPort: status.bindings.metroPort,
