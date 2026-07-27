@@ -22464,27 +22464,28 @@ function resolveAndroidInstallAction(opts) {
   return "build-then-install";
 }
 async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
+  opts.signal?.throwIfAborted();
   try {
     const { stdout } = await execFileAsync2("adb", [...adbSerialArgs(deviceId), "get-state"], {
-      timeout: 5e3
+      timeout: 5e3,
+      signal: opts.signal
     });
     if (stdout.trim() !== "device")
       throw new Error(`adb state is "${stdout.trim()}"`);
   } catch (err) {
+    opts.signal?.throwIfAborted();
     throw new Error(`rn-android-runner: target device not online (adb get-state) \u2014 boot the emulator / connect the device. ${err instanceof Error ? err.message : String(err)}`);
   }
   let pmOut = "";
   try {
-    pmOut = (await execFileAsync2("adb", [
-      ...adbSerialArgs(deviceId),
-      "shell",
-      "pm",
-      "list",
-      "instrumentation"
-    ])).stdout;
+    pmOut = (await execFileAsync2("adb", [...adbSerialArgs(deviceId), "shell", "pm", "list", "instrumentation"], {
+      signal: opts.signal
+    })).stdout;
   } catch {
+    opts.signal?.throwIfAborted();
   }
   const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), { appApk: APK_APP, testApk: APK_TEST }, void 0, opts.forceLocalBuild);
+  opts.signal?.throwIfAborted();
   const provenance = artifactProvenanceToState(artifacts.provenance);
   if (artifacts.note)
     pendingUpgradeNote = artifacts.note;
@@ -22499,20 +22500,26 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
       await execFileAsync2(GRADLEW, buildGradleAssembleArgs(), {
         cwd: RN_ANDROID_RUNNER_DIR,
         timeout: GRADLE_BUILD_TIMEOUT_MS,
-        maxBuffer: 10 * 1024 * 1024
+        maxBuffer: 10 * 1024 * 1024,
+        signal: opts.signal
       });
     } catch (err) {
+      opts.signal?.throwIfAborted();
       throw new Error(`rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   try {
     await execFileAsync2("adb", buildAdbInstallArgs(deviceId, artifacts.appApk), {
-      timeout: ADB_INSTALL_TIMEOUT_MS
+      timeout: ADB_INSTALL_TIMEOUT_MS,
+      signal: opts.signal
     });
+    opts.signal?.throwIfAborted();
     await execFileAsync2("adb", buildAdbInstallArgs(deviceId, artifacts.testApk), {
-      timeout: ADB_INSTALL_TIMEOUT_MS
+      timeout: ADB_INSTALL_TIMEOUT_MS,
+      signal: opts.signal
     });
   } catch (err) {
+    opts.signal?.throwIfAborted();
     throw new Error(`rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ${err instanceof Error ? err.message : String(err)}`);
   }
   return provenance;
@@ -22679,16 +22686,24 @@ function classifyAndroidHealth(info) {
 }
 function initializeAndroidRunnerRebuildState(databasePath) {
   const store = openAuthorityStore(databasePath);
-  store.database.exec(`
-    CREATE TABLE IF NOT EXISTS android_runner_rebuild_attempt (
-      lock_name TEXT PRIMARY KEY,
-      plugin_version TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
-      owner_nonce TEXT,
-      lease_ms INTEGER NOT NULL
-    )
-  `);
-  return store;
+  try {
+    store.database.exec(`
+      CREATE TABLE IF NOT EXISTS android_runner_rebuild_attempt (
+        lock_name TEXT PRIMARY KEY,
+        plugin_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
+        owner_nonce TEXT,
+        lease_ms INTEGER NOT NULL
+      )
+    `);
+    return store;
+  } catch (cause) {
+    try {
+      store.close();
+    } catch {
+    }
+    throw cause;
+  }
 }
 function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(), ownerNonce = randomUUID4(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
   try {
@@ -22782,20 +22797,50 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, dependencies = {}
   const heartbeat = dependencies.heartbeat ?? heartbeatAndroidRunnerRebuildLock;
   const complete = dependencies.complete ?? completeAndroidRunnerRebuildLock;
   const release = dependencies.release ?? releaseAndroidRunnerRebuildLock;
+  const controller = new AbortController();
+  const authorityLost = () => {
+    if (controller.signal.aborted)
+      return;
+    controller.abort(androidRebuildRefusal(error2, "runner artifact rebuild authority was lost"));
+  };
   const heartbeatTimer2 = setInterval(() => {
     try {
-      heartbeat(lock);
+      if (!heartbeat(lock))
+        authorityLost();
     } catch {
+      authorityLost();
     }
   }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
   heartbeatTimer2.unref();
   try {
-    const result = await rebuild();
-    clearInterval(heartbeatTimer2);
-    try {
-      complete(lock);
-    } catch {
+    const result = await rebuild(controller.signal);
+    controller.signal.throwIfAborted();
+    let completionTimer;
+    let finalized = false;
+    const finalize = () => {
+      if (controller.signal.aborted) {
+        clearInterval(heartbeatTimer2);
+        if (completionTimer)
+          clearInterval(completionTimer);
+        return;
+      }
+      try {
+        if (!complete(lock))
+          return;
+      } catch {
+        return;
+      }
+      finalized = true;
+      clearInterval(heartbeatTimer2);
+      if (completionTimer)
+        clearInterval(completionTimer);
+    };
+    finalize();
+    if (!finalized && !controller.signal.aborted) {
+      completionTimer = setInterval(finalize, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+      completionTimer.unref();
     }
+    controller.signal.throwIfAborted();
     return result;
   } catch (cause) {
     clearInterval(heartbeatTimer2);
@@ -22803,7 +22848,7 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, dependencies = {}
       release(lock);
     } catch {
     }
-    throw cause;
+    throw controller.signal.aborted ? controller.signal.reason : cause;
   }
 }
 function androidRetryCleanupContext(state, error2) {
@@ -22828,24 +22873,28 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-      const state = await runBoundedAndroidRunnerRebuild(err, async () => {
+      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
         await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err));
+        signal.throwIfAborted();
         invalidateAndroidRunnerApks();
         return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
           _forceReinstall: true,
-          _forceLocalBuild: true
+          _forceLocalBuild: true,
+          _rebuildSignal: signal
         });
       });
       pendingUpgradeNote = "runner artifact rebuilt (authority identity mismatch)";
       return state;
     }
     if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
-      const state = await runBoundedAndroidRunnerRebuild(err, async () => {
+      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
         await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState2, err));
+        signal.throwIfAborted();
         invalidateAndroidRunnerApks();
         return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
           _forceReinstall: true,
-          _forceLocalBuild: true
+          _forceLocalBuild: true,
+          _rebuildSignal: signal
         });
       });
       pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(", ") || "unknown"})`;
@@ -22855,6 +22904,7 @@ async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAULT_PORT,
   }
 }
 async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
+  opts._rebuildSignal?.throwIfAborted();
   const serial = deviceId ?? (testAuthorityState ? runnerState2?.deviceId : void 0) ?? await resolveAndroidSerial();
   if (!serial) {
     throw new Error("DEVICE_AUTHORITY_MISMATCH: Android native runner requires an exact claimed device");
@@ -22895,16 +22945,24 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       forceReinstall = true;
     }
   }
+  opts._rebuildSignal?.throwIfAborted();
   const provenance = await ensureAndroidRunnerInstalled(deviceId, {
     forceReinstall,
-    forceLocalBuild: opts._forceLocalBuild === true
+    forceLocalBuild: opts._forceLocalBuild === true,
+    signal: opts._rebuildSignal
   });
   let hostPort = await findFreePort(devicePort);
+  opts._rebuildSignal?.throwIfAborted();
   try {
-    await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort));
+    await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort), {
+      signal: opts._rebuildSignal
+    });
   } catch {
+    opts._rebuildSignal?.throwIfAborted();
     hostPort = await findFreePort(0);
-    await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort));
+    await execFileAsync2("adb", buildAdbForwardArgs(deviceId, hostPort, devicePort), {
+      signal: opts._rebuildSignal
+    });
   }
   return new Promise((resolve11, reject) => {
     let resolved = false;
@@ -22931,7 +22989,8 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       MAIN_LOOP_CLASS,
       INSTRUMENTATION
     ], {
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["ignore", "pipe", "pipe"],
+      signal: opts._rebuildSignal
     });
     runnerProcess2 = child;
     let diag = "";
@@ -22943,6 +23002,12 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
     const finishReady = () => {
       if (resolved)
         return;
+      if (opts._rebuildSignal?.aborted) {
+        resolved = true;
+        child.kill("SIGTERM");
+        reject(opts._rebuildSignal.reason);
+        return;
+      }
       resolved = true;
       const state = {
         schemaVersion: 1,
@@ -23284,7 +23349,7 @@ function errMessage(err) {
 function isAndroidConnectionFailure(message) {
   return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|rn-android-runner not started|did not become ready|Android runner instrumentation exited before readiness|Failed to spawn Android runner instrumentation/i.test(message);
 }
-var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
+var execFileAsync2, DEFAULT_PORT, READY_TIMEOUT_MS2, INSTRUMENTATION, MAIN_LOOP_CLASS, HEALTH_POLL_INTERVAL_MS, HEALTH_PROBE_TIMEOUT_MS, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, ANDROID_REBUILD_HEARTBEAT_MS, ANDROID_REBUILD_COMPLETION_RETRY_MS, GRADLE_BUILD_TIMEOUT_MS, ADB_INSTALL_TIMEOUT_MS, runnerProcess2, runnerState2, fetchImpl2, testAuthorityState, lastKnownCapabilities2, pendingUpgradeNote, AndroidCommandsStaleError, AndroidAuthorityStaleError, RUNNER_APK_PATHS, STATUS_PROBE_TIMEOUT_MS2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -23314,6 +23379,7 @@ var init_rn_android_runner_client = __esm({
     ANDROID_REBUILD_LOCK_DATABASE = join21(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
     ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
     ANDROID_REBUILD_HEARTBEAT_MS = 6e4;
+    ANDROID_REBUILD_COMPLETION_RETRY_MS = 1e3;
     GRADLE_BUILD_TIMEOUT_MS = 6e5;
     ADB_INSTALL_TIMEOUT_MS = 12e4;
     runnerProcess2 = null;
@@ -24324,6 +24390,7 @@ function executeRecorderScript(script, args, options) {
     let timer;
     let killTimer;
     let groupPollTimer;
+    let groupExitDeadline;
     let terminationError;
     const finish = (error2, result) => {
       if (settled)
@@ -24368,6 +24435,10 @@ function executeRecorderScript(script, args, options) {
         finish(terminationError);
         return;
       }
+      if (groupExitDeadline !== void 0 && Date.now() >= groupExitDeadline) {
+        finish(new Error(`${terminationError.message}; recorder process-group termination is unconfirmed`, { cause: terminationError }));
+        return;
+      }
       groupPollTimer = setTimeout(waitForProcessGroupExit, 25);
     };
     const terminate = (error2) => {
@@ -24378,6 +24449,7 @@ function executeRecorderScript(script, args, options) {
       if (process.platform === "win32")
         return;
       killTimer = setTimeout(() => {
+        groupExitDeadline = Date.now() + RECORDER_POST_KILL_CONFIRM_MS;
         signal("SIGKILL");
         waitForProcessGroupExit();
       }, 250);
@@ -24608,7 +24680,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-var execFile15;
+var execFile15, RECORDER_POST_KILL_CONFIRM_MS;
 var init_process_cleanup = __esm({
   "packages/rn-dev-agent-core/dist/session/process-cleanup.js"() {
     "use strict";
@@ -24617,6 +24689,7 @@ var init_process_cleanup = __esm({
     init_process_birth();
     init_registry();
     execFile15 = promisify16(execFileCb13);
+    RECORDER_POST_KILL_CONFIRM_MS = 2e3;
   }
 });
 

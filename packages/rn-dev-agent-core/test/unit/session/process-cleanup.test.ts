@@ -16,6 +16,10 @@ const binding = {
   instanceId: 'observe-a',
   cleanupCapability: 'observe-capability',
 };
+const cleanupSource = readFileSync(
+  new URL('../../../src/session/process-cleanup.ts', import.meta.url),
+  'utf8',
+);
 
 const listenerProbe = () => ({ status: 'listening' as const, pid: 456 });
 const processProbe = () => ({
@@ -162,5 +166,13 @@ test('recorder timeout waits for confirmed descendant termination after escalati
   assert.throws(
     () => process.kill(descendantPid, 0),
     (error: unknown) => (error as NodeJS.ErrnoException).code === 'ESRCH',
+  );
+});
+
+test('recorder timeout bounds post-kill process-group confirmation', () => {
+  assert.match(cleanupSource, /RECORDER_POST_KILL_CONFIRM_MS = 2_000/);
+  assert.match(
+    cleanupSource,
+    /groupExitDeadline !== undefined[\s\S]*?process-group termination is unconfirmed/,
   );
 });

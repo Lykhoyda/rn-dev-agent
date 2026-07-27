@@ -74,7 +74,11 @@ test('Android authority upgrades use the bounded artifact rebuild owner', () => 
   assert.ok(err.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'));
   assert.match(
     runnerSource,
-    /err instanceof AndroidAuthorityStaleError[\s\S]*?runBoundedAndroidRunnerRebuild\(err,[\s\S]*?invalidateAndroidRunnerApks\(\)[\s\S]*?_forceLocalBuild: true/,
+    /err instanceof AndroidAuthorityStaleError[\s\S]*?runBoundedAndroidRunnerRebuild\(err, async \(signal\)[\s\S]*?signal\.throwIfAborted\(\)[\s\S]*?invalidateAndroidRunnerApks\(\)[\s\S]*?_forceLocalBuild: true[\s\S]*?_rebuildSignal: signal/,
+  );
+  assert.match(
+    runnerSource,
+    /execFileAsync\(GRADLEW[\s\S]*?signal: opts\.signal[\s\S]*?buildAdbInstallArgs[\s\S]*?signal: opts\.signal/,
   );
 });
 
@@ -231,8 +235,43 @@ test('Android artifact rebuild heartbeats while the protected operation runs', a
   assert.ok(heartbeats >= 2);
 });
 
-test('Android artifact completion failure does not abandon a ready runner', async () => {
+test('Android artifact rebuild fences work when heartbeat authority is lost', async () => {
+  let fenced = false;
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      new AndroidAuthorityStaleError('serial-a'),
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              fenced = true;
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        }),
+      {
+        acquire: (pluginVersion) => ({
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        }),
+        heartbeat: () => false,
+        complete: () => assert.fail('authority-lost rebuild must not complete'),
+        release: () => true,
+        heartbeatIntervalMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof AndroidAuthorityStaleError &&
+      error.message.includes('rebuild authority was lost'),
+  );
+  assert.equal(fenced, true);
+});
+
+test('Android artifact completion retries do not abandon a ready runner', async () => {
   let released = false;
+  let completionAttempts = 0;
   const result = await runBoundedAndroidRunnerRebuild(
     new AndroidAuthorityStaleError('serial-a'),
     async () => 'ready',
@@ -243,17 +282,32 @@ test('Android artifact completion failure does not abandon a ready runner', asyn
       }),
       heartbeat: () => true,
       complete: () => {
-        throw new Error('database unavailable');
+        completionAttempts += 1;
+        if (completionAttempts === 1) throw new Error('database unavailable');
+        return completionAttempts >= 3;
       },
       release: () => {
         released = true;
         return true;
       },
+      heartbeatIntervalMs: 5,
+      completionRetryIntervalMs: 5,
     },
   );
 
   assert.equal(result, 'ready');
+  for (let attempt = 0; attempt < 20 && completionAttempts < 3; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(completionAttempts, 3);
   assert.equal(released, false);
+});
+
+test('Android rebuild state initialization closes its store on schema failure', () => {
+  assert.match(
+    runnerSource,
+    /function initializeAndroidRunnerRebuildState[\s\S]*?const store = openAuthorityStore[\s\S]*?try \{[\s\S]*?store\.database\.exec[\s\S]*?catch \(cause\) \{[\s\S]*?store\.close\(\)/,
+  );
 });
 
 test('Android artifact rebuild budget refuses repeated ownership upgrades', async () => {

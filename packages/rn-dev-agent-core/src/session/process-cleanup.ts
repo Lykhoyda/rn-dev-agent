@@ -11,6 +11,7 @@ import {
 import { SessionAuthorityError } from './registry.js';
 
 const execFile = promisify(execFileCb);
+const RECORDER_POST_KILL_CONFIRM_MS = 2_000;
 
 interface RecorderExecutionOptions {
   timeout: number;
@@ -51,6 +52,7 @@ function executeRecorderScript(
     let timer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     let groupPollTimer: NodeJS.Timeout | undefined;
+    let groupExitDeadline: number | undefined;
     let terminationError: Error | undefined;
     const finish = (error?: Error, result?: { stdout: string; stderr: string }): void => {
       if (settled) return;
@@ -83,6 +85,15 @@ function executeRecorderScript(
         finish(terminationError);
         return;
       }
+      if (groupExitDeadline !== undefined && Date.now() >= groupExitDeadline) {
+        finish(
+          new Error(
+            `${terminationError.message}; recorder process-group termination is unconfirmed`,
+            { cause: terminationError },
+          ),
+        );
+        return;
+      }
       groupPollTimer = setTimeout(waitForProcessGroupExit, 25);
     };
     const terminate = (error: Error): void => {
@@ -91,6 +102,7 @@ function executeRecorderScript(
       signal('SIGTERM');
       if (process.platform === 'win32') return;
       killTimer = setTimeout(() => {
+        groupExitDeadline = Date.now() + RECORDER_POST_KILL_CONFIRM_MS;
         signal('SIGKILL');
         waitForProcessGroupExit();
       }, 250);

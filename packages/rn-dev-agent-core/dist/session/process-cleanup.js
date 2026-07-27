@@ -5,6 +5,7 @@ import { probeManagedMetroListener } from './managed-metro.js';
 import { probeProcessBirth, withVerifiedDarwinProcessBirthHelper, } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 const execFile = promisify(execFileCb);
+const RECORDER_POST_KILL_CONFIRM_MS = 2_000;
 function executeRecorderScript(script, args, options) {
     return new Promise((resolve, reject) => {
         const child = spawn(script, args, {
@@ -19,6 +20,7 @@ function executeRecorderScript(script, args, options) {
         let timer;
         let killTimer;
         let groupPollTimer;
+        let groupExitDeadline;
         let terminationError;
         const finish = (error, result) => {
             if (settled)
@@ -64,6 +66,10 @@ function executeRecorderScript(script, args, options) {
                 finish(terminationError);
                 return;
             }
+            if (groupExitDeadline !== undefined && Date.now() >= groupExitDeadline) {
+                finish(new Error(`${terminationError.message}; recorder process-group termination is unconfirmed`, { cause: terminationError }));
+                return;
+            }
             groupPollTimer = setTimeout(waitForProcessGroupExit, 25);
         };
         const terminate = (error) => {
@@ -74,6 +80,7 @@ function executeRecorderScript(script, args, options) {
             if (process.platform === 'win32')
                 return;
             killTimer = setTimeout(() => {
+                groupExitDeadline = Date.now() + RECORDER_POST_KILL_CONFIRM_MS;
                 signal('SIGKILL');
                 waitForProcessGroupExit();
             }, 250);

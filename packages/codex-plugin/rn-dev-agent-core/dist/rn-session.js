@@ -14356,6 +14356,7 @@ import { promisify as promisify16 } from "node:util";
 init_process_birth();
 init_registry();
 var execFile15 = promisify16(execFileCb13);
+var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve5, reject) => {
     const child = spawn5(script, args, {
@@ -14370,6 +14371,7 @@ function executeRecorderScript(script, args, options) {
     let timer;
     let killTimer;
     let groupPollTimer;
+    let groupExitDeadline;
     let terminationError;
     const finish = (error, result) => {
       if (settled)
@@ -14414,6 +14416,10 @@ function executeRecorderScript(script, args, options) {
         finish(terminationError);
         return;
       }
+      if (groupExitDeadline !== void 0 && Date.now() >= groupExitDeadline) {
+        finish(new Error(`${terminationError.message}; recorder process-group termination is unconfirmed`, { cause: terminationError }));
+        return;
+      }
       groupPollTimer = setTimeout(waitForProcessGroupExit, 25);
     };
     const terminate = (error) => {
@@ -14424,6 +14430,7 @@ function executeRecorderScript(script, args, options) {
       if (process.platform === "win32")
         return;
       killTimer = setTimeout(() => {
+        groupExitDeadline = Date.now() + RECORDER_POST_KILL_CONFIRM_MS;
         signal("SIGKILL");
         waitForProcessGroupExit();
       }, 250);
