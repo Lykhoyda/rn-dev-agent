@@ -248,8 +248,6 @@ function verifyDarwinProcessBirthHelper(
       path: helper,
       requirement: darwinProcessBirthRequirement(),
     };
-  } catch (error) {
-    throw error;
   } finally {
     close(fd);
   }

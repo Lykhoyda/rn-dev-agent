@@ -20697,8 +20697,6 @@ function verifyDarwinProcessBirthHelper(dependencies) {
       path: helper,
       requirement: darwinProcessBirthRequirement()
     };
-  } catch (error2) {
-    throw error2;
   } finally {
     close(fd);
   }

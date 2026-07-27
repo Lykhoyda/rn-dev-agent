@@ -116,6 +116,7 @@ for (const file of RUNTIME_ENTRIES) {
     process.exit(1);
   }
 }
+chmodSync(join(coreRoot, 'dist', 'supervisor.js'), 0o755);
 
 if (!existsSync(observeWebDistSource)) {
   console.error(`build-host-runtimes: missing observe web bundle at ${observeWebDistSource}`);

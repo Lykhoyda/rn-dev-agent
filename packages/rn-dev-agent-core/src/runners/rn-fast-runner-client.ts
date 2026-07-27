@@ -1159,10 +1159,7 @@ function clearStateFileIfMatches(expected: StateSnapshot): void {
   if (clearedCurrent) lastKnownCapabilities = [];
 }
 
-export type FastRunnerStaleReason =
-  | 'health'
-  | 'authority-mismatch'
-  | RunnerIncompatibilityReason;
+export type FastRunnerStaleReason = 'health' | 'authority-mismatch' | RunnerIncompatibilityReason;
 
 export interface FastRunnerLivenessDetail {
   liveness: FastRunnerLiveness;
