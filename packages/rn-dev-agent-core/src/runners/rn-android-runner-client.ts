@@ -89,6 +89,7 @@ const ANDROID_REBUILD_LOCK_DATABASE = join(
 const ANDROID_REBUILD_LOCK_STALE_MS = 15 * 60_000;
 const ANDROID_REBUILD_HEARTBEAT_MS = 60_000;
 const ANDROID_REBUILD_COMPLETION_RETRY_MS = 1_000;
+const ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 
@@ -1028,6 +1029,7 @@ interface AndroidRunnerRebuildDependencies {
   release?: (lock: AndroidRunnerRebuildLock) => boolean;
   heartbeatIntervalMs?: number;
   completionRetryIntervalMs?: number;
+  completionAttempts?: number;
 }
 
 function androidRebuildRefusal(
@@ -1042,6 +1044,7 @@ function androidRebuildRefusal(
 export async function runBoundedAndroidRunnerRebuild<T>(
   error: AndroidAuthorityStaleError | AndroidCommandsStaleError,
   rebuild: (signal: AbortSignal) => Promise<T>,
+  cleanup: () => Promise<void>,
   dependencies: AndroidRunnerRebuildDependencies = {},
 ): Promise<T> {
   const pluginVersion = getPluginVersion() ?? 'unknown';
@@ -1075,35 +1078,42 @@ export async function runBoundedAndroidRunnerRebuild<T>(
   try {
     const result = await rebuild(controller.signal);
     controller.signal.throwIfAborted();
-    let completionTimer: NodeJS.Timeout | undefined;
-    let finalized = false;
-    const finalize = () => {
-      if (controller.signal.aborted) {
-        clearInterval(heartbeatTimer);
-        if (completionTimer) clearInterval(completionTimer);
-        return;
-      }
+    const completionAttempts = Math.max(
+      1,
+      dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS,
+    );
+    for (let attempt = 0; attempt < completionAttempts; attempt += 1) {
+      controller.signal.throwIfAborted();
       try {
-        if (!complete(lock)) return;
-      } catch {
-        return;
+        if (complete(lock)) {
+          controller.signal.throwIfAborted();
+          clearInterval(heartbeatTimer);
+          return result;
+        }
+      } catch {}
+      if (attempt + 1 < completionAttempts) {
+        await new Promise<void>((resolve) => {
+          setTimeout(
+            resolve,
+            dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS,
+          );
+        });
       }
-      finalized = true;
-      clearInterval(heartbeatTimer);
-      if (completionTimer) clearInterval(completionTimer);
-    };
-    finalize();
-    if (!finalized && !controller.signal.aborted) {
-      completionTimer = setInterval(
-        finalize,
-        dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS,
+    }
+    if (!controller.signal.aborted) {
+      controller.abort(
+        androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable'),
       );
-      completionTimer.unref();
     }
     controller.signal.throwIfAborted();
-    return result;
+    throw androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable');
   } catch (cause) {
     clearInterval(heartbeatTimer);
+    try {
+      await cleanup();
+    } catch {
+      throw androidRebuildRefusal(error, 'runner artifact cleanup could not be verified');
+    }
     try {
       release(lock);
     } catch {}
@@ -1171,16 +1181,22 @@ export async function startAndroidRunner(
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
-      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
-        signal.throwIfAborted();
-        invalidateAndroidRunnerApks();
-        return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
-          _forceReinstall: true,
-          _forceLocalBuild: true,
-          _rebuildSignal: signal,
-        });
-      });
+      const state = await runBoundedAndroidRunnerRebuild(
+        err,
+        async (signal) => {
+          await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+          signal.throwIfAborted();
+          invalidateAndroidRunnerApks();
+          return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+            _forceReinstall: true,
+            _forceLocalBuild: true,
+            _rebuildSignal: signal,
+          });
+        },
+        async () => {
+          await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+        },
+      );
       pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
       return state;
     }
@@ -1188,16 +1204,22 @@ export async function startAndroidRunner(
       // Killing the local adb child does NOT free the device-side
       // UiAutomation slot (#237) — reap through the slot-release path so the
       // rebuilt instrumentation can bind.
-      const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
-        await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
-        signal.throwIfAborted();
-        invalidateAndroidRunnerApks();
-        return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
-          _forceReinstall: true,
-          _forceLocalBuild: true,
-          _rebuildSignal: signal,
-        });
-      });
+      const state = await runBoundedAndroidRunnerRebuild(
+        err,
+        async (signal) => {
+          await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+          signal.throwIfAborted();
+          invalidateAndroidRunnerApks();
+          return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+            _forceReinstall: true,
+            _forceLocalBuild: true,
+            _rebuildSignal: signal,
+          });
+        },
+        async () => {
+          await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
+        },
+      );
       pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
       return state;
     }

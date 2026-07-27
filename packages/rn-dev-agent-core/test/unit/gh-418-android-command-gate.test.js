@@ -32,6 +32,7 @@ const runnerSource = readFileSync(
   new URL('../../src/runners/rn-android-runner-client.ts', import.meta.url),
   'utf8',
 );
+const noAndroidRebuildCleanup = async () => {};
 
 test('gh-418 android: probe parses commands array (non-strings filtered)', async () => {
   _setFetchForTest(async () => ({
@@ -90,6 +91,7 @@ test('Android artifact rebuild is serialized and budgeted once', async () => {
       events.push('rebuild');
       return 'ready';
     },
+    noAndroidRebuildCleanup,
     {
       acquire: (pluginVersion) => {
         events.push('acquire');
@@ -119,6 +121,7 @@ test('Android artifact rebuild preserves ownership mismatch after a failed rebui
       async () => {
         throw mismatch;
       },
+      noAndroidRebuildCleanup,
       {
         acquire: (pluginVersion) => ({
           status: 'acquired',
@@ -146,6 +149,9 @@ test('Android artifact rebuild consumes a bounded attempt after failure', async 
         events.push('rebuild');
         throw new Error('transient build failure');
       },
+      async () => {
+        events.push('cleanup');
+      },
       {
         acquire: (pluginVersion) => ({
           status: 'acquired',
@@ -163,7 +169,7 @@ test('Android artifact rebuild consumes a bounded attempt after failure', async 
     ),
     /transient build failure/,
   );
-  assert.deepEqual(events, ['rebuild', 'failed']);
+  assert.deepEqual(events, ['rebuild', 'cleanup', 'failed']);
 });
 
 test('Android artifact rebuild lease heartbeats and finalizes under its nonce', () => {
@@ -216,6 +222,7 @@ test('Android artifact rebuild heartbeats while the protected operation runs', a
   const result = await runBoundedAndroidRunnerRebuild(
     new AndroidAuthorityStaleError('serial-a'),
     () => new Promise((resolve) => setTimeout(() => resolve('ready'), 35)),
+    noAndroidRebuildCleanup,
     {
       acquire: (pluginVersion) => ({
         status: 'acquired',
@@ -251,6 +258,7 @@ test('Android artifact rebuild fences work when heartbeat authority is lost', as
             { once: true },
           );
         }),
+      noAndroidRebuildCleanup,
       {
         acquire: (pluginVersion) => ({
           status: 'acquired',
@@ -269,12 +277,13 @@ test('Android artifact rebuild fences work when heartbeat authority is lost', as
   assert.equal(fenced, true);
 });
 
-test('Android artifact completion retries do not abandon a ready runner', async () => {
+test('Android artifact completion is durable before exposing a ready runner', async () => {
   let released = false;
   let completionAttempts = 0;
   const result = await runBoundedAndroidRunnerRebuild(
     new AndroidAuthorityStaleError('serial-a'),
     async () => 'ready',
+    noAndroidRebuildCleanup,
     {
       acquire: (pluginVersion) => ({
         status: 'acquired',
@@ -292,14 +301,117 @@ test('Android artifact completion retries do not abandon a ready runner', async 
       },
       heartbeatIntervalMs: 5,
       completionRetryIntervalMs: 5,
+      completionAttempts: 3,
     },
   );
 
   assert.equal(result, 'ready');
-  for (let attempt = 0; attempt < 20 && completionAttempts < 3; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
   assert.equal(completionAttempts, 3);
+  assert.equal(released, false);
+});
+
+test('Android artifact completion failure cleans up before releasing the lease', async () => {
+  const events = [];
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      new AndroidAuthorityStaleError('serial-a'),
+      async () => 'ready',
+      async () => {
+        events.push('cleanup');
+      },
+      {
+        acquire: (pluginVersion) => ({
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        }),
+        heartbeat: () => true,
+        complete: () => {
+          events.push('complete');
+          return false;
+        },
+        release: () => {
+          events.push('release');
+          return true;
+        },
+        completionRetryIntervalMs: 1,
+        completionAttempts: 2,
+      },
+    ),
+    (error) =>
+      error instanceof AndroidAuthorityStaleError &&
+      error.message.includes('completion was not durable'),
+  );
+  assert.deepEqual(events, ['complete', 'complete', 'cleanup', 'release']);
+});
+
+test('Android authority loss verifies device cleanup before releasing the lease', async () => {
+  const events = [];
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      new AndroidAuthorityStaleError('serial-a'),
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              events.push('abort');
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        }),
+      async () => {
+        events.push('cleanup');
+      },
+      {
+        acquire: (pluginVersion) => ({
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        }),
+        heartbeat: () => false,
+        complete: () => assert.fail('authority-lost rebuild must not complete'),
+        release: () => {
+          events.push('release');
+          return true;
+        },
+        heartbeatIntervalMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof AndroidAuthorityStaleError &&
+      error.message.includes('rebuild authority was lost'),
+  );
+  assert.deepEqual(events, ['abort', 'cleanup', 'release']);
+});
+
+test('Android rebuild refuses to release an attempt without verified cleanup', async () => {
+  let released = false;
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      new AndroidAuthorityStaleError('serial-a'),
+      async () => {
+        throw new Error('build failed');
+      },
+      async () => {
+        throw new Error('cleanup failed');
+      },
+      {
+        acquire: (pluginVersion) => ({
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        }),
+        heartbeat: () => true,
+        complete: () => assert.fail('failed rebuild must not complete'),
+        release: () => {
+          released = true;
+          return true;
+        },
+      },
+    ),
+    (error) =>
+      error instanceof AndroidAuthorityStaleError &&
+      error.message.includes('cleanup could not be verified'),
+  );
   assert.equal(released, false);
 });
 
@@ -319,6 +431,7 @@ test('Android artifact rebuild budget refuses repeated ownership upgrades', asyn
       async () => {
         rebuildAttempted = true;
       },
+      noAndroidRebuildCleanup,
       {
         acquire: () => ({ status: 'exhausted' }),
       },

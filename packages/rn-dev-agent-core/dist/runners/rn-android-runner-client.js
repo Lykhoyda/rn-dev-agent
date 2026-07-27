@@ -38,6 +38,7 @@ const ANDROID_REBUILD_LOCK_DATABASE = join(ANDROID_REBUILD_ROOT, '.authority-reb
 const ANDROID_REBUILD_LOCK_STALE_MS = 15 * 60_000;
 const ANDROID_REBUILD_HEARTBEAT_MS = 60_000;
 const ANDROID_REBUILD_COMPLETION_RETRY_MS = 1_000;
+const ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 export function getAndroidRunnerState() {
@@ -713,7 +714,7 @@ function androidRebuildRefusal(error, detail) {
         ? new AndroidAuthorityStaleError(error.deviceId, detail)
         : new AndroidCommandsStaleError(error.missing, error.bundleId, error.deviceId, detail);
 }
-export async function runBoundedAndroidRunnerRebuild(error, rebuild, dependencies = {}) {
+export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, dependencies = {}) {
     const pluginVersion = getPluginVersion() ?? 'unknown';
     const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
     const claim = acquire(pluginVersion);
@@ -745,37 +746,37 @@ export async function runBoundedAndroidRunnerRebuild(error, rebuild, dependencie
     try {
         const result = await rebuild(controller.signal);
         controller.signal.throwIfAborted();
-        let completionTimer;
-        let finalized = false;
-        const finalize = () => {
-            if (controller.signal.aborted) {
-                clearInterval(heartbeatTimer);
-                if (completionTimer)
-                    clearInterval(completionTimer);
-                return;
-            }
+        const completionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
+        for (let attempt = 0; attempt < completionAttempts; attempt += 1) {
+            controller.signal.throwIfAborted();
             try {
-                if (!complete(lock))
-                    return;
+                if (complete(lock)) {
+                    controller.signal.throwIfAborted();
+                    clearInterval(heartbeatTimer);
+                    return result;
+                }
             }
-            catch {
-                return;
+            catch { }
+            if (attempt + 1 < completionAttempts) {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+                });
             }
-            finalized = true;
-            clearInterval(heartbeatTimer);
-            if (completionTimer)
-                clearInterval(completionTimer);
-        };
-        finalize();
-        if (!finalized && !controller.signal.aborted) {
-            completionTimer = setInterval(finalize, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
-            completionTimer.unref();
+        }
+        if (!controller.signal.aborted) {
+            controller.abort(androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable'));
         }
         controller.signal.throwIfAborted();
-        return result;
+        throw androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable');
     }
     catch (cause) {
         clearInterval(heartbeatTimer);
+        try {
+            await cleanup();
+        }
+        catch {
+            throw androidRebuildRefusal(error, 'runner artifact cleanup could not be verified');
+        }
         try {
             release(lock);
         }
@@ -825,6 +826,8 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
                     _forceLocalBuild: true,
                     _rebuildSignal: signal,
                 });
+            }, async () => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
             });
             pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
             return state;
@@ -842,6 +845,8 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
                     _forceLocalBuild: true,
                     _rebuildSignal: signal,
                 });
+            }, async () => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err));
             });
             pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
             return state;
