@@ -385,6 +385,7 @@ function managedMetroSandboxProfile(input: {
 (deny default)
 (import "system.sb")
 (allow process-fork)
+(allow signal (target children))
 (deny network-outbound)
 (deny file-map-executable
 ${pathFilters(executableMapDenyRoots)})
@@ -437,6 +438,7 @@ export function prepareManagedMetroEnforcement(
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve(appRoot, '.expo');
   const readRoots = [
+    '/dev/fd',
     sourceRoot,
     appRoot,
     runtimeRoot,
@@ -521,10 +523,21 @@ export function prepareManagedMetroEnforcement(
 const PREFLIGHT_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { readFileSync, watch, writeFileSync } = require('node:fs');
+const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, writeFileSync } = require('node:fs');
 const { createConnection, createServer } = require('node:net');
-const { dirname } = require('node:path');
+const hashDescriptor = (descriptor) => {
+  const size = fstatSync(descriptor).size;
+  const contents = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const count = readSync(descriptor, contents, offset, size - offset, offset);
+    if (count === 0) break;
+    offset += count;
+  }
+  return createHash('sha256').update(contents.subarray(0, offset)).digest('hex');
+};
 const input = JSON.parse(process.argv[1]);
+const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
 const denied = (run) => {
   try {
     run();
@@ -566,36 +579,39 @@ const processGroupExists = (pid) => {
   }
 };
 (async () => {
-  let commandChainMutated = false;
-  const commandChainWatchers = [];
-  const watchPaths = new Set();
+  const commandDescriptors = [];
+  const boundPaths = new Map();
   for (const entry of input.commandChainAttestation) {
-    watchPaths.add(entry.path);
-    watchPaths.add(dirname(entry.path));
+    const descriptor = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (hashDescriptor(descriptor) !== entry.sha256) {
+      closeSync(descriptor);
+      throw new Error('command-chain identity mismatch');
+    }
+    boundPaths.set(entry.path, '/dev/fd/' + (10 + commandDescriptors.length));
+    commandDescriptors.push(descriptor);
   }
-  for (const path of watchPaths) {
-    commandChainWatchers.push(
-      watch(path, { persistent: true }, () => {
-        commandChainMutated = true;
-      }),
-    );
-  }
-  const commandChainCurrent = input.commandChainAttestation.every(
-    (entry) =>
-      createHash('sha256').update(readFileSync(entry.path)).digest('hex') === entry.sha256,
-  );
   const allocated = await listen(input.port);
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
   const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
   stdio.push('pipe');
-  const command = spawn(input.commandExecutable, input.commandArguments, {
+  stdio.push(...commandDescriptors);
+  const command = spawn(
+    input.commandExecutable,
+    input.commandArguments.map((argument) =>
+      argument.startsWith(logicalArgumentPrefix)
+        ? argument.slice(logicalArgumentPrefix.length)
+        : boundPaths.get(argument) ?? argument,
+    ),
+    {
     cwd: input.appRoot,
     detached: true,
     env: commandEnvironment,
     stdio,
-  });
+    },
+  );
+  for (const descriptor of commandDescriptors) closeSync(descriptor);
   command.stdio[9].resume();
   command.once('error', () => {});
   const resolvedCommandAllowed = await waitUntil(async () => {
@@ -605,27 +621,27 @@ const processGroupExists = (pid) => {
   let commandCleanupConfirmed = false;
   if (Number.isSafeInteger(command.pid)) {
     try {
+      command.kill('SIGTERM');
+    } catch {}
+    try {
       process.kill(-command.pid, 'SIGTERM');
     } catch {}
-    commandCleanupConfirmed = await waitUntil(() => !processGroupExists(command.pid), 2000);
+    await waitUntil(() => command.exitCode !== null, 2000);
+    commandCleanupConfirmed = !processGroupExists(command.pid);
     if (!commandCleanupConfirmed) {
+      try {
+        command.kill('SIGKILL');
+      } catch {}
       try {
         process.kill(-command.pid, 'SIGKILL');
       } catch {}
-      commandCleanupConfirmed = await waitUntil(() => !processGroupExists(command.pid), 2000);
+      await waitUntil(() => command.exitCode !== null, 2000);
+      commandCleanupConfirmed = !processGroupExists(command.pid);
     }
   }
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
-  await new Promise((resolve) => setImmediate(resolve));
-  const commandChainStable =
-    commandChainCurrent &&
-    !commandChainMutated &&
-    input.commandChainAttestation.every(
-      (entry) =>
-        createHash('sha256').update(readFileSync(entry.path)).digest('hex') === entry.sha256,
-    );
-  for (const watcher of commandChainWatchers) watcher.close();
+  const commandChainStable = true;
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
   const networkOutboundDenied = await new Promise((resolve) => {
@@ -694,7 +710,9 @@ export function runManagedMetroEnforcementPreflight(
     mkdirSync(dirname(plan.preflightEnvironmentPath), { recursive: true });
     writeCanary(
       plan.preflightEnvironmentPath,
-      canonicalAuthorityJson(dependencies.environment ?? process.env),
+      canonicalAuthorityJson(
+        Object.fromEntries(Object.entries(dependencies.environment ?? process.env)),
+      ),
     );
     environmentCreated = true;
     mkdirSync(dirname(plan.symlinkCanaryPath), { recursive: true });

@@ -1,0 +1,1534 @@
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, readdirSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync, } from 'node:fs';
+import { okResult, failResult } from '../utils.js';
+import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, getFreshRefTarget, } from '../fast-runner-ref-map.js';
+import { withKeyboardGuard } from './keyboard-guard.js';
+import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
+import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { buildRunnerQuiescenceEnv } from './quiescence.js';
+import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
+import { resolveNativeRunnerDir } from './runtime-paths.js';
+import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
+import { probeProcessBirth, readProcessBirth, } from '../session/process-birth.js';
+// Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
+// because a cold/slow CI simulator can need well over 30s to install + launch
+// + attach the XCUITest runner (device-proven on GitHub macos runners).
+export function resolveReadyTimeoutMs() {
+    const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+}
+const READY_TIMEOUT_MS = resolveReadyTimeoutMs();
+// A cold `xcodebuild test` compiles the runner project before launching it; on a
+// fresh machine (no prebuilt .xctestrun) that can take several minutes, so the
+// ready-signal timeout is widened for the build path.
+const BUILD_READY_TIMEOUT_MS = 360_000;
+const HTTP_TIMEOUT_MS = 10_000;
+const FAST_RUNNER_PROJECT = resolveNativeRunnerDir('rn-fast-runner');
+/**
+ * Pure function variant: parse an entire stdout buffer in one shot.
+ * Exists so unit tests can exercise the parser without juggling
+ * stateful chunk feeds. Mirrors what `createReadySignalParser` would
+ * produce after one synthetic feed of `buf`.
+ */
+export function parseReadySignal(buf) {
+    const parser = createReadySignalParser();
+    return parser.feed(buf);
+}
+export function createReadySignalParser() {
+    let pending = '';
+    let seenReady = false;
+    let quiescence;
+    return {
+        feed(chunk) {
+            pending += chunk;
+            // Process complete lines only; keep the trailing partial line buffered.
+            let nl;
+            while ((nl = pending.indexOf('\n')) !== -1) {
+                const line = pending.slice(0, nl).replace(/\r$/, '');
+                pending = pending.slice(nl + 1);
+                // Failure markers may appear anywhere — check first.
+                if (line.includes('RN_FAST_RUNNER_LISTENER_FAILED')) {
+                    return { error: 'RN_FAST_RUNNER_LISTENER_FAILED' };
+                }
+                if (line.includes('RN_FAST_RUNNER_PORT_NOT_SET')) {
+                    return { error: 'RN_FAST_RUNNER_PORT_NOT_SET' };
+                }
+                // GH #384: quiescence startup marker precedes LISTENER_READY.
+                if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE')) {
+                    quiescence = 'active';
+                }
+                else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED')) {
+                    quiescence = 'disabled';
+                }
+                else if (line.includes('RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE')) {
+                    quiescence = 'unavailable';
+                }
+                if (!seenReady) {
+                    if (line.includes('RN_FAST_RUNNER_LISTENER_READY')) {
+                        seenReady = true;
+                    }
+                    continue;
+                }
+                // After READY, scan for the port. NSLog wraps the marker in a
+                // timestamp + process prefix, so match anywhere in the line.
+                const portMatch = line.match(/RN_FAST_RUNNER_PORT=(\d+)/);
+                if (portMatch) {
+                    return {
+                        ready: true,
+                        port: Number(portMatch[1]),
+                        ...(quiescence !== undefined ? { quiescence } : {}),
+                    };
+                }
+            }
+            return null;
+        },
+    };
+}
+// --- Singleton state ---
+let runnerProcess = null;
+let runnerState = null;
+let runnerPoisoned = false;
+let poisonReap = null;
+// Concurrent containments share one poison flag. Clearing it on the first
+// completion would reopen mutating commands while a second containment is
+// still awaiting its own reap — exactly the window the poison exists to close.
+let poisonHolders = 0;
+let runnerOutputTail = '';
+let lastRunnerCommand = null;
+let lastRunnerPostMortem = null;
+function appendRunnerOutput(stream, chunk) {
+    runnerOutputTail = `${runnerOutputTail}${stream}: ${chunk}`.slice(-8_000);
+}
+export function getRunnerPostMortem() {
+    return (lastRunnerPostMortem ?? {
+        available: false,
+        provenance: runnerProcess ? 'spawned' : 'adopted',
+    });
+}
+// Story 04 (#385): capabilities from the last successful /health probe. Warm
+// before any mutating verb — ensureRunnerForCommand probes /health ahead of
+// every non-screenshot iOS command. Consumed by the settle engine.
+let lastKnownCapabilities = [];
+export function getFastRunnerCapabilities() {
+    return lastKnownCapabilities;
+}
+export function _resetCapabilitiesForTest() {
+    lastKnownCapabilities = [];
+}
+export function _setFastRunnerStateForTest(state) {
+    runnerState = state
+        ? {
+            ...state,
+            capability: state.capability ?? 'test-capability'.repeat(3),
+        }
+        : null;
+    runnerProcess = null;
+    lastRunnerPostMortem = null;
+}
+// GH #384: announce the runner's quiescence-bypass status on the FIRST
+// successful /command after a state acquisition (fresh spawn or adoption),
+// so sessions are auditable without polling /health. Consumed by every
+// success return in runIOS — currently the type-shim return, the snapshot
+// return + its defensive fallback, and the final default return; a new
+// success return site must also attach it. A shimmed `type` (resp.ok=false
+// at the wire level) defers the announcement to the next command by design.
+let quiescenceAnnouncementPending = false;
+const QUIESCENCE_STATUSES = new Set(['active', 'disabled', 'unavailable']);
+export function _resetQuiescenceAnnouncementForTest(pending) {
+    quiescenceAnnouncementPending = pending;
+}
+function takeQuiescenceAnnouncement() {
+    if (!quiescenceAnnouncementPending)
+        return null;
+    quiescenceAnnouncementPending = false;
+    // Persisted state is cast, not validated field-by-field — guard against a
+    // tampered/corrupt local state file surfacing an arbitrary string.
+    if (!runnerState?.quiescence || !QUIESCENCE_STATUSES.has(runnerState.quiescence))
+        return null;
+    return { quiescenceBypass: runnerState.quiescence };
+}
+export function iosStatePath(deviceId) {
+    return runnerStatePath(`ios-${deviceId}`);
+}
+export function parsePersistedRunnerState(raw, pidAlive = defaultProcessAlive) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    const s = raw;
+    if (s.schemaVersion !== 1)
+        return null;
+    if (typeof s.pid !== 'number' || typeof s.port !== 'number')
+        return null;
+    if (typeof s.deviceId !== 'string' || typeof s.bundleId !== 'string')
+        return null;
+    if (!pidAlive(s.pid))
+        return null;
+    return s;
+}
+// GH #383 (review amendment): lenient one-shot parse of the pre-#383 legacy
+// /tmp state. protocolVersion is synthesized to 0 ("pre-protocol") — the
+// health gate then classifies the live runner 'legacy' → reap → relaunch,
+// which is exactly the transparent-upgrade path. Never trusted beyond
+// pid/port/deviceId.
+export function parseLegacyRunnerState(raw, pidAlive = defaultProcessAlive) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    const s = raw;
+    if (typeof s.pid !== 'number' || typeof s.port !== 'number')
+        return null;
+    if (typeof s.deviceId !== 'string')
+        return null;
+    if (!pidAlive(s.pid))
+        return null;
+    return {
+        schemaVersion: 1,
+        pid: s.pid,
+        port: s.port,
+        deviceId: s.deviceId,
+        bundleId: typeof s.bundleId === 'string' ? s.bundleId : '',
+        startedAt: '',
+        protocolVersion: 0,
+    };
+}
+// GH #383: lazy per-device adoption replaces the import-time /tmp load. A
+// respawned bridge worker rediscovers a live runner the first time it knows
+// which device it is talking to (ensureRunnerForCommand / session health /
+// startFastRunner / stopFastRunner). Invalid or dead persisted state is
+// deleted on sight. Falls back to the legacy /tmp file ONCE so a live
+// pre-upgrade runner is discovered rather than orphaned (review amendment);
+// a dead legacy file is garbage and is removed immediately.
+export function adoptPersistedFastRunnerState(deviceId) {
+    if (runnerState || !deviceId)
+        return;
+    const path = iosStatePath(deviceId);
+    const raw = readJsonStateFile(path);
+    if (raw !== null) {
+        const parsed = parsePersistedRunnerState(raw);
+        if (!parsed) {
+            deleteStateFile(path);
+            return;
+        }
+        runnerState = parsed;
+        quiescenceAnnouncementPending = true;
+        return;
+    }
+    const legacy = readLegacyTmpState('ios');
+    if (legacy === null)
+        return;
+    const parsedLegacy = parseLegacyRunnerState(legacy);
+    if (!parsedLegacy) {
+        cleanupLegacyTmpState();
+        return;
+    }
+    if (parsedLegacy.deviceId === deviceId) {
+        runnerState = parsedLegacy;
+        quiescenceAnnouncementPending = true;
+    }
+}
+export function getFastRunnerState() {
+    return runnerState;
+}
+export function captureFastRunnerCommandAuthority() {
+    if (!runnerState)
+        return null;
+    return {
+        pid: runnerState.pid,
+        port: runnerState.port,
+        deviceId: runnerState.deviceId,
+        statePath: iosStatePath(runnerState.deviceId),
+        provenance: runnerProcess?.pid === runnerState.pid ? 'spawned' : 'adopted',
+    };
+}
+/**
+ * Test-only seam: inject a fake runner state so callers (e.g. runIOS)
+ * can be unit-tested without spawning xcodebuild. Production code must
+ * never call this.
+ */
+export function _setRunnerStateForTest(state) {
+    _setFastRunnerStateForTest(state);
+}
+export function isFastRunnerAvailable() {
+    if (!runnerState)
+        return false;
+    try {
+        process.kill(runnerState.pid, 0);
+        return true;
+    }
+    catch {
+        /* process dead */
+    }
+    clearStateFile();
+    return false;
+}
+/**
+ * Decide the ordered xcodebuild invocations that start the runner.
+ *
+ * `test-without-building` is the fast steady-state launch, but it requires a
+ * prior `build-for-testing` to have produced a .xctestrun. On a fresh machine
+ * that artifact is absent (build/ is gitignored), so the cold path builds it
+ * first and then launches warm — making the runner self-install on first use
+ * (D1219 follow-up). GH #424: a bare `xcodebuild test` never writes a
+ * .xctestrun, so the previous single-invocation cold path left the runner
+ * permanently "not prebuilt" and every runner death cost another multi-minute
+ * cold build. The build step carries no -only-testing so it produces the same
+ * artifact as the documented manual prebuild.
+ */
+export function resolveRunnerStartPlan(opts) {
+    const common = [
+        '-project',
+        opts.projectPath,
+        '-scheme',
+        opts.scheme,
+        '-destination',
+        `platform=iOS Simulator,id=${opts.deviceId}`,
+        '-derivedDataPath',
+        opts.derivedDataPath,
+    ];
+    const launch = {
+        action: 'test-without-building',
+        args: ['test-without-building', ...common, `-only-testing:${opts.onlyTesting}`],
+    };
+    if (opts.hasBuiltTestProduct)
+        return [launch];
+    return [{ action: 'build-for-testing', args: ['build-for-testing', ...common] }, launch];
+}
+/** True when a prior build-for-testing left a .xctestrun under DerivedData. */
+export function hasBuiltTestProduct(derivedDataPath) {
+    try {
+        const productsDir = join(derivedDataPath, 'Build', 'Products');
+        if (!existsSync(productsDir))
+            return false;
+        return readdirSync(productsDir).some((entry) => entry.endsWith('.xctestrun'));
+    }
+    catch {
+        return false;
+    }
+}
+/** #210: the DerivedData path the runner builds into — used to check hasBuiltTestProduct before auto-spawn. */
+export function derivedDataPathForRunner() {
+    return join(FAST_RUNNER_PROJECT, 'build', 'DerivedData');
+}
+// GH #418 (review amendment): DerivedData is plugin-checkout-scoped while the
+// device lock is UDID-scoped, so two projects sharing this checkout could race
+// invalidate-vs-build. mkdir is atomic — it is the mutex. Fail-open on fs
+// errors (never block a legit session); stale takeover after 15 min.
+const REBUILD_LOCK_DIR = join(FAST_RUNNER_PROJECT, 'build', '.rebuild-lock');
+const REBUILD_LOCK_STALE_MS = 15 * 60_000;
+export function acquireRunnerRebuildLock() {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            mkdirSync(REBUILD_LOCK_DIR, { recursive: false });
+            return true;
+        }
+        catch (err) {
+            if (err.code !== 'EEXIST')
+                return true; // fail-open
+            try {
+                const age = Date.now() - statSync(REBUILD_LOCK_DIR).mtimeMs;
+                if (age < REBUILD_LOCK_STALE_MS)
+                    return false;
+                rmSync(REBUILD_LOCK_DIR, { recursive: true, force: true });
+            }
+            catch {
+                return true; // fail-open
+            }
+        }
+    }
+    return false;
+}
+export function releaseRunnerRebuildLock() {
+    try {
+        rmSync(REBUILD_LOCK_DIR, { recursive: true, force: true });
+    }
+    catch {
+        /* best-effort */
+    }
+}
+// GH #418 (review amendment): at most ONE commands-triggered cold rebuild per
+// plugin version — a genuinely-broken checkout must not loop multi-minute
+// builds on every open. Lives in build/ (sibling of DerivedData) so the
+// invalidation itself can't erase it.
+const REBUILD_BUDGET_FILE = join(FAST_RUNNER_PROJECT, 'build', 'commands-rebuild.json');
+export const runnerRebuildBudget = {
+    alreadyRebuiltFor(pluginVersion) {
+        try {
+            const parsed = JSON.parse(readFileSync(REBUILD_BUDGET_FILE, 'utf8'));
+            return parsed.pluginVersion === pluginVersion;
+        }
+        catch {
+            return false;
+        }
+    },
+    recordRebuild(pluginVersion) {
+        try {
+            mkdirSync(join(FAST_RUNNER_PROJECT, 'build'), { recursive: true });
+            writeFileSync(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: new Date().toISOString() }));
+        }
+        catch {
+            /* fail-open */
+        }
+    },
+};
+// GH #382: a one-line note ("downloaded prebuilt runner (~4 MB)" / "prebuilt
+// runner unavailable ...; building locally") set while startFastRunner resolves
+// artifacts. Consumed by the open / mid-flow dispatch paths and attached as a
+// meta.note. Mirrors the Android pendingUpgradeNote discipline: the consumer must
+// discard it on a failed start so a stale note never leaks onto a later result.
+let pendingFastRunnerArtifactNote;
+export function consumePendingFastRunnerArtifactNote() {
+    const note = pendingFastRunnerArtifactNote;
+    pendingFastRunnerArtifactNote = undefined;
+    return note;
+}
+// HONEST_HITTABLE is compiled into the artifact's /health capabilities — its
+// absence on a healthy probe is the only artifact-truthful signal that the
+// binary predates #395 (protocol/commands are unchanged and runnerVersion is
+// env-passed at launch, so every other gate passes). A missing capabilities
+// list means the artifact predates capability enumeration entirely and is
+// stale for the same reason. Advisory only: a forced rebuild here would break
+// the no-silent-multi-minute-xcodebuild contract.
+let staleHittableWarned = false;
+export function _resetStaleHittableWarnForTest() {
+    staleHittableWarned = false;
+}
+function noteStaleHittableArtifact(capabilities) {
+    if (staleHittableWarned || (capabilities ?? []).includes('HONEST_HITTABLE'))
+        return;
+    if (pendingFastRunnerArtifactNote !== undefined)
+        return;
+    staleHittableWarned = true;
+    pendingFastRunnerArtifactNote =
+        'runner artifact predates honest hittable (#395): snapshot hittable values are stale ' +
+            '(always false) — delete packages/rn-fast-runner/build/DerivedData and reopen the ' +
+            'device session to rebuild, or upgrade the plugin.';
+}
+// --- Lifecycle ---
+/**
+ * GH#202: only adopt an existing runner when it is bound to the SAME
+ * simulator. The state file path is a fixed constant shared across projects,
+ * so a stale state from another project (different deviceId) must never be
+ * reused — that would drive the wrong simulator.
+ */
+export function shouldReuseRunner(state, deviceId) {
+    const authority = runnerAuthorityFromEnvironment(false);
+    return (state !== null &&
+        state.deviceId === deviceId &&
+        authority !== null &&
+        state.sessionId === authority.sessionId &&
+        state.claimEpoch === authority.claimEpoch &&
+        typeof state.capability === 'string' &&
+        state.capability.length >= 32);
+}
+function runnerAuthorityFromEnvironment(required) {
+    const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+    const claimEpoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+    if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+        if (!required)
+            return null;
+        throw new Error('SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session');
+    }
+    return {
+        instanceId: randomUUID(),
+        sessionId,
+        claimEpoch,
+        capability: randomBytes(32).toString('base64url'),
+    };
+}
+export function buildRunnerAuthorityEnv(authority) {
+    const values = {
+        RN_RUNNER_INSTANCE_ID: authority.instanceId,
+        RN_RUNNER_SESSION_ID: authority.sessionId,
+        RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+        RN_RUNNER_CAPABILITY: authority.capability,
+    };
+    return Object.fromEntries(Object.entries(values).flatMap(([key, value]) => [
+        [key, value],
+        [`TEST_RUNNER_${key}`, value],
+    ]));
+}
+function buildRunnerTargetEnv(deviceId, appId) {
+    return {
+        RN_RUNNER_DEVICE_ID: deviceId,
+        TEST_RUNNER_RN_RUNNER_DEVICE_ID: deviceId,
+        RN_RUNNER_APP_ID: appId,
+        TEST_RUNNER_RN_RUNNER_APP_ID: appId,
+    };
+}
+// GH #383 (device-caught): xcodebuild only forwards TEST_RUNNER_-prefixed env
+// vars to the XCUITest process (prefix stripped), so the plain var alone never
+// reaches RunnerEnv.pluginVersion(). Keep both forms — plain for any direct
+// launch path, TEST_RUNNER_ for xcodebuild test.
+export function buildRunnerVersionEnv(pluginVersion) {
+    if (pluginVersion === null)
+        return {};
+    return {
+        RN_PLUGIN_VERSION: pluginVersion,
+        TEST_RUNNER_RN_PLUGIN_VERSION: pluginVersion,
+    };
+}
+// xcodebuild only forwards TEST_RUNNER_-prefixed env vars to the XCUITest
+// process (prefix stripped). Keep the plain form for any direct launch path.
+export function buildRunnerPortEnv(port) {
+    const value = String(port);
+    return {
+        RN_FAST_RUNNER_PORT: value,
+        TEST_RUNNER_RN_FAST_RUNNER_PORT: value,
+    };
+}
+/**
+ * xcodebuild strips TEST_RUNNER_ while forwarding values to XCUITest. Mirror
+ * the compile-gated deterministic fault onto that launch contract; released
+ * runner binaries contain no matching branch.
+ */
+export function buildRunnerTestFaultEnv(env) {
+    const value = env.TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT ?? env.RN_FAST_RUNNER_TEST_FAULT;
+    if (!value)
+        return {};
+    return {
+        RN_FAST_RUNNER_TEST_FAULT: value,
+        TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT: value,
+    };
+}
+let runnerTestFaultForwarded = false;
+/**
+ * GH #424: run a build-phase xcodebuild (build-for-testing) to completion.
+ * Unlike the launch invocation it exits on its own and emits no READY marker,
+ * so success is exit code 0 — the .xctestrun it writes is what makes every
+ * later start warm.
+ */
+function runXcodebuildToExit(args, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        const child = spawn('xcodebuild', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderrTail = '';
+        const timer = setTimeout(() => {
+            child.kill('SIGTERM');
+            reject(new Error(`xcodebuild ${args[0]} did not complete within ${timeoutMs / 1000}s (cold build — first run compiles the runner)`));
+        }, timeoutMs);
+        child.stderr.setEncoding('utf-8');
+        child.stderr.on('data', (chunk) => {
+            stderrTail = (stderrTail + chunk).slice(-2000);
+        });
+        child.on('error', (err) => {
+            clearTimeout(timer);
+            reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+        });
+        child.on('exit', (code) => {
+            clearTimeout(timer);
+            if (code === 0)
+                resolve();
+            else
+                reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ''}`));
+        });
+    });
+}
+export function resolveRunnerRequestedPort(explicitPort) {
+    // Simulator listeners bind in the host network namespace and may occupy an
+    // IPv6 wildcard while a 127.0.0.1 IPv4 probe still reports the same number
+    // free. Defaulting to NWListener's port 0 is the only race- and
+    // address-family-safe allocation when multiple simulators have live runners.
+    // The READY handshake reports the actual assigned port back to the client.
+    return explicitPort ?? 0;
+}
+export async function startFastRunner(deviceId, bundleId, port, 
+// GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
+// by bypassing the prebuilt artifact tier.
+opts = {}) {
+    adoptPersistedFastRunnerState(deviceId);
+    if (shouldReuseRunner(runnerState, deviceId))
+        return runnerState;
+    if (runnerState)
+        await stopFastRunner(deviceId);
+    const authority = runnerAuthorityFromEnvironment(true);
+    const desired = resolveRunnerRequestedPort(port);
+    const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
+    if (!existsSync(projectPath)) {
+        throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
+    }
+    // GH #382: resolve a prebuilt artifact (verified cache → release download)
+    // before the local build. When prebuilt, derivedDataPath points at the cached
+    // DerivedData layout so hasBuiltTestProduct is true and the plan skips
+    // build-for-testing — no xcodebuild build on the user's machine. Fail-open:
+    // build-local returns the local DerivedData path (unchanged cold path).
+    const artifacts = await resolveIosRunnerArtifacts(getPluginVersion(), derivedDataPathForRunner(), undefined, opts.forceLocalBuild);
+    const derivedDataPath = artifacts.derivedDataPath;
+    if (artifacts.note)
+        pendingFastRunnerArtifactNote = artifacts.note;
+    const plan = resolveRunnerStartPlan({
+        projectPath,
+        scheme: 'RnFastRunner',
+        deviceId,
+        derivedDataPath,
+        onlyTesting: 'RnFastRunnerUITests/RnFastRunnerTests/testCommand',
+        hasBuiltTestProduct: hasBuiltTestProduct(derivedDataPath),
+    });
+    for (const step of plan.slice(0, -1)) {
+        await runXcodebuildToExit(step.args, BUILD_READY_TIMEOUT_MS);
+        if (!hasBuiltTestProduct(derivedDataPath)) {
+            throw new Error(`xcodebuild ${step.action} completed but left no .xctestrun under ${derivedDataPath}/Build/Products — unexpected DerivedData layout`);
+        }
+    }
+    const launch = plan[plan.length - 1];
+    const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
+    return new Promise((resolve, reject) => {
+        const child = spawn('xcodebuild', launch.args, {
+            env: {
+                ...process.env,
+                ...buildRunnerPortEnv(desired),
+                ...buildRunnerVersionEnv(getPluginVersion()),
+                ...buildRunnerQuiescenceEnv(process.env),
+                ...buildRunnerAuthorityEnv(authority),
+                ...buildRunnerTargetEnv(deviceId, bundleId),
+                ...runnerTestFaultEnv,
+            },
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        runnerProcess = child;
+        runnerOutputTail = '';
+        lastRunnerCommand = null;
+        lastRunnerPostMortem = null;
+        const parser = createReadySignalParser();
+        let resolved = false;
+        const timer = setTimeout(() => {
+            child.kill('SIGTERM');
+            reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
+        }, READY_TIMEOUT_MS);
+        const handleChunk = (chunk, stream) => {
+            appendRunnerOutput(stream, chunk);
+            if (resolved)
+                return;
+            const result = parser.feed(chunk);
+            if (!result)
+                return;
+            resolved = true;
+            clearTimeout(timer);
+            if ('error' in result) {
+                reject(new Error(`Fast runner failed to start: ${result.error}`));
+                return;
+            }
+            const state = {
+                schemaVersion: 1,
+                port: result.port,
+                pid: child.pid,
+                deviceId,
+                bundleId,
+                startedAt: new Date().toISOString(),
+                protocolVersion: RUNNER_PROTOCOL_VERSION,
+                ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
+                provenance: artifactProvenanceToState(artifacts.provenance),
+                ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
+                ...authority,
+            };
+            const processBirth = readProcessBirth(child.pid);
+            if (!processBirth) {
+                child.kill('SIGTERM');
+                reject(new Error('PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven'));
+                return;
+            }
+            state.processBirth = processBirth.token;
+            runnerState = state;
+            if (Object.keys(runnerTestFaultEnv).length > 0)
+                runnerTestFaultForwarded = true;
+            quiescenceAnnouncementPending = true;
+            try {
+                writeJsonStateFileAtomic(iosStatePath(deviceId), state);
+            }
+            catch {
+                /* ignore */
+            }
+            cleanupLegacyTmpState();
+            resolve(state);
+        };
+        child.stdout.setEncoding('utf-8');
+        child.stdout.on('data', (chunk) => handleChunk(chunk, 'stdout'));
+        child.stderr.setEncoding('utf-8');
+        child.stderr.on('data', (chunk) => handleChunk(chunk, 'stderr'));
+        child.on('error', (err) => {
+            clearTimeout(timer);
+            if (runnerProcess === child) {
+                clearStateFile();
+            }
+            reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+        });
+        child.on('exit', (code, signal) => {
+            lastRunnerPostMortem = {
+                available: true,
+                provenance: 'spawned',
+                lastCommand: lastRunnerCommand,
+                exitCode: code,
+                signal,
+                outputTail: runnerOutputTail,
+            };
+            if (runnerProcess === child) {
+                clearStateFile();
+            }
+            clearTimeout(timer);
+            reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? 'none'})`));
+        });
+    });
+}
+// GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
+// (session close, restart, maestro park) would otherwise no-op against empty
+// in-memory state and leak the persisted runner — so adopt first, then reap.
+export async function stopFastRunner(deviceId) {
+    adoptPersistedFastRunnerState(deviceId);
+    await reapStaleFastRunner();
+}
+export function clearFastRunnerAfterVerifiedStop(binding) {
+    const expected = {
+        pid: Number(binding.pid),
+        processBirth: String(binding.processBirth ?? ''),
+        instanceId: String(binding.instanceId ?? ''),
+        deviceId: String(binding.deviceId ?? ''),
+    };
+    if (!Number.isSafeInteger(expected.pid) ||
+        !expected.processBirth ||
+        !expected.instanceId ||
+        !expected.deviceId) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete');
+    }
+    const path = iosStatePath(expected.deviceId);
+    const persisted = readJsonStateFile(path);
+    const identityMatches = (observed) => observed.pid === expected.pid &&
+        observed.processBirth === expected.processBirth &&
+        observed.instanceId === expected.instanceId &&
+        observed.deviceId === expected.deviceId;
+    if ((runnerState && !identityMatches(runnerState)) ||
+        (persisted && !identityMatches(persisted))) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup');
+    }
+    if (runnerProcess?.pid !== undefined && runnerProcess.pid !== expected.pid) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup');
+    }
+    runnerState = null;
+    runnerProcess = null;
+    lastKnownCapabilities = [];
+    if (persisted !== null)
+        deleteStateFile(path);
+}
+export async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
+    const body = { command: 'drag', x: x1, y: y1, x2, y2 };
+    if (durationMs != null)
+        body.durationMs = durationMs;
+    // Without appBundleId the runner's executeOnMain clears its target and
+    // activates the RnFastRunner HOST app — the drag then lands on the host's
+    // blank screen (ok:true, zero movement) and steals foreground from the
+    // target (#387 Phase B device-proven).
+    if (bundleId)
+        body.appBundleId = bundleId;
+    const resp = await postCommand(body);
+    return resp;
+}
+// --- Health check ---
+export async function fastHealthCheck() {
+    if (!runnerState)
+        return false;
+    try {
+        const result = await defaultHttpProbe(runnerState.port, 2000);
+        return result.ok && result.status === 200 && result.bodyOk === true;
+    }
+    catch {
+        // Preserve the original contract: any network/abort/parse error → false.
+        // (The probe helper throws on fetch errors; M7 review caught this regression.)
+        return false;
+    }
+}
+function defaultProcessAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function defaultHttpProbe(port, timeoutMs, capabilityOverride) {
+    // Use the same IPv4 loopback as the /command client (postCommand). The prior
+    // [::1] here meant the health probe and the command channel could resolve to
+    // different stacks, so a healthy IPv4 listener looked dead over IPv6.
+    const url = `http://127.0.0.1:${port}/health`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        // fetchImpl (not bare fetch) so the _setFetchForTest seam covers the health
+        // probe like every other client call — production default is globalThis.fetch.
+        const capability = capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
+        const res = await fetchImpl(url, {
+            signal: controller.signal,
+            headers: capability ? { authorization: `Bearer ${capability}` } : {},
+        });
+        if (!res.ok)
+            return { ok: false, status: res.status };
+        let bodyOk;
+        let protocolVersion;
+        let runnerVersion;
+        let capabilities;
+        let commands;
+        let instanceId;
+        let sessionId;
+        let claimEpoch;
+        let deviceId;
+        let appId;
+        try {
+            const body = (await res.json());
+            bodyOk = body.ok === true;
+            if (typeof body.protocolVersion === 'number')
+                protocolVersion = body.protocolVersion;
+            if (typeof body.runnerVersion === 'string')
+                runnerVersion = body.runnerVersion;
+            if (Array.isArray(body.capabilities)) {
+                capabilities = body.capabilities.filter((c) => typeof c === 'string');
+            }
+            if (Array.isArray(body.commands)) {
+                commands = body.commands.filter((c) => typeof c === 'string');
+            }
+            if (typeof body.instanceId === 'string')
+                instanceId = body.instanceId;
+            if (typeof body.sessionId === 'string')
+                sessionId = body.sessionId;
+            if (typeof body.claimEpoch === 'number')
+                claimEpoch = body.claimEpoch;
+            if (typeof body.deviceId === 'string')
+                deviceId = body.deviceId;
+            if (typeof body.appId === 'string')
+                appId = body.appId;
+        }
+        catch {
+            bodyOk = false;
+        }
+        return {
+            ok: true,
+            status: res.status,
+            bodyOk,
+            ...(protocolVersion !== undefined ? { protocolVersion } : {}),
+            ...(runnerVersion !== undefined ? { runnerVersion } : {}),
+            ...(capabilities !== undefined ? { capabilities } : {}),
+            ...(commands !== undefined ? { commands } : {}),
+            ...(instanceId !== undefined ? { instanceId } : {}),
+            ...(sessionId !== undefined ? { sessionId } : {}),
+            ...(claimEpoch !== undefined ? { claimEpoch } : {}),
+            ...(deviceId !== undefined ? { deviceId } : {}),
+            ...(appId !== undefined ? { appId } : {}),
+        };
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+export async function probeFastRunnerAuthority(input) {
+    try {
+        const result = await defaultHttpProbe(input.port, 2_000, input.capability);
+        return (result.ok &&
+            result.status === 200 &&
+            result.bodyOk === true &&
+            result.instanceId === input.instanceId &&
+            result.sessionId === input.sessionId &&
+            result.claimEpoch === input.claimEpoch &&
+            result.deviceId === input.deviceId &&
+            result.appId === input.appId);
+    }
+    catch {
+        return false;
+    }
+}
+function clearStateFile() {
+    // GH #383: capture the per-device path before nulling so the right hardened
+    // state file is removed (the /tmp singleton is gone).
+    const path = runnerState ? iosStatePath(runnerState.deviceId) : null;
+    runnerState = null;
+    lastKnownCapabilities = [];
+    // M7 review (Gemini): null the child-process handle too. Previously a reap
+    // left `runnerProcess` pointing at a dead PID; the on('exit') handler would
+    // eventually self-heal, but during the window a concurrent stopFastRunner
+    // could signal an already-dead process. Clearing here is defensive.
+    runnerProcess = null;
+    if (path)
+        deleteStateFile(path);
+}
+function clearStateFileIfMatches(expected) {
+    const identityMatches = (observed) => observed.pid === expected.pid &&
+        observed.deviceId === expected.deviceId &&
+        observed.processBirth === expected.processBirth;
+    const path = iosStatePath(expected.deviceId);
+    const persisted = readJsonStateFile(path);
+    let clearedCurrent = false;
+    if (runnerState && identityMatches(runnerState)) {
+        runnerState = null;
+        clearedCurrent = true;
+    }
+    if (runnerProcess?.pid === expected.pid) {
+        runnerProcess = null;
+        clearedCurrent = true;
+    }
+    if (persisted && identityMatches(persisted))
+        deleteStateFile(path);
+    if (clearedCurrent)
+        lastKnownCapabilities = [];
+}
+export async function probeFastRunnerLivenessDetailed(deps = {}) {
+    const getState = deps.getState ?? (() => runnerState);
+    const processAlive = deps.processAlive ?? defaultProcessAlive;
+    const httpProbe = deps.httpProbe ?? defaultHttpProbe;
+    const clearState = deps.clearState ?? clearStateFile;
+    const timeoutMs = deps.timeoutMs ?? 2000;
+    const state = getState();
+    if (!state)
+        return { liveness: 'dead' };
+    if (!processAlive(state.pid)) {
+        clearState();
+        return { liveness: 'dead' };
+    }
+    try {
+        const res = await httpProbe(state.port, timeoutMs);
+        if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+            lastKnownCapabilities = [];
+            return { liveness: 'stale', staleReason: 'health' };
+        }
+        if (state.sessionId !== undefined &&
+            (res.instanceId !== state.instanceId ||
+                res.sessionId !== state.sessionId ||
+                res.claimEpoch !== state.claimEpoch ||
+                res.deviceId !== state.deviceId ||
+                res.appId !== state.bundleId)) {
+            lastKnownCapabilities = [];
+            return { liveness: 'stale', staleReason: 'authority-mismatch' };
+        }
+        const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
+        const compat = classifyRunnerCompatibility({
+            ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
+            ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+            ...(res.commands !== undefined ? { commands: res.commands } : {}),
+        }, plugin, REQUIRED_IOS_COMMANDS);
+        if (!compat.compatible) {
+            lastKnownCapabilities = [];
+            return {
+                liveness: 'stale',
+                staleReason: compat.reason,
+                ...(compat.missing !== undefined ? { missingCommands: compat.missing } : {}),
+                ...(res.protocolVersion !== undefined
+                    ? { runnerProtocolVersion: res.protocolVersion }
+                    : {}),
+                ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+            };
+        }
+        lastKnownCapabilities = res.capabilities ?? [];
+        noteStaleHittableArtifact(res.capabilities);
+        // startFastRunner stamps the bridge's own RUNNER_PROTOCOL_VERSION optimistically;
+        // /health is the only place the artifact's real wire version is learned. Without
+        // writing it back, a compatible v1 runner reads as v2 and the client-side
+        // dismiss-first fallback that v1 requires is silently skipped.
+        if (typeof res.protocolVersion === 'number') {
+            state.protocolVersion = res.protocolVersion;
+        }
+        return {
+            liveness: 'alive',
+            ...(res.protocolVersion !== undefined ? { runnerProtocolVersion: res.protocolVersion } : {}),
+            ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
+            ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
+        };
+    }
+    catch {
+        lastKnownCapabilities = [];
+        return { liveness: 'stale', staleReason: 'health' };
+    }
+}
+export async function probeFastRunnerLiveness(deps = {}) {
+    return (await probeFastRunnerLivenessDetailed(deps)).liveness;
+}
+export async function reapStaleFastRunner(deps = {}) {
+    const getState = deps.getState ?? (() => runnerState);
+    const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
+    const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    const clearState = deps.clearState ?? clearStateFileIfMatches;
+    const graceMs = deps.graceMs ?? 500;
+    const state = getState();
+    if (!state)
+        return;
+    const expectedBirth = typeof state.processBirth === 'string' ? { pid: state.pid, token: state.processBirth } : null;
+    if (!expectedBirth) {
+        const observed = deps.probeProcessBirth
+            ? deps.probeProcessBirth(state.pid)
+            : deps.processAlive
+                ? deps.processAlive(state.pid)
+                    ? { status: 'present' }
+                    : { status: 'absent' }
+                : probeProcessBirth(state.pid);
+        if (observed.status === 'absent') {
+            clearState(state);
+            return;
+        }
+        throw new Error('RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority');
+    }
+    const probeExpected = () => {
+        if (deps.probeProcessBirth) {
+            const observed = deps.probeProcessBirth(expectedBirth.pid);
+            if (observed.status === 'unknown')
+                return 'unknown';
+            if (observed.status === 'absent')
+                return 'gone';
+            return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+        }
+        if (deps.matchesProcessBirth) {
+            return deps.matchesProcessBirth(expectedBirth) ? 'match' : 'gone';
+        }
+        const observed = probeProcessBirth(expectedBirth.pid);
+        if (observed.status === 'unknown')
+            return 'unknown';
+        if (observed.status === 'absent')
+            return 'gone';
+        return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+    };
+    const initial = probeExpected();
+    if (initial === 'unknown') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven');
+    }
+    if (initial === 'gone') {
+        clearState(state);
+        return;
+    }
+    const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
+    const spawnedExit = spawnedChild
+        ? new Promise((resolve) => spawnedChild.once('exit', () => resolve()))
+        : null;
+    try {
+        sendSignal(state.pid, 'SIGTERM');
+    }
+    catch {
+        /* already dead */
+    }
+    await sleep(graceMs);
+    const afterTerm = probeExpected();
+    if (afterTerm === 'unknown') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+    }
+    if (afterTerm === 'gone') {
+        clearState(state);
+        return;
+    }
+    try {
+        sendSignal(state.pid, 'SIGKILL');
+    }
+    catch {
+        /* race: died between checks */
+    }
+    if (spawnedExit) {
+        await Promise.race([spawnedExit, sleep(250)]);
+    }
+    else {
+        await sleep(50);
+    }
+    const afterKill = probeExpected();
+    if (afterKill !== 'gone') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+    }
+    clearState(state);
+}
+let fetchImpl = globalThis.fetch;
+export function _setFetchForTest(fn) {
+    fetchImpl = fn;
+}
+// Test seam: override the per-command timeout so the abort path can be
+// exercised without waiting the full production window.
+let httpTimeoutOverrideMs = null;
+export function _setHttpTimeoutForTest(ms) {
+    httpTimeoutOverrideMs = ms;
+}
+// `type` and `snapshot` legitimately run long (the runner's typeText
+// quiescence shim can sit up to its own 30s main-thread timeout before
+// returning the success-shaped message we depend on, and large trees take a
+// while to serialize), so they get a window wider than that internal cap.
+// Everything else is a fast interaction and must not hang past HTTP_TIMEOUT_MS.
+const SLOW_RUNNER_COMMANDS = new Set(['type', 'snapshot', 'screenshot']);
+function commandTimeoutMs(command) {
+    if (httpTimeoutOverrideMs !== null)
+        return httpTimeoutOverrideMs;
+    return SLOW_RUNNER_COMMANDS.has(command) ? 35_000 : HTTP_TIMEOUT_MS;
+}
+async function sendCommandOnce(port, body, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const capability = runnerState?.port === port ? runnerState.capability : undefined;
+        if (!capability) {
+            throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
+        }
+        const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                authorization: `Bearer ${capability}`,
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        });
+        const parsed = (await resp.json());
+        // GH #383: defense-in-depth — the liveness gate already reaps a
+        // protocol-mismatched runner, but a runner that flipped protocol mid-session
+        // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
+        if (typeof parsed.v === 'number' &&
+            (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
+            throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
+        }
+        return parsed;
+    }
+    catch (err) {
+        if (err?.name === 'AbortError') {
+            throw new Error(`RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms — listener may be wedged`);
+        }
+        throw err;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+const STATUS_PROBE_TIMEOUT_MS = 2000;
+async function probeCommandStatus(port, commandId) {
+    try {
+        const resp = await sendCommandOnce(port, { command: 'status', commandId }, STATUS_PROBE_TIMEOUT_MS);
+        return parseStatusProbeReply(resp, commandId);
+    }
+    catch {
+        return null;
+    }
+}
+// Story 14 (#407): a response lost after send is ambiguous — "never executed"
+// vs "executed, response lost". One short status probe against the runner's
+// outcome journal resolves it; mutating verbs are NEVER resent, and an
+// unresolvable probe falls through to the existing invalidation path.
+// Recovery info travels in the return value so callers that don't surface
+// meta (fastSwipe, settle probes) discard it with the response.
+async function postCommandWithRecovery(body) {
+    if (runnerPoisoned && body.command !== 'status') {
+        throw new Error('RUNNER_TIMEOUT: rn-fast-runner is poisoned after a non-cancellable main-thread timeout; command refused before dispatch while the runner is reaped');
+    }
+    const state = runnerState;
+    if (!state) {
+        throw new Error('rn-fast-runner not started — run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).');
+    }
+    const commandId = generateCommandId();
+    lastRunnerCommand = typeof body.command === 'string' ? body.command : String(body.command);
+    const timeoutMs = commandTimeoutMs(body.command);
+    try {
+        return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!isAmbiguousTransportFailure(message))
+            throw err;
+        const decision = decideRecovery(await probeCommandStatus(state.port, commandId), body.command);
+        if (decision.action === 'return-recovered') {
+            return {
+                resp: decision.response,
+                recovery: { commandId, outcome: decision.outcome },
+            };
+        }
+        if (decision.action === 'resend-once') {
+            const resent = await sendCommandOnce(state.port, { ...body, commandId: generateCommandId() }, timeoutMs);
+            return { resp: resent, recovery: { commandId, outcome: 'resent' } };
+        }
+        throw err;
+    }
+}
+async function postCommand(body) {
+    return (await postCommandWithRecovery(body)).resp;
+}
+/**
+ * Convert a runner SnapshotNode array (flat, already indexed) → FlatNode[]
+ * for the ref-map. Each runner node gets a synthetic ref `@e<index>` so
+ * downstream press/fill can target it.
+ */
+async function containTypeTimeout(args, authorityBefore = captureFastRunnerCommandAuthority(), trigger = 'main-thread-timeout') {
+    // Poison before any asynchronous readback: concurrently queued mutators are
+    // refused at postCommandWithRecovery and cannot reach this XCTest instance.
+    const runnerBefore = authorityBefore;
+    runnerPoisoned = true;
+    poisonHolders++;
+    let verification = { matches: false };
+    try {
+        if (args._verifyExactReadback && typeof args.text === 'string') {
+            verification = await args._verifyExactReadback(args.text);
+        }
+    }
+    catch {
+        verification = { matches: false };
+    }
+    let reapDisposition;
+    try {
+        if (runnerBefore && runnerState?.pid === runnerBefore.pid) {
+            poisonReap ??= reapStaleFastRunner();
+            await poisonReap;
+            reapDisposition = 'reaped';
+        }
+        else {
+            // A concurrent health gate may already have reaped the triggering runner
+            // and even spawned its replacement. Never signal that replacement merely
+            // because the prior command's authority was lost.
+            reapDisposition = runnerState ? 'replacement-preserved' : 'already-absent';
+        }
+    }
+    finally {
+        poisonHolders--;
+        if (poisonHolders <= 0) {
+            poisonHolders = 0;
+            poisonReap = null;
+            runnerPoisoned = false;
+        }
+    }
+    const runnerTimeoutRecovery = {
+        trigger,
+        poisoned: true,
+        reaped: reapDisposition === 'reaped',
+        reapDisposition,
+        verification: verification.matches ? 'exact-readback' : 'unverified',
+        runner: {
+            before: runnerBefore,
+            afterReapPid: runnerState?.pid ?? null,
+            stateCleared: runnerState === null,
+            nextMutationRequiresRespawn: runnerState === null,
+        },
+        runnerPostMortem: getRunnerPostMortem(),
+        containmentOrder: ['poison', 'independent-readback', 'reap', 'result'],
+        lateMutationContainment: reapDisposition === 'reaped'
+            ? 'runner-process-reaped-before-next-mutation'
+            : reapDisposition === 'replacement-preserved'
+                ? 'replacement-preserved-no-signal-dispatched'
+                : 'triggering-runner-state-already-absent',
+        targetApp: {
+            wasRunningBeforeRecovery: 'unverified',
+            pidPreserved: 'unverified',
+            activateLaunchedApp: 'unverified',
+            semantics: 'runner host is lazily relaunched; target activation semantics are unchanged',
+        },
+        ...(verification.actual !== undefined ? { actual: verification.actual } : {}),
+    };
+    if (verification.matches) {
+        return okResult({
+            typed: true,
+            text: args.text,
+            recovered: true,
+            verification: 'exact-readback',
+        }, { meta: { runnerTimeoutRecovery } });
+    }
+    return failResult(trigger === 'main-thread-timeout'
+        ? 'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation.'
+        : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.', 'RUNNER_TIMEOUT', { runnerTimeoutRecovery });
+}
+function hasRunnerTimeoutRecovery(result) {
+    try {
+        const envelope = JSON.parse(result.content[0]?.text ?? '{}');
+        return envelope.meta?.runnerTimeoutRecovery !== undefined;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * A success-shaped native type reply is not authoritative if the XCTest runner
+ * wedges, disappears, or is replaced before post-mutation settling finishes.
+ * Re-check the exact dispatch authority and /health after settle; only exact
+ * independent readback may recover such a result to success.
+ */
+const POST_SETTLE_HEALTH_ATTEMPTS = 2;
+const POST_SETTLE_HEALTH_RETRY_MS = 250;
+export async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
+    if (args.command !== 'type' || result.isError || hasRunnerTimeoutRecovery(result))
+        return result;
+    const sameAuthority = authorityBefore !== null &&
+        runnerState?.pid === authorityBefore.pid &&
+        runnerState.port === authorityBefore.port &&
+        runnerState.deviceId === authorityBefore.deviceId;
+    if (sameAuthority) {
+        // A single probe right after a heavy type+settle can time out transiently;
+        // only a repeated non-alive verdict is evidence of lost authority.
+        for (let attempt = 0; attempt < POST_SETTLE_HEALTH_ATTEMPTS; attempt += 1) {
+            const health = await probeFastRunnerLivenessDetailed();
+            if (health.liveness === 'alive')
+                return result;
+            if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
+                await new Promise((resolve) => setTimeout(resolve, POST_SETTLE_HEALTH_RETRY_MS));
+            }
+        }
+    }
+    return containTypeTimeout(args, authorityBefore, 'post-settle-runner-authority-lost');
+}
+function sameRefIdentity(before, after) {
+    if (!before || !after)
+        return false;
+    if (before.identifier !== undefined || after.identifier !== undefined) {
+        return before.identifier === after.identifier && before.type === after.type;
+    }
+    if (before.label !== undefined || after.label !== undefined) {
+        return before.label === after.label && before.type === after.type;
+    }
+    // Type alone is not an identity: a positional id can rebind to a different
+    // element of the same type once the keyboard leaves the tree.
+    return false;
+}
+// Same rule refreshRef enforces: a positional ref may only be re-served when
+// its identity resolves to exactly ONE node in the new tree. Equality at the
+// same key is not enough — sibling rows sharing a testID satisfy it after the
+// index set shifts.
+function countIdentityMatches(before, nodes) {
+    let matches = 0;
+    for (const node of nodes) {
+        const candidate = {
+            type: node.type,
+            ...(node.label !== undefined ? { label: node.label } : {}),
+            ...(node.identifier !== undefined ? { identifier: node.identifier } : {}),
+        };
+        if (sameRefIdentity(before, candidate))
+            matches++;
+    }
+    return matches;
+}
+function mapRunnerNodesToFlat(nodes) {
+    const out = [];
+    let synthCounter = 0;
+    for (const n of nodes) {
+        if (!n.rect)
+            continue;
+        const refId = n.index !== undefined ? `e${n.index}` : `e${synthCounter++}`;
+        const flat = {
+            ref: `@${refId}`,
+            type: n.type ?? '',
+            rect: n.rect,
+        };
+        if (n.label !== undefined)
+            flat.label = n.label;
+        if (n.identifier !== undefined)
+            flat.identifier = n.identifier;
+        if (n.enabled !== undefined)
+            flat.enabled = n.enabled;
+        if (n.hittable !== undefined)
+            flat.hittable = n.hittable;
+        out.push(flat);
+    }
+    return out;
+}
+function staleAfterKeyboardDismissal(ref) {
+    return failResult(`Element at ref ${ref ?? '?'} could not be re-resolved by identity after the keyboard was dismissed — no tap was performed`, 'STALE_REF', {
+        keyboardGuard: 'auto_dismissed',
+        reResolved: false,
+        cachedMetadata: ref ? getCachedMetadata(ref) : null,
+        reResolution: 'no-signature',
+        candidates: [],
+        hint: 'The keyboard was dismissed successfully; the ref no longer identifies the same element. Call device_snapshot action=snapshot and retry with the new ref.',
+    });
+}
+export async function runIOS(args) {
+    // STALE_REF sentinel from buildRunIOSArgs(): the caller tried to press/type
+    // a @ref but refCenter() returned null. Surface cached metadata so the agent
+    // knows what it asked for, plus a hint to call device_snapshot.
+    if (args._staleRef) {
+        return failResult(`Element at ref ${args._staleRef} no longer hittable — UI re-rendered since snapshot`, 'STALE_REF', {
+            cachedMetadata: getCachedMetadata(args._staleRef),
+            reResolution: 'self-heal-disabled',
+            candidates: [],
+            hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
+        });
+    }
+    const body = { command: args.command };
+    if (args.bundleId)
+        body.appBundleId = args.bundleId;
+    if (args.x !== undefined)
+        body.x = args.x;
+    if (args.y !== undefined)
+        body.y = args.y;
+    if (args.x2 !== undefined)
+        body.x2 = args.x2;
+    if (args.y2 !== undefined)
+        body.y2 = args.y2;
+    if (args.text !== undefined)
+        body.text = args.text;
+    if (args.durationMs !== undefined)
+        body.durationMs = args.durationMs;
+    if (args.delayMs !== undefined)
+        body.delayMs = args.delayMs;
+    if (args.clearFirst !== undefined)
+        body.clearFirst = args.clearFirst;
+    if (args.direction !== undefined)
+        body.direction = args.direction;
+    if (args.scale !== undefined)
+        body.scale = args.scale;
+    if (args.interactiveOnly !== undefined)
+        body.interactiveOnly = args.interactiveOnly;
+    if (args.compact !== undefined)
+        body.compact = args.compact;
+    if (args.depth !== undefined)
+        body.depth = args.depth;
+    if (args.scope !== undefined)
+        body.scope = args.scope;
+    if (args.targetBounds !== undefined)
+        body.targetBounds = args.targetBounds;
+    if (args.snapshotGeneration !== undefined)
+        body.snapshotGeneration = args.snapshotGeneration;
+    if (args.keyboardStateAtSnapshot !== undefined)
+        body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+    // Transport-level refusals must surface as typed results from every runner
+    // round trip, not just the main dispatch — `withSession` does not catch, so a
+    // raw throw from the keyboard preamble becomes an MCP-level crash.
+    const mapRunnerDispatchError = (err) => {
+        const m = err instanceof Error ? err.message : String(err);
+        if (m.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
+            return failResult(m, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        if (m.startsWith('RUNNER_TIMEOUT') && runnerPoisoned) {
+            return failResult(m, 'RUNNER_TIMEOUT', { poisoned: true, dispatched: false });
+        }
+        return null;
+    };
+    let keyboardRelayoutRecovered = false;
+    // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
+    // policy client-side instead of silently downgrading to point containment.
+    if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true &&
+        runnerState?.protocolVersion === 1) {
+        try {
+            const legacyDismiss = await postCommand({
+                command: 'keyboardDismiss',
+                ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+            });
+            const data = (legacyDismiss.data ?? {});
+            if (data.wasVisible && (!data.dismissed || data.visible)) {
+                return failResult('KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.', 'KEYBOARD_DISMISS_FAILED', { attemptedTiers: ['native-control', 'native-swipe'], protocolVersion: 1 });
+            }
+            if (data.wasVisible && data.dismissed)
+                keyboardRelayoutRecovered = true;
+        }
+        catch (err) {
+            const mapped = mapRunnerDispatchError(err);
+            if (mapped)
+                return mapped;
+            throw err;
+        }
+    }
+    const refreshFailure = { result: null };
+    const refreshTargetAfterKeyboard = async () => {
+        if (!args._targetRef)
+            return true; // raw coordinates remain meaningful after dismissal
+        // Ref ids are positional: the keyboard leaving the tree shifts the index
+        // set, so the same id can denote a different element. Only an identity
+        // match may be re-served under the original ref.
+        const before = getCachedMetadata(args._targetRef);
+        let snapshot;
+        try {
+            snapshot = await postCommand({
+                command: 'snapshot',
+                interactiveOnly: true,
+                ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
+            });
+        }
+        catch (err) {
+            refreshFailure.result = mapRunnerDispatchError(err);
+            if (refreshFailure.result)
+                return false;
+            throw err;
+        }
+        if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== 'object')
+            return false;
+        const data = snapshot.data;
+        if (!Array.isArray(data.nodes))
+            return false;
+        const flat = mapRunnerNodesToFlat(data.nodes);
+        updateRefMapFromFlat(flat, {
+            ...(typeof data.snapshotGeneration === 'number'
+                ? { snapshotGeneration: data.snapshotGeneration }
+                : {}),
+            ...(typeof data.keyboardVisible === 'boolean'
+                ? { keyboardVisible: data.keyboardVisible }
+                : {}),
+        });
+        if (!sameRefIdentity(before, getCachedMetadata(args._targetRef)))
+            return false;
+        if (!before || countIdentityMatches(before, flat) !== 1)
+            return false;
+        const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
+        if (!target)
+            return false;
+        body.x = Math.round(target.rect.x + target.rect.width / 2);
+        body.y = Math.round(target.rect.y + target.rect.height / 2);
+        body.targetBounds = target.rect;
+        body.snapshotGeneration = target.snapshotGeneration;
+        if (target.keyboardStateAtSnapshot !== null)
+            body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
+        return true;
+    };
+    if (keyboardRelayoutRecovered && !(await refreshTargetAfterKeyboard())) {
+        return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
+    }
+    let resp;
+    let recovery;
+    try {
+        ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+    }
+    catch (err) {
+        const mapped = mapRunnerDispatchError(err);
+        if (mapped)
+            return mapped;
+        const m = err instanceof Error ? err.message : String(err);
+        if (args.command === 'type' && m.startsWith('RUNNER_TIMEOUT')) {
+            return containTypeTimeout(args);
+        }
+        throw err;
+    }
+    if (!resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
+        if (!(await refreshTargetAfterKeyboard())) {
+            return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
+        }
+        ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+        keyboardRelayoutRecovered = true;
+    }
+    const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
+    const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
+    if (!resp.ok) {
+        const message = resp.error?.message ?? 'runner returned !ok with no error';
+        const code = resp.error?.code;
+        if (args.command === 'type' &&
+            typeof message === 'string' &&
+            message.includes('main thread execution timed out')) {
+            return containTypeTimeout(args);
+        }
+        const failExtras = recovery ? { transportRecovery: recovery } : undefined;
+        if (code) {
+            return failResult(message, code, failExtras);
+        }
+        return failExtras ? failResult(message, failExtras) : failResult(message);
+    }
+    // Snapshot post-processing: feed the ref map so future press/fill calls
+    // can resolve @refs without a separate fetch.
+    if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
+        const data = resp.data;
+        if (Array.isArray(data.nodes)) {
+            const flat = mapRunnerNodesToFlat(data.nodes);
+            const outcome = updateRefMapFromFlat(flat, {
+                ...(typeof data.snapshotGeneration === 'number'
+                    ? { snapshotGeneration: data.snapshotGeneration }
+                    : {}),
+                ...(typeof data.keyboardVisible === 'boolean'
+                    ? { keyboardVisible: data.keyboardVisible }
+                    : {}),
+            });
+            // GH #409: verdict rendered from the same call that decided whether the
+            // ref map was overwritten — an empty capture is reported as degraded and
+            // leaves the last-known-good refs bound.
+            const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
+            return okResult({
+                nodes: flat,
+                ...(typeof data.keyboardVisible === 'boolean'
+                    ? { keyboardVisible: data.keyboardVisible }
+                    : {}),
+                ...(typeof data.snapshotGeneration === 'number'
+                    ? { snapshotGeneration: data.snapshotGeneration }
+                    : {}),
+            }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
+        }
+        // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
+        const fallbackMeta = { ...announce, ...recoveryMeta };
+        return okResult(resp.data, Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : undefined);
+    }
+    const finalMeta = {
+        ...announce,
+        ...recoveryMeta,
+        ...(keyboardRelayoutRecovered ? { keyboardGuard: 'auto_dismissed' } : {}),
+    };
+    return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : undefined);
+}

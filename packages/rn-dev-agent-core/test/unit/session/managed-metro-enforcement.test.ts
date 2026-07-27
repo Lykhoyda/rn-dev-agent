@@ -20,7 +20,6 @@ import {
   verifyManagedMetroEnforcementReceipt,
 } from '../../../dist/session/managed-metro-enforcement.js';
 import {
-  sealManagedMetroLaunchCommand,
   startManagedMetro,
   stopManagedMetro,
   verifyManagedMetroManagementProof,
@@ -293,51 +292,6 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
     }),
     false,
   );
-});
-
-test('managed Metro launches from sealed command-chain bytes', () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-metro-command-seal-'));
-  roots.push(root);
-  const runtimeRoot = join(root, 'runtime');
-  const nodeExecutable = join(root, 'node');
-  const shellExecutable = join(root, 'sh');
-  const sourceExecutable = join(root, 'expo');
-  const helperExecutable = join(root, 'dirname');
-  for (const [path, contents] of [
-    [nodeExecutable, 'node-v1'],
-    [shellExecutable, 'shell-v1'],
-    [sourceExecutable, 'shim-v1'],
-    [helperExecutable, 'helper-v1'],
-  ]) {
-    writeFileSync(path, contents);
-    chmodSync(path, 0o755);
-  }
-  const sealed = sealManagedMetroLaunchCommand(
-    {
-      sourceExecutable,
-      executable: shellExecutable,
-      nodeExecutable,
-      args: [sourceExecutable, 'start'],
-      probeArgs: [sourceExecutable, '--version'],
-      executableMappings: [nodeExecutable, helperExecutable],
-      chainInputs: [sourceExecutable, shellExecutable, nodeExecutable, helperExecutable],
-      protectedRuntimeRoots: [],
-    },
-    runtimeRoot,
-    'metro-instance',
-  );
-  writeFileSync(sourceExecutable, 'shim-v2');
-  writeFileSync(nodeExecutable, 'node-v2');
-
-  assert.equal(readFileSync(sealed.sourceExecutable, 'utf8'), 'shim-v1');
-  assert.equal(readFileSync(sealed.nodeExecutable, 'utf8'), 'node-v1');
-  assert.notEqual(sealed.sourceExecutable, sourceExecutable);
-  assert.ok(sealed.chainInputs.every((path) => path.startsWith(runtimeRoot)));
-  assert.deepEqual(sealed.protectedRuntimeRoots, [dirname(sealed.sourceExecutable)]);
-  assert.equal(statSync(dirname(sealed.sourceExecutable)).mode & 0o222, 0);
-  assert.equal(statSync(dirname(sealed.nodeExecutable)).mode & 0o222, 0);
-  chmodSync(dirname(sealed.sourceExecutable), 0o700);
-  chmodSync(dirname(sealed.nodeExecutable), 0o700);
 });
 
 test(
