@@ -541,6 +541,118 @@ test('Metro preload records child-process and worker-thread module loads', () =>
   }
 });
 
+test('Metro descendants are transitively bound to broker authority and allowed code roots', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-session-metro-descendant-tree-')));
+  const external = mkdtempSync(join(tmpdir(), 'rn-session-metro-descendant-escape-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const childEntry = join(root, 'child.cjs');
+    const grandchildEntry = join(root, 'grandchild.cjs');
+    const outsideEntry = join(external, 'outside.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(
+      childEntry,
+      `const { spawnSync } = require('node:child_process'); const result = spawnSync(process.execPath, [${JSON.stringify(grandchildEntry)}]); process.exit(result.status ?? 1);`,
+    );
+    writeFileSync(grandchildEntry, 'process.exit(0);\n');
+    writeFileSync(outsideEntry, 'process.exit(0);\n');
+    const environment = metroPolicyEnvironment(adapterPath);
+    const rootNonce = 'ab'.repeat(16);
+    environment.RN_DEV_AGENT_METRO_CONTENT_ROOT = root;
+    environment.RN_DEV_AGENT_METRO_APP_ROOT = root;
+    environment.RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS = JSON.stringify([root]);
+    environment.RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE = rootNonce;
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const { spawnSync } = require('node:child_process'); let rejected = false; try { spawnSync(process.execPath, [${JSON.stringify(outsideEntry)}]); } catch (error) { rejected = error?.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION'; } if (!rejected) process.exit(2); const child = spawnSync(process.execPath, [${JSON.stringify(childEntry)}]); process.exit(child.status ?? 1);`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const observations = readFileSync(runtimeLoads, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const launches = observations
+      .filter((entry) => entry.kind === 'launch')
+      .map((entry) => JSON.parse(entry.value));
+    const attestations = observations
+      .filter((entry) => entry.kind === 'attestation')
+      .map((entry) => JSON.parse(entry.value));
+    assert.equal(launches.length, 2);
+    assert.equal(attestations.length, 2, JSON.stringify(observations));
+    assert.deepEqual(
+      new Set(launches.map((entry) => JSON.stringify(entry))),
+      new Set(attestations.map((entry) => JSON.stringify(entry))),
+    );
+    const rootChild = launches.find((entry) => entry.parent.nonce === rootNonce);
+    assert.ok(rootChild);
+    const grandchild = launches.find((entry) => entry.parent.nonce === rootChild.nonce);
+    assert.ok(grandchild);
+    assert.equal(grandchild.parent.identity, rootChild.identity);
+    for (const launch of launches) {
+      assert.deepEqual(launch.authority, {
+        appRoot: root,
+        contentRoot: root,
+        metroInstanceId: 'metro',
+        sessionId: 'session',
+      });
+      assert.match(launch.nonce, /^[a-f0-9]{32}$/);
+      assert.match(launch.identity, /^process:\d+$/);
+      assert.match(launch.semantics, /^[a-f0-9]{64}$/);
+    }
+    const executionSemantics = observations
+      .filter((entry) => entry.kind === 'semantics')
+      .map((entry) => JSON.parse(entry.value))
+      .filter((entry) => entry.entrypoint);
+    assert.equal(executionSemantics.length, 2);
+    assert.ok(
+      executionSemantics.every(
+        (entry) =>
+          entry.authority.parentIdentity.startsWith('process:') &&
+          /^[a-f0-9]{32}$/.test(entry.authority.parentNonce) &&
+          entry.authority.sessionId === 'session' &&
+          entry.authority.metroInstanceId === 'metro' &&
+          entry.authority.contentRoot === root &&
+          entry.authority.appRoot === root &&
+          JSON.stringify(entry.allowedCodeRoots) === JSON.stringify([root]) &&
+          /^[a-f0-9]{64}$/.test(entry.entrypointDigest),
+      ),
+    );
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+    rmSync(external, { force: true, recursive: true });
+  }
+});
+
 test('Metro descendant semantics bind arguments and Worker inputs', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-invocation-semantics-'));
   let evidenceDescriptor: number | undefined;

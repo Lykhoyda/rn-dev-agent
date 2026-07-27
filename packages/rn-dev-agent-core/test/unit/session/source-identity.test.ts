@@ -415,6 +415,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     version: 1,
     executable: process.execPath,
     nodeExecutable: process.execPath,
+    nodeVersion: process.version,
     port: 8341,
     args: ['metro', '--port', '8341'],
     nodeOptions: '',
@@ -427,20 +428,38 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     metroConfigInputs: [join(root, 'metro.config.js')],
     dependencyRoots: [],
     runtimeInputs: [],
+    descendantAuthority: {
+      version: 1,
+      rootNonce: 'cd'.repeat(16),
+      rootIdentity: 'process:100',
+      allowedCodeRoots: [root, external],
+    },
   };
   const enforcementReceipt = {
-    version: 1,
-    kind: 'darwin-seatbelt-v1',
+    version: 2,
+    kind: 'darwin-seatbelt-v2',
     profileSha256: '12'.repeat(32),
     sandboxExecutableSha256: '34'.repeat(32),
     sandboxExecutableCdHash: '56'.repeat(20),
-    processCreationDenied: true,
+    descendantCreationAllowed: true,
+    unauthorizedExecutableDenied: true,
     unmanifestedReadDenied: true,
     unmanifestedWriteDenied: true,
     symlinkEscapeDenied: true,
     unallocatedListenerDenied: true,
     allocatedListenerAllowed: true,
     networkOutboundDenied: true,
+    nodeRuntimeAttestation: {
+      version: 1,
+      executable: {
+        path: process.execPath,
+        sha256: '78'.repeat(32),
+        signingIdentity: null,
+      },
+      runtimeVersion: process.version,
+      loadedRuntimeFiles: [],
+      executableMappings: [],
+    },
   };
   const policyPayload = (runtimeEnforcement: 'os-enforced-v1' | 'unsupported') => ({
     version: 1,
@@ -568,10 +587,21 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
   publishRuntimeLoads([runtimeLoadPayload]);
   const first = strictProofSourceIdentity(identity, dependencies);
-  const semanticsValue = JSON.stringify({
+  const semanticsValue = canonicalAuthorityJson({
     mode: 'node',
     entrypoint: runtimeFile,
+    entrypointDigest: runtimeLoadPayload.digest,
     execArgv: ['--conditions=development'],
+    invocationDigest: 'ef'.repeat(32),
+    allowedCodeRoots: [root, external],
+    authority: {
+      sessionId: 'session',
+      metroInstanceId: 'metro',
+      contentRoot: root,
+      appRoot: root,
+      parentIdentity: 'process:100',
+      parentNonce: 'cd'.repeat(16),
+    },
   });
   const semanticsPayload = {
     version: 1,
@@ -608,12 +638,80 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'launch',
-    value: `${'ab'.repeat(16)}:process:123:${semanticsDigest}`,
+    value: canonicalAuthorityJson({
+      version: 1,
+      nonce: 'ab'.repeat(16),
+      identity: 'process:123',
+      parent: {
+        identity: 'process:100',
+        nonce: 'cd'.repeat(16),
+      },
+      semantics: semanticsDigest,
+      authority: {
+        sessionId: 'session',
+        metroInstanceId: 'metro',
+        contentRoot: root,
+        appRoot: root,
+      },
+    }),
     digest: null,
   };
   const attestationPayload = { ...launchPayload, kind: 'attestation' };
   publishRuntimeLoads([runtimeLoadPayload, semanticsPayload, launchPayload, attestationPayload]);
   assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
+  const forgedRootIdentitySemanticsValue = canonicalAuthorityJson({
+    ...JSON.parse(semanticsValue),
+    authority: {
+      ...JSON.parse(semanticsValue).authority,
+      parentIdentity: 'process:999',
+    },
+  });
+  const forgedRootIdentitySemanticsPayload = {
+    ...semanticsPayload,
+    value: forgedRootIdentitySemanticsValue,
+  };
+  const forgedRootIdentityLaunchPayload = {
+    ...launchPayload,
+    value: canonicalAuthorityJson({
+      ...JSON.parse(launchPayload.value),
+      parent: {
+        identity: 'process:999',
+        nonce: 'cd'.repeat(16),
+      },
+      semantics: createHash('sha256').update(forgedRootIdentitySemanticsValue).digest('hex'),
+    }),
+  };
+  publishRuntimeLoads([
+    runtimeLoadPayload,
+    forgedRootIdentitySemanticsPayload,
+    forgedRootIdentityLaunchPayload,
+    { ...forgedRootIdentityLaunchPayload, kind: 'attestation' },
+  ]);
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /descendant root identity does not match Metro/,
+  );
+  const orphanLaunchPayload = {
+    ...launchPayload,
+    value: canonicalAuthorityJson({
+      ...JSON.parse(launchPayload.value),
+      parent: {
+        identity: 'process:999',
+        nonce: 'de'.repeat(16),
+      },
+    }),
+  };
+  const orphanAttestationPayload = { ...orphanLaunchPayload, kind: 'attestation' };
+  publishRuntimeLoads([
+    runtimeLoadPayload,
+    semanticsPayload,
+    orphanLaunchPayload,
+    orphanAttestationPayload,
+  ]);
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /descendant parent is outside the attested tree/,
+  );
   const pendingPayload = {
     version: 1,
     runtimeEvidenceAuthority: 'broker-v2',

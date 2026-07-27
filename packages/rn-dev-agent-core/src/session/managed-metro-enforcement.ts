@@ -14,6 +14,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { canonicalAuthorityJson } from './authority-json.js';
 
 const DARWIN_SANDBOX_EXECUTABLE = '/usr/bin/sandbox-exec';
 const DARWIN_CODESIGN_EXECUTABLE = '/usr/bin/codesign';
@@ -36,6 +37,9 @@ interface ManagedMetroEnforcementDependencies {
   stat?: (path: string) => FileMetadata;
   readBytes?: (path: string) => Buffer;
   run?: (command: string, args: readonly string[]) => CommandResult;
+  runtimeCache?: () => string | null;
+  runtimeFiles?: (nodeExecutable: string) => readonly string[];
+  runtimeVersion?: (nodeExecutable: string) => string;
 }
 
 export interface ManagedMetroEnforcementInput {
@@ -44,40 +48,67 @@ export interface ManagedMetroEnforcementInput {
   sourceRoot: string;
   runtimeRoot: string;
   nodeExecutable: string;
+  nodeVersion: string;
   commandExecutable: string;
   port: number;
   instanceId: string;
   runtimeInputs: readonly string[];
 }
 
-export interface ManagedMetroEnforcementReceipt {
+export interface ManagedMetroSigningIdentity {
+  identifier: string;
+  cdHash: string;
+  authorities: string[];
+}
+
+export interface ManagedMetroRuntimeFileAttestation {
+  path: string;
+  sha256: string;
+  signingIdentity: ManagedMetroSigningIdentity | null;
+}
+
+export interface ManagedMetroNodeRuntimeAttestation {
   version: 1;
-  kind: 'darwin-seatbelt-v1';
+  executable: ManagedMetroRuntimeFileAttestation;
+  runtimeVersion: string;
+  linkedRuntimePaths: string[];
+  loadedRuntimeFiles: ManagedMetroRuntimeFileAttestation[];
+  sharedRuntimeCache: ManagedMetroRuntimeFileAttestation | null;
+  executableMappings: ManagedMetroRuntimeFileAttestation[];
+}
+
+export interface ManagedMetroEnforcementReceipt {
+  version: 2;
+  kind: 'darwin-seatbelt-v2';
   profileSha256: string;
   sandboxExecutableSha256: string;
   sandboxExecutableCdHash: string;
-  processCreationDenied: true;
+  descendantCreationAllowed: true;
+  unauthorizedExecutableDenied: true;
   unmanifestedReadDenied: true;
   unmanifestedWriteDenied: true;
   symlinkEscapeDenied: true;
   unallocatedListenerDenied: true;
   allocatedListenerAllowed: true;
   networkOutboundDenied: true;
+  nodeRuntimeAttestation: ManagedMetroNodeRuntimeAttestation;
 }
 
 export interface ManagedMetroEnforcementPlan {
   status: 'enforced';
-  kind: 'darwin-seatbelt-v1';
+  kind: 'darwin-seatbelt-v2';
   sandboxExecutable: '/usr/bin/sandbox-exec';
   sandboxExecutableSha256: string;
   sandboxExecutableCdHash: string;
   profile: string;
   profileSha256: string;
   canaryPath: string;
+  descendantCanaryPath: string;
   symlinkCanaryPath: string;
   port: number;
   unallocatedPort: number;
   nodeExecutable: string;
+  nodeRuntimeAttestation: ManagedMetroNodeRuntimeAttestation;
 }
 
 export type ManagedMetroEnforcement =
@@ -87,6 +118,7 @@ export type ManagedMetroEnforcement =
       reason:
         | 'host-enforcement-unavailable'
         | 'sandbox-executable-unverified'
+        | 'node-runtime-unverified'
         | 'sandbox-preflight-failed';
     };
 
@@ -167,6 +199,132 @@ function verifiedSandboxExecutable(dependencies: ManagedMetroEnforcementDependen
   }
 }
 
+function signingIdentity(
+  path: string,
+  run: (command: string, args: readonly string[]) => CommandResult,
+): ManagedMetroSigningIdentity | null {
+  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ['--verify', '--strict', path]);
+  if (verification.status !== 0) return null;
+  const details = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', path]);
+  const identifier = field(details.stderr, 'Identifier');
+  const cdHash = field(details.stderr, 'CDHash');
+  if (details.status !== 0 || !identifier || !/^[a-f0-9]{40,64}$/.test(cdHash ?? '')) {
+    return null;
+  }
+  return {
+    identifier,
+    cdHash: cdHash!,
+    authorities: details.stderr
+      .split('\n')
+      .filter((line) => line.startsWith('Authority='))
+      .map((line) => line.slice('Authority='.length))
+      .sort(),
+  };
+}
+
+function defaultRuntimeVersion(
+  nodeExecutable: string,
+  run: (command: string, args: readonly string[]) => CommandResult,
+): string {
+  const result = run(nodeExecutable, ['--version']);
+  if (result.status !== 0) throw new Error('node version unavailable');
+  return result.stdout.trim();
+}
+
+function defaultRuntimeFiles(
+  nodeExecutable: string,
+  run: (command: string, args: readonly string[]) => CommandResult,
+): string[] {
+  const result = run('/usr/bin/otool', ['-L', nodeExecutable]);
+  if (result.status !== 0) throw new Error('node runtime dependencies unavailable');
+  return result.stdout
+    .split('\n')
+    .slice(1)
+    .map((line) => line.trim().split(/\s+\(/, 1)[0])
+    .filter((path) => path.startsWith('/'));
+}
+
+function defaultRuntimeCache(exists: (path: string) => boolean): string | null {
+  const architecture = process.arch === 'arm64' ? 'arm64e' : process.arch;
+  return (
+    [
+      `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_${architecture}`,
+      `/System/Library/dyld/dyld_shared_cache_${architecture}`,
+    ].find(exists) ?? null
+  );
+}
+
+function attestRuntimeFile(
+  path: string,
+  dependencies: ManagedMetroEnforcementDependencies,
+): ManagedMetroRuntimeFileAttestation {
+  const canonicalize = dependencies.canonicalize ?? realpathSync;
+  const stat = dependencies.stat ?? statSync;
+  const readBytes = dependencies.readBytes ?? readFileSync;
+  const run = dependencies.run ?? defaultRun;
+  const canonical = canonicalize(path);
+  if (!stat(canonical).isFile()) throw new Error('runtime input is not a file');
+  return {
+    path: canonical,
+    sha256: sha256(readBytes(canonical)),
+    signingIdentity: signingIdentity(canonical, run),
+  };
+}
+
+function attestNodeRuntime(
+  input: ManagedMetroEnforcementInput,
+  executableMappings: readonly string[],
+  dependencies: ManagedMetroEnforcementDependencies,
+): ManagedMetroNodeRuntimeAttestation | null {
+  const run = dependencies.run ?? defaultRun;
+  const exists = dependencies.exists ?? existsSync;
+  const runtimeVersion =
+    dependencies.runtimeVersion?.(input.nodeExecutable) ??
+    defaultRuntimeVersion(input.nodeExecutable, run);
+  if (runtimeVersion !== input.nodeVersion) return null;
+  try {
+    const executable = attestRuntimeFile(input.nodeExecutable, dependencies);
+    const linkedRuntimePaths = [
+      ...new Set(
+        dependencies.runtimeFiles?.(executable.path) ?? defaultRuntimeFiles(executable.path, run),
+      ),
+    ].sort();
+    if (linkedRuntimePaths.length === 0) return null;
+    const missingRuntimePaths = linkedRuntimePaths.filter((path) => !exists(path));
+    if (
+      missingRuntimePaths.some(
+        (path) => !path.startsWith('/System/Library/') && !path.startsWith('/usr/lib/'),
+      )
+    ) {
+      return null;
+    }
+    const runtimeCachePath =
+      missingRuntimePaths.length > 0
+        ? (dependencies.runtimeCache?.() ?? defaultRuntimeCache(exists))
+        : null;
+    if (missingRuntimePaths.length > 0 && !runtimeCachePath) return null;
+    const loadedRuntimeFiles = [executable.path, ...linkedRuntimePaths.filter(exists)]
+      .sort()
+      .map((path) => attestRuntimeFile(path, dependencies));
+    const mappings = [...new Set(executableMappings)]
+      .sort()
+      .map((path) => attestRuntimeFile(path, dependencies));
+    return {
+      version: 1,
+      executable,
+      runtimeVersion,
+      linkedRuntimePaths,
+      loadedRuntimeFiles,
+      sharedRuntimeCache: runtimeCachePath
+        ? attestRuntimeFile(runtimeCachePath, dependencies)
+        : null,
+      executableMappings: mappings,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function sandboxString(value: string): string {
   if (value.includes('\0')) throw new Error('METRO_RUNTIME_ENFORCEMENT_PATH_INVALID');
   return JSON.stringify(value);
@@ -193,21 +351,25 @@ function managedMetroSandboxProfile(input: {
   readRoots: readonly string[];
   writeRoots: readonly string[];
   executablePaths: readonly string[];
+  executableMapPaths: readonly string[];
   executableMapDenyRoots: readonly string[];
   port: number;
 }): string {
   const readRoots = [...new Set(input.readRoots)].sort();
   const writeRoots = [...new Set(input.writeRoots)].sort();
   const executablePaths = [...new Set(input.executablePaths)].sort();
+  const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
   const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
   const pathAncestors = [...new Set([...readRoots, ...writeRoots])].sort();
   return `(version 1)
 (deny default)
 (import "system.sb")
-(deny process-fork)
+(allow process-fork)
 (deny network-outbound)
 (deny file-map-executable
 ${pathFilters(executableMapDenyRoots)})
+(allow file-map-executable
+${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
 (allow process-exec
 ${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
 (allow file-read* file-test-existence
@@ -246,39 +408,51 @@ export function prepareManagedMetroEnforcement(
     sourceRoot,
     appRoot,
     runtimeRoot,
-    dirname(dirname(nodeExecutable)),
     nodeExecutable,
     commandExecutable,
     ...runtimeInputs,
   ];
-  const executablePaths = [
-    nodeExecutable,
-    commandExecutable,
-    '/usr/bin/env',
-    '/bin/sh',
-    '/bin/bash',
-  ];
+  const executablePaths = [nodeExecutable, commandExecutable, '/usr/bin/env'];
+  const nodeRuntimeAttestation = attestNodeRuntime(
+    {
+      ...input,
+      nodeExecutable,
+      commandExecutable,
+      runtimeInputs,
+    },
+    executablePaths,
+    dependencies,
+  );
+  if (!nodeRuntimeAttestation) {
+    return { status: 'unsupported', reason: 'node-runtime-unverified' };
+  }
   const profile = managedMetroSandboxProfile({
     readRoots,
     writeRoots: [runtimeRoot, expoStateRoot],
     executablePaths,
+    executableMapPaths: [
+      ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
+      ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path),
+    ],
     executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
     port: input.port,
   });
   const canaryId = sha256(`${input.instanceId}\0${input.port}`).slice(0, 32);
   return {
     status: 'enforced',
-    kind: 'darwin-seatbelt-v1',
+    kind: 'darwin-seatbelt-v2',
     sandboxExecutable: sandbox.path,
     sandboxExecutableSha256: sandbox.sha256,
     sandboxExecutableCdHash: sandbox.cdHash,
     profile,
     profileSha256: sha256(profile),
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
+    descendantCanaryPath: resolve(runtimeRoot, `descendant-${canaryId}.cjs`),
     symlinkCanaryPath: resolve(runtimeRoot, `enforcement-${canaryId}.canary`),
     port: input.port,
     unallocatedPort: 0,
     nodeExecutable,
+    nodeRuntimeAttestation,
   };
 }
 
@@ -295,11 +469,13 @@ const denied = (run) => {
     return error && (error.code === 'EPERM' || error.code === 'EACCES');
   }
 };
-const processResult = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
-const processCreationDenied =
-  processResult.status === null &&
-  processResult.error &&
-  (processResult.error.code === 'EPERM' || processResult.error.code === 'EACCES');
+const descendantResult = spawnSync(process.execPath, [input.descendantCanaryPath]);
+const descendantCreationAllowed = descendantResult.status === 0;
+const unauthorizedResult = spawnSync('/usr/bin/true', []);
+const unauthorizedExecutableDenied =
+  unauthorizedResult.status === null &&
+  unauthorizedResult.error &&
+  (unauthorizedResult.error.code === 'EPERM' || unauthorizedResult.error.code === 'EACCES');
 const unmanifestedReadDenied = denied(() => readFileSync(input.canaryPath));
 const unmanifestedWriteDenied = denied(() => writeFileSync(input.canaryPath, 'forged'));
 const symlinkEscapeDenied = denied(() => readFileSync(input.symlinkCanaryPath));
@@ -325,7 +501,8 @@ const listen = (port) =>
     );
   });
   const receipt = {
-    processCreationDenied: Boolean(processCreationDenied),
+    descendantCreationAllowed,
+    unauthorizedExecutableDenied: Boolean(unauthorizedExecutableDenied),
     unmanifestedReadDenied,
     unmanifestedWriteDenied,
     symlinkEscapeDenied,
@@ -340,7 +517,7 @@ const listen = (port) =>
 `;
 
 interface ManagedMetroPreflightDependencies {
-  writeCanary?: (path: string) => void;
+  writeCanary?: (path: string, contents: string) => void;
   removeCanary?: (path: string) => void;
   run?: (command: string, args: readonly string[]) => CommandResult;
 }
@@ -351,14 +528,14 @@ export function runManagedMetroEnforcementPreflight(
 ): ManagedMetroEnforcementReceipt {
   const writeCanary =
     dependencies.writeCanary ??
-    ((path: string) => {
+    ((path: string, contents: string) => {
       const descriptor = openSync(
         path,
         constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
         0o600,
       );
       try {
-        writeSync(descriptor, 'rn-dev-agent sandbox canary');
+        writeSync(descriptor, contents);
       } finally {
         closeSync(descriptor);
       }
@@ -367,10 +544,14 @@ export function runManagedMetroEnforcementPreflight(
     dependencies.removeCanary ?? ((path: string) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun;
   let canaryCreated = false;
+  let descendantCanaryCreated = false;
   let symlinkCreated = false;
   try {
-    writeCanary(plan.canaryPath);
+    writeCanary(plan.canaryPath, 'rn-dev-agent sandbox canary');
     canaryCreated = true;
+    mkdirSync(dirname(plan.descendantCanaryPath), { recursive: true });
+    writeCanary(plan.descendantCanaryPath, 'process.exit(0);');
+    descendantCanaryCreated = true;
     mkdirSync(dirname(plan.symlinkCanaryPath), { recursive: true });
     rmSync(plan.symlinkCanaryPath, { force: true });
     symlinkSync(plan.canaryPath, plan.symlinkCanaryPath);
@@ -383,6 +564,7 @@ export function runManagedMetroEnforcementPreflight(
       PREFLIGHT_SOURCE,
       JSON.stringify({
         canaryPath: plan.canaryPath,
+        descendantCanaryPath: plan.descendantCanaryPath,
         symlinkCanaryPath: plan.symlinkCanaryPath,
         port: plan.port,
         unallocatedPort: plan.unallocatedPort,
@@ -393,7 +575,8 @@ export function runManagedMetroEnforcementPreflight(
     }
     const observed = JSON.parse(result.stdout) as Record<string, unknown>;
     if (
-      observed.processCreationDenied !== true ||
+      observed.descendantCreationAllowed !== true ||
+      observed.unauthorizedExecutableDenied !== true ||
       observed.unmanifestedReadDenied !== true ||
       observed.unmanifestedWriteDenied !== true ||
       observed.symlinkEscapeDenied !== true ||
@@ -404,18 +587,20 @@ export function runManagedMetroEnforcementPreflight(
       throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete');
     }
     return {
-      version: 1,
+      version: 2,
       kind: plan.kind,
       profileSha256: plan.profileSha256,
       sandboxExecutableSha256: plan.sandboxExecutableSha256,
       sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
-      processCreationDenied: true,
+      descendantCreationAllowed: true,
+      unauthorizedExecutableDenied: true,
       unmanifestedReadDenied: true,
       unmanifestedWriteDenied: true,
       symlinkEscapeDenied: true,
       unallocatedListenerDenied: true,
       allocatedListenerAllowed: true,
       networkOutboundDenied: true,
+      nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
     };
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('METRO_RUNTIME_ENFORCEMENT_')) {
@@ -426,6 +611,7 @@ export function runManagedMetroEnforcementPreflight(
     });
   } finally {
     if (symlinkCreated) rmSync(plan.symlinkCanaryPath, { force: true });
+    if (descendantCanaryCreated) removeCanary(plan.descendantCanaryPath);
     if (canaryCreated) removeCanary(plan.canaryPath);
   }
 }
@@ -433,23 +619,27 @@ export function runManagedMetroEnforcementPreflight(
 export function verifyManagedMetroEnforcementReceipt(
   input: ManagedMetroEnforcementInput,
   receipt: unknown,
+  dependencies: ManagedMetroEnforcementDependencies = {},
 ): receipt is ManagedMetroEnforcementReceipt {
   if (!receipt || typeof receipt !== 'object') return false;
   const observed = receipt as Partial<ManagedMetroEnforcementReceipt>;
-  const plan = prepareManagedMetroEnforcement(input);
+  const plan = prepareManagedMetroEnforcement(input, dependencies);
   return (
     plan.status === 'enforced' &&
-    observed.version === 1 &&
+    observed.version === 2 &&
     observed.kind === plan.kind &&
     observed.profileSha256 === plan.profileSha256 &&
     observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 &&
     observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash &&
-    observed.processCreationDenied === true &&
+    observed.descendantCreationAllowed === true &&
+    observed.unauthorizedExecutableDenied === true &&
     observed.unmanifestedReadDenied === true &&
     observed.unmanifestedWriteDenied === true &&
     observed.symlinkEscapeDenied === true &&
     observed.unallocatedListenerDenied === true &&
     observed.allocatedListenerAllowed === true &&
-    observed.networkOutboundDenied === true
+    observed.networkOutboundDenied === true &&
+    canonicalAuthorityJson(observed.nodeRuntimeAttestation) ===
+      canonicalAuthorityJson(plan.nodeRuntimeAttestation)
   );
 }

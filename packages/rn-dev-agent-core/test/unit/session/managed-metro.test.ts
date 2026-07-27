@@ -162,6 +162,17 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     kill: () => true,
     unref: () => {},
   };
+  const nodeRuntimeAttestation = {
+    version: 1 as const,
+    executable: {
+      path: process.execPath,
+      sha256: 'd'.repeat(64),
+      signingIdentity: null,
+    },
+    runtimeVersion: process.version,
+    loadedRuntimeFiles: [],
+    executableMappings: [],
+  };
   const binding = await startManagedMetro(
     {
       appRoot: '/app',
@@ -178,31 +189,35 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
       exists: () => true,
       prepareEnforcement: () => ({
         status: 'enforced',
-        kind: 'darwin-seatbelt-v1',
+        kind: 'darwin-seatbelt-v2',
         sandboxExecutable: '/usr/bin/sandbox-exec',
         sandboxExecutableSha256: 'a'.repeat(64),
         sandboxExecutableCdHash: 'b'.repeat(40),
         profile: '(version 1)\n(deny default)\n',
         profileSha256: 'c'.repeat(64),
         canaryPath: '/private/tmp/rn-dev-agent-metro-test.canary',
+        descendantCanaryPath: '/runtime/session/descendant-test.cjs',
         symlinkCanaryPath: '/runtime/session/enforcement-test.canary',
         port: 8341,
         unallocatedPort: 0,
         nodeExecutable: process.execPath,
+        nodeRuntimeAttestation,
       }),
       preflightEnforcement: (plan) => ({
-        version: 1,
+        version: 2,
         kind: plan.kind,
         profileSha256: plan.profileSha256,
         sandboxExecutableSha256: plan.sandboxExecutableSha256,
         sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
-        processCreationDenied: true,
+        descendantCreationAllowed: true,
+        unauthorizedExecutableDenied: true,
         unmanifestedReadDenied: true,
         unmanifestedWriteDenied: true,
         symlinkEscapeDenied: true,
         unallocatedListenerDenied: true,
         allocatedListenerAllowed: true,
         networkOutboundDenied: true,
+        nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
       }),
       spawnProcess: (executable, args, options) => {
         calls.push({ executable, args, env: options.env });
@@ -269,6 +284,21 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(childEnvironment.RCT_METRO_PORT, '8341');
   assert.equal(childEnvironment.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
   assert.equal(childEnvironment.RN_DEV_AGENT_REGISTRY_PATH, undefined);
+  assert.equal(childEnvironment.RN_DEV_AGENT_METRO_CONTENT_ROOT, '/app');
+  assert.equal(childEnvironment.RN_DEV_AGENT_METRO_APP_ROOT, '/app');
+  const allowedCodeRoots = [
+    '/app',
+    '/app/.pnpm',
+    '/app/.yarn/cache',
+    '/app/.yarn/unplugged',
+    '/app/node_modules',
+    '/node_modules',
+  ];
+  assert.equal(
+    childEnvironment.RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS,
+    JSON.stringify(allowedCodeRoots),
+  );
+  assert.match(childEnvironment.RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE ?? '', /^[a-f0-9]{32}$/);
   const runtimeManifest = JSON.parse(
     calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST ?? '{}',
   ) as Record<string, unknown>;
@@ -278,6 +308,12 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   );
   assert.equal(runtimeManifest.servingRoot, '/app');
   assert.equal(runtimeManifest.buildGeneration, 1);
+  assert.equal(runtimeManifest.nodeVersion, process.version);
+  assert.deepEqual(runtimeManifest.descendantAuthority, {
+    version: 1,
+    rootNonce: childEnvironment.RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE,
+    allowedCodeRoots,
+  });
   assert.ok(Array.isArray(runtimeManifest.runtimeInputs));
   assert.equal(
     verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {

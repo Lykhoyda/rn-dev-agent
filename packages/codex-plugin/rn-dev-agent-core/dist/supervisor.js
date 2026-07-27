@@ -940,6 +940,90 @@ function verifiedSandboxExecutable(dependencies) {
     return null;
   }
 }
+function signingIdentity(path, run) {
+  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ["--verify", "--strict", path]);
+  if (verification.status !== 0)
+    return null;
+  const details = run(DARWIN_CODESIGN_EXECUTABLE, ["-dv", "--verbose=4", path]);
+  const identifier = field(details.stderr, "Identifier");
+  const cdHash = field(details.stderr, "CDHash");
+  if (details.status !== 0 || !identifier || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "")) {
+    return null;
+  }
+  return {
+    identifier,
+    cdHash,
+    authorities: details.stderr.split("\n").filter((line) => line.startsWith("Authority=")).map((line) => line.slice("Authority=".length)).sort()
+  };
+}
+function defaultRuntimeVersion(nodeExecutable, run) {
+  const result = run(nodeExecutable, ["--version"]);
+  if (result.status !== 0)
+    throw new Error("node version unavailable");
+  return result.stdout.trim();
+}
+function defaultRuntimeFiles(nodeExecutable, run) {
+  const result = run("/usr/bin/otool", ["-L", nodeExecutable]);
+  if (result.status !== 0)
+    throw new Error("node runtime dependencies unavailable");
+  return result.stdout.split("\n").slice(1).map((line) => line.trim().split(/\s+\(/, 1)[0]).filter((path) => path.startsWith("/"));
+}
+function defaultRuntimeCache(exists) {
+  const architecture = process.arch === "arm64" ? "arm64e" : process.arch;
+  return [
+    `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_${architecture}`,
+    `/System/Library/dyld/dyld_shared_cache_${architecture}`
+  ].find(exists) ?? null;
+}
+function attestRuntimeFile(path, dependencies) {
+  const canonicalize = dependencies.canonicalize ?? realpathSync;
+  const stat2 = dependencies.stat ?? statSync2;
+  const readBytes = dependencies.readBytes ?? readFileSync3;
+  const run = dependencies.run ?? defaultRun2;
+  const canonical = canonicalize(path);
+  if (!stat2(canonical).isFile())
+    throw new Error("runtime input is not a file");
+  return {
+    path: canonical,
+    sha256: sha256(readBytes(canonical)),
+    signingIdentity: signingIdentity(canonical, run)
+  };
+}
+function attestNodeRuntime(input, executableMappings, dependencies) {
+  const run = dependencies.run ?? defaultRun2;
+  const exists = dependencies.exists ?? existsSync4;
+  const runtimeVersion = dependencies.runtimeVersion?.(input.nodeExecutable) ?? defaultRuntimeVersion(input.nodeExecutable, run);
+  if (runtimeVersion !== input.nodeVersion)
+    return null;
+  try {
+    const executable = attestRuntimeFile(input.nodeExecutable, dependencies);
+    const linkedRuntimePaths = [
+      ...new Set(dependencies.runtimeFiles?.(executable.path) ?? defaultRuntimeFiles(executable.path, run))
+    ].sort();
+    if (linkedRuntimePaths.length === 0)
+      return null;
+    const missingRuntimePaths = linkedRuntimePaths.filter((path) => !exists(path));
+    if (missingRuntimePaths.some((path) => !path.startsWith("/System/Library/") && !path.startsWith("/usr/lib/"))) {
+      return null;
+    }
+    const runtimeCachePath = missingRuntimePaths.length > 0 ? dependencies.runtimeCache?.() ?? defaultRuntimeCache(exists) : null;
+    if (missingRuntimePaths.length > 0 && !runtimeCachePath)
+      return null;
+    const loadedRuntimeFiles = [executable.path, ...linkedRuntimePaths.filter(exists)].sort().map((path) => attestRuntimeFile(path, dependencies));
+    const mappings = [...new Set(executableMappings)].sort().map((path) => attestRuntimeFile(path, dependencies));
+    return {
+      version: 1,
+      executable,
+      runtimeVersion,
+      linkedRuntimePaths,
+      loadedRuntimeFiles,
+      sharedRuntimeCache: runtimeCachePath ? attestRuntimeFile(runtimeCachePath, dependencies) : null,
+      executableMappings: mappings
+    };
+  } catch {
+    return null;
+  }
+}
 function sandboxString(value) {
   if (value.includes("\0"))
     throw new Error("METRO_RUNTIME_ENFORCEMENT_PATH_INVALID");
@@ -962,15 +1046,18 @@ function managedMetroSandboxProfile(input) {
   const readRoots = [...new Set(input.readRoots)].sort();
   const writeRoots = [...new Set(input.writeRoots)].sort();
   const executablePaths = [...new Set(input.executablePaths)].sort();
+  const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
   const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
   const pathAncestors = [.../* @__PURE__ */ new Set([...readRoots, ...writeRoots])].sort();
   return `(version 1)
 (deny default)
 (import "system.sb")
-(deny process-fork)
+(allow process-fork)
 (deny network-outbound)
 (deny file-map-executable
 ${pathFilters(executableMapDenyRoots)})
+(allow file-map-executable
+${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
 (allow process-exec
 ${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
 (allow file-read* file-test-existence
@@ -1005,52 +1092,61 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     sourceRoot,
     appRoot,
     runtimeRoot,
-    dirname2(dirname2(nodeExecutable)),
     nodeExecutable,
     commandExecutable,
     ...runtimeInputs
   ];
-  const executablePaths = [
+  const executablePaths = [nodeExecutable, commandExecutable, "/usr/bin/env"];
+  const nodeRuntimeAttestation = attestNodeRuntime({
+    ...input,
     nodeExecutable,
     commandExecutable,
-    "/usr/bin/env",
-    "/bin/sh",
-    "/bin/bash"
-  ];
+    runtimeInputs
+  }, executablePaths, dependencies);
+  if (!nodeRuntimeAttestation) {
+    return { status: "unsupported", reason: "node-runtime-unverified" };
+  }
   const profile = managedMetroSandboxProfile({
     readRoots,
     writeRoots: [runtimeRoot, expoStateRoot],
     executablePaths,
+    executableMapPaths: [
+      ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
+      ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path)
+    ],
     executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
     port: input.port
   });
   const canaryId = sha256(`${input.instanceId}\0${input.port}`).slice(0, 32);
   return {
     status: "enforced",
-    kind: "darwin-seatbelt-v1",
+    kind: "darwin-seatbelt-v2",
     sandboxExecutable: sandbox.path,
     sandboxExecutableSha256: sandbox.sha256,
     sandboxExecutableCdHash: sandbox.cdHash,
     profile,
     profileSha256: sha256(profile),
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
+    descendantCanaryPath: resolve2(runtimeRoot, `descendant-${canaryId}.cjs`),
     symlinkCanaryPath: resolve2(runtimeRoot, `enforcement-${canaryId}.canary`),
     port: input.port,
     unallocatedPort: 0,
-    nodeExecutable
+    nodeExecutable,
+    nodeRuntimeAttestation
   };
 }
-function verifyManagedMetroEnforcementReceipt(input, receipt2) {
+function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}) {
   if (!receipt2 || typeof receipt2 !== "object")
     return false;
   const observed = receipt2;
-  const plan = prepareManagedMetroEnforcement(input);
-  return plan.status === "enforced" && observed.version === 1 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.processCreationDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true;
+  const plan = prepareManagedMetroEnforcement(input, dependencies);
+  return plan.status === "enforced" && observed.version === 2 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.descendantCreationAllowed === true && observed.unauthorizedExecutableDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true && canonicalAuthorityJson(observed.nodeRuntimeAttestation) === canonicalAuthorityJson(plan.nodeRuntimeAttestation);
 }
 var DARWIN_SANDBOX_EXECUTABLE, DARWIN_CODESIGN_EXECUTABLE, PREFLIGHT_SOURCE;
 var init_managed_metro_enforcement = __esm({
   "packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js"() {
     "use strict";
+    init_authority_json();
     DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
     DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
     PREFLIGHT_SOURCE = String.raw`
@@ -1066,11 +1162,13 @@ const denied = (run) => {
     return error && (error.code === 'EPERM' || error.code === 'EACCES');
   }
 };
-const processResult = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
-const processCreationDenied =
-  processResult.status === null &&
-  processResult.error &&
-  (processResult.error.code === 'EPERM' || processResult.error.code === 'EACCES');
+const descendantResult = spawnSync(process.execPath, [input.descendantCanaryPath]);
+const descendantCreationAllowed = descendantResult.status === 0;
+const unauthorizedResult = spawnSync('/usr/bin/true', []);
+const unauthorizedExecutableDenied =
+  unauthorizedResult.status === null &&
+  unauthorizedResult.error &&
+  (unauthorizedResult.error.code === 'EPERM' || unauthorizedResult.error.code === 'EACCES');
 const unmanifestedReadDenied = denied(() => readFileSync(input.canaryPath));
 const unmanifestedWriteDenied = denied(() => writeFileSync(input.canaryPath, 'forged'));
 const symlinkEscapeDenied = denied(() => readFileSync(input.symlinkCanaryPath));
@@ -1096,7 +1194,8 @@ const listen = (port) =>
     );
   });
   const receipt = {
-    processCreationDenied: Boolean(processCreationDenied),
+    descendantCreationAllowed,
+    unauthorizedExecutableDenied: Boolean(unauthorizedExecutableDenied),
     unmanifestedReadDenied,
     unmanifestedWriteDenied,
     symlinkEscapeDenied,
@@ -1285,9 +1384,14 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   const expected = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
   const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
   const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
   }
+  const descendantAuthority = runtimeManifest.descendantAuthority;
+  if (descendantAuthority.version !== 1 || typeof descendantAuthority.rootNonce !== "string" || !/^[a-f0-9]{32}$/.test(descendantAuthority.rootNonce) || typeof descendantAuthority.rootIdentity !== "string" || !/^process:\d+$/.test(descendantAuthority.rootIdentity) || !Array.isArray(descendantAuthority.allowedCodeRoots) || descendantAuthority.allowedCodeRoots.length === 0 || descendantAuthority.allowedCodeRoots.some((entry) => typeof entry !== "string")) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant authority is invalid");
+  }
+  const allowedCodeRoots = descendantAuthority.allowedCodeRoots;
   if (receipt2.runtimeEnforcement !== "os-enforced-v1") {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable");
   }
@@ -1297,6 +1401,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     sourceRoot: identity2.contentRoot,
     runtimeRoot: dirname3(authority.evidencePath),
     nodeExecutable: runtimeManifest.nodeExecutable,
+    nodeVersion: runtimeManifest.nodeVersion,
     commandExecutable: runtimeManifest.executable,
     port: runtimeManifest.port,
     instanceId: authority.metroInstanceId,
@@ -1322,12 +1427,13 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     });
   }
   const runtimeLoads = /* @__PURE__ */ new Map();
-  const descendantLaunches = /* @__PURE__ */ new Set();
-  const descendantAttestations = /* @__PURE__ */ new Set();
+  const descendantLaunches = /* @__PURE__ */ new Map();
+  const descendantAttestations = /* @__PURE__ */ new Map();
   const descendantSemanticDigests = /* @__PURE__ */ new Set();
   const pendingIpcCompletions = /* @__PURE__ */ new Set();
   const completedIpcCompletions = /* @__PURE__ */ new Set();
   const runtimeSemantics = /* @__PURE__ */ new Set();
+  const runtimeSemanticsByDigest = /* @__PURE__ */ new Map();
   const orderedRuntimeSemantics = [];
   const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
   let runtimeEvidenceEntryCount = 0;
@@ -1370,11 +1476,22 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
     }
     if (load.kind === "launch" || load.kind === "attestation") {
-      if (!/^[a-f0-9]{32}:(?:process|worker):\d+:[a-f0-9]{64}$/.test(load.value)) {
+      let execution;
+      try {
+        execution = JSON.parse(load.value);
+      } catch {
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
       }
-      (load.kind === "launch" ? descendantLaunches : descendantAttestations).add(load.value);
-      descendantSemanticDigests.add(load.value.slice(-64));
+      if (execution.version !== 1 || typeof execution.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.nonce) || typeof execution.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.identity) || !execution.parent || typeof execution.parent.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.parent.identity) || typeof execution.parent.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.parent.nonce) || typeof execution.semantics !== "string" || !/^[a-f0-9]{64}$/.test(execution.semantics) || !execution.authority || execution.authority.sessionId !== authority.sessionId || execution.authority.metroInstanceId !== authority.metroInstanceId || execution.authority.contentRoot !== identity2.contentRoot || execution.authority.appRoot !== identity2.appRoot) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      const target = load.kind === "launch" ? descendantLaunches : descendantAttestations;
+      const priorExecution = target.get(load.value);
+      if (priorExecution && canonicalAuthorityJson(priorExecution) !== load.value) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      target.set(load.value, execution);
+      descendantSemanticDigests.add(execution.semantics);
       continue;
     }
     if (load.kind === "semantics") {
@@ -1382,6 +1499,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded");
       }
       runtimeSemantics.add(load.value);
+      runtimeSemanticsByDigest.set(createHash4("sha256").update(load.value).digest("hex"), load.value);
       orderedRuntimeSemantics.push(load.value);
       continue;
     }
@@ -1428,12 +1546,12 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual(observedHead, expectedHead)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
   }
-  for (const launch of descendantLaunches) {
+  for (const launch of descendantLaunches.keys()) {
     if (!descendantAttestations.has(launch)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested");
     }
   }
-  for (const attestation of descendantAttestations) {
+  for (const attestation of descendantAttestations.keys()) {
     if (!descendantLaunches.has(attestation)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch");
     }
@@ -1448,10 +1566,57 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
     }
   }
-  const observedSemanticDigests = new Set([...runtimeSemantics].map((value) => createHash4("sha256").update(value).digest("hex")));
+  const observedSemanticDigests = new Set(runtimeSemanticsByDigest.keys());
   for (const semantics of descendantSemanticDigests) {
     if (!observedSemanticDigests.has(semantics)) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
+    }
+  }
+  const descendantsByNonce = /* @__PURE__ */ new Map();
+  for (const execution of descendantLaunches.values()) {
+    if (descendantsByNonce.has(execution.nonce)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant nonce was reused");
+    }
+    descendantsByNonce.set(execution.nonce, execution);
+  }
+  for (const execution of descendantLaunches.values()) {
+    let current = execution;
+    const visited = /* @__PURE__ */ new Set();
+    while (current.parent.nonce !== descendantAuthority.rootNonce) {
+      if (visited.has(current.nonce)) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant tree contains a cycle");
+      }
+      visited.add(current.nonce);
+      const parent = descendantsByNonce.get(current.parent.nonce);
+      if (!parent || parent.identity !== current.parent.identity) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant parent is outside the attested tree");
+      }
+      current = parent;
+    }
+    if (current.parent.identity !== descendantAuthority.rootIdentity) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant root identity does not match Metro");
+    }
+    const semanticsValue = runtimeSemanticsByDigest.get(execution.semantics);
+    if (!semanticsValue) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
+    }
+    let semantics;
+    try {
+      semantics = JSON.parse(semanticsValue);
+    } catch {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
+    }
+    const semanticAuthority = semantics.authority && typeof semantics.authority === "object" ? semantics.authority : null;
+    if (!["node", "sync", "fork", "worker"].includes(semantics.mode) || typeof semantics.entrypoint !== "string" || typeof semantics.entrypointDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.entrypointDigest) || !Array.isArray(semantics.execArgv) || semantics.execArgv.some((entry) => typeof entry !== "string") || typeof semantics.invocationDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.invocationDigest) || canonicalAuthorityJson(semantics.allowedCodeRoots) !== canonicalAuthorityJson(allowedCodeRoots) || !semanticAuthority || semanticAuthority.sessionId !== authority.sessionId || semanticAuthority.metroInstanceId !== authority.metroInstanceId || semanticAuthority.contentRoot !== identity2.contentRoot || semanticAuthority.appRoot !== identity2.appRoot || semanticAuthority.parentIdentity !== execution.parent.identity || semanticAuthority.parentNonce !== execution.parent.nonce) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
+    }
+    const entrypoint = realpathSync2(semantics.entrypoint);
+    if (!allowedCodeRoots.some((root) => isContained(realpathSync2(root), entrypoint))) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant entrypoint is outside allowed code roots");
+    }
+    const observedEntrypoint = runtimeLoads.get(`input\0${entrypoint}`);
+    if (!observedEntrypoint || observedEntrypoint.digest !== semantics.entrypointDigest) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant executable bytes are not attested");
     }
   }
   for (const load of runtimeLoads.values()) {
@@ -23528,26 +23693,29 @@ const runtimeEnforcement = JSON.parse(runtimeEnforcementSource);
 const enforcementReceipt = runtimeEnforcement.receipt;
 const brokerEnforced =
   runtimeEnforcement.status === 'enforced' &&
-  runtimeEnforcement.kind === 'darwin-seatbelt-v1' &&
+  runtimeEnforcement.kind === 'darwin-seatbelt-v2' &&
   runtimeEnforcement.sandboxExecutable === '/usr/bin/sandbox-exec' &&
   typeof runtimeEnforcement.profile === 'string' &&
   /^[a-f0-9]{64}$/.test(runtimeEnforcement.profileSha256 || '') &&
   createHash('sha256').update(runtimeEnforcement.profile).digest('hex') ===
     runtimeEnforcement.profileSha256 &&
-  enforcementReceipt?.version === 1 &&
+  enforcementReceipt?.version === 2 &&
   enforcementReceipt.kind === runtimeEnforcement.kind &&
   enforcementReceipt.profileSha256 === runtimeEnforcement.profileSha256 &&
   enforcementReceipt.sandboxExecutableSha256 ===
     runtimeEnforcement.sandboxExecutableSha256 &&
   enforcementReceipt.sandboxExecutableCdHash ===
     runtimeEnforcement.sandboxExecutableCdHash &&
-  enforcementReceipt.processCreationDenied === true &&
+  enforcementReceipt.descendantCreationAllowed === true &&
+  enforcementReceipt.unauthorizedExecutableDenied === true &&
   enforcementReceipt.unmanifestedReadDenied === true &&
   enforcementReceipt.unmanifestedWriteDenied === true &&
   enforcementReceipt.symlinkEscapeDenied === true &&
   enforcementReceipt.unallocatedListenerDenied === true &&
   enforcementReceipt.allocatedListenerAllowed === true &&
-  enforcementReceipt.networkOutboundDenied === true;
+  enforcementReceipt.networkOutboundDenied === true &&
+  canonicalAuthorityJson(enforcementReceipt.nodeRuntimeAttestation) ===
+    canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation);
 const runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
@@ -23672,15 +23840,6 @@ const environmentDigest = createHash('sha256')
   .update(canonicalAuthorityJson(childEnvironment))
   .digest('hex');
 if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
-appendEvidence({
-  version: 1,
-  sessionId,
-  metroInstanceId,
-  kind: 'semantics',
-  value: canonicalAuthorityJson(runtimeManifest),
-  digest: null,
-});
-publishPolicy();
 const sandboxExecutable = runtimeEnforcement.sandboxExecutable;
 const sandboxArgs = brokerEnforced
   ? ['-p', runtimeEnforcement.profile, executable, ...args]
@@ -23690,6 +23849,17 @@ child = spawn(brokerEnforced ? sandboxExecutable : executable, sandboxArgs, {
   env: childEnvironment,
   stdio: ['inherit', 'inherit', 'inherit', 'ipc', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
 });
+if (!Number.isSafeInteger(child.pid)) process.exit(1);
+runtimeManifest.descendantAuthority.rootIdentity = 'process:' + child.pid;
+appendEvidence({
+  version: 1,
+  sessionId,
+  metroInstanceId,
+  kind: 'semantics',
+  value: canonicalAuthorityJson(runtimeManifest),
+  digest: null,
+});
+publishPolicy();
 const evidence = child.stdio[evidenceDescriptor];
 let childOutcome = null;
 let evidenceFinished = false;
@@ -73815,6 +73985,8 @@ const authorityEnvironment = privateArrayFilter(privateObjectEntries(process.env
     (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
     key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
     key !== 'RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE' &&
     (!usesExternalEvidenceOwner ||
       (key !== 'RN_DEV_AGENT_METRO_POLICY_CAPABILITY' &&
         key !== 'RN_DEV_AGENT_METRO_RUNTIME_LOADS')),
@@ -73826,6 +73998,34 @@ let initialCacheCaptured = false;
 let loaderEpoch = 0;
 let runtimeLoadsDescriptor;
 let runtimeLoadsDescriptorOwned = false;
+const authoritySessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+const authorityMetroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+const authorityContentRoot =
+  process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT || fs.realpathSync(process.cwd());
+const authorityAppRoot =
+  process.env.RN_DEV_AGENT_METRO_APP_ROOT || fs.realpathSync(process.cwd());
+const authorityRootNonce =
+  process.env.RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE ||
+  createHash('sha256')
+    .update('reported-v1:' + authoritySessionId + ':' + authorityMetroInstanceId)
+    .digest('hex')
+    .slice(0, 32);
+const allowedCodeRootsSource = process.env.RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS;
+let allowedCodeRoots = [];
+if (allowedCodeRootsSource) {
+  try {
+    const parsed = JSON.parse(allowedCodeRootsSource);
+    if (!Array.isArray(parsed) || parsed.length === 0) throw descendantError();
+    allowedCodeRoots = privateArraySort(
+      privateArrayMap(parsed, (entry) => {
+        if (typeof entry !== 'string') throw descendantError();
+        return fs.realpathSync(entry);
+      }),
+    );
+  } catch {
+    throw descendantError();
+  }
+}
 function writeRuntimeLoad(line, loadsPath) {
   if (runtimeLoadsDescriptor === undefined) {
     runtimeLoadsDescriptor =
@@ -73900,6 +74100,32 @@ const nativeChannelControlNames = new IntrinsicSet([
 ]);
 const nativeProcessControlNames = new IntrinsicSet(['close', 'hasRef', 'ref', 'unref']);
 const descendantNonce = process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+const descendantParentIdentity =
+  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
+const descendantParentNonce =
+  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
+const currentIdentity = workerThreads.isMainThread
+  ? 'process:' + process.pid
+  : 'worker:' + workerThreads.threadId;
+const currentAuthorityNonce = descendantNonce || authorityRootNonce;
+function descendantExecutionRecord(nonce, identity, semantics, parentIdentity, parentNonce) {
+  return canonicalAuthorityJson({
+    version: 1,
+    nonce,
+    identity,
+    parent: {
+      identity: parentIdentity,
+      nonce: parentNonce,
+    },
+    semantics,
+    authority: {
+      sessionId: authoritySessionId,
+      metroInstanceId: authorityMetroInstanceId,
+      contentRoot: authorityContentRoot,
+      appRoot: authorityAppRoot,
+    },
+  });
+}
 const descendantMessageContext = descendantNonce
   ? {
       mode: workerThreads.isMainThread ? 'fork-message' : 'worker-message',
@@ -73916,16 +74142,29 @@ const descendantMessageContext = descendantNonce
   : undefined;
 if (descendantNonce) {
   const descendantSemantics = process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
-  const identity = workerThreads.isMainThread
-    ? 'process:' + process.pid
-    : 'worker:' + workerThreads.threadId;
-  if (descendantSemantics && /^[a-f0-9]{64}$/.test(descendantSemantics)) {
+  const semanticsAvailable = /^[a-f0-9]{64}$/.test(descendantSemantics || '');
+  const parentIdentityAvailable = /^(?:process|worker):\\d+$/.test(
+    descendantParentIdentity || '',
+  );
+  const parentNonceAvailable = /^[a-f0-9]{32}$/.test(descendantParentNonce || '');
+  const parentAvailable = parentIdentityAvailable && parentNonceAvailable;
+  if (semanticsAvailable && parentAvailable) {
     persistLoaderObservation(
       'attestation',
-      descendantNonce + ':' + identity + ':' + descendantSemantics,
+      descendantExecutionRecord(
+        descendantNonce,
+        currentIdentity,
+        descendantSemantics,
+        descendantParentIdentity,
+        descendantParentNonce,
+      ),
     );
-  } else {
+  } else if (!semanticsAvailable) {
     recordLoaderViolation('Metro descendant execution semantics are unavailable');
+  } else if (!parentIdentityAvailable) {
+    recordLoaderViolation('Metro descendant parent identity is unavailable');
+  } else {
+    recordLoaderViolation('Metro descendant parent nonce is unavailable');
   }
   if (workerThreads.isMainThread) {
     const descendantLifecycleContext = lifecycleContext(
@@ -74062,6 +74301,8 @@ if (descendantNonce) {
   }
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
 }
 if (workerThreads.isMainThread && typeof process.send === 'function') {
   process.on('message', (message) => {
@@ -74092,6 +74333,8 @@ function authenticatedChildEnvironment(entries, nonce, semantics) {
   });
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY = currentIdentity;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE = currentAuthorityNonce;
   return nextEnvironment;
 }
 function snapshotInvocation(value) {
@@ -74749,6 +74992,19 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
     const candidate = path.resolve(cwd || process.cwd(), entrypoint);
     const canonical = fs.realpathSync(candidate);
     if (!fs.statSync(canonical).isFile()) throw descendantError();
+    if (
+      allowedCodeRoots.length > 0 &&
+      !allowedCodeRoots.some((root) => {
+        const relative = path.relative(root, canonical);
+        return relative === '' || (
+          relative !== '..' &&
+          !relative.startsWith('..' + path.sep) &&
+          !path.isAbsolute(relative)
+        );
+      })
+    ) {
+      throw descendantError();
+    }
     return canonical;
   } catch (error) {
     if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
@@ -74769,15 +75025,34 @@ function executionSemantics(mode, entrypoint, execArgv, invocation) {
   const value = canonicalAuthorityJson({
     mode,
     entrypoint,
+    entrypointDigest: digestRuntimeFile(entrypoint),
     execArgv,
     invocationDigest: digestInvocation(invocation),
+    allowedCodeRoots,
+    authority: {
+      sessionId: authoritySessionId,
+      metroInstanceId: authorityMetroInstanceId,
+      contentRoot: authorityContentRoot,
+      appRoot: authorityAppRoot,
+      parentIdentity: currentIdentity,
+      parentNonce: currentAuthorityNonce,
+    },
   });
   persistLoaderObservation('semantics', value);
   return createHash('sha256').update(value).digest('hex');
 }
 function recordChildLaunch(nonce, child, semantics) {
   if (!child || typeof child.pid !== 'number') return;
-  persistLoaderObservation('launch', nonce + ':process:' + child.pid + ':' + semantics);
+  persistLoaderObservation(
+    'launch',
+    descendantExecutionRecord(
+      nonce,
+      'process:' + child.pid,
+      semantics,
+      currentIdentity,
+      currentAuthorityNonce,
+    ),
+  );
 }
 function lifecycleContext(mode, recipient) {
   return { mode, recipient, sequence: 0, disconnectDepth: 0 };
@@ -75404,7 +75679,13 @@ function fenceWorkers() {
     );
     persistLoaderObservation(
       'launch',
-      nonce + ':worker:' + worker.threadId + ':' + semantics,
+      descendantExecutionRecord(
+        nonce,
+        'worker:' + worker.threadId,
+        semantics,
+        currentIdentity,
+        currentAuthorityNonce,
+      ),
     );
     return worker;
   }

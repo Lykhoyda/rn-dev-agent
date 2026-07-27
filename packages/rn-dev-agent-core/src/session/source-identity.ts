@@ -378,6 +378,7 @@ function metroRuntimeInputs(
     runtimeManifest.version !== 1 ||
     typeof runtimeManifest.executable !== 'string' ||
     typeof runtimeManifest.nodeExecutable !== 'string' ||
+    typeof runtimeManifest.nodeVersion !== 'string' ||
     !Number.isSafeInteger(runtimeManifest.port as number) ||
     (runtimeManifest.port as number) < 1 ||
     (runtimeManifest.port as number) > 65_535 ||
@@ -398,6 +399,8 @@ function metroRuntimeInputs(
     runtimeManifest.dependencyRoots.some((entry) => typeof entry !== 'string') ||
     !Array.isArray(runtimeManifest.runtimeInputs) ||
     runtimeManifest.runtimeInputs.some((entry) => typeof entry !== 'string') ||
+    !runtimeManifest.descendantAuthority ||
+    typeof runtimeManifest.descendantAuthority !== 'object' ||
     !Array.isArray(receipt.runtimeInputs) ||
     receipt.runtimeInputs.some((entry) => typeof entry !== 'string') ||
     canonicalAuthorityJson(runtimeManifest.runtimeInputs) !==
@@ -409,6 +412,20 @@ function metroRuntimeInputs(
   ) {
     throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid');
   }
+  const descendantAuthority = runtimeManifest.descendantAuthority as Record<string, unknown>;
+  if (
+    descendantAuthority.version !== 1 ||
+    typeof descendantAuthority.rootNonce !== 'string' ||
+    !/^[a-f0-9]{32}$/.test(descendantAuthority.rootNonce) ||
+    typeof descendantAuthority.rootIdentity !== 'string' ||
+    !/^process:\d+$/.test(descendantAuthority.rootIdentity) ||
+    !Array.isArray(descendantAuthority.allowedCodeRoots) ||
+    descendantAuthority.allowedCodeRoots.length === 0 ||
+    descendantAuthority.allowedCodeRoots.some((entry) => typeof entry !== 'string')
+  ) {
+    throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant authority is invalid');
+  }
+  const allowedCodeRoots = descendantAuthority.allowedCodeRoots as string[];
   if (receipt.runtimeEnforcement !== 'os-enforced-v1') {
     throw new Error(
       'STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable',
@@ -422,6 +439,7 @@ function metroRuntimeInputs(
         sourceRoot: identity.contentRoot,
         runtimeRoot: dirname(authority.evidencePath),
         nodeExecutable: runtimeManifest.nodeExecutable as string,
+        nodeVersion: runtimeManifest.nodeVersion as string,
         commandExecutable: runtimeManifest.executable as string,
         port: runtimeManifest.port as number,
         instanceId: authority.metroInstanceId,
@@ -455,12 +473,26 @@ function metroRuntimeInputs(
     string,
     { kind: 'input' | 'violation'; value: string; digest: string | null }
   >();
-  const descendantLaunches = new Set<string>();
-  const descendantAttestations = new Set<string>();
+  type DescendantExecution = {
+    version: 1;
+    nonce: string;
+    identity: string;
+    parent: { identity: string; nonce: string };
+    semantics: string;
+    authority: {
+      sessionId: string;
+      metroInstanceId: string;
+      contentRoot: string;
+      appRoot: string;
+    };
+  };
+  const descendantLaunches = new Map<string, DescendantExecution>();
+  const descendantAttestations = new Map<string, DescendantExecution>();
   const descendantSemanticDigests = new Set<string>();
   const pendingIpcCompletions = new Set<string>();
   const completedIpcCompletions = new Set<string>();
   const runtimeSemantics = new Set<string>();
+  const runtimeSemanticsByDigest = new Map<string, string>();
   const orderedRuntimeSemantics: string[] = [];
   const runtimeEvidenceKeys = new Set<string>();
   let runtimeEvidenceEntryCount = 0;
@@ -549,11 +581,40 @@ function metroRuntimeInputs(
       throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded');
     }
     if (load.kind === 'launch' || load.kind === 'attestation') {
-      if (!/^[a-f0-9]{32}:(?:process|worker):\d+:[a-f0-9]{64}$/.test(load.value)) {
+      let execution: Partial<DescendantExecution>;
+      try {
+        execution = JSON.parse(load.value) as Partial<DescendantExecution>;
+      } catch {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
       }
-      (load.kind === 'launch' ? descendantLaunches : descendantAttestations).add(load.value);
-      descendantSemanticDigests.add(load.value.slice(-64));
+      if (
+        execution.version !== 1 ||
+        typeof execution.nonce !== 'string' ||
+        !/^[a-f0-9]{32}$/.test(execution.nonce) ||
+        typeof execution.identity !== 'string' ||
+        !/^(?:process|worker):\d+$/.test(execution.identity) ||
+        !execution.parent ||
+        typeof execution.parent.identity !== 'string' ||
+        !/^(?:process|worker):\d+$/.test(execution.parent.identity) ||
+        typeof execution.parent.nonce !== 'string' ||
+        !/^[a-f0-9]{32}$/.test(execution.parent.nonce) ||
+        typeof execution.semantics !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(execution.semantics) ||
+        !execution.authority ||
+        execution.authority.sessionId !== authority.sessionId ||
+        execution.authority.metroInstanceId !== authority.metroInstanceId ||
+        execution.authority.contentRoot !== identity.contentRoot ||
+        execution.authority.appRoot !== identity.appRoot
+      ) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
+      }
+      const target = load.kind === 'launch' ? descendantLaunches : descendantAttestations;
+      const priorExecution = target.get(load.value);
+      if (priorExecution && canonicalAuthorityJson(priorExecution) !== load.value) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid');
+      }
+      target.set(load.value, execution as DescendantExecution);
+      descendantSemanticDigests.add(execution.semantics);
       continue;
     }
     if (load.kind === 'semantics') {
@@ -561,6 +622,10 @@ function metroRuntimeInputs(
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded');
       }
       runtimeSemantics.add(load.value);
+      runtimeSemanticsByDigest.set(
+        createHash('sha256').update(load.value).digest('hex'),
+        load.value,
+      );
       orderedRuntimeSemantics.push(load.value);
       continue;
     }
@@ -631,14 +696,14 @@ function metroRuntimeInputs(
   ) {
     throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid');
   }
-  for (const launch of descendantLaunches) {
+  for (const launch of descendantLaunches.keys()) {
     if (!descendantAttestations.has(launch)) {
       throw new Error(
         'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested',
       );
     }
   }
-  for (const attestation of descendantAttestations) {
+  for (const attestation of descendantAttestations.keys()) {
     if (!descendantLaunches.has(attestation)) {
       throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch');
     }
@@ -653,13 +718,93 @@ function metroRuntimeInputs(
       throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request');
     }
   }
-  const observedSemanticDigests = new Set(
-    [...runtimeSemantics].map((value) => createHash('sha256').update(value).digest('hex')),
-  );
+  const observedSemanticDigests = new Set(runtimeSemanticsByDigest.keys());
   for (const semantics of descendantSemanticDigests) {
     if (!observedSemanticDigests.has(semantics)) {
       throw new Error(
         'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing',
+      );
+    }
+  }
+  const descendantsByNonce = new Map<string, DescendantExecution>();
+  for (const execution of descendantLaunches.values()) {
+    if (descendantsByNonce.has(execution.nonce)) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant nonce was reused');
+    }
+    descendantsByNonce.set(execution.nonce, execution);
+  }
+  for (const execution of descendantLaunches.values()) {
+    let current = execution;
+    const visited = new Set<string>();
+    while (current.parent.nonce !== descendantAuthority.rootNonce) {
+      if (visited.has(current.nonce)) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant tree contains a cycle');
+      }
+      visited.add(current.nonce);
+      const parent = descendantsByNonce.get(current.parent.nonce);
+      if (!parent || parent.identity !== current.parent.identity) {
+        throw new Error(
+          'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant parent is outside the attested tree',
+        );
+      }
+      current = parent;
+    }
+    if (current.parent.identity !== descendantAuthority.rootIdentity) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant root identity does not match Metro',
+      );
+    }
+    const semanticsValue = runtimeSemanticsByDigest.get(execution.semantics);
+    if (!semanticsValue) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing',
+      );
+    }
+    let semantics: Record<string, unknown>;
+    try {
+      semantics = JSON.parse(semanticsValue) as Record<string, unknown>;
+    } catch {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid',
+      );
+    }
+    const semanticAuthority =
+      semantics.authority && typeof semantics.authority === 'object'
+        ? (semantics.authority as Record<string, unknown>)
+        : null;
+    if (
+      !['node', 'sync', 'fork', 'worker'].includes(semantics.mode as string) ||
+      typeof semantics.entrypoint !== 'string' ||
+      typeof semantics.entrypointDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(semantics.entrypointDigest) ||
+      !Array.isArray(semantics.execArgv) ||
+      semantics.execArgv.some((entry) => typeof entry !== 'string') ||
+      typeof semantics.invocationDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(semantics.invocationDigest) ||
+      canonicalAuthorityJson(semantics.allowedCodeRoots) !==
+        canonicalAuthorityJson(allowedCodeRoots) ||
+      !semanticAuthority ||
+      semanticAuthority.sessionId !== authority.sessionId ||
+      semanticAuthority.metroInstanceId !== authority.metroInstanceId ||
+      semanticAuthority.contentRoot !== identity.contentRoot ||
+      semanticAuthority.appRoot !== identity.appRoot ||
+      semanticAuthority.parentIdentity !== execution.parent.identity ||
+      semanticAuthority.parentNonce !== execution.parent.nonce
+    ) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid',
+      );
+    }
+    const entrypoint = realpathSync(semantics.entrypoint);
+    if (!allowedCodeRoots.some((root) => isContained(realpathSync(root), entrypoint))) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant entrypoint is outside allowed code roots',
+      );
+    }
+    const observedEntrypoint = runtimeLoads.get(`input\0${entrypoint}`);
+    if (!observedEntrypoint || observedEntrypoint.digest !== semantics.entrypointDigest) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant executable bytes are not attested',
       );
     }
   }

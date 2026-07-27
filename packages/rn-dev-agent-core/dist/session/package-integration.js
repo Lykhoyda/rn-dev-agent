@@ -253,6 +253,8 @@ const authorityEnvironment = privateArrayFilter(privateObjectEntries(process.env
     (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
     key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
     key !== 'RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE' &&
     (!usesExternalEvidenceOwner ||
       (key !== 'RN_DEV_AGENT_METRO_POLICY_CAPABILITY' &&
         key !== 'RN_DEV_AGENT_METRO_RUNTIME_LOADS')),
@@ -264,6 +266,34 @@ let initialCacheCaptured = false;
 let loaderEpoch = 0;
 let runtimeLoadsDescriptor;
 let runtimeLoadsDescriptorOwned = false;
+const authoritySessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+const authorityMetroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+const authorityContentRoot =
+  process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT || fs.realpathSync(process.cwd());
+const authorityAppRoot =
+  process.env.RN_DEV_AGENT_METRO_APP_ROOT || fs.realpathSync(process.cwd());
+const authorityRootNonce =
+  process.env.RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE ||
+  createHash('sha256')
+    .update('reported-v1:' + authoritySessionId + ':' + authorityMetroInstanceId)
+    .digest('hex')
+    .slice(0, 32);
+const allowedCodeRootsSource = process.env.RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS;
+let allowedCodeRoots = [];
+if (allowedCodeRootsSource) {
+  try {
+    const parsed = JSON.parse(allowedCodeRootsSource);
+    if (!Array.isArray(parsed) || parsed.length === 0) throw descendantError();
+    allowedCodeRoots = privateArraySort(
+      privateArrayMap(parsed, (entry) => {
+        if (typeof entry !== 'string') throw descendantError();
+        return fs.realpathSync(entry);
+      }),
+    );
+  } catch {
+    throw descendantError();
+  }
+}
 function writeRuntimeLoad(line, loadsPath) {
   if (runtimeLoadsDescriptor === undefined) {
     runtimeLoadsDescriptor =
@@ -338,6 +368,32 @@ const nativeChannelControlNames = new IntrinsicSet([
 ]);
 const nativeProcessControlNames = new IntrinsicSet(['close', 'hasRef', 'ref', 'unref']);
 const descendantNonce = process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+const descendantParentIdentity =
+  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
+const descendantParentNonce =
+  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
+const currentIdentity = workerThreads.isMainThread
+  ? 'process:' + process.pid
+  : 'worker:' + workerThreads.threadId;
+const currentAuthorityNonce = descendantNonce || authorityRootNonce;
+function descendantExecutionRecord(nonce, identity, semantics, parentIdentity, parentNonce) {
+  return canonicalAuthorityJson({
+    version: 1,
+    nonce,
+    identity,
+    parent: {
+      identity: parentIdentity,
+      nonce: parentNonce,
+    },
+    semantics,
+    authority: {
+      sessionId: authoritySessionId,
+      metroInstanceId: authorityMetroInstanceId,
+      contentRoot: authorityContentRoot,
+      appRoot: authorityAppRoot,
+    },
+  });
+}
 const descendantMessageContext = descendantNonce
   ? {
       mode: workerThreads.isMainThread ? 'fork-message' : 'worker-message',
@@ -354,16 +410,29 @@ const descendantMessageContext = descendantNonce
   : undefined;
 if (descendantNonce) {
   const descendantSemantics = process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
-  const identity = workerThreads.isMainThread
-    ? 'process:' + process.pid
-    : 'worker:' + workerThreads.threadId;
-  if (descendantSemantics && /^[a-f0-9]{64}$/.test(descendantSemantics)) {
+  const semanticsAvailable = /^[a-f0-9]{64}$/.test(descendantSemantics || '');
+  const parentIdentityAvailable = /^(?:process|worker):\\d+$/.test(
+    descendantParentIdentity || '',
+  );
+  const parentNonceAvailable = /^[a-f0-9]{32}$/.test(descendantParentNonce || '');
+  const parentAvailable = parentIdentityAvailable && parentNonceAvailable;
+  if (semanticsAvailable && parentAvailable) {
     persistLoaderObservation(
       'attestation',
-      descendantNonce + ':' + identity + ':' + descendantSemantics,
+      descendantExecutionRecord(
+        descendantNonce,
+        currentIdentity,
+        descendantSemantics,
+        descendantParentIdentity,
+        descendantParentNonce,
+      ),
     );
-  } else {
+  } else if (!semanticsAvailable) {
     recordLoaderViolation('Metro descendant execution semantics are unavailable');
+  } else if (!parentIdentityAvailable) {
+    recordLoaderViolation('Metro descendant parent identity is unavailable');
+  } else {
+    recordLoaderViolation('Metro descendant parent nonce is unavailable');
   }
   if (workerThreads.isMainThread) {
     const descendantLifecycleContext = lifecycleContext(
@@ -500,6 +569,8 @@ if (descendantNonce) {
   }
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
   delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
 }
 if (workerThreads.isMainThread && typeof process.send === 'function') {
   process.on('message', (message) => {
@@ -530,6 +601,8 @@ function authenticatedChildEnvironment(entries, nonce, semantics) {
   });
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
   nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY = currentIdentity;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE = currentAuthorityNonce;
   return nextEnvironment;
 }
 function snapshotInvocation(value) {
@@ -1187,6 +1260,19 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
     const candidate = path.resolve(cwd || process.cwd(), entrypoint);
     const canonical = fs.realpathSync(candidate);
     if (!fs.statSync(canonical).isFile()) throw descendantError();
+    if (
+      allowedCodeRoots.length > 0 &&
+      !allowedCodeRoots.some((root) => {
+        const relative = path.relative(root, canonical);
+        return relative === '' || (
+          relative !== '..' &&
+          !relative.startsWith('..' + path.sep) &&
+          !path.isAbsolute(relative)
+        );
+      })
+    ) {
+      throw descendantError();
+    }
     return canonical;
   } catch (error) {
     if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
@@ -1207,15 +1293,34 @@ function executionSemantics(mode, entrypoint, execArgv, invocation) {
   const value = canonicalAuthorityJson({
     mode,
     entrypoint,
+    entrypointDigest: digestRuntimeFile(entrypoint),
     execArgv,
     invocationDigest: digestInvocation(invocation),
+    allowedCodeRoots,
+    authority: {
+      sessionId: authoritySessionId,
+      metroInstanceId: authorityMetroInstanceId,
+      contentRoot: authorityContentRoot,
+      appRoot: authorityAppRoot,
+      parentIdentity: currentIdentity,
+      parentNonce: currentAuthorityNonce,
+    },
   });
   persistLoaderObservation('semantics', value);
   return createHash('sha256').update(value).digest('hex');
 }
 function recordChildLaunch(nonce, child, semantics) {
   if (!child || typeof child.pid !== 'number') return;
-  persistLoaderObservation('launch', nonce + ':process:' + child.pid + ':' + semantics);
+  persistLoaderObservation(
+    'launch',
+    descendantExecutionRecord(
+      nonce,
+      'process:' + child.pid,
+      semantics,
+      currentIdentity,
+      currentAuthorityNonce,
+    ),
+  );
 }
 function lifecycleContext(mode, recipient) {
   return { mode, recipient, sequence: 0, disconnectDepth: 0 };
@@ -1842,7 +1947,13 @@ function fenceWorkers() {
     );
     persistLoaderObservation(
       'launch',
-      nonce + ':worker:' + worker.threadId + ':' + semantics,
+      descendantExecutionRecord(
+        nonce,
+        'worker:' + worker.threadId,
+        semantics,
+        currentIdentity,
+        currentAuthorityNonce,
+      ),
     );
     return worker;
   }

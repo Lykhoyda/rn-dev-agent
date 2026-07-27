@@ -197,26 +197,29 @@ const runtimeEnforcement = JSON.parse(runtimeEnforcementSource);
 const enforcementReceipt = runtimeEnforcement.receipt;
 const brokerEnforced =
   runtimeEnforcement.status === 'enforced' &&
-  runtimeEnforcement.kind === 'darwin-seatbelt-v1' &&
+  runtimeEnforcement.kind === 'darwin-seatbelt-v2' &&
   runtimeEnforcement.sandboxExecutable === '/usr/bin/sandbox-exec' &&
   typeof runtimeEnforcement.profile === 'string' &&
   /^[a-f0-9]{64}$/.test(runtimeEnforcement.profileSha256 || '') &&
   createHash('sha256').update(runtimeEnforcement.profile).digest('hex') ===
     runtimeEnforcement.profileSha256 &&
-  enforcementReceipt?.version === 1 &&
+  enforcementReceipt?.version === 2 &&
   enforcementReceipt.kind === runtimeEnforcement.kind &&
   enforcementReceipt.profileSha256 === runtimeEnforcement.profileSha256 &&
   enforcementReceipt.sandboxExecutableSha256 ===
     runtimeEnforcement.sandboxExecutableSha256 &&
   enforcementReceipt.sandboxExecutableCdHash ===
     runtimeEnforcement.sandboxExecutableCdHash &&
-  enforcementReceipt.processCreationDenied === true &&
+  enforcementReceipt.descendantCreationAllowed === true &&
+  enforcementReceipt.unauthorizedExecutableDenied === true &&
   enforcementReceipt.unmanifestedReadDenied === true &&
   enforcementReceipt.unmanifestedWriteDenied === true &&
   enforcementReceipt.symlinkEscapeDenied === true &&
   enforcementReceipt.unallocatedListenerDenied === true &&
   enforcementReceipt.allocatedListenerAllowed === true &&
-  enforcementReceipt.networkOutboundDenied === true;
+  enforcementReceipt.networkOutboundDenied === true &&
+  canonicalAuthorityJson(enforcementReceipt.nodeRuntimeAttestation) ===
+    canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation);
 const runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
@@ -341,15 +344,6 @@ const environmentDigest = createHash('sha256')
   .update(canonicalAuthorityJson(childEnvironment))
   .digest('hex');
 if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
-appendEvidence({
-  version: 1,
-  sessionId,
-  metroInstanceId,
-  kind: 'semantics',
-  value: canonicalAuthorityJson(runtimeManifest),
-  digest: null,
-});
-publishPolicy();
 const sandboxExecutable = runtimeEnforcement.sandboxExecutable;
 const sandboxArgs = brokerEnforced
   ? ['-p', runtimeEnforcement.profile, executable, ...args]
@@ -359,6 +353,17 @@ child = spawn(brokerEnforced ? sandboxExecutable : executable, sandboxArgs, {
   env: childEnvironment,
   stdio: ['inherit', 'inherit', 'inherit', 'ipc', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
 });
+if (!Number.isSafeInteger(child.pid)) process.exit(1);
+runtimeManifest.descendantAuthority.rootIdentity = 'process:' + child.pid;
+appendEvidence({
+  version: 1,
+  sessionId,
+  metroInstanceId,
+  kind: 'semantics',
+  value: canonicalAuthorityJson(runtimeManifest),
+  digest: null,
+});
+publishPolicy();
 const evidence = child.stdio[evidenceDescriptor];
 let childOutcome = null;
 let evidenceFinished = false;
@@ -888,8 +893,20 @@ export async function startManagedMetro(
   const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`]
     .filter(Boolean)
     .join(' ');
-  const metroArgs = [...command.args, '--port', String(input.port)];
   const exists = dependencies.exists ?? existsSync;
+  const resolvedDependencyRoots = dependencyRoots(input.appRoot, input.sourceRoot, exists).map(
+    canonicalRuntimeInput,
+  );
+  const allowedCodeRoots = [
+    canonicalRuntimeInput(input.sourceRoot),
+    canonicalRuntimeInput(input.appRoot),
+    ...resolvedDependencyRoots,
+  ].filter((value, index, entries) => entries.indexOf(value) === index);
+  const authorityRootNonce = createHmac('sha256', input.signerCapability)
+    .update(`metro-descendant-root\0${instanceId}`)
+    .digest('hex')
+    .slice(0, 32);
+  const metroArgs = [...command.args, '--port', String(input.port)];
   const metroHome = join(input.runtimeRoot, 'metro-home');
   const metroTemporaryRoot = join(input.runtimeRoot, 'metro-tmp');
   const metroCacheRoot = join(input.runtimeRoot, 'metro-cache');
@@ -919,15 +936,16 @@ export async function startManagedMetro(
     RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,
     RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
     RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
+    RN_DEV_AGENT_METRO_CONTENT_ROOT: canonicalRuntimeInput(input.sourceRoot),
+    RN_DEV_AGENT_METRO_APP_ROOT: canonicalRuntimeInput(input.appRoot),
+    RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS: canonicalAuthorityJson(allowedCodeRoots),
+    RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE: authorityRootNonce,
   };
   const packageInputs = [canonicalRuntimeInput(join(input.appRoot, 'package.json'))];
   const metroConfigInputs = ['metro.config.js', 'metro.config.cjs']
     .map((name) => join(input.appRoot, name))
     .filter(exists)
     .map(canonicalRuntimeInput);
-  const resolvedDependencyRoots = dependencyRoots(input.appRoot, input.sourceRoot, exists).map(
-    canonicalRuntimeInput,
-  );
   const runtimeInputs = [
     canonicalRuntimeInput(command.executable),
     canonicalRuntimeInput(authorityPreload),
@@ -939,6 +957,7 @@ export async function startManagedMetro(
     version: 1,
     executable: canonicalRuntimeInput(command.executable),
     nodeExecutable: canonicalRuntimeInput(process.execPath),
+    nodeVersion: process.version,
     port: input.port,
     args: metroArgs,
     nodeOptions: authorityNodeOptions,
@@ -953,6 +972,11 @@ export async function startManagedMetro(
     metroConfigInputs,
     dependencyRoots: resolvedDependencyRoots,
     runtimeInputs,
+    descendantAuthority: {
+      version: 1,
+      rootNonce: authorityRootNonce,
+      allowedCodeRoots,
+    },
   };
   const prepareEnforcement = dependencies.prepareEnforcement ?? prepareManagedMetroEnforcement;
   const preflightEnforcement =
@@ -963,6 +987,7 @@ export async function startManagedMetro(
     sourceRoot: input.sourceRoot,
     runtimeRoot: input.runtimeRoot,
     nodeExecutable: process.execPath,
+    nodeVersion: process.version,
     commandExecutable: command.executable,
     port: input.port,
     instanceId,

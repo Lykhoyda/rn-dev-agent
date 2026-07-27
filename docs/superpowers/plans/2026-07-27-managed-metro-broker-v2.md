@@ -4,7 +4,7 @@
 
 **Goal:** Make strict proof eligible only when the per-launch broker independently enforces and attests a closed-world managed-Metro runtime.
 
-**Architecture:** On Darwin, the broker verifies the platform `sandbox-exec` binary, derives a deterministic Seatbelt profile from the exact runtime manifest, and proves the profile denies unmanifested file access, process creation, and unallocated network listeners before launching Metro. The broker signs the profile identity and enforcement result; strict source identity accepts only that broker-v2 attestation and continues to refuse unsupported or failed enforcement.
+**Architecture:** On Darwin, the broker verifies the platform `sandbox-exec` binary, derives a deterministic Seatbelt profile from the exact runtime manifest, and permits only broker-authenticated Node descendants transitively bound to their parent identity and nonce, executable bytes, invocation, environment, working directory, code roots, session, and project. Node trust is attested from executable and loaded-runtime bytes, signing identity when available, runtime version, and explicit executable mappings. The broker proves all other executable launches, unmanifested file access, and unallocated network listeners are denied; strict source identity accepts only that broker-v2 attestation and continues to refuse unsupported or failed enforcement.
 
 **Tech Stack:** TypeScript, Node.js 22+, macOS Seatbelt, Node test runner, Yarn 4, generated Claude/Codex host runtimes.
 
@@ -28,7 +28,7 @@
 - Produces: `prepareManagedMetroEnforcement(input, dependencies)` returning a signed-input-ready Darwin plan or an unsupported result.
 - Produces: `verifyManagedMetroEnforcementReceipt(receipt, manifest)` for strict-proof verification.
 
-- [x] Write failing tests for deterministic profile generation, unsupported-host refusal, invalid platform-binary refusal, and a successful Darwin deny/allow probe.
+- [x] Write failing tests for deterministic profile generation, unsupported-host refusal, invalid platform-binary refusal, Node runtime attestation, and a successful Darwin descendant deny/allow probe.
 - [x] Run the focused test and confirm it fails because the enforcement module does not exist.
 - [x] Implement the minimal planner, platform binary verification, profile generation, and probe contract.
 - [x] Run the focused test and confirm it passes.
@@ -90,7 +90,7 @@
 - Verify all task files and generated outputs.
 
 - [x] Run focused broker, source-identity, proof, and package-integration tests.
-- [ ] Run formatting, lint, package sync, dist freshness, TypeScript-only, full tests, and docs build.
-- [ ] Commit the implementation on top of `04cd2d0981f699fb27218d11b8047f16aad0185f`.
+- [x] Run formatting, lint, package sync, TypeScript-only, full tests, and docs build.
+- [ ] Commit the option-B follow-up on top of `e400115920b45d8cb7d11344b700a08f148f77b1`, then prove dist freshness from the clean commit.
 - [ ] Run the complete no-mistakes workflow with the captain’s original intent and process every gate synchronously.
 - [ ] Stop at `checks-passed`, report the new exact PR head, and leave PR 621 unmerged.
