@@ -84,8 +84,9 @@ interface ManagedMetroProcessIdentity {
 const METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');
-const { chmodSync, closeSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { chmodSync, closeSync, openSync, readFileSync, realpathSync, rmSync, watch, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
+const { dirname } = require('node:path');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
@@ -211,7 +212,41 @@ const attestedFilesCurrent = (entries) =>
       return false;
     }
   });
-const brokerEnforced =
+let child;
+let commandChainMutated = false;
+const commandChainWatchers = [];
+const commandChainDirectories = new Set();
+const invalidateCommandChain = () => {
+  if (commandChainMutated) return;
+  commandChainMutated = true;
+  if (!child?.pid) return;
+  brokerEnforced = false;
+  runtimeEvidenceAuthority = 'reported-v1';
+  appendViolation('Metro command chain changed after attestation');
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {}
+  }
+};
+try {
+  const watchPaths = new Set();
+  for (const entry of enforcementReceipt?.commandChainAttestation ?? []) {
+    if (typeof entry.path !== 'string') throw new Error('invalid command-chain path');
+    watchPaths.add(entry.path);
+    const directory = dirname(entry.path);
+    commandChainDirectories.add(directory);
+    watchPaths.add(directory);
+  }
+  for (const path of watchPaths) {
+    commandChainWatchers.push(watch(path, { persistent: true }, invalidateCommandChain));
+  }
+} catch {
+  commandChainMutated = true;
+}
+let brokerEnforced =
   runtimeEnforcement.status === 'enforced' &&
   runtimeEnforcement.kind === 'darwin-seatbelt-v2' &&
   runtimeEnforcement.sandboxExecutable === '/usr/bin/sandbox-exec' &&
@@ -238,6 +273,8 @@ const brokerEnforced =
   enforcementReceipt.networkOutboundDenied === true &&
   enforcementReceipt.resolvedCommandAllowed === true &&
   enforcementReceipt.commandCleanupConfirmed === true &&
+  enforcementReceipt.commandChainStable === true &&
+  !commandChainMutated &&
   attestedFilesCurrent(enforcementReceipt.commandChainAttestation) &&
   attestedFilesCurrent(enforcementReceipt.nodeRuntimeAttestation?.loadedRuntimeFiles) &&
   attestedFilesCurrent(enforcementReceipt.nodeRuntimeAttestation?.executableMappings) &&
@@ -245,7 +282,7 @@ const brokerEnforced =
     canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation) &&
   canonicalAuthorityJson(enforcementReceipt.commandChainAttestation) ===
     canonicalAuthorityJson(runtimeEnforcement.commandChainAttestation);
-const runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
+let runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -305,7 +342,6 @@ function appendViolation(value) {
 if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
 const headConnections = new Set();
 const pendingHeads = new Map();
-let child;
 function closeHeadConnection(connection) {
   headConnections.delete(connection);
   for (const [challenge, pending] of pendingHeads) {
@@ -397,6 +433,12 @@ function finishLauncher() {
   if (launcherFinished || childOutcome === null || !evidenceFinished) return;
   launcherFinished = true;
   if (buffered) appendViolation('Metro runtime evidence record is incomplete');
+  for (const watcher of commandChainWatchers) watcher.close();
+  for (const directory of commandChainDirectories) {
+    try {
+      chmodSync(directory, 0o700);
+    } catch {}
+  }
   for (const connection of headConnections) connection.destroy();
   pendingHeads.clear();
   closeSync(journalDescriptor);
@@ -754,6 +796,11 @@ export function sealManagedMetroLaunchCommand(
     runtimeRoot,
     `metro-command-${createHash('sha256').update(instanceId).digest('hex').slice(0, 16)}`,
   );
+  if (existsSync(sealedRoot)) {
+    chmodSync(sealedRoot, 0o700);
+    const existingBinRoot = join(sealedRoot, 'bin');
+    if (existsSync(existingBinRoot)) chmodSync(existingBinRoot, 0o700);
+  }
   rmSync(sealedRoot, { force: true, recursive: true });
   const binRoot = join(sealedRoot, 'bin');
   mkdirSync(binRoot, { recursive: true, mode: 0o700 });
@@ -785,6 +832,8 @@ export function sealManagedMetroLaunchCommand(
     if (canonical === canonicalRuntimeInput(command.executable)) return executable;
     return seal(input, join(binRoot, `chain-${index}`));
   });
+  chmodSync(binRoot, 0o500);
+  chmodSync(sealedRoot, 0o500);
   let args = command.args.map((argument) =>
     argument === command.sourceExecutable ? sourceExecutable : argument,
   );

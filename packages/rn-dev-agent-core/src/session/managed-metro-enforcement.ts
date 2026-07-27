@@ -100,6 +100,7 @@ export interface ManagedMetroEnforcementReceipt {
   networkOutboundDenied: true;
   resolvedCommandAllowed: true;
   commandCleanupConfirmed: true;
+  commandChainStable: true;
   nodeRuntimeAttestation: ManagedMetroNodeRuntimeAttestation;
   commandChainAttestation: ManagedMetroRuntimeFileAttestation[];
 }
@@ -519,8 +520,10 @@ export function prepareManagedMetroEnforcement(
 
 const PREFLIGHT_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
-const { readFileSync, writeFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+const { readFileSync, watch, writeFileSync } = require('node:fs');
 const { createConnection, createServer } = require('node:net');
+const { dirname } = require('node:path');
 const input = JSON.parse(process.argv[1]);
 const denied = (run) => {
   try {
@@ -563,6 +566,24 @@ const processGroupExists = (pid) => {
   }
 };
 (async () => {
+  let commandChainMutated = false;
+  const commandChainWatchers = [];
+  const watchPaths = new Set();
+  for (const entry of input.commandChainAttestation) {
+    watchPaths.add(entry.path);
+    watchPaths.add(dirname(entry.path));
+  }
+  for (const path of watchPaths) {
+    commandChainWatchers.push(
+      watch(path, { persistent: true }, () => {
+        commandChainMutated = true;
+      }),
+    );
+  }
+  const commandChainCurrent = input.commandChainAttestation.every(
+    (entry) =>
+      createHash('sha256').update(readFileSync(entry.path)).digest('hex') === entry.sha256,
+  );
   const allocated = await listen(input.port);
   if (!allocated.ok) throw new Error('allocated listener unavailable before command');
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
@@ -596,6 +617,15 @@ const processGroupExists = (pid) => {
   }
   const released = await listen(input.port);
   commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  await new Promise((resolve) => setImmediate(resolve));
+  const commandChainStable =
+    commandChainCurrent &&
+    !commandChainMutated &&
+    input.commandChainAttestation.every(
+      (entry) =>
+        createHash('sha256').update(readFileSync(entry.path)).digest('hex') === entry.sha256,
+    );
+  for (const watcher of commandChainWatchers) watcher.close();
   const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
   const unallocated = await listen(input.unallocatedPort);
   const networkOutboundDenied = await new Promise((resolve) => {
@@ -620,6 +650,7 @@ const processGroupExists = (pid) => {
     networkOutboundDenied,
     resolvedCommandAllowed,
     commandCleanupConfirmed,
+    commandChainStable,
   };
   process.stdout.write(JSON.stringify(receipt));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
@@ -681,6 +712,7 @@ export function runManagedMetroEnforcementPreflight(
         symlinkCanaryPath: plan.symlinkCanaryPath,
         commandExecutable: plan.commandExecutable,
         commandArguments: plan.commandArguments,
+        commandChainAttestation: plan.commandChainAttestation,
         preflightEnvironmentPath: plan.preflightEnvironmentPath,
         appRoot: plan.appRoot,
         port: plan.port,
@@ -701,7 +733,8 @@ export function runManagedMetroEnforcementPreflight(
       observed.allocatedListenerAllowed !== true ||
       observed.networkOutboundDenied !== true ||
       observed.resolvedCommandAllowed !== true ||
-      observed.commandCleanupConfirmed !== true
+      observed.commandCleanupConfirmed !== true ||
+      observed.commandChainStable !== true
     ) {
       throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete');
     }
@@ -723,6 +756,7 @@ export function runManagedMetroEnforcementPreflight(
       networkOutboundDenied: true,
       resolvedCommandAllowed: true,
       commandCleanupConfirmed: true,
+      commandChainStable: true,
       nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
       commandChainAttestation: plan.commandChainAttestation,
     };
@@ -767,6 +801,7 @@ export function verifyManagedMetroEnforcementReceipt(
     observed.networkOutboundDenied === true &&
     observed.resolvedCommandAllowed === true &&
     observed.commandCleanupConfirmed === true &&
+    observed.commandChainStable === true &&
     canonicalAuthorityJson(observed.nodeRuntimeAttestation) ===
       canonicalAuthorityJson(plan.nodeRuntimeAttestation) &&
     canonicalAuthorityJson(observed.commandChainAttestation) ===

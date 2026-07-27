@@ -458,6 +458,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     networkOutboundDenied: true,
     resolvedCommandAllowed: true,
     commandCleanupConfirmed: true,
+    commandChainStable: true,
     nodeRuntimeAttestation: {
       version: 1,
       executable: {

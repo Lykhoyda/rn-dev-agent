@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -260,6 +261,7 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
     networkOutboundDenied: true,
     resolvedCommandAllowed: true,
     commandCleanupConfirmed: true,
+    commandChainStable: true,
     nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
     commandChainAttestation: plan.commandChainAttestation,
   };
@@ -332,6 +334,10 @@ test('managed Metro launches from sealed command-chain bytes', () => {
   assert.notEqual(sealed.sourceExecutable, sourceExecutable);
   assert.ok(sealed.chainInputs.every((path) => path.startsWith(runtimeRoot)));
   assert.deepEqual(sealed.protectedRuntimeRoots, [dirname(sealed.sourceExecutable)]);
+  assert.equal(statSync(dirname(sealed.sourceExecutable)).mode & 0o222, 0);
+  assert.equal(statSync(dirname(sealed.nodeExecutable)).mode & 0o222, 0);
+  chmodSync(dirname(sealed.sourceExecutable), 0o700);
+  chmodSync(dirname(sealed.nodeExecutable), 0o700);
 });
 
 test(
@@ -398,6 +404,7 @@ test(
       networkOutboundDenied: true,
       resolvedCommandAllowed: true,
       commandCleanupConfirmed: true,
+      commandChainStable: true,
       nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
       commandChainAttestation: plan.commandChainAttestation,
     });
@@ -550,6 +557,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         'networkOutboundDenied',
         'resolvedCommandAllowed',
         'commandCleanupConfirmed',
+        'commandChainStable',
       ]) {
         assert.equal(observedReceipt[field], true, field);
       }
