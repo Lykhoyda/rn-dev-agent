@@ -187,7 +187,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
         canaryPath: '/private/tmp/rn-dev-agent-metro-test.canary',
         symlinkCanaryPath: '/runtime/session/enforcement-test.canary',
         port: 8341,
-        unallocatedPort: 8342,
+        unallocatedPort: 0,
         nodeExecutable: process.execPath,
       }),
       preflightEnforcement: (plan) => ({

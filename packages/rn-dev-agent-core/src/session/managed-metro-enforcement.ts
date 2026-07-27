@@ -277,7 +277,7 @@ export function prepareManagedMetroEnforcement(
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
     symlinkCanaryPath: resolve(runtimeRoot, `enforcement-${canaryId}.canary`),
     port: input.port,
-    unallocatedPort: input.port === 65_535 ? input.port - 1 : input.port + 1,
+    unallocatedPort: 0,
     nodeExecutable,
   };
 }

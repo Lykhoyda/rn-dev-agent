@@ -110,6 +110,7 @@ test('managed Metro derives a deterministic closed-world Darwin profile', () => 
   assert.match(first.profile, /\(deny process-fork\)/);
   assert.match(first.profile, /\(deny network-outbound\)/);
   assert.match(first.profile, /\(deny file-map-executable/);
+  assert.equal(first.unallocatedPort, 0);
 });
 
 test(
