@@ -5,8 +5,11 @@
 // the same stale APK and never runs Gradle).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  acquireAndroidRunnerRebuildLock,
   AndroidAuthorityStaleError,
   probeAndroidRunnerHealthInfo,
   resolveAndroidInstallAction,
@@ -15,6 +18,7 @@ import {
   AndroidCommandsStaleError,
   androidRetryCleanupContext,
   runBoundedAndroidRunnerRebuild,
+  releaseAndroidRunnerRebuildLock,
   _setFetchForTest,
 } from '../../dist/runners/rn-android-runner-client.js';
 import {
@@ -87,15 +91,15 @@ test('Android artifact rebuild is serialized and budgeted once', async () => {
     {
       acquire: () => {
         events.push('acquire');
-        return true;
+        return { ownerNonce: 'lock-a' };
       },
-      release: () => events.push('release'),
+      release: (lock) => events.push(`release:${lock.ownerNonce}`),
       budget,
     },
   );
 
   assert.equal(result, 'ready');
-  assert.deepEqual(events, ['acquire', 'budget', 'rebuild', 'release']);
+  assert.deepEqual(events, ['acquire', 'rebuild', 'budget', 'release:lock-a']);
 });
 
 test('Android artifact rebuild preserves ownership mismatch after a failed rebuild', async () => {
@@ -107,7 +111,7 @@ test('Android artifact rebuild preserves ownership mismatch after a failed rebui
         throw mismatch;
       },
       {
-        acquire: () => true,
+        acquire: () => ({ ownerNonce: 'lock-a' }),
         release: () => {},
         budget: {
           alreadyRebuiltFor: () => false,
@@ -119,6 +123,58 @@ test('Android artifact rebuild preserves ownership mismatch after a failed rebui
       error instanceof AndroidAuthorityStaleError &&
       error.message.startsWith('RUNNER_OWNERSHIP_MISMATCH'),
   );
+});
+
+test('Android artifact rebuild records its budget only after success', async () => {
+  const events = [];
+  await assert.rejects(
+    runBoundedAndroidRunnerRebuild(
+      new AndroidAuthorityStaleError('serial-a'),
+      async () => {
+        events.push('rebuild');
+        throw new Error('transient build failure');
+      },
+      {
+        acquire: () => ({ ownerNonce: 'lock-a' }),
+        release: () => events.push('release'),
+        budget: {
+          alreadyRebuiltFor: () => false,
+          recordRebuild: () => events.push('budget'),
+        },
+      },
+    ),
+    /transient build failure/,
+  );
+  assert.deepEqual(events, ['rebuild', 'release']);
+});
+
+test('Android artifact rebuild lock uses nonce-owned atomic takeover and release', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'rn-android-rebuild-lock-'));
+  const database = join(directory, 'lock.sqlite');
+  try {
+    const first = acquireAndroidRunnerRebuildLock(1_000, 'owner-a', database);
+    assert.deepEqual(first, { ownerNonce: 'owner-a' });
+    assert.equal(acquireAndroidRunnerRebuildLock(1_001, 'owner-b', database), null);
+
+    const replacement = acquireAndroidRunnerRebuildLock(
+      1_000 + 15 * 60_000 + 1,
+      'owner-b',
+      database,
+    );
+    assert.deepEqual(replacement, { ownerNonce: 'owner-b' });
+    releaseAndroidRunnerRebuildLock(first, database);
+    assert.equal(
+      acquireAndroidRunnerRebuildLock(1_000 + 15 * 60_000 + 2, 'owner-c', database),
+      null,
+    );
+
+    releaseAndroidRunnerRebuildLock(replacement, database);
+    const final = acquireAndroidRunnerRebuildLock(1_000 + 15 * 60_000 + 3, 'owner-c', database);
+    assert.deepEqual(final, { ownerNonce: 'owner-c' });
+    releaseAndroidRunnerRebuildLock(final, database);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('Android artifact rebuild budget refuses repeated ownership upgrades', async () => {

@@ -110,15 +110,14 @@ test('Android runner cleanup refuses release while instrumentation remains', asy
   );
 });
 
-test('Darwin recorder scripts use an authenticated staged helper', async () => {
+test('Darwin recorder scripts receive the pinned live-process requirement', async () => {
   let observedOptions;
   const result = await runRecordProofScript('record_proof.sh', ['status', 'scope'], 1_000, {
     platform: 'darwin',
     withHelper: async (callback) =>
       callback({
-        fd: 41,
-        path: '/trusted/staged/darwin-process-birth',
-        cleanup: () => {},
+        path: '/trusted/darwin-process-birth',
+        requirement: 'cdhash H"trusted"',
       }),
     execute: async (_script, _args, options) => {
       observedOptions = options;
@@ -127,9 +126,24 @@ test('Darwin recorder scripts use an authenticated staged helper', async () => {
   });
 
   assert.deepEqual(result, { stdout: 'ok', stderr: '' });
-  assert.equal(observedOptions.helperFd, 41);
   assert.equal(
     observedOptions.env.RN_DEV_AGENT_PROCESS_BIRTH_HELPER,
-    '/trusted/staged/darwin-process-birth',
+    '/trusted/darwin-process-birth',
   );
+  assert.equal(observedOptions.env.RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT, 'cdhash H"trusted"');
+});
+
+test('recorder timeout waits for confirmed termination after escalation', async () => {
+  const startedAt = Date.now();
+  await assert.rejects(
+    runRecordProofScript(
+      process.execPath,
+      ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);"],
+      500,
+      { platform: 'linux' },
+    ),
+    /timed out after 500ms/,
+  );
+
+  assert.ok(Date.now() - startedAt >= 700);
 });

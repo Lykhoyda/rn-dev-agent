@@ -15,7 +15,6 @@ const execFile = promisify(execFileCb);
 interface RecorderExecutionOptions {
   timeout: number;
   env: NodeJS.ProcessEnv;
-  helperFd?: number;
 }
 
 type RecorderExecution = (
@@ -40,36 +39,59 @@ function executeRecorderScript(
   options: RecorderExecutionOptions,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const stdio: Array<'ignore' | 'pipe' | number> =
-      options.helperFd === undefined
-        ? ['ignore', 'pipe', 'pipe']
-        : ['ignore', 'pipe', 'pipe', options.helperFd];
-    const child = spawn(script, args, { env: options.env, stdio });
+    const child = spawn(script, args, {
+      detached: process.platform !== 'win32',
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let outputBytes = 0;
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
+    let terminationError: Error | undefined;
     const finish = (error?: Error, result?: { stdout: string; stderr: string }): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       if (error) reject(error);
       else resolve(result!);
     };
+    const signal = (value: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
+      try {
+        if (process.platform === 'win32') child.kill(value);
+        else process.kill(-child.pid, value);
+      } catch {}
+    };
+    const terminate = (error: Error): void => {
+      if (terminationError) return;
+      terminationError = error;
+      signal('SIGTERM');
+      killTimer = setTimeout(() => signal('SIGKILL'), 250);
+    };
     const collect = (target: Buffer[]) => (chunk: Buffer) => {
+      if (terminationError) return;
       outputBytes += chunk.length;
       if (outputBytes > 8 * 1024 * 1024) {
-        child.kill('SIGTERM');
-        finish(new Error('record_proof.sh output exceeded 8 MiB'));
+        terminate(new Error('record_proof.sh output exceeded 8 MiB'));
         return;
       }
       target.push(chunk);
     };
     child.stdout?.on('data', collect(stdout));
     child.stderr?.on('data', collect(stderr));
-    child.on('error', (error) => finish(error));
+    child.on('error', (error) => {
+      if (child.pid === undefined) finish(error);
+      else terminate(error);
+    });
     child.on('close', (code, signal) => {
+      if (terminationError) {
+        finish(terminationError);
+        return;
+      }
       const result = {
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
@@ -85,8 +107,7 @@ function executeRecorderScript(
       );
     });
     timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      finish(new Error(`record_proof.sh timed out after ${options.timeout}ms`));
+      terminate(new Error(`record_proof.sh timed out after ${options.timeout}ms`));
     }, options.timeout);
   });
 }
@@ -108,8 +129,8 @@ export async function runRecordProofScript(
       env: {
         ...process.env,
         RN_DEV_AGENT_PROCESS_BIRTH_HELPER: helper.path,
+        RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: helper.requirement,
       },
-      helperFd: helper.fd,
     }),
   );
 }

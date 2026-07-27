@@ -6,7 +6,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
-import { probeProcessBirth } from '../../dist/session/process-birth.js';
+import {
+  darwinProcessBirthRequirement,
+  probeProcessBirth,
+} from '../../dist/session/process-birth.js';
 import { parseStartOutput } from '../../dist/tools/device-record.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -124,6 +127,7 @@ done
         ...process.env,
         PATH: `${root}:${process.env.PATH}`,
         RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+        RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
       },
     },
   );
@@ -155,6 +159,7 @@ done
       ...process.env,
       PATH: `${root}:${process.env.PATH}`,
       RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+      RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
     },
   });
   assert.equal(abort.status, 0, abort.stderr);
@@ -212,6 +217,7 @@ done
     ...process.env,
     PATH: `${root}:${process.env.PATH}`,
     RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+    RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
   };
   const start = spawnSync(
     'bash',
@@ -283,6 +289,7 @@ done
     ...process.env,
     PATH: `${root}:${process.env.PATH}`,
     RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+    RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
   };
   const start = await execFileAsync(
     'bash',
@@ -300,7 +307,7 @@ done
   const childBefore = probeProcessBirth(childPid);
   assert.equal(childBefore.status, 'present');
   writeFileSync(requestPath, Buffer.from([0xff]));
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     if (readFileSync(statePath, 'utf8').trim().startsWith('failed')) break;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

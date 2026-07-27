@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { darwinProcessBirthRequirement } from '../../dist/session/process-birth.js';
 
 const sourceScript = resolve(import.meta.dirname, '../../../../scripts/record_proof.sh');
 
@@ -122,6 +123,7 @@ test('a spontaneous nonzero recorder exit is reported as failure', async () => {
           import.meta.dirname,
           '../../dist/native/darwin-process-birth',
         ),
+        RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
       },
     });
     assert.equal(started.status, 0, started.stderr);
@@ -370,6 +372,7 @@ test('a hostile legacy runtime path cannot disable the private recorder runtime'
           import.meta.dirname,
           '../../dist/native/darwin-process-birth',
         ),
+        RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
       },
     });
 
@@ -385,6 +388,7 @@ test('a hostile legacy runtime path cannot disable the private recorder runtime'
           import.meta.dirname,
           '../../dist/native/darwin-process-birth',
         ),
+        RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
       },
     });
     assert.equal(aborted.status, 0, aborted.stderr);

@@ -20,12 +20,14 @@ const temporarySource = `${output}.c.tmp-${process.pid}`;
 const source = `#include <errno.h>
 #include <inttypes.h>
 #include <libproc.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
-  if (argc != 2) return 2;
+  if (argc != 2 && (argc != 3 || strcmp(argv[2], "--hold") != 0)) return 2;
 
   errno = 0;
   char *end = NULL;
@@ -45,6 +47,9 @@ int main(int argc, char **argv) {
          info.pbi_pid,
          info.pbi_start_tvsec,
          info.pbi_start_tvusec);
+  if (argc == 3) {
+    if (fflush(stdout) != 0 || raise(SIGSTOP) != 0) return 4;
+  }
   return 0;
 }
 `;
@@ -192,6 +197,17 @@ function hasExpectedCodeSignature(path) {
   );
 }
 
+function codeDirectoryHashes(path) {
+  return ['arm64', 'x86_64'].map((architecture) => {
+    const details = runCodesign(['--display', '--verbose=4', '--arch', architecture, path]);
+    const cdhash = detailValue(details.stderr, 'CDHash');
+    if (details.error || details.status !== 0 || !/^[0-9a-f]{40}$/i.test(cdhash ?? '')) {
+      throw new Error('build-darwin-process-birth-helper: helper CDHash is invalid');
+    }
+    return cdhash.toLowerCase();
+  });
+}
+
 function commandOutput(command, arguments_) {
   const result = spawnSync(command, arguments_, {
     encoding: 'utf8',
@@ -247,6 +263,15 @@ function verifyPackagedHelper() {
   }
   if (manifest.stableBinarySha256 !== stableMachOSha256(output)) {
     throw new Error('build-darwin-process-birth-helper: packaged helper content is stale');
+  }
+  if (
+    !Array.isArray(manifest.cdhashes) ||
+    manifest.cdhashes.length !== 2 ||
+    !manifest.cdhashes.every((cdhash) => /^[0-9a-f]{40}$/.test(cdhash)) ||
+    (process.platform === 'darwin' &&
+      JSON.stringify(manifest.cdhashes) !== JSON.stringify(codeDirectoryHashes(output)))
+  ) {
+    throw new Error('build-darwin-process-birth-helper: packaged helper CDHashes are stale');
   }
   processMachOUuids(output, false);
   if (process.platform === 'darwin' && !hasExpectedCodeSignature(output)) {
@@ -442,6 +467,7 @@ writeFileSync(
       recipeSha256,
       stableBinarySha256: stableMachOSha256(output),
       binarySha256: sha256(readFileSync(output)),
+      cdhashes: codeDirectoryHashes(output),
     },
     null,
     2,

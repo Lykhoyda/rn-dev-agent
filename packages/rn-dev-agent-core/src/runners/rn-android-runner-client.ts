@@ -5,7 +5,7 @@
 import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { ToolResult } from '../utils.js';
@@ -43,6 +43,7 @@ import {
   parseStatusProbeReply,
 } from './transport-recovery.js';
 import { readProcessBirth } from '../session/process-birth.js';
+import { openAuthorityStore } from '../session/authority-store.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -80,7 +81,11 @@ const APK_TEST = join(
   'app-debug-androidTest.apk',
 );
 const ANDROID_REBUILD_ROOT = join(RN_ANDROID_RUNNER_DIR, 'app', 'build');
-const ANDROID_REBUILD_LOCK_DIR = join(ANDROID_REBUILD_ROOT, '.authority-rebuild-lock');
+const ANDROID_REBUILD_LOCK_DATABASE = join(
+  ANDROID_REBUILD_ROOT,
+  '.authority-rebuild',
+  'lock.sqlite',
+);
 const ANDROID_REBUILD_BUDGET_FILE = join(ANDROID_REBUILD_ROOT, 'authority-rebuild.json');
 const ANDROID_REBUILD_LOCK_STALE_MS = 15 * 60_000;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
@@ -851,37 +856,63 @@ export class AndroidAuthorityStaleError extends Error {
   }
 }
 
-export function acquireAndroidRunnerRebuildLock(): boolean {
-  try {
-    mkdirSync(ANDROID_REBUILD_ROOT, { recursive: true });
-  } catch {
-    return false;
-  }
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      mkdirSync(ANDROID_REBUILD_LOCK_DIR);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return false;
-      try {
-        if (
-          Date.now() - statSync(ANDROID_REBUILD_LOCK_DIR).mtimeMs <
-          ANDROID_REBUILD_LOCK_STALE_MS
-        ) {
-          return false;
-        }
-        rmSync(ANDROID_REBUILD_LOCK_DIR, { recursive: true, force: true });
-      } catch {
-        return false;
-      }
-    }
-  }
-  return false;
+export interface AndroidRunnerRebuildLock {
+  ownerNonce: string;
 }
 
-export function releaseAndroidRunnerRebuildLock(): void {
+export function acquireAndroidRunnerRebuildLock(
+  now = Date.now(),
+  ownerNonce = randomUUID(),
+  databasePath = ANDROID_REBUILD_LOCK_DATABASE,
+): AndroidRunnerRebuildLock | null {
   try {
-    rmSync(ANDROID_REBUILD_LOCK_DIR, { recursive: true, force: true });
+    const store = openAuthorityStore(databasePath);
+    try {
+      store.database.exec(`
+        CREATE TABLE IF NOT EXISTS android_runner_rebuild_lock (
+          lock_name TEXT PRIMARY KEY,
+          owner_nonce TEXT NOT NULL,
+          acquired_ms INTEGER NOT NULL
+        )
+      `);
+      const claimed = store.database
+        .prepare(
+          `INSERT INTO android_runner_rebuild_lock(lock_name, owner_nonce, acquired_ms)
+           VALUES ('artifact', ?, ?)
+           ON CONFLICT(lock_name) DO UPDATE SET
+             owner_nonce = excluded.owner_nonce,
+             acquired_ms = excluded.acquired_ms
+           WHERE android_runner_rebuild_lock.acquired_ms <= ?
+           RETURNING owner_nonce`,
+        )
+        .get(ownerNonce, now, now - ANDROID_REBUILD_LOCK_STALE_MS);
+      store.secureFiles();
+      return claimed?.owner_nonce === ownerNonce ? { ownerNonce } : null;
+    } finally {
+      store.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+export function releaseAndroidRunnerRebuildLock(
+  lock: AndroidRunnerRebuildLock,
+  databasePath = ANDROID_REBUILD_LOCK_DATABASE,
+): void {
+  try {
+    const store = openAuthorityStore(databasePath);
+    try {
+      store.database
+        .prepare(
+          `DELETE FROM android_runner_rebuild_lock
+           WHERE lock_name = 'artifact' AND owner_nonce = ?`,
+        )
+        .run(lock.ownerNonce);
+      store.secureFiles();
+    } finally {
+      store.close();
+    }
   } catch {}
 }
 
@@ -906,8 +937,8 @@ export const androidRunnerRebuildBudget = {
 };
 
 interface AndroidRunnerRebuildDependencies {
-  acquire?: () => boolean;
-  release?: () => void;
+  acquire?: () => AndroidRunnerRebuildLock | null;
+  release?: (lock: AndroidRunnerRebuildLock) => void;
   budget?: {
     alreadyRebuiltFor(pluginVersion: string): boolean;
     recordRebuild(pluginVersion: string): void;
@@ -937,15 +968,17 @@ export async function runBoundedAndroidRunnerRebuild<T>(
     );
   }
   const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
-  if (!acquire()) {
+  const lock = acquire();
+  if (!lock) {
     throw androidRebuildRefusal(error, 'another session is rebuilding the shared runner artifact');
   }
   const release = dependencies.release ?? releaseAndroidRunnerRebuildLock;
   try {
+    const result = await rebuild();
     budget.recordRebuild(pluginVersion);
-    return await rebuild();
+    return result;
   } finally {
-    release();
+    release(lock);
   }
 }
 

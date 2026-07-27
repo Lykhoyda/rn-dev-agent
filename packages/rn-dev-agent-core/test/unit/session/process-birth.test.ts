@@ -22,15 +22,10 @@ test('macOS process identity uses full kernel start time and boot session', () =
       }
       throw new Error(`unexpected command ${command}`);
     },
-    runWithDescriptor: (command, args) => {
-      if (command === '/usr/bin/codesign') {
-        assert.equal(args[0], '--verify');
-        assert.equal(args[1], '--strict');
-        assert.match(args[2], /darwin-process-birth$/);
-        return '';
-      }
-      assert.match(command, /darwin-process-birth$/);
-      assert.deepEqual(args, ['123']);
+    runVerifiedHelper: (path, pid, requirement) => {
+      assert.match(path, /darwin-process-birth$/);
+      assert.equal(pid, 123);
+      assert.match(requirement, /cdhash H"[0-9a-f]{40}"/);
       return `123:1784792468:${startMicroseconds}\n`;
     },
   });
@@ -80,7 +75,10 @@ test('macOS process identity refuses a replaced helper manifest', () => {
         : readFileSync(new URL('../../../dist/native/darwin-process-birth', import.meta.url)),
     run: (command) => {
       if (command === '/bin/ps') return '123\n';
-      if (command.endsWith('/native/darwin-process-birth')) helperExecuted = true;
+      return '';
+    },
+    runVerifiedHelper: () => {
+      helperExecuted = true;
       return '';
     },
   });
@@ -89,7 +87,7 @@ test('macOS process identity refuses a replaced helper manifest', () => {
   assert.equal(helperExecuted, false);
 });
 
-test('macOS process identity executes the verified descriptor, not the helper path', () => {
+test('macOS process identity requires the verified live helper CDHash', () => {
   const helperBytes = readFileSync(
     new URL('../../../dist/native/darwin-process-birth', import.meta.url),
   );
@@ -101,7 +99,7 @@ test('macOS process identity executes the verified descriptor, not the helper pa
     uid: 501,
     isFile: () => true,
   };
-  const commands: string[] = [];
+  let observedRequirement = '';
   const birth = readProcessBirth(123, {
     platform: 'darwin',
     helperPath: () => '/trusted/darwin-process-birth',
@@ -110,30 +108,47 @@ test('macOS process identity executes the verified descriptor, not the helper pa
     open: () => 17,
     fstat: () => metadata,
     close: () => {},
-    stage: () => ({
-      path: '/trusted/staged/darwin-process-birth',
-      cleanup: () => {},
-    }),
     uid: 501,
     readDescriptor: () => helperBytes,
     readBinary: () =>
       Buffer.from(
         JSON.stringify({
-          sourceSha256: '54b3387a83580c5a782f3aedfb1984b62ed84faeadeca295fb90e533d9ecc137',
-          recipeSha256: 'ff4a62e1c242f6123eb7232eae6e823ee808d18d9e138814dbe19f516cae2313',
-          stableBinarySha256: 'cb08e04b81369c8f1acb5d52508841f72317c30b15bcf966f2963f54e0033ff1',
-          binarySha256: '08a196d403db4245ff162d8d7585aa4c2c6e784029a4a6fab8ac69b14951d9dc',
+          sourceSha256: '99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a',
+          recipeSha256: '4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3',
+          stableBinarySha256: '6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea',
+          binarySha256: 'fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5',
+          cdhashes: [
+            '1e67841d4d49a5e5088d283e26430130f017b989',
+            '7f25b0eca55913e522781923a16c6b0cd98bb4fc',
+          ],
         }),
       ),
     run: (command) => (command === '/bin/ps' ? '123\n' : 'C9D056AF-6F25-47A3-8A9A-63B86EF8519F\n'),
-    runWithDescriptor: (command) => {
-      commands.push(command);
-      return command === '/usr/bin/codesign' ? '' : '123:1784792468:345678\n';
+    runVerifiedHelper: (path, pid, requirement) => {
+      assert.equal(path, '/trusted/darwin-process-birth');
+      assert.equal(pid, 123);
+      observedRequirement = requirement;
+      return '123:1784792468:345678\n';
     },
   });
 
   assert.equal(birth?.source, 'darwin-libproc');
-  assert.deepEqual(commands, ['/usr/bin/codesign', '/trusted/staged/darwin-process-birth']);
+  assert.equal(
+    observedRequirement,
+    '(cdhash H"1e67841d4d49a5e5088d283e26430130f017b989" or cdhash H"7f25b0eca55913e522781923a16c6b0cd98bb4fc")',
+  );
+});
+
+test('macOS process identity rejects a live helper outside the pinned CDHashes', () => {
+  const birth = probeProcessBirth(123, {
+    platform: 'darwin',
+    run: (command) => (command === '/bin/ps' ? '123\n' : 'C9D056AF-6F25-47A3-8A9A-63B86EF8519F\n'),
+    runVerifiedHelper: () => {
+      throw new Error('live process failed its code requirement');
+    },
+  });
+
+  assert.deepEqual(birth, { status: 'unknown' });
 });
 
 test('Linux process identity handles process names containing spaces', () => {
@@ -231,6 +246,8 @@ test('Darwin process helper ships executable in core and both host runtimes', ()
   assert.deepEqual(manifests[1], manifests[0]);
   assert.deepEqual(manifests[2], manifests[0]);
   assert.equal(manifests[0].binarySha256, createHash('sha256').update(helpers[0]).digest('hex'));
+  assert.equal(manifests[0].cdhashes.length, 2);
+  assert.ok(manifests[0].cdhashes.every((cdhash) => /^[a-f0-9]{40}$/.test(cdhash)));
   assert.match(manifests[0].sourceSha256, /^[a-f0-9]{64}$/);
   assert.match(manifests[0].recipeSha256, /^[a-f0-9]{64}$/);
   assert.match(manifests[0].stableBinarySha256, /^[a-f0-9]{64}$/);

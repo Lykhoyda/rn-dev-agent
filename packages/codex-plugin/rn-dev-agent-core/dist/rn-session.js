@@ -7455,9 +7455,8 @@ var init_metro_cwd = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, linkSync, lstatSync as lstatSync2, mkdtempSync, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join as join2 } from "node:path";
+import { closeSync, constants, existsSync, fstatSync, lstatSync as lstatSync2, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3 } from "node:fs";
+import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
   try {
@@ -7473,10 +7472,12 @@ function defaultRun(command, args) {
     throw error;
   }
 }
-function defaultRunWithDescriptor(command, args, fd) {
-  return execFileSync3(command, [...args], {
+function defaultRunVerifiedHelper(path, pid, requirement) {
+  return execFileSync3("/bin/zsh", ["-f", "-c", VERIFIED_HELPER_SCRIPT, "rn-process-birth", path, String(pid), requirement], {
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore", fd],
+    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
     timeout: 2e3
   });
 }
@@ -7498,29 +7499,10 @@ function darwinProcessBirthHelperPath() {
 function sameFile(before, after) {
   return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.uid === after.uid;
 }
-function stageDarwinProcessBirthHelper(helperPath, opened) {
-  const directory = mkdtempSync(join2(tmpdir(), "rn-dev-agent-process-birth-"));
-  const stagedPath = join2(directory, basename(helperPath));
-  const cleanup = () => {
-    try {
-      chmodSync(directory, 448);
-      rmSync(directory, { recursive: true, force: true });
-    } catch {
-    }
-  };
-  try {
-    linkSync(helperPath, stagedPath);
-    if (!sameFile(opened, lstatSync2(stagedPath))) {
-      throw new Error("Darwin process-birth helper staging identity is invalid");
-    }
-    chmodSync(directory, 320);
-    return { path: stagedPath, cleanup };
-  } catch (error) {
-    cleanup();
-    throw error;
-  }
+function darwinProcessBirthRequirement() {
+  return `(${DARWIN_HELPER_MANIFEST.cdhashes.map((cdhash) => `cdhash H"${cdhash}"`).join(" or ")})`;
 }
-function verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor) {
+function verifyDarwinProcessBirthHelper(dependencies) {
   const helper = (dependencies.helperPath ?? darwinProcessBirthHelperPath)();
   const manifestPath = `${helper}.json`;
   const canonicalize = dependencies.canonicalize ?? realpathSync3;
@@ -7541,7 +7523,6 @@ function verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor) {
   });
   const open = dependencies.open ?? openSync;
   const close = dependencies.close ?? closeSync;
-  const stage = dependencies.stage ?? stageDarwinProcessBirthHelper;
   const uid = dependencies.uid ?? process.getuid?.();
   if (canonicalize(helper) !== helper || canonicalize(manifestPath) !== manifestPath) {
     throw new Error("Darwin process-birth helper path is not canonical");
@@ -7554,7 +7535,7 @@ function verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor) {
   }
   const manifestBytes = readBinary(manifestPath);
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
-  if (Object.keys(DARWIN_HELPER_MANIFEST).some((key) => manifest[key] !== DARWIN_HELPER_MANIFEST[key])) {
+  if (Object.entries(DARWIN_HELPER_MANIFEST).some(([key, expected]) => JSON.stringify(manifest[key]) !== JSON.stringify(expected))) {
     throw new Error("Darwin process-birth helper provenance is invalid");
   }
   const fd = open(helper, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -7563,36 +7544,18 @@ function verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor) {
     if (!opened.isFile() || !sameFile(helperBefore, opened) || createHash2("sha256").update(readDescriptor(fd)).digest("hex") !== DARWIN_HELPER_MANIFEST.binarySha256 || !sameFile(manifestBefore, metadata(manifestPath))) {
       throw new Error("Darwin process-birth helper changed during verification");
     }
-    const staged = stage(helper, opened);
-    try {
-      runWithDescriptor("/usr/bin/codesign", ["--verify", "--strict", staged.path], fd);
-      if (!sameFile(opened, metadata(staged.path))) {
-        throw new Error("Darwin process-birth helper staging changed during verification");
-      }
-      return {
-        fd,
-        path: staged.path,
-        cleanup: () => {
-          close(fd);
-          staged.cleanup();
-        }
-      };
-    } catch (error) {
-      staged.cleanup();
-      throw error;
-    }
+    return {
+      path: helper,
+      requirement: darwinProcessBirthRequirement()
+    };
   } catch (error) {
-    close(fd);
     throw error;
+  } finally {
+    close(fd);
   }
 }
 async function withVerifiedDarwinProcessBirthHelper(callback) {
-  const helper = verifyDarwinProcessBirthHelper({}, defaultRunWithDescriptor);
-  try {
-    return await callback(helper);
-  } finally {
-    helper.cleanup();
-  }
+  return callback(verifyDarwinProcessBirthHelper({}));
 }
 function readProcessBirth(pid, dependencies = {}) {
   const probe = probeProcessBirth(pid, dependencies);
@@ -7604,7 +7567,7 @@ function probeProcessBirth(pid, dependencies = {}) {
   const platform = dependencies.platform ?? process.platform;
   const read = dependencies.read ?? ((path) => readFileSync2(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
-  const runWithDescriptor = dependencies.runWithDescriptor ?? defaultRunWithDescriptor;
+  const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
     if (platform === "darwin") {
       const observedPid = run("/bin/ps", ["-p", String(pid), "-o", "pid="]).trim();
@@ -7612,13 +7575,8 @@ function probeProcessBirth(pid, dependencies = {}) {
         return { status: "absent" };
       if (Number(observedPid) !== pid)
         return { status: "unknown" };
-      const helper = verifyDarwinProcessBirthHelper(dependencies, runWithDescriptor);
-      let processInfo;
-      try {
-        processInfo = runWithDescriptor(helper.path, [String(pid)], helper.fd).trim();
-      } finally {
-        helper.cleanup();
-      }
+      const helper = verifyDarwinProcessBirthHelper(dependencies);
+      const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
       if (!processMatch || Number(processMatch[1]) !== pid)
         return { status: "unknown" };
@@ -7675,21 +7633,54 @@ function probeProcessBirth(pid, dependencies = {}) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST;
+var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "54b3387a83580c5a782f3aedfb1984b62ed84faeadeca295fb90e533d9ecc137",
-      recipeSha256: "ff4a62e1c242f6123eb7232eae6e823ee808d18d9e138814dbe19f516cae2313",
-      stableBinarySha256: "cb08e04b81369c8f1acb5d52508841f72317c30b15bcf966f2963f54e0033ff1",
-      binarySha256: "08a196d403db4245ff162d8d7585aa4c2c6e784029a4a6fab8ac69b14951d9dc"
+      sourceSha256: "99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a",
+      recipeSha256: "4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3",
+      stableBinarySha256: "6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea",
+      binarySha256: "fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5",
+      cdhashes: [
+        "1e67841d4d49a5e5088d283e26430130f017b989",
+        "7f25b0eca55913e522781923a16c6b0cd98bb4fc"
+      ]
     };
+    VERIFIED_HELPER_SCRIPT = `
+set -euo pipefail
+helper_pid=
+cleanup() {
+  if [[ -n "$helper_pid" ]]; then
+    /bin/kill -CONT "$helper_pid" 2>/dev/null || true
+    /bin/kill -KILL "$helper_pid" 2>/dev/null || true
+    wait "$helper_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+coproc "$1" "$2" --hold
+helper_pid=$!
+IFS= read -r -p result
+/usr/bin/codesign --verify --strict --requirement "$3" "+$helper_pid" >/dev/null 2>&1
+/bin/kill -CONT "$helper_pid"
+attempt=0
+while (( attempt < 100 )); do
+  state=$(/bin/ps -p "$helper_pid" -o state= 2>/dev/null || true)
+  [[ -z "$state" || "$state" == Z* ]] && break
+  /bin/sleep 0.01
+  (( attempt += 1 ))
+done
+[[ -z "$state" || "$state" == Z* ]]
+wait "$helper_pid" 2>/dev/null || true
+helper_pid=
+trap - EXIT HUP INT TERM
+print -r -- "$result"
+`;
   }
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync as chmodSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
+import { chmodSync, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname as dirname4 } from "node:path";
 function loadAuthoritySqlite() {
@@ -7710,7 +7701,7 @@ function assertPrivateDirectory(path) {
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
     throw new Error("authority state root is not owned by the current user");
   }
-  chmodSync2(path, 448);
+  chmodSync(path, 448);
 }
 function secureDatabaseFiles(path) {
   for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
@@ -7723,7 +7714,7 @@ function secureDatabaseFiles(path) {
       if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
         throw new Error("authority database is not owned by the current user");
       }
-      chmodSync2(candidate, 384);
+      chmodSync(candidate, 384);
     } catch (error) {
       const code = error.code;
       if (code !== "ENOENT")
@@ -9623,7 +9614,7 @@ var init_no_change_tracker = __esm({
 // packages/rn-dev-agent-core/dist/logger.js
 import { createWriteStream, mkdirSync as mkdirSync6, existsSync as existsSync8 } from "node:fs";
 import { join as join11 } from "node:path";
-import { tmpdir as tmpdir3, homedir as homedir2 } from "node:os";
+import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
 function resolveLogPath() {
   if (process.argv.includes("--diagnostic-contract-probe"))
     return null;
@@ -9645,7 +9636,7 @@ function resolveLogPath() {
     return join11(fallbackDir, "rn-dev-agent-cdp-bridge.log");
   } catch {
   }
-  return join11(tmpdir3(), "rn-dev-agent-cdp-bridge.log");
+  return join11(tmpdir2(), "rn-dev-agent-cdp-bridge.log");
 }
 var configuredLevel, logFilePath;
 var init_logger = __esm({
@@ -10431,7 +10422,7 @@ var init_free_port = __esm({
 import { spawn as spawn4, execFile as execFile13 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
 import { join as join14 } from "node:path";
-var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DIR, ANDROID_REBUILD_BUDGET_FILE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
+var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_BUDGET_FILE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -10445,13 +10436,14 @@ var init_rn_android_runner_client = __esm({
     init_runtime_paths();
     init_transport_recovery();
     init_process_birth();
+    init_authority_store();
     execFileAsync2 = promisify14(execFile13);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join14(RN_ANDROID_RUNNER_DIR, "gradlew");
     APK_APP = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
     APK_TEST = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
     ANDROID_REBUILD_ROOT = join14(RN_ANDROID_RUNNER_DIR, "app", "build");
-    ANDROID_REBUILD_LOCK_DIR = join14(ANDROID_REBUILD_ROOT, ".authority-rebuild-lock");
+    ANDROID_REBUILD_LOCK_DATABASE = join14(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
     ANDROID_REBUILD_BUDGET_FILE = join14(ANDROID_REBUILD_ROOT, "authority-rebuild.json");
     ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
     fetchImpl2 = globalThis.fetch;
@@ -10803,7 +10795,7 @@ async function captureMetroBinding(input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync3, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync5, rmSync as rmSync3 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 init_process_birth();
 
@@ -10900,7 +10892,7 @@ function canonicalAuthorityJson(value) {
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync2, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync as rmSync2, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
+import { closeSync as closeSync2, constants as constants2, existsSync as existsSync2, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
 import { dirname as dirname2, resolve as resolve2 } from "node:path";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
@@ -11226,7 +11218,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
       closeSync2(descriptor);
     }
   });
-  const removeCanary = dependencies.removeCanary ?? ((path) => rmSync2(path, { force: true }));
+  const removeCanary = dependencies.removeCanary ?? ((path) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun2;
   let canaryCreated = false;
   let descendantCanaryCreated = false;
@@ -11238,7 +11230,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
     writeCanary(plan.descendantCanaryPath, "process.exit(0);");
     descendantCanaryCreated = true;
     mkdirSync(dirname2(plan.symlinkCanaryPath), { recursive: true });
-    rmSync2(plan.symlinkCanaryPath, { force: true });
+    rmSync(plan.symlinkCanaryPath, { force: true });
     symlinkSync(plan.canaryPath, plan.symlinkCanaryPath);
     symlinkCreated = true;
     const result = run(plan.sandboxExecutable, [
@@ -11287,7 +11279,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
     });
   } finally {
     if (symlinkCreated)
-      rmSync2(plan.symlinkCanaryPath, { force: true });
+      rmSync(plan.symlinkCanaryPath, { force: true });
     if (descendantCanaryCreated)
       removeCanary(plan.descendantCanaryPath);
     if (canaryCreated)
@@ -12176,7 +12168,7 @@ function removeManagedMetroEvidenceSocket(path) {
   if (!/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path)) {
     throw new Error("METRO_EVIDENCE_SOCKET_INVALID");
   }
-  rmSync3(path, { force: true });
+  rmSync2(path, { force: true });
 }
 function removeManagedMetroEvidenceSocketSafely(path, dependencies) {
   try {
@@ -12468,7 +12460,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync3, linkSync as linkSync2, lstatSync as lstatSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync4, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -12481,7 +12473,7 @@ function ensurePrivateDirectory(path) {
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
     }
-    chmodSync3(path, 448);
+    chmodSync2(path, 448);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
       throw error;
@@ -12521,13 +12513,13 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     try {
       writeFileSync2(temporary, randomBytes3(32), { flag: "wx", mode: 384, flush: true });
       try {
-        linkSync2(temporary, path);
+        linkSync(temporary, path);
       } catch (error) {
         if (error.code !== "EEXIST")
           throw error;
       }
     } finally {
-      rmSync4(temporary, { force: true });
+      rmSync3(temporary, { force: true });
     }
     const link = lstatSync6(path);
     const stat = statSync4(path);
@@ -12535,7 +12527,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "bound-directory journal key is invalid");
     }
-    chmodSync3(path, 384);
+    chmodSync2(path, 384);
     return key.toString("base64url");
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
@@ -12557,8 +12549,8 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync5, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync2, lstatSync as lstatSync7, mkdtempSync as mkdtempSync2, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
+import { closeSync as closeSync5, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync2, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 var WORKER_READY_TIMEOUT_MS = 3e4;
@@ -13639,7 +13631,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     }
     if (waitForFile(stoppedPath, 1e3)) {
       if (!existsSync5(join7(worker.controlPath, "lock-retained"))) {
-        rmSync5(worker.controlPath, { force: true, recursive: true });
+        rmSync4(worker.controlPath, { force: true, recursive: true });
       }
       return;
     }
@@ -13655,7 +13647,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
   if (!existsSync5(join7(worker.controlPath, "lock-retained"))) {
-    rmSync5(worker.controlPath, { force: true, recursive: true });
+    rmSync4(worker.controlPath, { force: true, recursive: true });
   }
 }
 function bindWorker(controlPath, child, owner, childId, lifecycleCapability = "") {
@@ -13701,7 +13693,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
   };
 }
 function startWorker(path, identity, realPath) {
-  const controlPath = mkdtempSync2(join7(tmpdir2(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join7(tmpdir(), "rn-bound-directory-"));
   const lifecycleCapability = randomUUID2();
   const binding = Buffer.from(JSON.stringify({
     dev: identity.dev.toString(),
@@ -13731,7 +13723,7 @@ function startWorker(path, identity, realPath) {
   return bindWorker(controlPath, child, void 0, void 0, lifecycleCapability);
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
-  const controlPath = mkdtempSync2(join7(tmpdir2(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join7(tmpdir(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -13767,7 +13759,7 @@ function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPat
           sequence: 0
         }, "SIGKILL");
       } else {
-        rmSync5(controlPath, { force: true, recursive: true });
+        rmSync4(controlPath, { force: true, recursive: true });
       }
     } catch (cleanupError) {
       throw new AggregateError([
@@ -13821,7 +13813,7 @@ function sendOperation(directory, request, timeoutMs) {
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory operation returned invalid output");
   } finally {
-    rmSync5(responsePath, { force: true });
+    rmSync4(responsePath, { force: true });
   }
   return result;
 }
@@ -14068,7 +14060,7 @@ function closeBoundDirectories(directories, primaryError) {
   throw new AggregateError(errors, "bound-directory cleanup failed");
 }
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
-  const controlPath = mkdtempSync2(join7(tmpdir2(), "rn-bound-directory-"));
+  const controlPath = mkdtempSync(join7(tmpdir(), "rn-bound-directory-"));
   const childId = randomUUID2();
   const lifecycleCapability = randomUUID2();
   let worker;
@@ -14088,7 +14080,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
     });
     childStarted = !result.directoryMissing;
     if (result.directoryMissing) {
-      rmSync5(controlPath, { force: true, recursive: true });
+      rmSync4(controlPath, { force: true, recursive: true });
       return null;
     }
     worker = bindWorker(controlPath, void 0, parent, childId, lifecycleCapability);
@@ -14128,7 +14120,7 @@ function openBoundSubdirectoryInternal(parent, name, options = {}) {
           sequence: 0
         }, "SIGKILL");
       } else {
-        rmSync5(controlPath, { force: true, recursive: true });
+        rmSync4(controlPath, { force: true, recursive: true });
       }
     } catch (cleanupError) {
       throw new AggregateError([
@@ -14348,37 +14340,72 @@ init_registry();
 var execFile15 = promisify16(execFileCb13);
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve5, reject) => {
-    const stdio = options.helperFd === void 0 ? ["ignore", "pipe", "pipe"] : ["ignore", "pipe", "pipe", options.helperFd];
-    const child = spawn5(script, args, { env: options.env, stdio });
+    const child = spawn5(script, args, {
+      detached: process.platform !== "win32",
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
     const stdout = [];
     const stderr = [];
     let outputBytes = 0;
     let settled = false;
     let timer;
+    let killTimer;
+    let terminationError;
     const finish = (error, result) => {
       if (settled)
         return;
       settled = true;
       if (timer)
         clearTimeout(timer);
+      if (killTimer)
+        clearTimeout(killTimer);
       if (error)
         reject(error);
       else
         resolve5(result);
     };
+    const signal = (value) => {
+      if (child.pid === void 0)
+        return;
+      try {
+        if (process.platform === "win32")
+          child.kill(value);
+        else
+          process.kill(-child.pid, value);
+      } catch {
+      }
+    };
+    const terminate = (error) => {
+      if (terminationError)
+        return;
+      terminationError = error;
+      signal("SIGTERM");
+      killTimer = setTimeout(() => signal("SIGKILL"), 250);
+    };
     const collect = (target) => (chunk) => {
+      if (terminationError)
+        return;
       outputBytes += chunk.length;
       if (outputBytes > 8 * 1024 * 1024) {
-        child.kill("SIGTERM");
-        finish(new Error("record_proof.sh output exceeded 8 MiB"));
+        terminate(new Error("record_proof.sh output exceeded 8 MiB"));
         return;
       }
       target.push(chunk);
     };
     child.stdout?.on("data", collect(stdout));
     child.stderr?.on("data", collect(stderr));
-    child.on("error", (error) => finish(error));
-    child.on("close", (code, signal) => {
+    child.on("error", (error) => {
+      if (child.pid === void 0)
+        finish(error);
+      else
+        terminate(error);
+    });
+    child.on("close", (code, signal2) => {
+      if (terminationError) {
+        finish(terminationError);
+        return;
+      }
       const result = {
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8")
@@ -14387,11 +14414,10 @@ function executeRecorderScript(script, args, options) {
         finish(void 0, result);
         return;
       }
-      finish(new Error(`record_proof.sh exited with ${code ?? signal ?? "unknown"}: ${result.stderr.trim()}`));
+      finish(new Error(`record_proof.sh exited with ${code ?? signal2 ?? "unknown"}: ${result.stderr.trim()}`));
     });
     timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      finish(new Error(`record_proof.sh timed out after ${options.timeout}ms`));
+      terminate(new Error(`record_proof.sh timed out after ${options.timeout}ms`));
     }, options.timeout);
   });
 }
@@ -14405,9 +14431,9 @@ async function runRecordProofScript(script, args, timeout = 6e4, dependencies = 
     timeout,
     env: {
       ...process.env,
-      RN_DEV_AGENT_PROCESS_BIRTH_HELPER: helper.path
-    },
-    helperFd: helper.fd
+      RN_DEV_AGENT_PROCESS_BIRTH_HELPER: helper.path,
+      RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: helper.requirement
+    }
   }));
 }
 async function waitForExactStopped(probe, deadlineMs, code, message) {

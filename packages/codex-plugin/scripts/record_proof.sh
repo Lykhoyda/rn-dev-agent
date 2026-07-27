@@ -948,6 +948,41 @@ LOCAL_PROCESS_STATE="unknown"
 LOCAL_PROCESS_BIRTH=""
 LOCAL_PROCESS_MARKER_MATCH="false"
 
+darwin_process_birth_info() {
+  local helper="$1"
+  local pid="$2"
+  local requirement="$3"
+  /bin/zsh -f -c '
+    set -euo pipefail
+    helper_pid=
+    cleanup() {
+      if [[ -n "$helper_pid" ]]; then
+        /bin/kill -CONT "$helper_pid" 2>/dev/null || true
+        /bin/kill -KILL "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+      fi
+    }
+    trap cleanup EXIT HUP INT TERM
+    coproc "$1" "$2" --hold
+    helper_pid=$!
+    IFS= read -r -p result
+    /usr/bin/codesign --verify --strict --requirement "$3" "+$helper_pid" >/dev/null 2>&1
+    /bin/kill -CONT "$helper_pid"
+    attempt=0
+    while (( attempt < 100 )); do
+      state=$(/bin/ps -p "$helper_pid" -o state= 2>/dev/null || true)
+      [[ -z "$state" || "$state" == Z* ]] && break
+      /bin/sleep 0.01
+      (( attempt += 1 ))
+    done
+    [[ -z "$state" || "$state" == Z* ]]
+    wait "$helper_pid" 2>/dev/null || true
+    helper_pid=
+    trap - EXIT HUP INT TERM
+    print -r -- "$result"
+  ' rn-process-birth "$helper" "$pid" "$requirement"
+}
+
 probe_local_process() {
   local pid="$1"
   local marker="$2"
@@ -974,14 +1009,18 @@ probe_local_process() {
   platform="$(uname -s)"
   if [[ "$platform" == "Darwin" ]]; then
     local helper="${RN_DEV_AGENT_PROCESS_BIRTH_HELPER:-}"
-    [[ -x "$helper" ]] || {
+    local requirement="${RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT:-}"
+    [[ -x "$helper" && -n "$requirement" ]] || {
       echo "Error: Darwin recorder process-birth helper is unavailable" >&2
       return 1
     }
-    local info_before
-    local info_after
+    local info
     local boot_session
-    info_before="$("$helper" "$pid" 2>/dev/null)" || {
+    boot_session="$(/usr/sbin/sysctl -n kern.bootsessionuuid 2>/dev/null)" || {
+      echo "Error: recorder boot identity is unavailable" >&2
+      return 1
+    }
+    info="$(darwin_process_birth_info "$helper" "$pid" "$requirement" 2>/dev/null)" || {
       is_alive "$pid" || {
         LOCAL_PROCESS_STATE="absent"
         return 0
@@ -989,20 +1028,8 @@ probe_local_process() {
       echo "Error: recorder process birth is unavailable" >&2
       return 1
     }
-    boot_session="$(/usr/sbin/sysctl -n kern.bootsessionuuid 2>/dev/null)" || {
-      echo "Error: recorder boot identity is unavailable" >&2
-      return 1
-    }
-    info_after="$("$helper" "$pid" 2>/dev/null)" || {
-      is_alive "$pid" || {
-        LOCAL_PROCESS_STATE="absent"
-        return 0
-      }
-      echo "Error: recorder process changed during identity capture" >&2
-      return 1
-    }
-    [[ "$info_before" == "$info_after" && "$info_before" =~ ^${pid}:([0-9]+):([0-9]+)$ ]] || {
-      echo "Error: recorder process birth identity changed" >&2
+    [[ "$info" =~ ^${pid}:([0-9]+):([0-9]+)$ ]] || {
+      echo "Error: recorder process birth identity is invalid" >&2
       return 1
     }
     LOCAL_PROCESS_BIRTH="$(
