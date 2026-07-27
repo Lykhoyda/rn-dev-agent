@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   runRecordProofScript,
@@ -133,17 +136,31 @@ test('Darwin recorder scripts receive the pinned live-process requirement', asyn
   assert.equal(observedOptions.env.RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT, 'cdhash H"trusted"');
 });
 
-test('recorder timeout waits for confirmed termination after escalation', async () => {
+test('recorder timeout waits for confirmed descendant termination after escalation', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'record-proof-timeout-'));
+  const descendantPath = join(directory, 'descendant.pid');
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const descendantCode = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);";
+  const parentCode = `
+    const { spawn } = require('node:child_process');
+    const { writeFileSync } = require('node:fs');
+    const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantCode)}], {
+      stdio: 'ignore',
+    });
+    writeFileSync(${JSON.stringify(descendantPath)}, String(child.pid));
+    process.on('SIGTERM', () => process.exit(0));
+    setInterval(() => {}, 1_000);
+  `;
   const startedAt = Date.now();
   await assert.rejects(
-    runRecordProofScript(
-      process.execPath,
-      ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);"],
-      500,
-      { platform: 'linux' },
-    ),
+    runRecordProofScript(process.execPath, ['-e', parentCode], 500, { platform: 'linux' }),
     /timed out after 500ms/,
   );
 
   assert.ok(Date.now() - startedAt >= 700);
+  const descendantPid = Number(readFileSync(descendantPath, 'utf8'));
+  assert.throws(
+    () => process.kill(descendantPid, 0),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === 'ESRCH',
+  );
 });

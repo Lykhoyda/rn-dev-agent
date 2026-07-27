@@ -4,7 +4,7 @@
  */
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
@@ -35,8 +35,8 @@ const APK_APP = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'd
 const APK_TEST = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'androidTest', 'debug', 'app-debug-androidTest.apk');
 const ANDROID_REBUILD_ROOT = join(RN_ANDROID_RUNNER_DIR, 'app', 'build');
 const ANDROID_REBUILD_LOCK_DATABASE = join(ANDROID_REBUILD_ROOT, '.authority-rebuild', 'lock.sqlite');
-const ANDROID_REBUILD_BUDGET_FILE = join(ANDROID_REBUILD_ROOT, 'authority-rebuild.json');
 const ANDROID_REBUILD_LOCK_STALE_MS = 15 * 60_000;
+const ANDROID_REBUILD_HEARTBEAT_MS = 60_000;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
 export function getAndroidRunnerState() {
@@ -584,68 +584,113 @@ export class AndroidAuthorityStaleError extends Error {
         this.deviceId = deviceId;
     }
 }
-export function acquireAndroidRunnerRebuildLock(now = Date.now(), ownerNonce = randomUUID(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+function initializeAndroidRunnerRebuildState(databasePath) {
+    const store = openAuthorityStore(databasePath);
+    store.database.exec(`
+    CREATE TABLE IF NOT EXISTS android_runner_rebuild_attempt (
+      lock_name TEXT PRIMARY KEY,
+      plugin_version TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
+      owner_nonce TEXT,
+      lease_ms INTEGER NOT NULL
+    )
+  `);
+    return store;
+}
+export function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(), ownerNonce = randomUUID(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
     try {
-        const store = openAuthorityStore(databasePath);
+        const store = initializeAndroidRunnerRebuildState(databasePath);
         try {
-            store.database.exec(`
-        CREATE TABLE IF NOT EXISTS android_runner_rebuild_lock (
-          lock_name TEXT PRIMARY KEY,
-          owner_nonce TEXT NOT NULL,
-          acquired_ms INTEGER NOT NULL
-        )
-      `);
             const claimed = store.database
-                .prepare(`INSERT INTO android_runner_rebuild_lock(lock_name, owner_nonce, acquired_ms)
-           VALUES ('artifact', ?, ?)
+                .prepare(`INSERT INTO android_runner_rebuild_attempt(
+             lock_name, plugin_version, status, owner_nonce, lease_ms
+           )
+           VALUES ('artifact', ?, 'in_progress', ?, ?)
            ON CONFLICT(lock_name) DO UPDATE SET
+             plugin_version = excluded.plugin_version,
+             status = 'in_progress',
              owner_nonce = excluded.owner_nonce,
-             acquired_ms = excluded.acquired_ms
-           WHERE android_runner_rebuild_lock.acquired_ms <= ?
-           RETURNING owner_nonce`)
-                .get(ownerNonce, now, now - ANDROID_REBUILD_LOCK_STALE_MS);
+             lease_ms = excluded.lease_ms
+           WHERE
+             android_runner_rebuild_attempt.status != 'in_progress'
+               AND android_runner_rebuild_attempt.plugin_version != excluded.plugin_version
+             OR android_runner_rebuild_attempt.status = 'in_progress'
+               AND android_runner_rebuild_attempt.lease_ms <= ?
+           RETURNING owner_nonce, plugin_version`)
+                .get(pluginVersion, ownerNonce, now, now - ANDROID_REBUILD_LOCK_STALE_MS);
             store.secureFiles();
-            return claimed?.owner_nonce === ownerNonce ? { ownerNonce } : null;
+            if (claimed?.owner_nonce === ownerNonce && claimed.plugin_version === pluginVersion) {
+                return { status: 'acquired', lock: { ownerNonce, pluginVersion } };
+            }
+            const current = store.database
+                .prepare(`SELECT plugin_version, status
+           FROM android_runner_rebuild_attempt
+           WHERE lock_name = 'artifact'`)
+                .get();
+            return current?.plugin_version === pluginVersion && current.status !== 'in_progress'
+                ? { status: 'exhausted' }
+                : { status: 'busy' };
         }
         finally {
             store.close();
         }
     }
     catch {
-        return null;
+        return { status: 'busy' };
     }
 }
-export function releaseAndroidRunnerRebuildLock(lock, databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+export function heartbeatAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
     try {
-        const store = openAuthorityStore(databasePath);
+        const store = initializeAndroidRunnerRebuildState(databasePath);
         try {
-            store.database
-                .prepare(`DELETE FROM android_runner_rebuild_lock
-           WHERE lock_name = 'artifact' AND owner_nonce = ?`)
-                .run(lock.ownerNonce);
+            const refreshed = store.database
+                .prepare(`UPDATE android_runner_rebuild_attempt
+           SET lease_ms = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND owner_nonce = ?`)
+                .run(now, lock.pluginVersion, lock.ownerNonce);
             store.secureFiles();
+            return refreshed.changes === 1;
         }
         finally {
             store.close();
         }
     }
-    catch { }
+    catch {
+        return false;
+    }
 }
-export const androidRunnerRebuildBudget = {
-    alreadyRebuiltFor(pluginVersion) {
+function finishAndroidRunnerRebuildLock(lock, status, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    try {
+        const store = initializeAndroidRunnerRebuildState(databasePath);
         try {
-            const parsed = JSON.parse(readFileSync(ANDROID_REBUILD_BUDGET_FILE, 'utf8'));
-            return parsed.pluginVersion === pluginVersion;
+            const finished = store.database
+                .prepare(`UPDATE android_runner_rebuild_attempt
+           SET status = ?, owner_nonce = NULL, lease_ms = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND owner_nonce = ?`)
+                .run(status, now, lock.pluginVersion, lock.ownerNonce);
+            store.secureFiles();
+            return finished.changes === 1;
         }
-        catch {
-            return false;
+        finally {
+            store.close();
         }
-    },
-    recordRebuild(pluginVersion) {
-        mkdirSync(ANDROID_REBUILD_ROOT, { recursive: true });
-        writeFileSync(ANDROID_REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: new Date().toISOString() }));
-    },
-};
+    }
+    catch {
+        return false;
+    }
+}
+export function completeAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    return finishAndroidRunnerRebuildLock(lock, 'completed', now, databasePath);
+}
+export function releaseAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    return finishAndroidRunnerRebuildLock(lock, 'failed', now, databasePath);
+}
 function androidRebuildRefusal(error, detail) {
     return error instanceof AndroidAuthorityStaleError
         ? new AndroidAuthorityStaleError(error.deviceId, detail)
@@ -653,23 +698,40 @@ function androidRebuildRefusal(error, detail) {
 }
 export async function runBoundedAndroidRunnerRebuild(error, rebuild, dependencies = {}) {
     const pluginVersion = getPluginVersion() ?? 'unknown';
-    const budget = dependencies.budget ?? androidRunnerRebuildBudget;
-    if (budget.alreadyRebuiltFor(pluginVersion)) {
-        throw androidRebuildRefusal(error, `runner artifact was already rebuilt once for plugin v${pluginVersion}`);
-    }
     const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
-    const lock = acquire();
-    if (!lock) {
-        throw androidRebuildRefusal(error, 'another session is rebuilding the shared runner artifact');
+    const claim = acquire(pluginVersion);
+    if (claim.status !== 'acquired') {
+        throw androidRebuildRefusal(error, claim.status === 'exhausted'
+            ? `runner artifact was already rebuilt once for plugin v${pluginVersion}`
+            : 'another session is rebuilding the shared runner artifact');
     }
+    const { lock } = claim;
+    const heartbeat = dependencies.heartbeat ?? heartbeatAndroidRunnerRebuildLock;
+    const complete = dependencies.complete ?? completeAndroidRunnerRebuildLock;
     const release = dependencies.release ?? releaseAndroidRunnerRebuildLock;
+    const heartbeatTimer = setInterval(() => {
+        try {
+            heartbeat(lock);
+        }
+        catch { }
+    }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
+    heartbeatTimer.unref();
     try {
         const result = await rebuild();
-        budget.recordRebuild(pluginVersion);
+        clearInterval(heartbeatTimer);
+        try {
+            complete(lock);
+        }
+        catch { }
         return result;
     }
-    finally {
-        release(lock);
+    catch (cause) {
+        clearInterval(heartbeatTimer);
+        try {
+            release(lock);
+        }
+        catch { }
+        throw cause;
     }
 }
 export function androidRetryCleanupContext(state, error) {

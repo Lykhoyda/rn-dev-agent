@@ -50,12 +50,14 @@ function executeRecorderScript(
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
+    let groupPollTimer: NodeJS.Timeout | undefined;
     let terminationError: Error | undefined;
     const finish = (error?: Error, result?: { stdout: string; stderr: string }): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (groupPollTimer) clearTimeout(groupPollTimer);
       if (error) reject(error);
       else resolve(result!);
     };
@@ -66,11 +68,33 @@ function executeRecorderScript(
         else process.kill(-child.pid, value);
       } catch {}
     };
+    const processGroupExists = (): boolean => {
+      if (child.pid === undefined || process.platform === 'win32') return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+      }
+    };
+    const waitForProcessGroupExit = (): void => {
+      if (!terminationError || settled) return;
+      if (!processGroupExists()) {
+        finish(terminationError);
+        return;
+      }
+      groupPollTimer = setTimeout(waitForProcessGroupExit, 25);
+    };
     const terminate = (error: Error): void => {
       if (terminationError) return;
       terminationError = error;
       signal('SIGTERM');
-      killTimer = setTimeout(() => signal('SIGKILL'), 250);
+      if (process.platform === 'win32') return;
+      killTimer = setTimeout(() => {
+        signal('SIGKILL');
+        waitForProcessGroupExit();
+      }, 250);
+      waitForProcessGroupExit();
     };
     const collect = (target: Buffer[]) => (chunk: Buffer) => {
       if (terminationError) return;
@@ -89,7 +113,8 @@ function executeRecorderScript(
     });
     child.on('close', (code, signal) => {
       if (terminationError) {
-        finish(terminationError);
+        if (process.platform === 'win32') finish(terminationError);
+        else waitForProcessGroupExit();
         return;
       }
       const result = {

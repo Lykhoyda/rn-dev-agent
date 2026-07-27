@@ -7661,7 +7661,26 @@ trap cleanup EXIT HUP INT TERM
 coproc "$1" "$2" --hold
 helper_pid=$!
 IFS= read -r -p result
-/usr/bin/codesign --verify --strict --requirement "$3" "+$helper_pid" >/dev/null 2>&1
+attempt=0
+state=
+while (( attempt < 100 )); do
+  state=$(/bin/ps -p "$helper_pid" -o state= 2>/dev/null || true)
+  [[ "$state" == T* ]] && break
+  [[ -z "$state" || "$state" == Z* ]] && exit 1
+  /bin/sleep 0.01
+  (( attempt += 1 ))
+done
+[[ "$state" == T* ]]
+/usr/bin/codesign --verify --strict "-R=$3" "$1" >/dev/null 2>&1
+/usr/bin/codesign --verify --strict "+$helper_pid" >/dev/null 2>&1
+live_cdhash=$(
+  /usr/bin/codesign --display --verbose=4 "+$helper_pid" 2>&1 |
+    /usr/bin/awk -F= '/^CDHash=/{print tolower($2); exit}'
+)
+[[ "$live_cdhash" != *[^0-9a-f]* ]]
+[[ "\${#live_cdhash}" == 40 ]]
+expected_cdhash="H\\"\${live_cdhash}\\""
+[[ "$3" == *"$expected_cdhash"* ]]
 /bin/kill -CONT "$helper_pid"
 attempt=0
 while (( attempt < 100 )); do
@@ -10422,7 +10441,7 @@ var init_free_port = __esm({
 import { spawn as spawn4, execFile as execFile13 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
 import { join as join14 } from "node:path";
-var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_BUDGET_FILE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
+var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
 var init_rn_android_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js"() {
     "use strict";
@@ -10444,7 +10463,6 @@ var init_rn_android_runner_client = __esm({
     APK_TEST = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
     ANDROID_REBUILD_ROOT = join14(RN_ANDROID_RUNNER_DIR, "app", "build");
     ANDROID_REBUILD_LOCK_DATABASE = join14(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
-    ANDROID_REBUILD_BUDGET_FILE = join14(ANDROID_REBUILD_ROOT, "authority-rebuild.json");
     ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
     fetchImpl2 = globalThis.fetch;
   }
@@ -14351,6 +14369,7 @@ function executeRecorderScript(script, args, options) {
     let settled = false;
     let timer;
     let killTimer;
+    let groupPollTimer;
     let terminationError;
     const finish = (error, result) => {
       if (settled)
@@ -14360,6 +14379,8 @@ function executeRecorderScript(script, args, options) {
         clearTimeout(timer);
       if (killTimer)
         clearTimeout(killTimer);
+      if (groupPollTimer)
+        clearTimeout(groupPollTimer);
       if (error)
         reject(error);
       else
@@ -14376,12 +14397,37 @@ function executeRecorderScript(script, args, options) {
       } catch {
       }
     };
+    const processGroupExists = () => {
+      if (child.pid === void 0 || process.platform === "win32")
+        return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return error.code !== "ESRCH";
+      }
+    };
+    const waitForProcessGroupExit = () => {
+      if (!terminationError || settled)
+        return;
+      if (!processGroupExists()) {
+        finish(terminationError);
+        return;
+      }
+      groupPollTimer = setTimeout(waitForProcessGroupExit, 25);
+    };
     const terminate = (error) => {
       if (terminationError)
         return;
       terminationError = error;
       signal("SIGTERM");
-      killTimer = setTimeout(() => signal("SIGKILL"), 250);
+      if (process.platform === "win32")
+        return;
+      killTimer = setTimeout(() => {
+        signal("SIGKILL");
+        waitForProcessGroupExit();
+      }, 250);
+      waitForProcessGroupExit();
     };
     const collect = (target) => (chunk) => {
       if (terminationError)
@@ -14403,7 +14449,10 @@ function executeRecorderScript(script, args, options) {
     });
     child.on("close", (code, signal2) => {
       if (terminationError) {
-        finish(terminationError);
+        if (process.platform === "win32")
+          finish(terminationError);
+        else
+          waitForProcessGroupExit();
         return;
       }
       const result = {

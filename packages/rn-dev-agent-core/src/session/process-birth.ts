@@ -97,7 +97,26 @@ trap cleanup EXIT HUP INT TERM
 coproc "$1" "$2" --hold
 helper_pid=$!
 IFS= read -r -p result
-/usr/bin/codesign --verify --strict --requirement "$3" "+$helper_pid" >/dev/null 2>&1
+attempt=0
+state=
+while (( attempt < 100 )); do
+  state=$(/bin/ps -p "$helper_pid" -o state= 2>/dev/null || true)
+  [[ "$state" == T* ]] && break
+  [[ -z "$state" || "$state" == Z* ]] && exit 1
+  /bin/sleep 0.01
+  (( attempt += 1 ))
+done
+[[ "$state" == T* ]]
+/usr/bin/codesign --verify --strict "-R=$3" "$1" >/dev/null 2>&1
+/usr/bin/codesign --verify --strict "+$helper_pid" >/dev/null 2>&1
+live_cdhash=$(
+  /usr/bin/codesign --display --verbose=4 "+$helper_pid" 2>&1 |
+    /usr/bin/awk -F= '/^CDHash=/{print tolower($2); exit}'
+)
+[[ "$live_cdhash" != *[^0-9a-f]* ]]
+[[ "\${#live_cdhash}" == 40 ]]
+expected_cdhash="H\\"\${live_cdhash}\\""
+[[ "$3" == *"$expected_cdhash"* ]]
 /bin/kill -CONT "$helper_pid"
 attempt=0
 while (( attempt < 100 )); do

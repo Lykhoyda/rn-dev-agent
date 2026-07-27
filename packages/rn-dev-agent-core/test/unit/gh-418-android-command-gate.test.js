@@ -11,6 +11,8 @@ import { join } from 'node:path';
 import {
   acquireAndroidRunnerRebuildLock,
   AndroidAuthorityStaleError,
+  completeAndroidRunnerRebuildLock,
+  heartbeatAndroidRunnerRebuildLock,
   probeAndroidRunnerHealthInfo,
   resolveAndroidInstallAction,
   invalidateAndroidRunnerApks,
@@ -78,10 +80,6 @@ test('Android authority upgrades use the bounded artifact rebuild owner', () => 
 
 test('Android artifact rebuild is serialized and budgeted once', async () => {
   const events = [];
-  const budget = {
-    alreadyRebuiltFor: () => false,
-    recordRebuild: () => events.push('budget'),
-  };
   const result = await runBoundedAndroidRunnerRebuild(
     new AndroidAuthorityStaleError('serial-a'),
     async () => {
@@ -89,17 +87,24 @@ test('Android artifact rebuild is serialized and budgeted once', async () => {
       return 'ready';
     },
     {
-      acquire: () => {
+      acquire: (pluginVersion) => {
         events.push('acquire');
-        return { ownerNonce: 'lock-a' };
+        return {
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        };
       },
-      release: (lock) => events.push(`release:${lock.ownerNonce}`),
-      budget,
+      heartbeat: () => true,
+      complete: (lock) => {
+        events.push(`complete:${lock.ownerNonce}`);
+        return true;
+      },
+      release: () => assert.fail('successful rebuild must not be released as failed'),
     },
   );
 
   assert.equal(result, 'ready');
-  assert.deepEqual(events, ['acquire', 'rebuild', 'budget', 'release:lock-a']);
+  assert.deepEqual(events, ['acquire', 'rebuild', 'complete:lock-a']);
 });
 
 test('Android artifact rebuild preserves ownership mismatch after a failed rebuild', async () => {
@@ -111,12 +116,15 @@ test('Android artifact rebuild preserves ownership mismatch after a failed rebui
         throw mismatch;
       },
       {
-        acquire: () => ({ ownerNonce: 'lock-a' }),
-        release: () => {},
-        budget: {
-          alreadyRebuiltFor: () => false,
-          recordRebuild: () => {},
+        acquire: (pluginVersion) => ({
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        }),
+        heartbeat: () => true,
+        complete: () => {
+          assert.fail('failed rebuild must not be completed');
         },
+        release: () => true,
       },
     ),
     (error) =>
@@ -125,7 +133,7 @@ test('Android artifact rebuild preserves ownership mismatch after a failed rebui
   );
 });
 
-test('Android artifact rebuild records its budget only after success', async () => {
+test('Android artifact rebuild consumes a bounded attempt after failure', async () => {
   const events = [];
   await assert.rejects(
     runBoundedAndroidRunnerRebuild(
@@ -135,46 +143,117 @@ test('Android artifact rebuild records its budget only after success', async () 
         throw new Error('transient build failure');
       },
       {
-        acquire: () => ({ ownerNonce: 'lock-a' }),
-        release: () => events.push('release'),
-        budget: {
-          alreadyRebuiltFor: () => false,
-          recordRebuild: () => events.push('budget'),
+        acquire: (pluginVersion) => ({
+          status: 'acquired',
+          lock: { ownerNonce: 'lock-a', pluginVersion },
+        }),
+        heartbeat: () => true,
+        complete: () => {
+          assert.fail('failed rebuild must not be completed');
+        },
+        release: () => {
+          events.push('failed');
+          return true;
         },
       },
     ),
     /transient build failure/,
   );
-  assert.deepEqual(events, ['rebuild', 'release']);
+  assert.deepEqual(events, ['rebuild', 'failed']);
 });
 
-test('Android artifact rebuild lock uses nonce-owned atomic takeover and release', () => {
+test('Android artifact rebuild lease heartbeats and finalizes under its nonce', () => {
   const directory = mkdtempSync(join(tmpdir(), 'rn-android-rebuild-lock-'));
   const database = join(directory, 'lock.sqlite');
   try {
-    const first = acquireAndroidRunnerRebuildLock(1_000, 'owner-a', database);
-    assert.deepEqual(first, { ownerNonce: 'owner-a' });
-    assert.equal(acquireAndroidRunnerRebuildLock(1_001, 'owner-b', database), null);
+    const first = acquireAndroidRunnerRebuildLock('1.0.0', 1_000, 'owner-a', database);
+    assert.deepEqual(first, {
+      status: 'acquired',
+      lock: { ownerNonce: 'owner-a', pluginVersion: '1.0.0' },
+    });
+    assert.deepEqual(acquireAndroidRunnerRebuildLock('1.0.0', 1_001, 'owner-b', database), {
+      status: 'busy',
+    });
+    assert.equal(heartbeatAndroidRunnerRebuildLock(first.lock, 2_000, database), true);
+    assert.deepEqual(
+      acquireAndroidRunnerRebuildLock('1.0.0', 1_000 + 15 * 60_000 + 1, 'owner-b', database),
+      { status: 'busy' },
+    );
 
     const replacement = acquireAndroidRunnerRebuildLock(
-      1_000 + 15 * 60_000 + 1,
+      '1.0.0',
+      2_000 + 15 * 60_000 + 1,
       'owner-b',
       database,
     );
-    assert.deepEqual(replacement, { ownerNonce: 'owner-b' });
-    releaseAndroidRunnerRebuildLock(first, database);
-    assert.equal(
-      acquireAndroidRunnerRebuildLock(1_000 + 15 * 60_000 + 2, 'owner-c', database),
-      null,
-    );
+    assert.deepEqual(replacement, {
+      status: 'acquired',
+      lock: { ownerNonce: 'owner-b', pluginVersion: '1.0.0' },
+    });
+    assert.equal(releaseAndroidRunnerRebuildLock(first.lock, 2_001, database), false);
+    assert.equal(completeAndroidRunnerRebuildLock(replacement.lock, 2_002, database), true);
+    assert.deepEqual(acquireAndroidRunnerRebuildLock('1.0.0', 2_003, 'owner-c', database), {
+      status: 'exhausted',
+    });
 
-    releaseAndroidRunnerRebuildLock(replacement, database);
-    const final = acquireAndroidRunnerRebuildLock(1_000 + 15 * 60_000 + 3, 'owner-c', database);
-    assert.deepEqual(final, { ownerNonce: 'owner-c' });
-    releaseAndroidRunnerRebuildLock(final, database);
+    const nextVersion = acquireAndroidRunnerRebuildLock('2.0.0', 2_004, 'owner-c', database);
+    assert.equal(nextVersion.status, 'acquired');
+    assert.equal(releaseAndroidRunnerRebuildLock(nextVersion.lock, 2_005, database), true);
+    assert.deepEqual(acquireAndroidRunnerRebuildLock('2.0.0', 2_006, 'owner-d', database), {
+      status: 'exhausted',
+    });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('Android artifact rebuild heartbeats while the protected operation runs', async () => {
+  let heartbeats = 0;
+  const result = await runBoundedAndroidRunnerRebuild(
+    new AndroidAuthorityStaleError('serial-a'),
+    () => new Promise((resolve) => setTimeout(() => resolve('ready'), 35)),
+    {
+      acquire: (pluginVersion) => ({
+        status: 'acquired',
+        lock: { ownerNonce: 'lock-a', pluginVersion },
+      }),
+      heartbeat: () => {
+        heartbeats += 1;
+        return true;
+      },
+      complete: () => true,
+      release: () => true,
+      heartbeatIntervalMs: 5,
+    },
+  );
+
+  assert.equal(result, 'ready');
+  assert.ok(heartbeats >= 2);
+});
+
+test('Android artifact completion failure does not abandon a ready runner', async () => {
+  let released = false;
+  const result = await runBoundedAndroidRunnerRebuild(
+    new AndroidAuthorityStaleError('serial-a'),
+    async () => 'ready',
+    {
+      acquire: (pluginVersion) => ({
+        status: 'acquired',
+        lock: { ownerNonce: 'lock-a', pluginVersion },
+      }),
+      heartbeat: () => true,
+      complete: () => {
+        throw new Error('database unavailable');
+      },
+      release: () => {
+        released = true;
+        return true;
+      },
+    },
+  );
+
+  assert.equal(result, 'ready');
+  assert.equal(released, false);
 });
 
 test('Android artifact rebuild budget refuses repeated ownership upgrades', async () => {
@@ -187,14 +266,7 @@ test('Android artifact rebuild budget refuses repeated ownership upgrades', asyn
         rebuildAttempted = true;
       },
       {
-        acquire: () => {
-          assert.fail('lock should not be acquired after the rebuild budget is exhausted');
-        },
-        release: () => {},
-        budget: {
-          alreadyRebuiltFor: () => true,
-          recordRebuild: () => {},
-        },
+        acquire: () => ({ status: 'exhausted' }),
       },
     ),
     (error) =>

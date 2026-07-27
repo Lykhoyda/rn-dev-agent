@@ -18,6 +18,7 @@ function executeRecorderScript(script, args, options) {
         let settled = false;
         let timer;
         let killTimer;
+        let groupPollTimer;
         let terminationError;
         const finish = (error, result) => {
             if (settled)
@@ -27,6 +28,8 @@ function executeRecorderScript(script, args, options) {
                 clearTimeout(timer);
             if (killTimer)
                 clearTimeout(killTimer);
+            if (groupPollTimer)
+                clearTimeout(groupPollTimer);
             if (error)
                 reject(error);
             else
@@ -43,12 +46,38 @@ function executeRecorderScript(script, args, options) {
             }
             catch { }
         };
+        const processGroupExists = () => {
+            if (child.pid === undefined || process.platform === 'win32')
+                return false;
+            try {
+                process.kill(-child.pid, 0);
+                return true;
+            }
+            catch (error) {
+                return error.code !== 'ESRCH';
+            }
+        };
+        const waitForProcessGroupExit = () => {
+            if (!terminationError || settled)
+                return;
+            if (!processGroupExists()) {
+                finish(terminationError);
+                return;
+            }
+            groupPollTimer = setTimeout(waitForProcessGroupExit, 25);
+        };
         const terminate = (error) => {
             if (terminationError)
                 return;
             terminationError = error;
             signal('SIGTERM');
-            killTimer = setTimeout(() => signal('SIGKILL'), 250);
+            if (process.platform === 'win32')
+                return;
+            killTimer = setTimeout(() => {
+                signal('SIGKILL');
+                waitForProcessGroupExit();
+            }, 250);
+            waitForProcessGroupExit();
         };
         const collect = (target) => (chunk) => {
             if (terminationError)
@@ -70,7 +99,10 @@ function executeRecorderScript(script, args, options) {
         });
         child.on('close', (code, signal) => {
             if (terminationError) {
-                finish(terminationError);
+                if (process.platform === 'win32')
+                    finish(terminationError);
+                else
+                    waitForProcessGroupExit();
                 return;
             }
             const result = {

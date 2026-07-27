@@ -151,6 +151,21 @@ test('macOS process identity rejects a live helper outside the pinned CDHashes',
   assert.deepEqual(birth, { status: 'unknown' });
 });
 
+test('macOS helper verification waits for SIGSTOP and applies the pinned requirement', () => {
+  const sources = [
+    readFileSync(new URL('../../../src/session/process-birth.ts', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../../../../scripts/record_proof.sh', import.meta.url), 'utf8'),
+  ];
+
+  for (const source of sources) {
+    assert.match(
+      source,
+      /\[\[ "\$state" == T\* \]\][\s\S]*?codesign --verify --strict "-R=\$3" "\$1"[\s\S]*?codesign --verify --strict "\+\$helper_pid"[\s\S]*?CDHash=[\s\S]*?expected_cdhash=[\s\S]*?kill -CONT "\$helper_pid"/,
+    );
+    assert.doesNotMatch(source, /codesign --verify --strict --requirement/);
+  }
+});
+
 test('Linux process identity handles process names containing spaces', () => {
   const birth = readProcessBirth(456, {
     platform: 'linux',
