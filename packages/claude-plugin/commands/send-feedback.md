@@ -35,10 +35,18 @@ Then collect the following (skip what was already provided via $ARGUMENTS):
 
 ## Step 2: Collect environment context (automated)
 
-Run the collection script to gather sanitized environment data:
+Call `rn_session` with `action: "status"` first. If it returns an exact
+session, retain its opaque `sessionId` locally and pass it only to the
+collector process as `RN_DEV_AGENT_SESSION_ID`; do not include the ID in the
+preview or submission. This keeps feedback authority aligned after a handoff,
+when multiple released sessions can share one worktree.
+
+Run the collection script from the project root to gather sanitized
+environment data:
 
 ```bash
 PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
+PROJECT_ROOT="${RN_PROJECT_ROOT:-${CLAUDE_USER_CWD:-$PWD}}"
 if [ -z "$PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
   PLUGIN_ROOT="packages/codex-plugin"
 fi
@@ -47,9 +55,11 @@ if [ -z "$PLUGIN_ROOT" ]; then
   [ -n "$PLUGIN_MANIFEST" ] && PLUGIN_ROOT="$(dirname "$(dirname "$PLUGIN_MANIFEST")")"
 fi
 if [ -n "$PLUGIN_ROOT" ] && [ -x "$PLUGIN_ROOT/scripts/collect-feedback.sh" ]; then
-  "$PLUGIN_ROOT/scripts/collect-feedback.sh"
+  (cd "$PROJECT_ROOT" && RN_DEV_AGENT_SESSION_ID="<exact rn_session sessionId>" \
+    "$PLUGIN_ROOT/scripts/collect-feedback.sh")
 elif command -v rn-collect-feedback >/dev/null 2>&1; then
-  rn-collect-feedback
+  (cd "$PROJECT_ROOT" && RN_DEV_AGENT_SESSION_ID="<exact rn_session sessionId>" \
+    rn-collect-feedback)
 else
   echo "rn-dev-agent feedback collector is missing; reinstall or update the plugin" >&2
   exit 1
@@ -75,11 +85,12 @@ This collects (all redacted):
   are the device backends; a leftover agent-device can interfere)
 - Last 20 telemetry events ONLY when fresh (<24h; tool name, result, latency — no params or paths), plus `telemetry_status` (`ok` / `stale (...)` / `none`). On current plugin versions `stale`/`none` is expected — per-tool-call telemetry capture was removed with the Experience Engine (GH #200); only legacy versions still write it.
 
-Also call `rn_session` with `action: "status"` and reconcile its authority state
-with the collector's `authority` object. Compare exact values locally, but put
-only the sanitized authority state, own Metro allocated/bound booleans, and
-foreign-session count in the preview. If no exact session exists, show
-`authority: unknown`; never select the first live session.
+Reconcile the previously captured `rn_session` status with the collector's
+`authority` object. Compare exact values locally, but put only the sanitized
+authority state, own Metro allocated/bound booleans, and foreign-session count
+in the preview. If no exact session exists, omit
+`RN_DEV_AGENT_SESSION_ID`, show `authority: unknown`, and never select the first
+live session.
 
 Call `cdp_status` only for passive CDP diagnostics (if available). It does not
 replace `rn_session` authority.

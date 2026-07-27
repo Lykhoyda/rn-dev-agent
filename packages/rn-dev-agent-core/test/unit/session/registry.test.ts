@@ -836,6 +836,11 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
       },
       observe: { port: 7333, instanceId: 'observe-1' },
       proof: { runId: 'proof-1' },
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: owner.sessionId,
+        manifestSha256: 'a'.repeat(64),
+      },
     },
   });
   const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
@@ -860,6 +865,11 @@ test('handoff transfers only safe claims and requires fresh live-resource bindin
   assert.equal(status?.bindings.runner, null);
   assert.equal(status?.bindings.observe, null);
   assert.equal(status?.bindings.proof, null);
+  assert.deepEqual(status?.bindings.packageIntegration, {
+    version: 1,
+    installedBySessionId: owner.sessionId,
+    manifestSha256: 'a'.repeat(64),
+  });
 });
 
 test('handoff cancellation and explicit expiry recovery restore the unchanged owner', () => {

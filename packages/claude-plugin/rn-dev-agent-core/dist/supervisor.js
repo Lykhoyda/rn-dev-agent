@@ -1215,6 +1215,10 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
   const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
   const nodeExecutable = canonicalPath(input.nodeExecutable, canonicalize);
   const commandExecutable = canonicalPath(input.commandExecutable, canonicalize);
+  const commandArguments = [...input.commandArguments ?? []];
+  const commandProbeArguments = [...input.commandProbeArguments ?? []];
+  const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) => canonicalPath(path, canonicalize));
+  const commandChainInputs = (input.commandChainInputs ?? []).map((path) => canonicalPath(path, canonicalize));
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve2(appRoot, ".expo");
   const readRoots = [
@@ -1223,9 +1227,16 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     runtimeRoot,
     nodeExecutable,
     commandExecutable,
+    ...commandExecutableMappings,
+    ...commandChainInputs,
     ...runtimeInputs
   ];
-  const executablePaths = [nodeExecutable, commandExecutable, "/usr/bin/env"];
+  const executablePaths = [
+    nodeExecutable,
+    commandExecutable,
+    ...commandExecutableMappings,
+    "/usr/bin/env"
+  ];
   const nodeRuntimeAttestation = attestNodeRuntime({
     ...input,
     nodeExecutable,
@@ -1233,6 +1244,12 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     runtimeInputs
   }, executablePaths, dependencies);
   if (!nodeRuntimeAttestation) {
+    return { status: "unsupported", reason: "node-runtime-unverified" };
+  }
+  let commandChainAttestation;
+  try {
+    commandChainAttestation = [...new Set(commandChainInputs)].sort().map((path) => attestRuntimeFile(path, dependencies));
+  } catch {
     return { status: "unsupported", reason: "node-runtime-unverified" };
   }
   const profile = managedMetroSandboxProfile({
@@ -1253,6 +1270,11 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     sandboxExecutable: sandbox.path,
     sandboxExecutableSha256: sandbox.sha256,
     sandboxExecutableCdHash: sandbox.cdHash,
+    commandLaunchSha256: sha256(canonicalAuthorityJson({ executable: commandExecutable, arguments: commandArguments })),
+    resolvedCommandSha256: sha256(canonicalAuthorityJson({
+      executable: commandExecutable,
+      arguments: commandProbeArguments
+    })),
     profile,
     profileSha256: sha256(profile),
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
@@ -1261,7 +1283,10 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     port: input.port,
     unallocatedPort: 0,
     nodeExecutable,
-    nodeRuntimeAttestation
+    commandExecutable,
+    commandProbeArguments,
+    nodeRuntimeAttestation,
+    commandChainAttestation
   };
 }
 function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}) {
@@ -1269,7 +1294,7 @@ function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}
     return false;
   const observed = receipt2;
   const plan = prepareManagedMetroEnforcement(input, dependencies);
-  return plan.status === "enforced" && observed.version === 2 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.descendantCreationAllowed === true && observed.unauthorizedExecutableDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true && canonicalAuthorityJson(observed.nodeRuntimeAttestation) === canonicalAuthorityJson(plan.nodeRuntimeAttestation);
+  return plan.status === "enforced" && observed.version === 2 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.commandLaunchSha256 === plan.commandLaunchSha256 && observed.resolvedCommandSha256 === plan.resolvedCommandSha256 && observed.descendantCreationAllowed === true && observed.unauthorizedExecutableDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true && observed.resolvedCommandAllowed === true && canonicalAuthorityJson(observed.nodeRuntimeAttestation) === canonicalAuthorityJson(plan.nodeRuntimeAttestation) && canonicalAuthorityJson(observed.commandChainAttestation) === canonicalAuthorityJson(plan.commandChainAttestation);
 }
 var DARWIN_SANDBOX_EXECUTABLE, DARWIN_CODESIGN_EXECUTABLE, PREFLIGHT_SOURCE;
 var init_managed_metro_enforcement = __esm({
@@ -1291,8 +1316,9 @@ const denied = (run) => {
     return error && (error.code === 'EPERM' || error.code === 'EACCES');
   }
 };
-const descendantResult = spawnSync(process.execPath, [input.descendantCanaryPath]);
-const descendantCreationAllowed = descendantResult.status === 0;
+const resolvedCommand = spawnSync(input.commandExecutable, input.commandProbeArguments);
+const resolvedCommandAllowed = resolvedCommand.status === 0;
+const descendantCreationAllowed = resolvedCommandAllowed;
 const unauthorizedResult = spawnSync('/usr/bin/true', []);
 const unauthorizedExecutableDenied =
   unauthorizedResult.status === null &&
@@ -1332,6 +1358,7 @@ const listen = (port) =>
       !unallocated.ok && (unallocated.code === 'EPERM' || unallocated.code === 'EACCES'),
     allocatedListenerAllowed: allocated.ok,
     networkOutboundDenied,
+    resolvedCommandAllowed,
   };
   process.stdout.write(JSON.stringify(receipt));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
@@ -1513,7 +1540,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   const expected = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
   const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
   const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.sourceExecutable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandProbeArguments) || runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandExecutableMappings) || runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandChainInputs) || runtimeManifest.commandChainInputs.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
     throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
   }
   const descendantAuthority = runtimeManifest.descendantAuthority;
@@ -1532,6 +1559,10 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     nodeExecutable: runtimeManifest.nodeExecutable,
     nodeVersion: runtimeManifest.nodeVersion,
     commandExecutable: runtimeManifest.executable,
+    commandArguments: runtimeManifest.args,
+    commandProbeArguments: runtimeManifest.commandProbeArguments,
+    commandExecutableMappings: runtimeManifest.commandExecutableMappings,
+    commandChainInputs: runtimeManifest.commandChainInputs,
     port: runtimeManifest.port,
     instanceId: authority.metroInstanceId,
     runtimeInputs: receipt2.runtimeInputs
@@ -24202,6 +24233,8 @@ const brokerEnforced =
     runtimeEnforcement.sandboxExecutableSha256 &&
   enforcementReceipt.sandboxExecutableCdHash ===
     runtimeEnforcement.sandboxExecutableCdHash &&
+  enforcementReceipt.commandLaunchSha256 === runtimeEnforcement.commandLaunchSha256 &&
+  enforcementReceipt.resolvedCommandSha256 === runtimeEnforcement.resolvedCommandSha256 &&
   enforcementReceipt.descendantCreationAllowed === true &&
   enforcementReceipt.unauthorizedExecutableDenied === true &&
   enforcementReceipt.unmanifestedReadDenied === true &&
@@ -24210,8 +24243,11 @@ const brokerEnforced =
   enforcementReceipt.unallocatedListenerDenied === true &&
   enforcementReceipt.allocatedListenerAllowed === true &&
   enforcementReceipt.networkOutboundDenied === true &&
+  enforcementReceipt.resolvedCommandAllowed === true &&
   canonicalAuthorityJson(enforcementReceipt.nodeRuntimeAttestation) ===
-    canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation);
+    canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation) &&
+  canonicalAuthorityJson(enforcementReceipt.commandChainAttestation) ===
+    canonicalAuthorityJson(runtimeEnforcement.commandChainAttestation);
 const runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
@@ -49116,7 +49152,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes9, createHash: createHash20 } = __require("crypto");
+    var { randomBytes: randomBytes9, createHash: createHash21 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -49784,7 +49820,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash20("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash21("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -50153,7 +50189,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash20 } = __require("crypto");
+    var { createHash: createHash21 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -50460,7 +50496,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash20("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash21("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -77452,6 +77488,7 @@ var init_package_integration = __esm({
 // packages/rn-dev-agent-core/dist/tools/session.js
 import { dirname as dirname22, join as join55 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
+import { createHash as createHash18 } from "node:crypto";
 function sameMetroAuthority(current, next) {
   return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
 }
@@ -77643,7 +77680,10 @@ function createSessionHandler(runtime, dependencies = {}) {
       }
       if (input.action === "prepare_handoff") {
         const targetHandle = required2(input.targetHandle, "targetHandle");
-        return okResult(registry2.prepareHandoffForHandle(session, { targetHandle }));
+        return okResult(registry2.prepareHandoffForHandle(session, {
+          targetHandle,
+          ...input.ttlMs === void 0 ? {} : { ttlMs: input.ttlMs }
+        }));
       }
       if (input.action === "cancel_handoff") {
         const handoffId = required2(input.handoffId, "handoffId");
@@ -77680,6 +77720,11 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration manifest is unavailable for restoration");
           }
           assertPackageIntegrationInactive(status2.bindings, input.action);
+          const integrationBinding = status2.bindings.packageIntegration;
+          const manifestSha256 = createHash18("sha256").update(integrationInputs.manifest ?? "").digest("hex");
+          if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
+          }
           restorePackageIntegrationFiles({ appRoot });
           registry2.updateBindings(session, {
             bindings: { packageIntegration: null }
@@ -77708,8 +77753,18 @@ function createSessionHandler(runtime, dependencies = {}) {
         assertPackageIntegrationInactive(status2.bindings, input.action);
         applyPackageIntegration({ appRoot, sessionCli });
         try {
+          const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
+          if (!installedManifest) {
+            throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
+          }
           registry2.updateBindings(session, {
-            bindings: { packageIntegration: { applied: true } }
+            bindings: {
+              packageIntegration: {
+                version: 1,
+                installedBySessionId: session.sessionId,
+                manifestSha256: createHash18("sha256").update(installedManifest).digest("hex")
+              }
+            }
           });
         } catch (error2) {
           try {
@@ -77808,11 +77863,19 @@ function createSessionHandler(runtime, dependencies = {}) {
           registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "metro");
         }
         registry2.finishHandoffCleanup(session, status2.worker.instanceId);
+        const acceptedStatus = registry2.getSessionStatus(session.sessionId);
+        const transferredIntegration = acceptedStatus?.bindings.packageIntegration;
         return okResult({
           accepted: true,
           session: projectPublicAuthorityStatus(runtime.status()),
           runnerCapabilityRotated: Boolean(priorRunner),
-          nextAction: "Reopen the exact device runner and pin the dev client before authoritative tools."
+          integrationRestoration: typeof transferredIntegration?.installedBySessionId === "string" ? {
+            required: true,
+            action: "restore_integration",
+            ownerSessionId: session.sessionId,
+            installedBySessionId: transferredIntegration.installedBySessionId
+          } : { required: false },
+          nextAction: typeof transferredIntegration?.installedBySessionId === "string" ? "The recipient now owns integration restoration; call restore_integration with confirmed=true before release." : "Reopen the exact device runner and pin the dev client before authoritative tools."
         });
       }
       if (input.action === "adopt_stale") {
@@ -78104,9 +78167,9 @@ var init_target_device_authority = __esm({
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 function identity(value) {
-  return createHash18("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash19("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -78509,7 +78572,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash19, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash20, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
 import { readFileSync as readFileSync39, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
@@ -79055,7 +79118,7 @@ var init_index = __esm({
           runnerInstanceId: runner?.instanceId,
           runnerPid: runner?.pid,
           runnerProcessBirth: runner?.processBirth,
-          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash19("sha256").update(runner.capability).digest("hex") : void 0,
+          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash20("sha256").update(runner.capability).digest("hex") : void 0,
           runnerPort: runner?.port,
           runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
           deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -79295,6 +79358,7 @@ var init_index = __esm({
       buildGeneration: external_exports.number().int().nonnegative().optional(),
       mode: external_exports.enum(["managed", "external"]).optional(),
       targetHandle: external_exports.string().optional(),
+      ttlMs: external_exports.number().int().min(5e3).max(3e5).optional(),
       handoffId: external_exports.string().optional(),
       token: external_exports.string().optional(),
       adoptionHandle: external_exports.string().optional(),
@@ -79774,7 +79838,7 @@ var init_index = __esm({
           connectedAt: current.connectedAt
         }),
         errorCount: errors.length,
-        errorSha256: createHash19("sha256").update(errorBytes).digest("hex"),
+        errorSha256: createHash20("sha256").update(errorBytes).digest("hex"),
         device: identity2.device,
         runtime: identity2.runtime
       };

@@ -50,6 +50,10 @@ export interface ManagedMetroEnforcementInput {
   nodeExecutable: string;
   nodeVersion: string;
   commandExecutable: string;
+  commandArguments?: readonly string[];
+  commandProbeArguments?: readonly string[];
+  commandExecutableMappings?: readonly string[];
+  commandChainInputs?: readonly string[];
   port: number;
   instanceId: string;
   runtimeInputs: readonly string[];
@@ -83,6 +87,8 @@ export interface ManagedMetroEnforcementReceipt {
   profileSha256: string;
   sandboxExecutableSha256: string;
   sandboxExecutableCdHash: string;
+  commandLaunchSha256: string;
+  resolvedCommandSha256: string;
   descendantCreationAllowed: true;
   unauthorizedExecutableDenied: true;
   unmanifestedReadDenied: true;
@@ -91,7 +97,9 @@ export interface ManagedMetroEnforcementReceipt {
   unallocatedListenerDenied: true;
   allocatedListenerAllowed: true;
   networkOutboundDenied: true;
+  resolvedCommandAllowed: true;
   nodeRuntimeAttestation: ManagedMetroNodeRuntimeAttestation;
+  commandChainAttestation: ManagedMetroRuntimeFileAttestation[];
 }
 
 export interface ManagedMetroEnforcementPlan {
@@ -100,6 +108,8 @@ export interface ManagedMetroEnforcementPlan {
   sandboxExecutable: '/usr/bin/sandbox-exec';
   sandboxExecutableSha256: string;
   sandboxExecutableCdHash: string;
+  commandLaunchSha256: string;
+  resolvedCommandSha256: string;
   profile: string;
   profileSha256: string;
   canaryPath: string;
@@ -108,7 +118,10 @@ export interface ManagedMetroEnforcementPlan {
   port: number;
   unallocatedPort: number;
   nodeExecutable: string;
+  commandExecutable: string;
+  commandProbeArguments: string[];
   nodeRuntimeAttestation: ManagedMetroNodeRuntimeAttestation;
+  commandChainAttestation: ManagedMetroRuntimeFileAttestation[];
 }
 
 export type ManagedMetroEnforcement =
@@ -402,6 +415,14 @@ export function prepareManagedMetroEnforcement(
   const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
   const nodeExecutable = canonicalPath(input.nodeExecutable, canonicalize);
   const commandExecutable = canonicalPath(input.commandExecutable, canonicalize);
+  const commandArguments = [...(input.commandArguments ?? [])];
+  const commandProbeArguments = [...(input.commandProbeArguments ?? [])];
+  const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) =>
+    canonicalPath(path, canonicalize),
+  );
+  const commandChainInputs = (input.commandChainInputs ?? []).map((path) =>
+    canonicalPath(path, canonicalize),
+  );
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve(appRoot, '.expo');
   const readRoots = [
@@ -410,9 +431,16 @@ export function prepareManagedMetroEnforcement(
     runtimeRoot,
     nodeExecutable,
     commandExecutable,
+    ...commandExecutableMappings,
+    ...commandChainInputs,
     ...runtimeInputs,
   ];
-  const executablePaths = [nodeExecutable, commandExecutable, '/usr/bin/env'];
+  const executablePaths = [
+    nodeExecutable,
+    commandExecutable,
+    ...commandExecutableMappings,
+    '/usr/bin/env',
+  ];
   const nodeRuntimeAttestation = attestNodeRuntime(
     {
       ...input,
@@ -424,6 +452,14 @@ export function prepareManagedMetroEnforcement(
     dependencies,
   );
   if (!nodeRuntimeAttestation) {
+    return { status: 'unsupported', reason: 'node-runtime-unverified' };
+  }
+  let commandChainAttestation: ManagedMetroRuntimeFileAttestation[];
+  try {
+    commandChainAttestation = [...new Set(commandChainInputs)]
+      .sort()
+      .map((path) => attestRuntimeFile(path, dependencies));
+  } catch {
     return { status: 'unsupported', reason: 'node-runtime-unverified' };
   }
   const profile = managedMetroSandboxProfile({
@@ -444,6 +480,15 @@ export function prepareManagedMetroEnforcement(
     sandboxExecutable: sandbox.path,
     sandboxExecutableSha256: sandbox.sha256,
     sandboxExecutableCdHash: sandbox.cdHash,
+    commandLaunchSha256: sha256(
+      canonicalAuthorityJson({ executable: commandExecutable, arguments: commandArguments }),
+    ),
+    resolvedCommandSha256: sha256(
+      canonicalAuthorityJson({
+        executable: commandExecutable,
+        arguments: commandProbeArguments,
+      }),
+    ),
     profile,
     profileSha256: sha256(profile),
     canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
@@ -452,7 +497,10 @@ export function prepareManagedMetroEnforcement(
     port: input.port,
     unallocatedPort: 0,
     nodeExecutable,
+    commandExecutable,
+    commandProbeArguments,
     nodeRuntimeAttestation,
+    commandChainAttestation,
   };
 }
 
@@ -469,8 +517,9 @@ const denied = (run) => {
     return error && (error.code === 'EPERM' || error.code === 'EACCES');
   }
 };
-const descendantResult = spawnSync(process.execPath, [input.descendantCanaryPath]);
-const descendantCreationAllowed = descendantResult.status === 0;
+const resolvedCommand = spawnSync(input.commandExecutable, input.commandProbeArguments);
+const resolvedCommandAllowed = resolvedCommand.status === 0;
+const descendantCreationAllowed = resolvedCommandAllowed;
 const unauthorizedResult = spawnSync('/usr/bin/true', []);
 const unauthorizedExecutableDenied =
   unauthorizedResult.status === null &&
@@ -510,6 +559,7 @@ const listen = (port) =>
       !unallocated.ok && (unallocated.code === 'EPERM' || unallocated.code === 'EACCES'),
     allocatedListenerAllowed: allocated.ok,
     networkOutboundDenied,
+    resolvedCommandAllowed,
   };
   process.stdout.write(JSON.stringify(receipt));
   process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
@@ -544,14 +594,10 @@ export function runManagedMetroEnforcementPreflight(
     dependencies.removeCanary ?? ((path: string) => rmSync(path, { force: true }));
   const run = dependencies.run ?? defaultRun;
   let canaryCreated = false;
-  let descendantCanaryCreated = false;
   let symlinkCreated = false;
   try {
     writeCanary(plan.canaryPath, 'rn-dev-agent sandbox canary');
     canaryCreated = true;
-    mkdirSync(dirname(plan.descendantCanaryPath), { recursive: true });
-    writeCanary(plan.descendantCanaryPath, 'process.exit(0);');
-    descendantCanaryCreated = true;
     mkdirSync(dirname(plan.symlinkCanaryPath), { recursive: true });
     rmSync(plan.symlinkCanaryPath, { force: true });
     symlinkSync(plan.canaryPath, plan.symlinkCanaryPath);
@@ -564,8 +610,9 @@ export function runManagedMetroEnforcementPreflight(
       PREFLIGHT_SOURCE,
       JSON.stringify({
         canaryPath: plan.canaryPath,
-        descendantCanaryPath: plan.descendantCanaryPath,
         symlinkCanaryPath: plan.symlinkCanaryPath,
+        commandExecutable: plan.commandExecutable,
+        commandProbeArguments: plan.commandProbeArguments,
         port: plan.port,
         unallocatedPort: plan.unallocatedPort,
       }),
@@ -582,7 +629,8 @@ export function runManagedMetroEnforcementPreflight(
       observed.symlinkEscapeDenied !== true ||
       observed.unallocatedListenerDenied !== true ||
       observed.allocatedListenerAllowed !== true ||
-      observed.networkOutboundDenied !== true
+      observed.networkOutboundDenied !== true ||
+      observed.resolvedCommandAllowed !== true
     ) {
       throw new Error('METRO_RUNTIME_ENFORCEMENT_UNAVAILABLE: sandbox preflight is incomplete');
     }
@@ -592,6 +640,8 @@ export function runManagedMetroEnforcementPreflight(
       profileSha256: plan.profileSha256,
       sandboxExecutableSha256: plan.sandboxExecutableSha256,
       sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
+      commandLaunchSha256: plan.commandLaunchSha256,
+      resolvedCommandSha256: plan.resolvedCommandSha256,
       descendantCreationAllowed: true,
       unauthorizedExecutableDenied: true,
       unmanifestedReadDenied: true,
@@ -600,7 +650,9 @@ export function runManagedMetroEnforcementPreflight(
       unallocatedListenerDenied: true,
       allocatedListenerAllowed: true,
       networkOutboundDenied: true,
+      resolvedCommandAllowed: true,
       nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
+      commandChainAttestation: plan.commandChainAttestation,
     };
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('METRO_RUNTIME_ENFORCEMENT_')) {
@@ -611,7 +663,6 @@ export function runManagedMetroEnforcementPreflight(
     });
   } finally {
     if (symlinkCreated) rmSync(plan.symlinkCanaryPath, { force: true });
-    if (descendantCanaryCreated) removeCanary(plan.descendantCanaryPath);
     if (canaryCreated) removeCanary(plan.canaryPath);
   }
 }
@@ -631,6 +682,8 @@ export function verifyManagedMetroEnforcementReceipt(
     observed.profileSha256 === plan.profileSha256 &&
     observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 &&
     observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash &&
+    observed.commandLaunchSha256 === plan.commandLaunchSha256 &&
+    observed.resolvedCommandSha256 === plan.resolvedCommandSha256 &&
     observed.descendantCreationAllowed === true &&
     observed.unauthorizedExecutableDenied === true &&
     observed.unmanifestedReadDenied === true &&
@@ -639,7 +692,10 @@ export function verifyManagedMetroEnforcementReceipt(
     observed.unallocatedListenerDenied === true &&
     observed.allocatedListenerAllowed === true &&
     observed.networkOutboundDenied === true &&
+    observed.resolvedCommandAllowed === true &&
     canonicalAuthorityJson(observed.nodeRuntimeAttestation) ===
-      canonicalAuthorityJson(plan.nodeRuntimeAttestation)
+      canonicalAuthorityJson(plan.nodeRuntimeAttestation) &&
+    canonicalAuthorityJson(observed.commandChainAttestation) ===
+      canonicalAuthorityJson(plan.commandChainAttestation)
   );
 }

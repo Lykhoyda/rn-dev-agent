@@ -414,10 +414,14 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   const runtimeManifest = {
     version: 1,
     executable: process.execPath,
+    sourceExecutable: process.execPath,
     nodeExecutable: process.execPath,
     nodeVersion: process.version,
     port: 8341,
     args: ['metro', '--port', '8341'],
+    commandProbeArguments: ['--version'],
+    commandExecutableMappings: [],
+    commandChainInputs: [process.execPath],
     nodeOptions: '',
     environmentDigest: 'ab'.repeat(32),
     contentRoot: root,
@@ -441,6 +445,8 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     profileSha256: '12'.repeat(32),
     sandboxExecutableSha256: '34'.repeat(32),
     sandboxExecutableCdHash: '56'.repeat(20),
+    commandLaunchSha256: '67'.repeat(32),
+    resolvedCommandSha256: '68'.repeat(32),
     descendantCreationAllowed: true,
     unauthorizedExecutableDenied: true,
     unmanifestedReadDenied: true,
@@ -449,6 +455,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     unallocatedListenerDenied: true,
     allocatedListenerAllowed: true,
     networkOutboundDenied: true,
+    resolvedCommandAllowed: true,
     nodeRuntimeAttestation: {
       version: 1,
       executable: {
@@ -460,6 +467,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
       loadedRuntimeFiles: [],
       executableMappings: [],
     },
+    commandChainAttestation: [],
   };
   const policyPayload = (runtimeEnforcement: 'os-enforced-v1' | 'unsupported') => ({
     version: 1,

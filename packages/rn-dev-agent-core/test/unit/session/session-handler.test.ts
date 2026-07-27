@@ -111,6 +111,34 @@ function cleanupRuntime(
   };
 }
 
+test('handoff preparation forwards an explicit operator TTL', async () => {
+  let observed: { targetHandle: string; ttlMs?: number } | undefined;
+  const handler = createSessionHandler({
+    status: () => ({ available: true, state: 'active', bindings: {} }),
+    requireOperational: () => ({
+      registry: {
+        prepareHandoffForHandle: (
+          _session: unknown,
+          input: { targetHandle: string; ttlMs?: number },
+        ) => {
+          observed = input;
+          return { handoffId: 'handoff', token: 'token' };
+        },
+      },
+      session: { sessionId: 'source', claimEpoch: 1 },
+    }),
+  });
+
+  const result = await handler({
+    action: 'prepare_handoff',
+    targetHandle: 'recipient',
+    ttlMs: 120_000,
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(observed, { targetHandle: 'recipient', ttlMs: 120_000 });
+});
+
 test('handoff cleanup remains fenced when exact shutdown is not proven', async () => {
   let finished = false;
   const handler = createSessionHandler(
@@ -1048,6 +1076,57 @@ test('integration restoration rejects active handoff cleanup authority', async (
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /releasing active handoffCleanup authority/);
     assert.equal(existsSync(manifestPath), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('handoff recipient restores donor-installed integration with transferred authority', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-transferred-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const originalPackage = {
+      scripts: { ios: 'expo run:ios', android: 'expo run:android' },
+    };
+    writeFileSync(packagePath, `${JSON.stringify(originalPackage)}\n`);
+    const metroPath = join(root, 'metro.config.js');
+    const originalMetro = 'module.exports = {};\n';
+    writeFileSync(metroPath, originalMetro);
+    let activeSessionId = 'donor';
+    const status = {
+      sessionId: activeSessionId,
+      source: { appRoot: root },
+      bindings: {} as Record<string, unknown>,
+    };
+    const registry = {
+      getSessionStatus: () => ({ ...status, sessionId: activeSessionId }),
+      updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
+        status.bindings = { ...status.bindings, ...update.bindings };
+      },
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status, sessionId: activeSessionId }),
+      requireOperational: () => ({
+        registry,
+        session: { sessionId: activeSessionId, claimEpoch: 1 },
+      }),
+    });
+
+    const applied = await handler({ action: 'apply_integration', confirmed: true });
+    assert.equal(applied.isError, undefined);
+    assert.equal(
+      (status.bindings.packageIntegration as { installedBySessionId?: string })
+        .installedBySessionId,
+      'donor',
+    );
+
+    activeSessionId = 'recipient';
+    const restored = await handler({ action: 'restore_integration', confirmed: true });
+
+    assert.equal(restored.isError, undefined);
+    assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), originalPackage);
+    assert.equal(readFileSync(metroPath, 'utf8'), originalMetro);
+    assert.equal(status.bindings.packageIntegration, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

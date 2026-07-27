@@ -251,6 +251,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntime
         !runtimeManifest ||
         runtimeManifest.version !== 1 ||
         typeof runtimeManifest.executable !== 'string' ||
+        typeof runtimeManifest.sourceExecutable !== 'string' ||
         typeof runtimeManifest.nodeExecutable !== 'string' ||
         typeof runtimeManifest.nodeVersion !== 'string' ||
         !Number.isSafeInteger(runtimeManifest.port) ||
@@ -258,6 +259,12 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntime
         runtimeManifest.port > 65_535 ||
         !Array.isArray(runtimeManifest.args) ||
         runtimeManifest.args.some((entry) => typeof entry !== 'string') ||
+        !Array.isArray(runtimeManifest.commandProbeArguments) ||
+        runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== 'string') ||
+        !Array.isArray(runtimeManifest.commandExecutableMappings) ||
+        runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== 'string') ||
+        !Array.isArray(runtimeManifest.commandChainInputs) ||
+        runtimeManifest.commandChainInputs.some((entry) => typeof entry !== 'string') ||
         typeof runtimeManifest.nodeOptions !== 'string' ||
         typeof runtimeManifest.environmentDigest !== 'string' ||
         !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) ||
@@ -308,6 +315,10 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntime
         nodeExecutable: runtimeManifest.nodeExecutable,
         nodeVersion: runtimeManifest.nodeVersion,
         commandExecutable: runtimeManifest.executable,
+        commandArguments: runtimeManifest.args,
+        commandProbeArguments: runtimeManifest.commandProbeArguments,
+        commandExecutableMappings: runtimeManifest.commandExecutableMappings,
+        commandChainInputs: runtimeManifest.commandChainInputs,
         port: runtimeManifest.port,
         instanceId: authority.metroInstanceId,
         runtimeInputs: receipt.runtimeInputs,

@@ -6,6 +6,7 @@ import { captureMetroBinding } from '../session/metro-binding.js';
 import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, readPackageIntegrationInputs, restorePackageIntegrationFiles, } from '../session/package-integration.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
@@ -218,7 +219,10 @@ export function createSessionHandler(runtime, dependencies = {}) {
             }
             if (input.action === 'prepare_handoff') {
                 const targetHandle = required(input.targetHandle, 'targetHandle');
-                return okResult(registry.prepareHandoffForHandle(session, { targetHandle }));
+                return okResult(registry.prepareHandoffForHandle(session, {
+                    targetHandle,
+                    ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
+                }));
             }
             if (input.action === 'cancel_handoff') {
                 const handoffId = required(input.handoffId, 'handoffId');
@@ -262,6 +266,15 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration manifest is unavailable for restoration');
                     }
                     assertPackageIntegrationInactive(status.bindings, input.action);
+                    const integrationBinding = status.bindings.packageIntegration;
+                    const manifestSha256 = createHash('sha256')
+                        .update(integrationInputs.manifest ?? '')
+                        .digest('hex');
+                    if (integrationBinding?.version !== 1 ||
+                        typeof integrationBinding.installedBySessionId !== 'string' ||
+                        integrationBinding.manifestSha256 !== manifestSha256) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration restoration requires the transferred manifest authority binding');
+                    }
                     restorePackageIntegrationFiles({ appRoot });
                     registry.updateBindings(session, {
                         bindings: { packageIntegration: null },
@@ -290,8 +303,18 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 assertPackageIntegrationInactive(status.bindings, input.action);
                 applyPackageIntegration({ appRoot, sessionCli });
                 try {
+                    const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
+                    if (!installedManifest) {
+                        throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable');
+                    }
                     registry.updateBindings(session, {
-                        bindings: { packageIntegration: { applied: true } },
+                        bindings: {
+                            packageIntegration: {
+                                version: 1,
+                                installedBySessionId: session.sessionId,
+                                manifestSha256: createHash('sha256').update(installedManifest).digest('hex'),
+                            },
+                        },
                     });
                 }
                 catch (error) {
@@ -398,11 +421,23 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     registry.completeHandoffCleanupResource(session, status.worker.instanceId, 'metro');
                 }
                 registry.finishHandoffCleanup(session, status.worker.instanceId);
+                const acceptedStatus = registry.getSessionStatus(session.sessionId);
+                const transferredIntegration = acceptedStatus?.bindings.packageIntegration;
                 return okResult({
                     accepted: true,
                     session: projectPublicAuthorityStatus(runtime.status()),
                     runnerCapabilityRotated: Boolean(priorRunner),
-                    nextAction: 'Reopen the exact device runner and pin the dev client before authoritative tools.',
+                    integrationRestoration: typeof transferredIntegration?.installedBySessionId === 'string'
+                        ? {
+                            required: true,
+                            action: 'restore_integration',
+                            ownerSessionId: session.sessionId,
+                            installedBySessionId: transferredIntegration.installedBySessionId,
+                        }
+                        : { required: false },
+                    nextAction: typeof transferredIntegration?.installedBySessionId === 'string'
+                        ? 'The recipient now owns integration restoration; call restore_integration with confirmed=true before release.'
+                        : 'Reopen the exact device runner and pin the dev client before authoritative tools.',
                 });
             }
             if (input.action === 'adopt_stale') {

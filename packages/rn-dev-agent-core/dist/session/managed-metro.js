@@ -138,6 +138,8 @@ const brokerEnforced =
     runtimeEnforcement.sandboxExecutableSha256 &&
   enforcementReceipt.sandboxExecutableCdHash ===
     runtimeEnforcement.sandboxExecutableCdHash &&
+  enforcementReceipt.commandLaunchSha256 === runtimeEnforcement.commandLaunchSha256 &&
+  enforcementReceipt.resolvedCommandSha256 === runtimeEnforcement.resolvedCommandSha256 &&
   enforcementReceipt.descendantCreationAllowed === true &&
   enforcementReceipt.unauthorizedExecutableDenied === true &&
   enforcementReceipt.unmanifestedReadDenied === true &&
@@ -146,8 +148,11 @@ const brokerEnforced =
   enforcementReceipt.unallocatedListenerDenied === true &&
   enforcementReceipt.allocatedListenerAllowed === true &&
   enforcementReceipt.networkOutboundDenied === true &&
+  enforcementReceipt.resolvedCommandAllowed === true &&
   canonicalAuthorityJson(enforcementReceipt.nodeRuntimeAttestation) ===
-    canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation);
+    canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation) &&
+  canonicalAuthorityJson(enforcementReceipt.commandChainAttestation) ===
+    canonicalAuthorityJson(runtimeEnforcement.commandChainAttestation);
 const runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
@@ -553,6 +558,57 @@ export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
     }
     throw new Error('METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native');
 }
+function resolveManagedMetroLaunchCommand(command, dependencies) {
+    const exists = dependencies.exists ?? existsSync;
+    const readText = dependencies.readText ?? ((path) => readFileSync(path, 'utf8'));
+    let firstLine = '';
+    try {
+        firstLine = readText(command.executable).split(/\r?\n/, 1)[0] ?? '';
+    }
+    catch {
+        return {
+            sourceExecutable: command.executable,
+            executable: command.executable,
+            args: command.args,
+            probeArgs: ['--version'],
+            executableMappings: [],
+            chainInputs: [command.executable],
+        };
+    }
+    if (/^#!\s*\/usr\/bin\/env\s+node(?:\s|$)/.test(firstLine)) {
+        return {
+            sourceExecutable: command.executable,
+            executable: process.execPath,
+            args: [command.executable, ...command.args],
+            probeArgs: [command.executable, '--version'],
+            executableMappings: [],
+            chainInputs: [command.executable, process.execPath],
+        };
+    }
+    if (/^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(firstLine)) {
+        const shellSelector = exists('/private/var/select/sh') ? '/private/var/select/sh' : '/bin/sh';
+        const shellExecutable = canonicalRuntimeInput(shellSelector);
+        const shellHelpers = ['/usr/bin/dirname', '/usr/bin/sed', '/usr/bin/uname']
+            .filter(exists)
+            .map(canonicalRuntimeInput);
+        return {
+            sourceExecutable: command.executable,
+            executable: shellExecutable,
+            args: [command.executable, ...command.args],
+            probeArgs: [command.executable, '--version'],
+            executableMappings: [process.execPath, ...shellHelpers],
+            chainInputs: [command.executable, shellExecutable, process.execPath, ...shellHelpers],
+        };
+    }
+    return {
+        sourceExecutable: command.executable,
+        executable: command.executable,
+        args: command.args,
+        probeArgs: ['--version'],
+        executableMappings: [],
+        chainInputs: [command.executable],
+    };
+}
 function managementProof(sessionId, authority, signerCapability) {
     return createHmac('sha256', signerCapability)
         .update(canonicalAuthorityJson({
@@ -702,6 +758,7 @@ async function stopSpawnedProcessGroup(input, dependencies) {
 }
 export async function startManagedMetro(input, dependencies = {}) {
     const command = resolveManagedMetroCommand(input.appRoot, dependencies);
+    const launchCommand = resolveManagedMetroLaunchCommand(command, dependencies);
     const instanceId = input.instanceId;
     const runtimePolicyCapability = createHmac('sha256', input.signerCapability)
         .update('metro-runtime-policy')
@@ -734,7 +791,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         .update(`metro-descendant-root\0${instanceId}`)
         .digest('hex')
         .slice(0, 32);
-    const metroArgs = [...command.args, '--port', String(input.port)];
+    const metroArgs = [...launchCommand.args, '--port', String(input.port)];
     const metroHome = join(input.runtimeRoot, 'metro-home');
     const metroTemporaryRoot = join(input.runtimeRoot, 'metro-tmp');
     const metroCacheRoot = join(input.runtimeRoot, 'metro-cache');
@@ -776,7 +833,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         .filter(exists)
         .map(canonicalRuntimeInput);
     const runtimeInputs = [
-        canonicalRuntimeInput(command.executable),
+        canonicalRuntimeInput(launchCommand.sourceExecutable),
         canonicalRuntimeInput(authorityPreload),
         ...packageInputs,
         ...metroConfigInputs,
@@ -784,7 +841,11 @@ export async function startManagedMetro(input, dependencies = {}) {
     ].filter((value, index, entries) => entries.indexOf(value) === index);
     const runtimeManifest = {
         version: 1,
-        executable: canonicalRuntimeInput(command.executable),
+        executable: canonicalRuntimeInput(launchCommand.executable),
+        sourceExecutable: canonicalRuntimeInput(launchCommand.sourceExecutable),
+        commandProbeArguments: launchCommand.probeArgs,
+        commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
+        commandChainInputs: launchCommand.chainInputs.map(canonicalRuntimeInput),
         nodeExecutable: canonicalRuntimeInput(process.execPath),
         nodeVersion: process.version,
         port: input.port,
@@ -816,7 +877,11 @@ export async function startManagedMetro(input, dependencies = {}) {
         runtimeRoot: input.runtimeRoot,
         nodeExecutable: process.execPath,
         nodeVersion: process.version,
-        commandExecutable: command.executable,
+        commandExecutable: launchCommand.executable,
+        commandArguments: metroArgs,
+        commandProbeArguments: launchCommand.probeArgs,
+        commandExecutableMappings: launchCommand.executableMappings,
+        commandChainInputs: launchCommand.chainInputs,
         port: input.port,
         instanceId,
         runtimeInputs,
@@ -842,7 +907,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         cwd: input.appRoot,
         env: {
             ...metroEnvironment,
-            RN_DEV_AGENT_METRO_EXECUTABLE: command.executable,
+            RN_DEV_AGENT_METRO_EXECUTABLE: launchCommand.executable,
             RN_DEV_AGENT_METRO_ARGS: JSON.stringify(metroArgs),
             RN_DEV_AGENT_SESSION_ID: input.sessionId,
             RN_DEV_AGENT_METRO_INSTANCE_ID: instanceId,

@@ -33,18 +33,26 @@ Ask in normal conversation; do not assume a host-specific question tool:
 
 ## 2. Collect and sanitize
 
-Run the collector and parse its structured output. It may report plugin/core
-versions, OS/Node versions, device counts, Metro status, runner versions, and
-recent legacy telemetry status. If active `cdp_status`/`cdp_error_log` tools are
-available, their high-level connection/error counts may be added; absence or
-transport closure is itself valid feedback and must not block submission.
+Call `rn_session({action: "status"})` first when available. If it returns an
+exact session, retain its opaque `sessionId` only in memory. Run the collector
+from the exact project root with that ID set only for the collector process as
+`RN_DEV_AGENT_SESSION_ID`. Never include the ID in a preview or submission.
+This prevents a completed handoff from making the collector ambiguous when
+multiple released sessions share one worktree.
 
-Call `rn_session({action: "status"})` when available and reconcile it with the
-collector's `authority` object. Compare exact values only in memory. The
-preview may show the sanitized authority state, own Metro allocated/bound
-booleans, and foreign-session count. If there is no exact session, show
-`authority: unknown`; never select the first live session. `cdp_status` is
-passive diagnostic context and does not replace session authority.
+Parse the collector's structured output. It may report plugin/core versions,
+OS/Node versions, device counts, Metro status, runner versions, and recent
+legacy telemetry status. Reconcile its authority object with the previously
+captured `rn_session` status. Compare exact values only in memory. The preview
+may show the sanitized authority state, own Metro allocated/bound booleans, and
+foreign-session count. If there is no exact session, omit
+`RN_DEV_AGENT_SESSION_ID`, show `authority: unknown`, and never select the first
+live session.
+
+If active `cdp_status`/`cdp_error_log` tools are available, their high-level
+connection/error counts may be added; absence or transport closure is itself
+valid feedback and must not block submission. `cdp_status` is passive
+diagnostic context and does not replace session authority.
 
 Never include:
 

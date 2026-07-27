@@ -770,6 +770,7 @@ trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent author
     buildGeneration: z.number().int().nonnegative().optional(),
     mode: z.enum(['managed', 'external']).optional(),
     targetHandle: z.string().optional(),
+    ttlMs: z.number().int().min(5_000).max(300_000).optional(),
     handoffId: z.string().optional(),
     token: z.string().optional(),
     adoptionHandle: z.string().optional(),

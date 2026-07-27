@@ -377,6 +377,7 @@ function metroRuntimeInputs(
     !runtimeManifest ||
     runtimeManifest.version !== 1 ||
     typeof runtimeManifest.executable !== 'string' ||
+    typeof runtimeManifest.sourceExecutable !== 'string' ||
     typeof runtimeManifest.nodeExecutable !== 'string' ||
     typeof runtimeManifest.nodeVersion !== 'string' ||
     !Number.isSafeInteger(runtimeManifest.port as number) ||
@@ -384,6 +385,12 @@ function metroRuntimeInputs(
     (runtimeManifest.port as number) > 65_535 ||
     !Array.isArray(runtimeManifest.args) ||
     runtimeManifest.args.some((entry) => typeof entry !== 'string') ||
+    !Array.isArray(runtimeManifest.commandProbeArguments) ||
+    runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== 'string') ||
+    !Array.isArray(runtimeManifest.commandExecutableMappings) ||
+    runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== 'string') ||
+    !Array.isArray(runtimeManifest.commandChainInputs) ||
+    runtimeManifest.commandChainInputs.some((entry) => typeof entry !== 'string') ||
     typeof runtimeManifest.nodeOptions !== 'string' ||
     typeof runtimeManifest.environmentDigest !== 'string' ||
     !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) ||
@@ -441,6 +448,10 @@ function metroRuntimeInputs(
         nodeExecutable: runtimeManifest.nodeExecutable as string,
         nodeVersion: runtimeManifest.nodeVersion as string,
         commandExecutable: runtimeManifest.executable as string,
+        commandArguments: runtimeManifest.args as string[],
+        commandProbeArguments: runtimeManifest.commandProbeArguments as string[],
+        commandExecutableMappings: runtimeManifest.commandExecutableMappings as string[],
+        commandChainInputs: runtimeManifest.commandChainInputs as string[],
         port: runtimeManifest.port as number,
         instanceId: authority.metroInstanceId,
         runtimeInputs: receipt.runtimeInputs as string[],

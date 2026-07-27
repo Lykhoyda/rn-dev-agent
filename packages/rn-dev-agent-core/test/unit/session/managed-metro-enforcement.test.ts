@@ -41,6 +41,9 @@ function fixtureInput(platform: NodeJS.Platform = 'darwin') {
     nodeExecutable: '/node/bin/node',
     nodeVersion: 'v24.14.0',
     commandExecutable: '/repo/apps/mobile/node_modules/.bin/expo',
+    commandArguments: ['start', '--dev-client', '--port', '8341'],
+    commandProbeArguments: ['--version'],
+    commandChainInputs: ['/repo/apps/mobile/node_modules/.bin/expo'],
     port: 8341,
     instanceId: 'metro-instance',
     runtimeInputs: [
@@ -244,6 +247,8 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
     profileSha256: plan.profileSha256,
     sandboxExecutableSha256: plan.sandboxExecutableSha256,
     sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
+    commandLaunchSha256: plan.commandLaunchSha256,
+    resolvedCommandSha256: plan.resolvedCommandSha256,
     descendantCreationAllowed: true,
     unauthorizedExecutableDenied: true,
     unmanifestedReadDenied: true,
@@ -252,7 +257,9 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
     unallocatedListenerDenied: true,
     allocatedListenerAllowed: true,
     networkOutboundDenied: true,
+    resolvedCommandAllowed: true,
     nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
+    commandChainAttestation: plan.commandChainAttestation,
   };
 
   assert.equal(
@@ -263,6 +270,22 @@ test('managed Metro rejects a receipt after Node executable bytes change', () =>
     verifyManagedMetroEnforcementReceipt(fixtureInput(), receipt, {
       ...verifiedRuntime,
       readBytes: (path: string) => Buffer.from(path === '/node/bin/node' ? 'replaced-node' : path),
+    }),
+    false,
+  );
+  assert.equal(
+    verifyManagedMetroEnforcementReceipt(
+      { ...fixtureInput(), commandArguments: ['start', '--port', '8341'] },
+      receipt,
+      verifiedRuntime,
+    ),
+    false,
+  );
+  assert.equal(
+    verifyManagedMetroEnforcementReceipt(fixtureInput(), receipt, {
+      ...verifiedRuntime,
+      readBytes: (path: string) =>
+        Buffer.from(path.endsWith('/node_modules/.bin/expo') ? 'replaced-shim' : path),
     }),
     false,
   );
@@ -298,7 +321,9 @@ test(
       runtimeRoot,
       nodeExecutable: process.execPath,
       nodeVersion: process.version,
-      commandExecutable,
+      commandExecutable: process.execPath,
+      commandProbeArguments: [commandExecutable],
+      commandChainInputs: [process.execPath, commandExecutable],
       port,
       instanceId: 'integration',
       runtimeInputs: [commandExecutable],
@@ -314,6 +339,8 @@ test(
       profileSha256: plan.profileSha256,
       sandboxExecutableSha256: plan.sandboxExecutableSha256,
       sandboxExecutableCdHash: plan.sandboxExecutableCdHash,
+      commandLaunchSha256: plan.commandLaunchSha256,
+      resolvedCommandSha256: plan.resolvedCommandSha256,
       descendantCreationAllowed: true,
       unauthorizedExecutableDenied: true,
       unmanifestedReadDenied: true,
@@ -322,7 +349,9 @@ test(
       unallocatedListenerDenied: true,
       allocatedListenerAllowed: true,
       networkOutboundDenied: true,
+      resolvedCommandAllowed: true,
       nodeRuntimeAttestation: plan.nodeRuntimeAttestation,
+      commandChainAttestation: plan.commandChainAttestation,
     });
     assert.equal(dirname(plan.canaryPath), '/private/tmp');
   },
@@ -345,17 +374,33 @@ test(
     writeFileSync(join(integrationRoot, 'rn-session-metro.cjs'), renderMetroIntegrationAdapter());
     const descendantEntry = join(appRoot, 'metro-descendant.cjs');
     writeFileSync(descendantEntry, 'process.exit(0);\n');
-    const executable = join(binRoot, 'expo');
+    const expoRoot = join(appRoot, 'node_modules', 'expo', 'bin');
+    mkdirSync(expoRoot, { recursive: true });
+    const expoEntry = join(expoRoot, 'cli');
     writeFileSync(
-      executable,
-      `#!/usr/bin/env node
-const { createServer } = require('node:net');
+      expoEntry,
+      `const { createServer } = require('node:net');
 const { spawnSync } = require('node:child_process');
+if (process.argv.includes('--version')) {
+  process.stdout.write('1.0.0\\n');
+  process.exit(0);
+}
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 const descendant = spawnSync(process.execPath, [${JSON.stringify(descendantEntry)}]);
 if (descendant.status !== 0) process.exit(descendant.status || 1);
 createServer(() => {}).listen(port, '127.0.0.1');
 setInterval(() => {}, 1 << 30);
+`,
+    );
+    const executable = join(binRoot, 'expo');
+    writeFileSync(
+      executable,
+      `#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
+case \`uname\` in
+  *CYGWIN*|*MINGW*|*MSYS*) basedir=\`cygpath -w "$basedir"\`;;
+esac
+exec node "$basedir/../expo/bin/cli" "$@"
 `,
     );
     chmodSync(executable, 0o755);
@@ -422,6 +467,10 @@ setInterval(() => {}, 1 << 30);
         nodeExecutable: runtimeManifest.nodeExecutable as string,
         nodeVersion: runtimeManifest.nodeVersion as string,
         commandExecutable: runtimeManifest.executable as string,
+        commandArguments: runtimeManifest.args as string[],
+        commandProbeArguments: runtimeManifest.commandProbeArguments as string[],
+        commandExecutableMappings: runtimeManifest.commandExecutableMappings as string[],
+        commandChainInputs: runtimeManifest.commandChainInputs as string[],
         port: runtimeManifest.port as number,
         instanceId: 'integration-metro',
         runtimeInputs: policy.runtimeInputs as string[],
@@ -439,6 +488,8 @@ setInterval(() => {}, 1 << 30);
       assert.equal(observedReceipt.profileSha256, reconstructed.profileSha256);
       assert.equal(observedReceipt.sandboxExecutableSha256, reconstructed.sandboxExecutableSha256);
       assert.equal(observedReceipt.sandboxExecutableCdHash, reconstructed.sandboxExecutableCdHash);
+      assert.equal(observedReceipt.commandLaunchSha256, reconstructed.commandLaunchSha256);
+      assert.equal(observedReceipt.resolvedCommandSha256, reconstructed.resolvedCommandSha256);
       for (const field of [
         'descendantCreationAllowed',
         'unauthorizedExecutableDenied',
@@ -448,6 +499,7 @@ setInterval(() => {}, 1 << 30);
         'unallocatedListenerDenied',
         'allocatedListenerAllowed',
         'networkOutboundDenied',
+        'resolvedCommandAllowed',
       ]) {
         assert.equal(observedReceipt[field], true, field);
       }
