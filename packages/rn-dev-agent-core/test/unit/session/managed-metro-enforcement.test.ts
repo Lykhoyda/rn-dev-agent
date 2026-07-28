@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,6 +30,7 @@ import { renderMetroIntegrationAdapter } from '../../../dist/session/package-int
 import { probeProcessBirth, readProcessBirth } from '../../../dist/session/process-birth.js';
 
 const roots: string[] = [];
+const requireFromTest = createRequire(import.meta.url);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
@@ -44,6 +48,7 @@ function fixtureInput(platform: NodeJS.Platform = 'darwin') {
     commandArguments: ['start', '--dev-client', '--port', '8341'],
     commandProbeArguments: ['--version'],
     commandChainInputs: ['/repo/apps/mobile/node_modules/.bin/expo'],
+    nativeAddonRoots: ['/repo/node_modules'],
     port: 8341,
     instanceId: 'metro-instance',
     runtimeInputs: [
@@ -124,7 +129,8 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
   assert.doesNotMatch(first.profile, /\(deny process-fork\)/);
   assert.doesNotMatch(first.profile, /\(literal "\/bin\/sh"\)/);
   assert.match(first.profile, /\(deny network-outbound\)/);
-  assert.match(first.profile, /\(deny file-map-executable/);
+  assert.match(first.profile, /\(extension "node"\)/);
+  assert.match(first.profile, /\(subpath "\/repo\/node_modules"\)/);
   assert.deepEqual(first.nodeRuntimeAttestation, {
     version: 1,
     executable: {
@@ -380,6 +386,35 @@ test(
     mkdirSync(binRoot, { recursive: true });
     writeFileSync(join(appRoot, 'package.json'), JSON.stringify({ dependencies: { expo: '1' } }));
     writeFileSync(join(integrationRoot, 'rn-session-metro.cjs'), renderMetroIntegrationAdapter());
+    const pnpmRoot = join(appRoot, 'node_modules', '.pnpm');
+    const nativeWindRoot = join(pnpmRoot, 'nativewind@1.0.0', 'node_modules', 'nativewind');
+    const cssInteropRoot = join(
+      pnpmRoot,
+      'react-native-css-interop@1.0.0',
+      'node_modules',
+      'react-native-css-interop',
+    );
+    const lightningCssRoot = join(pnpmRoot, 'lightningcss@1.0.0', 'node_modules', 'lightningcss');
+    for (const dependencyRoot of [nativeWindRoot, cssInteropRoot, lightningCssRoot]) {
+      mkdirSync(dependencyRoot, { recursive: true });
+    }
+    writeFileSync(
+      join(nativeWindRoot, 'index.js'),
+      "module.exports = require('react-native-css-interop');\n",
+    );
+    writeFileSync(join(cssInteropRoot, 'index.js'), "module.exports = require('lightningcss');\n");
+    writeFileSync(
+      join(lightningCssRoot, 'index.js'),
+      "module.exports = require('./lightningcss.node');\n",
+    );
+    const addonPath = join(lightningCssRoot, 'lightningcss.node');
+    copyFileSync(
+      requireFromTest.resolve('@oxfmt/binding-darwin-arm64/oxfmt.darwin-arm64.node'),
+      addonPath,
+    );
+    symlinkSync(nativeWindRoot, join(appRoot, 'node_modules', 'nativewind'), 'dir');
+    symlinkSync(cssInteropRoot, join(appRoot, 'node_modules', 'react-native-css-interop'), 'dir');
+    symlinkSync(lightningCssRoot, join(appRoot, 'node_modules', 'lightningcss'), 'dir');
     const descendantEntry = join(appRoot, 'metro-descendant.cjs');
     writeFileSync(descendantEntry, 'process.exit(0);\n');
     const expoRoot = join(appRoot, 'node_modules', 'expo', 'bin');
@@ -394,6 +429,7 @@ if (process.argv.includes('--version')) {
   process.exit(0);
 }
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+require('nativewind');
 const descendant = spawnSync(process.execPath, [${JSON.stringify(descendantEntry)}]);
 if (descendant.status !== 0) process.exit(descendant.status || 1);
 createServer(() => {}).listen(port, '127.0.0.1');
@@ -450,7 +486,11 @@ exec node "$basedir/../expo/bin/cli" "$@"
     );
 
     try {
-      assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
+      assert.equal(
+        binding.runtimeEvidenceAuthority,
+        'managed-sandbox-v1',
+        readFileSync(join(runtimeRoot, 'metro.log'), 'utf8'),
+      );
       assert.equal(
         verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
           sessionId: 'integration-session',
@@ -485,6 +525,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         commandExecutableMappings: runtimeManifest.commandExecutableMappings as string[],
         commandChainInputs: runtimeManifest.commandChainInputs as string[],
         protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots as string[],
+        nativeAddonRoots: runtimeManifest.nativeAddonRoots as string[],
         port: runtimeManifest.port as number,
         instanceId: 'integration-metro',
         runtimeInputs: policy.runtimeInputs as string[],
@@ -532,6 +573,14 @@ exec node "$basedir/../expo/bin/cli" "$@"
       );
       const attestations = new Set(
         evidence.filter((entry) => entry.kind === 'attestation').map((entry) => entry.value),
+      );
+      assert.ok(
+        evidence.some(
+          (entry) =>
+            entry.kind === 'input' &&
+            entry.value === realpathSync(addonPath) &&
+            entry.digest === createHash('sha256').update(readFileSync(addonPath)).digest('hex'),
+        ),
       );
       assert.equal(launches.size, 1);
       assert.deepEqual(launches, attestations);

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
 import {
@@ -631,44 +634,82 @@ test('managed Metro proves a cross-platform listener belongs to the spawned laun
 });
 
 test('managed Metro stops polling when the launcher exits by signal', async () => {
-  let listenerProbes = 0;
-  await assert.rejects(
-    () =>
-      startManagedMetro(
-        {
-          appRoot: '/app',
-          runtimeRoot: '/tmp',
-          sourceRoot: '/app',
-          sessionId: 'session-a',
-          port: 8341,
-          instanceId: 'metro-a',
-          buildGeneration: 1,
-          signerCapability: 'signer',
-        },
-        {
-          readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
-          exists: () => true,
-          spawnProcess: () => ({
-            pid: 101,
-            exitCode: null,
-            signalCode: 'SIGTERM',
-            kill: () => true,
-            unref: () => {},
-          }),
-          listenerPid: () => {
-            listenerProbes++;
-            return null;
-          },
-          readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
-          probeBirth: () => ({ status: 'absent' }),
-          probeListener: () => ({ status: 'absent' }),
-          wait: async () =>
-            assert.fail('signalled launcher must not wait for the startup deadline'),
-        },
-      ),
-    /METRO_START_UNAVAILABLE/,
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-managed-metro-startup-refusal-'));
+  const capability = createHmac('sha256', 'signer')
+    .update('metro-runtime-policy')
+    .digest('base64url');
+  const violation = {
+    version: 1,
+    sessionId: 'session-a',
+    metroInstanceId: 'metro-a',
+    kind: 'violation',
+    value: 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: outside:foreign-addon.node',
+    digest: null,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sequence: 1,
+    previousSignature: null,
+  };
+  writeFileSync(
+    join(runtimeRoot, 'metro-runtime-evidence.jsonl'),
+    `${canonicalAuthorityJson({
+      ...violation,
+      signature: createHmac('sha256', capability)
+        .update(canonicalAuthorityJson(violation))
+        .digest('hex'),
+    })}\n`,
   );
-  assert.equal(listenerProbes, 0);
+  writeFileSync(join(runtimeRoot, 'metro.log'), 'first line\nnative addon startup failed\n');
+  let listenerProbes = 0;
+  try {
+    await assert.rejects(
+      () =>
+        startManagedMetro(
+          {
+            appRoot: '/app',
+            runtimeRoot,
+            sourceRoot: '/app',
+            sessionId: 'session-a',
+            port: 8341,
+            instanceId: 'metro-a',
+            buildGeneration: 1,
+            signerCapability: 'signer',
+          },
+          {
+            readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+            exists: () => true,
+            spawnProcess: () => ({
+              pid: 101,
+              exitCode: null,
+              signalCode: 'SIGTERM',
+              kill: () => true,
+              unref: () => {},
+            }),
+            listenerPid: () => {
+              listenerProbes++;
+              return null;
+            },
+            readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+            probeBirth: () => ({ status: 'absent' }),
+            probeListener: () => ({ status: 'absent' }),
+            wait: async () =>
+              assert.fail('signalled launcher must not wait for the startup deadline'),
+          },
+        ),
+      (error: Error) => {
+        assert.match(error.message, /^RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON:/);
+        assert.match(error.message, /launcher signal SIGTERM/);
+        assert.match(error.message, /native addon startup failed/);
+        return true;
+      },
+    );
+    assert.equal(listenerProbes, 0);
+    assert.match(
+      readFileSync(join(runtimeRoot, 'metro.log'), 'utf8'),
+      /native addon startup failed/,
+    );
+  } finally {
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
 });
 
 test('managed Metro stops its owned process tree and proves the listener is gone', async () => {

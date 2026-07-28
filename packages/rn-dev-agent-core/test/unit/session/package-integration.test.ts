@@ -53,7 +53,10 @@ const packageJson = {
   },
 };
 
-function metroPolicyEnvironment(adapterPath: string): NodeJS.ProcessEnv {
+function metroPolicyEnvironment(
+  adapterPath: string,
+  allowedCodeRoots: readonly string[] = [],
+): NodeJS.ProcessEnv {
   const runtimeLoads = join(dirname(adapterPath), 'metro-runtime-loads.jsonl');
   writeFileSync(runtimeLoads, '');
   return {
@@ -65,6 +68,9 @@ function metroPolicyEnvironment(adapterPath: string): NodeJS.ProcessEnv {
     RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: adapterPath,
     RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: '',
     RN_DEV_AGENT_METRO_RUNTIME_LOADS: runtimeLoads,
+    ...(allowedCodeRoots.length > 0
+      ? { RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS: JSON.stringify(allowedCodeRoots) }
+      : {}),
   };
 }
 
@@ -1284,7 +1290,7 @@ test('Metro seals native process handles and IPC read callbacks', () => {
       evidence.some(
         (entry) =>
           entry.kind === 'violation' &&
-          entry.value === 'Metro runtime native addons are unsupported for strict proof',
+          entry.value === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: outside:unknown.node',
       ),
     );
   } finally {
@@ -1483,7 +1489,7 @@ test('Metro preload ignores caught optional module misses', () => {
   }
 });
 
-test('Metro preload rejects native addons from strict proof', () => {
+test('Metro preload attests ESM native addons within managed code roots', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-native-addon-'));
   try {
     execFileSync('git', ['init', '-q', root]);
@@ -1493,7 +1499,7 @@ test('Metro preload rejects native addons from strict proof', () => {
     const addonPath = join(root, 'fixture.node');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(addonPath, 'fixture native addon bytes');
-    const env = metroPolicyEnvironment(adapterPath);
+    const env = metroPolicyEnvironment(adapterPath, [root]);
     env.NODE_OPTIONS = '';
     const result = spawnSync(
       process.execPath,
@@ -1518,14 +1524,13 @@ test('Metro preload rejects native addons from strict proof', () => {
     assert.ok(
       observations.some(
         (entry) =>
-          entry.kind === 'violation' &&
-          entry.value.includes('native addons are unsupported for strict proof'),
+          entry.kind === 'input' &&
+          entry.value === realpathSync(addonPath) &&
+          entry.digest === createHash('sha256').update('fixture native addon bytes').digest('hex'),
       ),
     );
     assert.equal(
-      observations.some(
-        (entry) => entry.kind === 'input' && entry.value === realpathSync(addonPath),
-      ),
+      observations.some((entry) => entry.kind === 'violation'),
       false,
     );
   } finally {
@@ -1533,7 +1538,7 @@ test('Metro preload rejects native addons from strict proof', () => {
   }
 });
 
-test('Metro preload fences direct native addon loading', () => {
+test('Metro preload attests direct native addon bytes before invoking the original loader', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-direct-native-addon-'));
   try {
     execFileSync('git', ['init', '-q', root]);
@@ -1543,15 +1548,60 @@ test('Metro preload fences direct native addon loading', () => {
     const addonPath = join(root, 'fixture.node');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(addonPath, 'fixture native addon bytes');
+    const env = metroPolicyEnvironment(adapterPath, [root]);
+    env.NODE_OPTIONS = '';
     const result = spawnSync(
       process.execPath,
       [
         '-e',
-        `const compose = require(${JSON.stringify(adapterPath)}); compose({}); const guardedDlopen = process.dlopen; let error; try { process.dlopen({}, ${JSON.stringify(addonPath)}); } catch (caught) { error = caught; } if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON') process.exit(1); try { process.dlopen = () => {}; } catch {} if (process.dlopen !== guardedDlopen || require('node:process').dlopen !== guardedDlopen) process.exit(2);`,
+        `const fs = require('node:fs'); const expected = fs.realpathSync(${JSON.stringify(addonPath)}); let calls = 0; process.dlopen = (_module, path) => { const evidence = fs.readFileSync(${JSON.stringify(join(integration, 'metro-runtime-loads.jsonl'))}, 'utf8'); if (!evidence.includes(expected)) process.exit(3); if (path !== expected) process.exit(4); calls += 1; return 'loaded'; }; const compose = require(${JSON.stringify(adapterPath)}); compose({}); const guardedDlopen = process.dlopen; if (process.dlopen({}, ${JSON.stringify(addonPath)}) !== 'loaded' || calls !== 1) process.exit(1); try { process.dlopen = () => {}; } catch {} if (process.dlopen !== guardedDlopen || require('node:process').dlopen !== guardedDlopen) process.exit(2);`,
       ],
       {
         cwd: root,
-        env: metroPolicyEnvironment(adapterPath),
+        env,
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const observations = readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.ok(
+      observations.some(
+        (entry) =>
+          entry.kind === 'input' &&
+          entry.value === realpathSync(addonPath) &&
+          entry.digest === createHash('sha256').update('fixture native addon bytes').digest('hex'),
+      ),
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro preload refuses native addons outside managed code roots with a sanitized path', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-native-addon-project-'));
+  const foreignRoot = mkdtempSync(join(tmpdir(), 'rn-session-metro-native-addon-foreign-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const addonPath = join(foreignRoot, 'foreign-addon.node');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(addonPath, 'foreign native addon bytes');
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `process.dlopen = () => process.exit(5); const compose = require(${JSON.stringify(adapterPath)}); compose({}); let error; try { process.dlopen({}, ${JSON.stringify(addonPath)}); } catch (caught) { error = caught; } if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON') process.exit(1); if (!error.message.includes('foreign-addon.node') || error.message.includes(${JSON.stringify(foreignRoot)})) process.exit(2);`,
+      ],
+      {
+        cwd: root,
+        env: metroPolicyEnvironment(adapterPath, [root]),
         encoding: 'utf8',
       },
     );
@@ -1566,11 +1616,14 @@ test('Metro preload fences direct native addon loading', () => {
       observations.some(
         (entry) =>
           entry.kind === 'violation' &&
-          entry.value.includes('native addons are unsupported for strict proof'),
+          entry.value.includes('RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON') &&
+          entry.value.includes('foreign-addon.node') &&
+          !entry.value.includes(foreignRoot),
       ),
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
+    rmSync(foreignRoot, { force: true, recursive: true });
   }
 });
 

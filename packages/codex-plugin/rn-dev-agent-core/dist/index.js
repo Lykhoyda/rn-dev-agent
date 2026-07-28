@@ -26243,6 +26243,9 @@ var init_registry = __esm({
       CDP_TARGET_AUTHORITY_MISMATCH: "B",
       TARGET_CLAIM_CONFLICT: "B",
       DEVICE_CLAIM_CONFLICT: "D",
+      DEVICE_DISCOVERY_UNAVAILABLE: "D",
+      DEVICE_NOT_FOUND: "D",
+      DEVICE_RECEIPT_INCOMPATIBLE: "D",
       DEVICE_AUTHORITY_MISMATCH: "D",
       PLATFORM_AUTHORITY_MISMATCH: "D",
       RUNNER_OWNERSHIP_MISMATCH: "R",
@@ -62714,7 +62717,7 @@ import { promisify as promisify24 } from "node:util";
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync8, spawn as spawn6 } from "node:child_process";
 import { createHash as createHash8, createHmac, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync6, existsSync as existsSync28, mkdirSync as mkdirSync16, openSync as openSync6, readFileSync as readFileSync24, realpathSync as realpathSync7, rmSync as rmSync10 } from "node:fs";
+import { closeSync as closeSync6, existsSync as existsSync28, fstatSync as fstatSync4, mkdirSync as mkdirSync16, openSync as openSync6, readFileSync as readFileSync24, readSync as readSync3, realpathSync as realpathSync7, rmSync as rmSync10 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
 init_metro_cwd();
@@ -63094,7 +63097,7 @@ function managedMetroSandboxProfile(input) {
   const writeRoots = [...new Set(input.writeRoots)].sort();
   const executablePaths = [...new Set(input.executablePaths)].sort();
   const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
-  const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
+  const nativeAddonRoots = [...new Set(input.nativeAddonRoots)].sort();
   const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
   const pathAncestors = [.../* @__PURE__ */ new Set([...readRoots, ...writeRoots])].sort();
   return `(version 1)
@@ -63103,10 +63106,12 @@ function managedMetroSandboxProfile(input) {
 (allow process-fork)
 (allow signal (target children))
 (deny network-outbound)
-(deny file-map-executable
-${pathFilters(executableMapDenyRoots)})
 (allow file-map-executable
 ${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
+(allow file-map-executable
+${nativeAddonRoots.map((path) => `    (require-all
+      (subpath ${sandboxString(path)})
+      (extension "node"))`).join("\n")})
 (allow process-exec
 ${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
 (allow file-read* file-test-existence
@@ -63141,6 +63146,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
   const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) => canonicalPath(path, canonicalize));
   const commandChainInputs = (input.commandChainInputs ?? []).map((path) => canonicalPath(path, canonicalize));
   const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) => canonicalPath(path, canonicalize));
+  const nativeAddonRoots = (input.nativeAddonRoots ?? [sourceRoot, appRoot]).map((path) => canonicalPath(path, canonicalize));
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve5(appRoot, ".expo");
   const readRoots = [
@@ -63183,7 +63189,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
       ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
       ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path)
     ],
-    executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
+    nativeAddonRoots,
     protectedRuntimeRoots,
     port: input.port
   });
@@ -72251,7 +72257,7 @@ function createBuildLaunchPlan(input) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { closeSync as closeSync9, constants as constants5, fstatSync as fstatSync4, lstatSync as lstatSync11, openSync as openSync9, readFileSync as readFileSync37 } from "node:fs";
+import { closeSync as closeSync9, constants as constants5, fstatSync as fstatSync5, lstatSync as lstatSync11, openSync as openSync9, readFileSync as readFileSync37 } from "node:fs";
 import { basename as basename6, isAbsolute as isAbsolute6, join as join51, relative as relative4, resolve as resolve8, sep as sep6 } from "node:path";
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
@@ -72543,6 +72549,20 @@ if (allowedCodeRootsSource) {
   } catch {
     throw descendantError();
   }
+}
+function isWithinAllowedCodeRoot(candidate) {
+  return allowedCodeRoots.length === 0 || allowedCodeRoots.some((root) => {
+    const relative = path.relative(root, candidate);
+    return relative === '' || (
+      relative !== '..' &&
+      !relative.startsWith('..' + path.sep) &&
+      !path.isAbsolute(relative)
+    );
+  });
+}
+function sanitizedNativeAddonPath(candidate) {
+  const value = typeof candidate === 'string' ? candidate : '';
+  return 'outside:' + path.basename(value || 'unknown.node');
 }
 function writeRuntimeLoad(line, loadsPath) {
   if (runtimeLoadsDescriptor === undefined) {
@@ -73510,17 +73530,7 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
     const candidate = path.resolve(cwd || process.cwd(), entrypoint);
     const canonical = fs.realpathSync(candidate);
     if (!fs.statSync(canonical).isFile()) throw descendantError();
-    if (
-      allowedCodeRoots.length > 0 &&
-      !allowedCodeRoots.some((root) => {
-        const relative = path.relative(root, canonical);
-        return relative === '' || (
-          relative !== '..' &&
-          !relative.startsWith('..' + path.sep) &&
-          !path.isAbsolute(relative)
-        );
-      })
-    ) {
+    if (!isWithinAllowedCodeRoot(canonical)) {
       throw descendantError();
     }
     return canonical;
@@ -74272,18 +74282,6 @@ if (canAuthenticateChildProcesses) {
   rejectChildProcessMethod('execSync');
   fenceWorkers();
 }
-const rejectNativeAddonLoad = () => {
-  recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');
-  const error = new Error('RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON');
-  error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
-  throw error;
-};
-Object.defineProperty(process, 'dlopen', {
-  configurable: false,
-  enumerable: true,
-  value: rejectNativeAddonLoad,
-  writable: false,
-});
 function digestRuntimeFile(file) {
   const descriptor = fs.openSync(file, 'r');
   try {
@@ -74302,6 +74300,50 @@ function digestRuntimeFile(file) {
     fs.closeSync(descriptor);
   }
 }
+function recordRuntimeFileInput(file) {
+  const resolved = fs.realpathSync(file);
+  if (!fs.statSync(resolved).isFile() || !isWithinAllowedCodeRoot(resolved)) {
+    const error = new Error(
+      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
+    );
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  const digest = digestRuntimeFile(resolved);
+  if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
+    privateMapSet(observedLoaderDigests, resolved, digest);
+    privateSetAdd(accumulatedRuntimeInputs, resolved);
+    loaderEpoch += 1;
+    persistLoaderObservation('input', resolved, digest);
+  }
+  return resolved;
+}
+const originalDlopen = process.dlopen;
+const attestNativeAddonLoad = function(module, file) {
+  let resolved;
+  try {
+    resolved = recordRuntimeFileInput(path.resolve(String(file)));
+  } catch (caught) {
+    const sanitizedPath = sanitizedNativeAddonPath(file);
+    const message =
+      caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
+        ? caught.message
+        : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedPath;
+    recordLoaderViolation(message);
+    const error = new Error(message);
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  const args = privateArraySlice(arguments);
+  args[1] = resolved;
+  return intrinsicReflectApply(originalDlopen, process, args);
+};
+Object.defineProperty(process, 'dlopen', {
+  configurable: false,
+  enumerable: true,
+  value: attestNativeAddonLoad,
+  writable: false,
+});
 function digestRuntimeSource(source) {
   const bytes =
     typeof source === 'string'
@@ -74327,7 +74369,16 @@ function recordLoaderResult(url, result) {
     return;
   }
   if (result && result.format === 'addon') {
-    recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');
+    try {
+      recordRuntimeFileInput(fileURLToPath(url));
+    } catch (caught) {
+      const message =
+        caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
+          ? caught.message
+          : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' +
+            sanitizedNativeAddonPath(fileURLToPath(url));
+      recordLoaderViolation(message);
+    }
     return;
   }
   try {
@@ -75006,7 +75057,7 @@ function readRegularFile(root, candidate) {
   const before = regularFileIdentity(root, candidate);
   const descriptor = openSync9(candidate, constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0) | (constants5.O_NONBLOCK ?? 0));
   try {
-    const opened = fstatSync4(descriptor, { bigint: true });
+    const opened = fstatSync5(descriptor, { bigint: true });
     const after = regularFileIdentity(root, candidate);
     if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
@@ -75337,6 +75388,28 @@ import { fileURLToPath as fileURLToPath5 } from "node:url";
 import { createHash as createHash16 } from "node:crypto";
 init_process_birth();
 init_device_arbiter();
+
+// packages/rn-dev-agent-core/dist/session/device-existence.js
+import { execFileSync as execFileSync14 } from "node:child_process";
+function deviceExistsOnHost(platform, deviceId) {
+  if (platform === "ios") {
+    const output2 = execFileSync14("xcrun", ["simctl", "list", "devices", "--json"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5e3
+    });
+    const parsed = JSON.parse(output2);
+    return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
+  }
+  const output = execFileSync14("adb", ["devices"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5e3
+  });
+  return output.split("\n").some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
 function sameMetroAuthority(current, next) {
   return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
 }
@@ -75417,6 +75490,19 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         if (status2.bindings.runner || status2.bindings.observe || status2.bindings.proof) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner, Observe, or proof authority to be released first");
+        }
+        let deviceExists;
+        try {
+          deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+        } catch (error2) {
+          throw new SessionAuthorityError("DEVICE_DISCOVERY_UNAVAILABLE", `could not verify exact ${platform} device ${deviceId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
+        }
+        if (!deviceExists) {
+          throw new SessionAuthorityError("DEVICE_NOT_FOUND", `exact ${platform} device ${deviceId} does not exist or is unavailable`);
+        }
+        const currentDevice = status2.bindings.device;
+        if (!input.buildReceipt && status2.bindings.install && currentDevice?.platform && currentDevice.platform !== platform) {
+          throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", `cannot replace ${String(currentDevice.platform)} device authority with ${platform} while its install receipt is bound`);
         }
         if (!input.buildReceipt) {
           registry2.replaceDeviceAuthority(session, {
@@ -75923,7 +76009,7 @@ init_authority_gate();
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 init_discovery();
 init_metro_cwd();
-import { execFileSync as execFileSync15 } from "node:child_process";
+import { execFileSync as execFileSync16 } from "node:child_process";
 import { createHash as createHash18 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
@@ -75961,8 +76047,8 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 init_metro_cwd();
 import { createHash as createHash17, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
-import { execFileSync as execFileSync14 } from "node:child_process";
-import { closeSync as closeSync10, existsSync as existsSync38, lstatSync as lstatSync12, openSync as openSync10, readdirSync as readdirSync14, readFileSync as readFileSync38, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync10 } from "node:fs";
+import { execFileSync as execFileSync15 } from "node:child_process";
+import { closeSync as closeSync10, existsSync as existsSync38, lstatSync as lstatSync12, openSync as openSync10, readdirSync as readdirSync14, readFileSync as readFileSync38, readlinkSync as readlinkSync3, readSync as readSync4, realpathSync as realpathSync10 } from "node:fs";
 import { dirname as dirname21, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve9 } from "node:path";
 function digest2(parts) {
   const hash = createHash17("sha256");
@@ -76025,7 +76111,7 @@ socket.once('timeout', () => process.exit(3));
 socket.once('error', () => process.exit(4));
 `;
 function readMetroEvidenceHead(socket, challenge) {
-  return execFileSync14(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
+  return execFileSync15(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
     encoding: "utf8",
     maxBuffer: 4096,
     stdio: ["ignore", "pipe", "ignore"],
@@ -76044,7 +76130,7 @@ function updateFramedFile(hash, path, size) {
   try {
     let offset = 0;
     while (offset < size) {
-      const bytesRead = readSync3(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
+      const bytesRead = readSync4(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
       if (bytesRead === 0) {
         throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: source file changed while hashing");
       }
@@ -76066,7 +76152,7 @@ function fileDigest(path) {
   try {
     let offset = 0;
     while (offset < stat2.size) {
-      const bytesRead = readSync3(descriptor, buffer, 0, Math.min(buffer.length, stat2.size - offset), offset);
+      const bytesRead = readSync4(descriptor, buffer, 0, Math.min(buffer.length, stat2.size - offset), offset);
       if (bytesRead === 0) {
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
       }
@@ -76506,7 +76592,7 @@ function updateDependencyStores(hash, identity2, git, pathExists, runtimeInputs)
   }
 }
 function defaultGit(root, args) {
-  return execFileSync14("git", ["-C", root, ...args], {
+  return execFileSync15("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 5e3,
@@ -76757,23 +76843,6 @@ async function defaultFetchText(url, init) {
 async function defaultFetchJson(url, init) {
   return JSON.parse(await defaultFetchText(url, init));
 }
-function defaultDeviceExists(platform, deviceId) {
-  if (platform === "ios") {
-    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5e3
-    });
-    const parsed = JSON.parse(output2);
-    return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
-  }
-  const output = execFileSync15("adb", ["devices"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5e3
-  });
-  return output.split("\n").some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
-}
 function sameSource(expected, observed) {
   return expected.kind === observed.kind && expected.sourceKey === observed.sourceKey && expected.worktreeKey === observed.worktreeKey && expected.appRootKey === observed.appRootKey && (expected.kind !== "declared-root" || observed.kind === "declared-root" && expected.manifestDigest === observed.manifestDigest);
 }
@@ -76783,7 +76852,7 @@ function createLocalAuthorityProbe(dependencies) {
   const fetchTargets2 = dependencies.fetchTargets ?? (async (port) => JSON.parse(await fetchText(`http://127.0.0.1:${port}/json/list`)));
   const proveTargetDevices = dependencies.proveTargetDevices ?? ((input) => proveTargetDeviceAssociations(input, {
     execute: async (file, args) => ({
-      stdout: execFileSync15(file, args, {
+      stdout: execFileSync16(file, args, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 5e3
@@ -76791,7 +76860,7 @@ function createLocalAuthorityProbe(dependencies) {
     })
   }));
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
-  const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
+  const deviceExists = dependencies.deviceExists ?? deviceExistsOnHost;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
   const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;

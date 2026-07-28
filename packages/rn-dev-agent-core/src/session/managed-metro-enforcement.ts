@@ -55,6 +55,7 @@ export interface ManagedMetroEnforcementInput {
   commandExecutableMappings?: readonly string[];
   commandChainInputs?: readonly string[];
   protectedRuntimeRoots?: readonly string[];
+  nativeAddonRoots?: readonly string[];
   port: number;
   instanceId: string;
   runtimeInputs: readonly string[];
@@ -370,7 +371,7 @@ function managedMetroSandboxProfile(input: {
   writeRoots: readonly string[];
   executablePaths: readonly string[];
   executableMapPaths: readonly string[];
-  executableMapDenyRoots: readonly string[];
+  nativeAddonRoots: readonly string[];
   protectedRuntimeRoots: readonly string[];
   port: number;
 }): string {
@@ -378,7 +379,7 @@ function managedMetroSandboxProfile(input: {
   const writeRoots = [...new Set(input.writeRoots)].sort();
   const executablePaths = [...new Set(input.executablePaths)].sort();
   const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
-  const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
+  const nativeAddonRoots = [...new Set(input.nativeAddonRoots)].sort();
   const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
   const pathAncestors = [...new Set([...readRoots, ...writeRoots])].sort();
   return `(version 1)
@@ -387,10 +388,16 @@ function managedMetroSandboxProfile(input: {
 (allow process-fork)
 (allow signal (target children))
 (deny network-outbound)
-(deny file-map-executable
-${pathFilters(executableMapDenyRoots)})
 (allow file-map-executable
 ${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
+(allow file-map-executable
+${nativeAddonRoots
+  .map(
+    (path) => `    (require-all
+      (subpath ${sandboxString(path)})
+      (extension "node"))`,
+  )
+  .join('\n')})
 (allow process-exec
 ${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
 (allow file-read* file-test-existence
@@ -437,6 +444,9 @@ export function prepareManagedMetroEnforcement(
     canonicalPath(path, canonicalize),
   );
   const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) =>
+    canonicalPath(path, canonicalize),
+  );
+  const nativeAddonRoots = (input.nativeAddonRoots ?? [sourceRoot, appRoot]).map((path) =>
     canonicalPath(path, canonicalize),
   );
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
@@ -487,7 +497,7 @@ export function prepareManagedMetroEnforcement(
       ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
       ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path),
     ],
-    executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
+    nativeAddonRoots,
     protectedRuntimeRoots,
     port: input.port,
   });

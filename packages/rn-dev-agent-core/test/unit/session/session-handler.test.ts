@@ -626,6 +626,160 @@ test('device rebinding refuses to discard live runner, Observe, or proof authori
   assert.match(result.content[0].text, /runner, Observe, or proof authority/i);
 });
 
+test('device binding rejects a nonexistent exact device before claiming it', async () => {
+  let replaced = false;
+  const status = { sessionId: 'session-a', bindings: {} };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          replaceDeviceAuthority: () => {
+            replaced = true;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    { deviceExists: () => false } as never,
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'MISSING-SIMULATOR',
+    appId: 'dev.example',
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(replaced, false);
+  assert.equal(JSON.parse(result.content[0].text).code, 'DEVICE_NOT_FOUND');
+});
+
+test('device binding preserves the registry foreign-claim refusal', async () => {
+  const status = { sessionId: 'session-a', bindings: {} };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          replaceDeviceAuthority: () => {
+            const error = new Error(
+              'DEVICE_CLAIM_CONFLICT: exact device is claimed by another session',
+            ) as Error & { code: string };
+            error.name = 'SessionAuthorityError';
+            error.code = 'DEVICE_CLAIM_CONFLICT';
+            throw error;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    { deviceExists: () => true } as never,
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'dev.example',
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /DEVICE_CLAIM_CONFLICT/);
+});
+
+test('same-session cross-platform rebind accepts an existing unclaimed device without a receipt', async () => {
+  let replacement: Record<string, unknown> | undefined;
+  const status = {
+    sessionId: 'session-a',
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    state: 'device_claimed',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+      install: null,
+    },
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          replaceDeviceAuthority: (_session: unknown, input: Record<string, unknown>) => {
+            replacement = input;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    { deviceExists: () => true } as never,
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'dev.example',
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.ok(replacement);
+  assert.deepEqual((replacement.device as Record<string, unknown>).platform, 'android');
+});
+
+test('cross-platform rebind refuses to discard an incompatible install receipt', async () => {
+  let replaced = false;
+  const status = {
+    sessionId: 'session-a',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+      install: {
+        platform: 'ios',
+        deviceId: 'SIM-1',
+        appId: 'dev.example',
+        artifactDigest: 'ios-build',
+      },
+    },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          replaceDeviceAuthority: () => {
+            replaced = true;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    { deviceExists: () => true } as never,
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'dev.example',
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(replaced, false);
+  assert.equal(JSON.parse(result.content[0].text).code, 'DEVICE_RECEIPT_INCOMPATIBLE');
+});
+
 test('public Metro binding rejects managed mode without process management proof', async () => {
   let captured = false;
   const status = {

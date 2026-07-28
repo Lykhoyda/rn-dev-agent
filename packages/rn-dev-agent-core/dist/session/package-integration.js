@@ -294,6 +294,20 @@ if (allowedCodeRootsSource) {
     throw descendantError();
   }
 }
+function isWithinAllowedCodeRoot(candidate) {
+  return allowedCodeRoots.length === 0 || allowedCodeRoots.some((root) => {
+    const relative = path.relative(root, candidate);
+    return relative === '' || (
+      relative !== '..' &&
+      !relative.startsWith('..' + path.sep) &&
+      !path.isAbsolute(relative)
+    );
+  });
+}
+function sanitizedNativeAddonPath(candidate) {
+  const value = typeof candidate === 'string' ? candidate : '';
+  return 'outside:' + path.basename(value || 'unknown.node');
+}
 function writeRuntimeLoad(line, loadsPath) {
   if (runtimeLoadsDescriptor === undefined) {
     runtimeLoadsDescriptor =
@@ -1260,17 +1274,7 @@ function requireFileBackedEntrypoint(entrypoint, cwd) {
     const candidate = path.resolve(cwd || process.cwd(), entrypoint);
     const canonical = fs.realpathSync(candidate);
     if (!fs.statSync(canonical).isFile()) throw descendantError();
-    if (
-      allowedCodeRoots.length > 0 &&
-      !allowedCodeRoots.some((root) => {
-        const relative = path.relative(root, canonical);
-        return relative === '' || (
-          relative !== '..' &&
-          !relative.startsWith('..' + path.sep) &&
-          !path.isAbsolute(relative)
-        );
-      })
-    ) {
+    if (!isWithinAllowedCodeRoot(canonical)) {
       throw descendantError();
     }
     return canonical;
@@ -2022,18 +2026,6 @@ if (canAuthenticateChildProcesses) {
   rejectChildProcessMethod('execSync');
   fenceWorkers();
 }
-const rejectNativeAddonLoad = () => {
-  recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');
-  const error = new Error('RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON');
-  error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
-  throw error;
-};
-Object.defineProperty(process, 'dlopen', {
-  configurable: false,
-  enumerable: true,
-  value: rejectNativeAddonLoad,
-  writable: false,
-});
 function digestRuntimeFile(file) {
   const descriptor = fs.openSync(file, 'r');
   try {
@@ -2052,6 +2044,50 @@ function digestRuntimeFile(file) {
     fs.closeSync(descriptor);
   }
 }
+function recordRuntimeFileInput(file) {
+  const resolved = fs.realpathSync(file);
+  if (!fs.statSync(resolved).isFile() || !isWithinAllowedCodeRoot(resolved)) {
+    const error = new Error(
+      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
+    );
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  const digest = digestRuntimeFile(resolved);
+  if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
+    privateMapSet(observedLoaderDigests, resolved, digest);
+    privateSetAdd(accumulatedRuntimeInputs, resolved);
+    loaderEpoch += 1;
+    persistLoaderObservation('input', resolved, digest);
+  }
+  return resolved;
+}
+const originalDlopen = process.dlopen;
+const attestNativeAddonLoad = function(module, file) {
+  let resolved;
+  try {
+    resolved = recordRuntimeFileInput(path.resolve(String(file)));
+  } catch (caught) {
+    const sanitizedPath = sanitizedNativeAddonPath(file);
+    const message =
+      caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
+        ? caught.message
+        : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedPath;
+    recordLoaderViolation(message);
+    const error = new Error(message);
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  const args = privateArraySlice(arguments);
+  args[1] = resolved;
+  return intrinsicReflectApply(originalDlopen, process, args);
+};
+Object.defineProperty(process, 'dlopen', {
+  configurable: false,
+  enumerable: true,
+  value: attestNativeAddonLoad,
+  writable: false,
+});
 function digestRuntimeSource(source) {
   const bytes =
     typeof source === 'string'
@@ -2077,7 +2113,16 @@ function recordLoaderResult(url, result) {
     return;
   }
   if (result && result.format === 'addon') {
-    recordLoaderViolation('Metro runtime native addons are unsupported for strict proof');
+    try {
+      recordRuntimeFileInput(fileURLToPath(url));
+    } catch (caught) {
+      const message =
+        caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
+          ? caught.message
+          : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' +
+            sanitizedNativeAddonPath(fileURLToPath(url));
+      recordLoaderViolation(message);
+    }
     return;
   }
   try {

@@ -3,9 +3,11 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
   closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
 } from 'node:fs';
@@ -1120,6 +1122,110 @@ function canonicalRuntimeInput(path: string): string {
   }
 }
 
+function latestSignedRuntimeViolation(
+  path: string,
+  capability: string,
+  expected: { sessionId: string; metroInstanceId: string },
+): string | null {
+  try {
+    const bytes = readFileSync(path);
+    if (bytes.byteLength > 2 * 1024 * 1024) return null;
+    let previousSignature: string | null = null;
+    let sequence = 0;
+    let latest: string | null = null;
+    for (const line of bytes.toString('utf8').split('\n').filter(Boolean)) {
+      const observed = JSON.parse(line) as Record<string, unknown>;
+      const signature = observed.signature;
+      if (typeof signature !== 'string') return null;
+      const { signature: _signature, ...payload } = observed;
+      const expectedSignature = createHmac('sha256', capability)
+        .update(canonicalAuthorityJson(payload))
+        .digest('hex');
+      const actualBytes = Buffer.from(signature, 'hex');
+      const expectedBytes = Buffer.from(expectedSignature, 'hex');
+      if (
+        actualBytes.length !== expectedBytes.length ||
+        !timingSafeEqual(actualBytes, expectedBytes) ||
+        payload.sessionId !== expected.sessionId ||
+        payload.metroInstanceId !== expected.metroInstanceId ||
+        payload.sequence !== sequence + 1 ||
+        payload.previousSignature !== previousSignature
+      ) {
+        return null;
+      }
+      sequence += 1;
+      previousSignature = signature;
+      if (payload.kind === 'violation' && typeof payload.value === 'string') {
+        latest = payload.value;
+      }
+    }
+    return latest;
+  } catch {
+    return null;
+  }
+}
+
+function boundedMetroLogTail(path: string, maxBytes = 4_096): string | null {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, 'r');
+    const size = fstatSync(descriptor).size;
+    const length = Math.min(size, maxBytes);
+    if (length === 0) return null;
+    const buffer = Buffer.alloc(length);
+    readSync(descriptor, buffer, 0, length, size - length);
+    const tail = buffer
+      .toString('utf8')
+      .replace(/[^\t\n\r\x20-\x7e]/g, '?')
+      .trim();
+    return tail || null;
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function managedMetroStartupError(input: {
+  runtimeEvidencePath: string;
+  runtimePolicyCapability: string;
+  logPath: string;
+  sessionId: string;
+  metroInstanceId: string;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  lastError: unknown;
+}): Error {
+  const violation = latestSignedRuntimeViolation(
+    input.runtimeEvidencePath,
+    input.runtimePolicyCapability,
+    {
+      sessionId: input.sessionId,
+      metroInstanceId: input.metroInstanceId,
+    },
+  );
+  const childOutcome =
+    input.exitCode !== null
+      ? `launcher exit ${input.exitCode}`
+      : input.signalCode
+        ? `launcher signal ${input.signalCode}`
+        : null;
+  const logTail = boundedMetroLogTail(input.logPath);
+  const details = [
+    childOutcome,
+    input.lastError instanceof Error ? input.lastError.message : null,
+    logTail ? `Metro log tail:\n${logTail}` : null,
+  ].filter(Boolean);
+  if (violation && /^[A-Z][A-Z0-9_]+:/.test(violation)) {
+    return new Error(`${violation}${details.length > 0 ? `; ${details.join('; ')}` : ''}`);
+  }
+  return new Error(
+    `METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${
+      details.length > 0 ? ` (${details.join('; ')})` : ''
+    }`,
+  );
+}
+
 async function stopSpawnedProcessGroup(
   input: { launcherPid: number; port: number },
   dependencies: Pick<
@@ -1274,6 +1380,7 @@ export async function startManagedMetro(
     commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
     commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
     protectedRuntimeRoots: launchCommand.protectedRuntimeRoots.map(canonicalRuntimeInput),
+    nativeAddonRoots: allowedCodeRoots,
     nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
     nodeVersion: process.version,
     port: input.port,
@@ -1312,6 +1419,7 @@ export async function startManagedMetro(
     commandExecutableMappings: launchCommand.executableMappings,
     commandChainInputs,
     protectedRuntimeRoots: launchCommand.protectedRuntimeRoots,
+    nativeAddonRoots: allowedCodeRoots,
     port: input.port,
     instanceId,
     runtimeInputs,
@@ -1340,7 +1448,8 @@ export async function startManagedMetro(
     runtimeEnforcement.status === 'enforced' && 'receipt' in runtimeEnforcement
       ? runtimeEnforcement.receipt
       : null;
-  const log = openSync(join(input.runtimeRoot, 'metro.log'), 'a', 0o600);
+  const logPath = join(input.runtimeRoot, 'metro.log');
+  const log = openSync(logPath, 'a', 0o600);
   const child = (dependencies.spawnProcess ?? spawn)(
     launchCommand.nodeExecutable,
     ['-e', METRO_LAUNCHER_SOURCE],
@@ -1477,11 +1586,16 @@ export async function startManagedMetro(
   if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
     throw new Error('METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed');
   }
-  throw new Error(
-    `METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${
-      lastError instanceof Error ? ` (${lastError.message})` : ''
-    }`,
-  );
+  throw managedMetroStartupError({
+    runtimeEvidencePath,
+    runtimePolicyCapability,
+    logPath,
+    sessionId: input.sessionId,
+    metroInstanceId: instanceId,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    lastError,
+  });
 }
 
 export function signalManagedMetroProcessTree(

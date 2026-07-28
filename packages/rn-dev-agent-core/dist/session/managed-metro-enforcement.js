@@ -203,7 +203,7 @@ function managedMetroSandboxProfile(input) {
     const writeRoots = [...new Set(input.writeRoots)].sort();
     const executablePaths = [...new Set(input.executablePaths)].sort();
     const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
-    const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
+    const nativeAddonRoots = [...new Set(input.nativeAddonRoots)].sort();
     const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
     const pathAncestors = [...new Set([...readRoots, ...writeRoots])].sort();
     return `(version 1)
@@ -212,10 +212,14 @@ function managedMetroSandboxProfile(input) {
 (allow process-fork)
 (allow signal (target children))
 (deny network-outbound)
-(deny file-map-executable
-${pathFilters(executableMapDenyRoots)})
 (allow file-map-executable
 ${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
+(allow file-map-executable
+${nativeAddonRoots
+        .map((path) => `    (require-all
+      (subpath ${sandboxString(path)})
+      (extension "node"))`)
+        .join('\n')})
 (allow process-exec
 ${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join('\n')})
 (allow file-read* file-test-existence
@@ -252,6 +256,7 @@ export function prepareManagedMetroEnforcement(input, dependencies = {}) {
     const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) => canonicalPath(path, canonicalize));
     const commandChainInputs = (input.commandChainInputs ?? []).map((path) => canonicalPath(path, canonicalize));
     const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) => canonicalPath(path, canonicalize));
+    const nativeAddonRoots = (input.nativeAddonRoots ?? [sourceRoot, appRoot]).map((path) => canonicalPath(path, canonicalize));
     const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
     const expoStateRoot = resolve(appRoot, '.expo');
     const readRoots = [
@@ -297,7 +302,7 @@ export function prepareManagedMetroEnforcement(input, dependencies = {}) {
             ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
             ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path),
         ],
-        executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
+        nativeAddonRoots,
         protectedRuntimeRoots,
         port: input.port,
     });

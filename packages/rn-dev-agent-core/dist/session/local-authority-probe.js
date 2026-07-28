@@ -10,6 +10,7 @@ import { readProcessBirth } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 import { resolveSourceIdentity } from './source-identity.js';
 import { proveTargetDeviceAssociations, } from './target-device-authority.js';
+import { deviceExistsOnHost } from './device-existence.js';
 function identity(value) {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -45,27 +46,6 @@ async function defaultFetchText(url, init) {
 async function defaultFetchJson(url, init) {
     return JSON.parse(await defaultFetchText(url, init));
 }
-function defaultDeviceExists(platform, deviceId) {
-    if (platform === 'ios') {
-        const output = execFileSync('xcrun', ['simctl', 'list', 'devices', '--json'], {
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            timeout: 5_000,
-        });
-        const parsed = JSON.parse(output);
-        return Object.values(parsed.devices ?? {})
-            .flat()
-            .some((device) => device.udid === deviceId && device.isAvailable !== false);
-    }
-    const output = execFileSync('adb', ['devices'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 5_000,
-    });
-    return output
-        .split('\n')
-        .some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
-}
 function sameSource(expected, observed) {
     return (expected.kind === observed.kind &&
         expected.sourceKey === observed.sourceKey &&
@@ -90,7 +70,7 @@ export function createLocalAuthorityProbe(dependencies) {
             }),
         }));
     const sourceResolver = dependencies.resolveSource ?? defaultSource;
-    const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
+    const deviceExists = dependencies.deviceExists ?? deviceExistsOnHost;
     const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
     const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
     const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;

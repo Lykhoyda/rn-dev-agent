@@ -22,6 +22,7 @@ import {
   type TargetDeviceAssociations,
 } from './target-device-authority.js';
 import type { AuthorityAxis } from './tool-profiles.js';
+import { deviceExistsOnHost } from './device-existence.js';
 
 interface LocalAuthorityProbeDependencies {
   runtime: WorkerAuthorityRuntime;
@@ -83,30 +84,6 @@ async function defaultFetchJson(url: string, init?: RequestInit): Promise<Record
   return JSON.parse(await defaultFetchText(url, init)) as Record<string, unknown>;
 }
 
-function defaultDeviceExists(platform: 'ios' | 'android', deviceId: string): boolean {
-  if (platform === 'ios') {
-    const output = execFileSync('xcrun', ['simctl', 'list', 'devices', '--json'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 5_000,
-    });
-    const parsed = JSON.parse(output) as {
-      devices?: Record<string, Array<{ udid?: string; isAvailable?: boolean }>>;
-    };
-    return Object.values(parsed.devices ?? {})
-      .flat()
-      .some((device) => device.udid === deviceId && device.isAvailable !== false);
-  }
-  const output = execFileSync('adb', ['devices'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 5_000,
-  });
-  return output
-    .split('\n')
-    .some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
-}
-
 function sameSource(expected: SourceIdentity, observed: SourceIdentity): boolean {
   return (
     expected.kind === observed.kind &&
@@ -146,7 +123,7 @@ export function createLocalAuthorityProbe(
         }),
       }));
   const sourceResolver = dependencies.resolveSource ?? defaultSource;
-  const deviceExists = dependencies.deviceExists ?? defaultDeviceExists;
+  const deviceExists = dependencies.deviceExists ?? deviceExistsOnHost;
   const inspectOwner = dependencies.inspectOwner ?? inspectSessionOwner;
   const captureInstalled = dependencies.captureInstalled ?? captureInstalledArtifact;
   const captureGeneration = dependencies.captureInstallGeneration ?? captureInstallGeneration;

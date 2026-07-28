@@ -10869,7 +10869,7 @@ async function captureMetroBinding(input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync3, existsSync as existsSync4, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 init_trusted_system_executable();
 init_process_birth();
@@ -11137,7 +11137,7 @@ function managedMetroSandboxProfile(input) {
   const writeRoots = [...new Set(input.writeRoots)].sort();
   const executablePaths = [...new Set(input.executablePaths)].sort();
   const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
-  const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
+  const nativeAddonRoots = [...new Set(input.nativeAddonRoots)].sort();
   const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
   const pathAncestors = [.../* @__PURE__ */ new Set([...readRoots, ...writeRoots])].sort();
   return `(version 1)
@@ -11146,10 +11146,12 @@ function managedMetroSandboxProfile(input) {
 (allow process-fork)
 (allow signal (target children))
 (deny network-outbound)
-(deny file-map-executable
-${pathFilters(executableMapDenyRoots)})
 (allow file-map-executable
 ${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
+(allow file-map-executable
+${nativeAddonRoots.map((path) => `    (require-all
+      (subpath ${sandboxString(path)})
+      (extension "node"))`).join("\n")})
 (allow process-exec
 ${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
 (allow file-read* file-test-existence
@@ -11184,6 +11186,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
   const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) => canonicalPath(path, canonicalize));
   const commandChainInputs = (input.commandChainInputs ?? []).map((path) => canonicalPath(path, canonicalize));
   const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) => canonicalPath(path, canonicalize));
+  const nativeAddonRoots = (input.nativeAddonRoots ?? [sourceRoot, appRoot]).map((path) => canonicalPath(path, canonicalize));
   const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
   const expoStateRoot = resolve2(appRoot, ".expo");
   const readRoots = [
@@ -11226,7 +11229,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
       ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
       ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path)
     ],
-    executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
+    nativeAddonRoots,
     protectedRuntimeRoots,
     port: input.port
   });
@@ -12346,6 +12349,74 @@ function canonicalRuntimeInput(path) {
     return resolve3(path);
   }
 }
+function latestSignedRuntimeViolation(path, capability, expected) {
+  try {
+    const bytes = readFileSync4(path);
+    if (bytes.byteLength > 2 * 1024 * 1024)
+      return null;
+    let previousSignature = null;
+    let sequence = 0;
+    let latest = null;
+    for (const line of bytes.toString("utf8").split("\n").filter(Boolean)) {
+      const observed = JSON.parse(line);
+      const signature = observed.signature;
+      if (typeof signature !== "string")
+        return null;
+      const { signature: _signature, ...payload } = observed;
+      const expectedSignature = createHmac3("sha256", capability).update(canonicalAuthorityJson(payload)).digest("hex");
+      const actualBytes = Buffer.from(signature, "hex");
+      const expectedBytes = Buffer.from(expectedSignature, "hex");
+      if (actualBytes.length !== expectedBytes.length || !timingSafeEqual3(actualBytes, expectedBytes) || payload.sessionId !== expected.sessionId || payload.metroInstanceId !== expected.metroInstanceId || payload.sequence !== sequence + 1 || payload.previousSignature !== previousSignature) {
+        return null;
+      }
+      sequence += 1;
+      previousSignature = signature;
+      if (payload.kind === "violation" && typeof payload.value === "string") {
+        latest = payload.value;
+      }
+    }
+    return latest;
+  } catch {
+    return null;
+  }
+}
+function boundedMetroLogTail(path, maxBytes = 4096) {
+  let descriptor;
+  try {
+    descriptor = openSync3(path, "r");
+    const size = fstatSync2(descriptor).size;
+    const length = Math.min(size, maxBytes);
+    if (length === 0)
+      return null;
+    const buffer = Buffer.alloc(length);
+    readSync2(descriptor, buffer, 0, length, size - length);
+    const tail = buffer.toString("utf8").replace(/[^\t\n\r\x20-\x7e]/g, "?").trim();
+    return tail || null;
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== void 0)
+      closeSync3(descriptor);
+  }
+}
+function managedMetroStartupError(input) {
+  const violation = latestSignedRuntimeViolation(input.runtimeEvidencePath, input.runtimePolicyCapability, {
+    sessionId: input.sessionId,
+    metroInstanceId: input.metroInstanceId
+  });
+  const childOutcome = input.exitCode !== null ? `launcher exit ${input.exitCode}` : input.signalCode ? `launcher signal ${input.signalCode}` : null;
+  const logTail = boundedMetroLogTail(input.logPath);
+  const details = [
+    childOutcome,
+    input.lastError instanceof Error ? input.lastError.message : null,
+    logTail ? `Metro log tail:
+${logTail}` : null
+  ].filter(Boolean);
+  if (violation && /^[A-Z][A-Z0-9_]+:/.test(violation)) {
+    return new Error(`${violation}${details.length > 0 ? `; ${details.join("; ")}` : ""}`);
+  }
+  return new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${details.length > 0 ? ` (${details.join("; ")})` : ""}`);
+}
 async function stopSpawnedProcessGroup(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
@@ -12458,6 +12529,7 @@ async function startManagedMetro(input, dependencies = {}) {
     commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
     commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
     protectedRuntimeRoots: launchCommand.protectedRuntimeRoots.map(canonicalRuntimeInput),
+    nativeAddonRoots: allowedCodeRoots,
     nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
     nodeVersion: process.version,
     port: input.port,
@@ -12493,6 +12565,7 @@ async function startManagedMetro(input, dependencies = {}) {
     commandExecutableMappings: launchCommand.executableMappings,
     commandChainInputs,
     protectedRuntimeRoots: launchCommand.protectedRuntimeRoots,
+    nativeAddonRoots: allowedCodeRoots,
     port: input.port,
     instanceId,
     runtimeInputs
@@ -12514,7 +12587,8 @@ async function startManagedMetro(input, dependencies = {}) {
   const runtimeEvidenceAuthority = runtimeEnforcement.status === "enforced" ? "managed-sandbox-v1" : "reported-v1";
   const requiresSandboxAdmission = runtimeEnforcement.status === "enforced";
   const enforcementReceiptForAdmission = runtimeEnforcement.status === "enforced" && "receipt" in runtimeEnforcement ? runtimeEnforcement.receipt : null;
-  const log = openSync3(join3(input.runtimeRoot, "metro.log"), "a", 384);
+  const logPath = join3(input.runtimeRoot, "metro.log");
+  const log = openSync3(logPath, "a", 384);
   const child = (dependencies.spawnProcess ?? spawn)(launchCommand.nodeExecutable, ["-e", METRO_LAUNCHER_SOURCE], {
     cwd: input.appRoot,
     env: {
@@ -12623,7 +12697,16 @@ async function startManagedMetro(input, dependencies = {}) {
   if (!removeManagedMetroEvidenceSocketSafely(runtimeEvidenceSocket, dependencies)) {
     throw new Error("METRO_START_CLEANUP_UNPROVEN: Metro evidence socket cleanup failed");
   }
-  throw new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${lastError instanceof Error ? ` (${lastError.message})` : ""}`);
+  throw managedMetroStartupError({
+    runtimeEvidencePath,
+    runtimePolicyCapability,
+    logPath,
+    sessionId: input.sessionId,
+    metroInstanceId: instanceId,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    lastError
+  });
 }
 function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
   if (platform === "win32") {
@@ -12807,7 +12890,7 @@ init_registry();
 init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { closeSync as closeSync4, existsSync as existsSync5, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync6 } from "node:fs";
+import { closeSync as closeSync4, existsSync as existsSync5, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve4 } from "node:path";
 function digest2(parts) {
   const hash = createHash6("sha256");
@@ -13028,7 +13111,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync5, constants as constants3, existsSync as existsSync6, fstatSync as fstatSync2, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants3, existsSync as existsSync6, fstatSync as fstatSync3, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -14305,7 +14388,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory is closed");
   }
   if (directory.descriptor !== void 0) {
-    const retained = fstatSync2(directory.descriptor, { bigint: true });
+    const retained = fstatSync3(directory.descriptor, { bigint: true });
     if (!retained.isDirectory() || retained.dev !== directory.identity.dev || retained.ino !== directory.identity.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed");
     }
@@ -14435,7 +14518,7 @@ function openValidatedDirectory(path, expected) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
     }
     descriptor = openSync5(path, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
-    const opened = fstatSync2(descriptor, { bigint: true });
+    const opened = fstatSync3(descriptor, { bigint: true });
     const after = lstatSync7(path, { bigint: true });
     const realPath = realpathSync7(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {

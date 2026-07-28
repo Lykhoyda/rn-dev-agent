@@ -35,6 +35,7 @@ import {
   stopBoundRecorder,
   stopBoundRunner,
 } from '../session/process-cleanup.js';
+import { deviceExistsOnHost } from '../session/device-existence.js';
 
 export interface SessionToolInput {
   action:
@@ -99,6 +100,7 @@ interface SessionHandlerDependencies {
     reason: string;
   };
   cleanupTimeoutMs?: number;
+  deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
 }
 
 function sameMetroAuthority(
@@ -240,6 +242,35 @@ export function createSessionHandler(
           throw new SessionAuthorityError(
             'DEVICE_AUTHORITY_MISMATCH',
             'device rebinding requires runner, Observe, or proof authority to be released first',
+          );
+        }
+        let deviceExists: boolean;
+        try {
+          deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+        } catch (error) {
+          throw new SessionAuthorityError(
+            'DEVICE_DISCOVERY_UNAVAILABLE',
+            `could not verify exact ${platform} device ${deviceId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+        if (!deviceExists) {
+          throw new SessionAuthorityError(
+            'DEVICE_NOT_FOUND',
+            `exact ${platform} device ${deviceId} does not exist or is unavailable`,
+          );
+        }
+        const currentDevice = status.bindings.device as Record<string, unknown> | undefined;
+        if (
+          !input.buildReceipt &&
+          status.bindings.install &&
+          currentDevice?.platform &&
+          currentDevice.platform !== platform
+        ) {
+          throw new SessionAuthorityError(
+            'DEVICE_RECEIPT_INCOMPATIBLE',
+            `cannot replace ${String(currentDevice.platform)} device authority with ${platform} while its install receipt is bound`,
           );
         }
         if (!input.buildReceipt) {
