@@ -906,7 +906,7 @@ test('handoff cancellation advances its active controller operation fence', asyn
   const { registry, create } = fixture();
   const owner = create('a');
   const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
-  const operation = registry.beginOperation(owner, {
+  const operation = registry.beginHandoffCancellationOperation(owner, {
     operationId: 'cancel-handoff',
     tool: 'rn_session',
     profile: 'transition:CS>CS',
