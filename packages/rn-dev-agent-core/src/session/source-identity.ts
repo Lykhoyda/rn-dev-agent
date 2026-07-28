@@ -489,7 +489,7 @@ function metroRuntimeInputs(
   }
   const runtimeLoads = new Map<
     string,
-    { kind: 'input' | 'violation'; value: string; digest: string | null }
+    { kind: 'input' | 'violation' | 'stability'; value: string; digest: string | null }
   >();
   type DescendantExecution = {
     version: 1;
@@ -574,12 +574,13 @@ function metroRuntimeInputs(
         load.kind !== 'attestation' &&
         load.kind !== 'semantics' &&
         load.kind !== 'pending' &&
-        load.kind !== 'completion') ||
+        load.kind !== 'completion' &&
+        load.kind !== 'stability') ||
       typeof load.value !== 'string' ||
       !Number.isSafeInteger(load.sequence) ||
       load.sequence !== evidenceSequence + 1 ||
       load.previousSignature !== previousEvidenceSignature ||
-      (load.kind === 'input'
+      (load.kind === 'input' || load.kind === 'stability'
         ? typeof load.digest !== 'string' || !/^[a-f0-9]{64}$/.test(load.digest)
         : load.digest !== null) ||
       observedLoad.length !== expectedLoad.length ||

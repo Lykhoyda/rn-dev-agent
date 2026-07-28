@@ -2027,78 +2027,53 @@ if (canAuthenticateChildProcesses) {
   fenceWorkers();
 }
 function digestRuntimeFile(file) {
-  const descriptor = fs.openSync(file, 'r');
+  const refusal = (message) => {
+    const error = new Error('METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    return error;
+  };
+  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
-    const stat = fs.fstatSync(descriptor);
-    if (!stat.isFile() || stat.size > 128 * 1024 * 1024) {
-      throw new Error('unsupported runtime module file');
+    const initial = fs.fstatSync(descriptor);
+    if (!initial.isFile()) {
+      throw refusal('native addon is not a regular file');
+    }
+    if (initial.size > 128 * 1024 * 1024) {
+      throw refusal('native addon exceeds the 128 MiB evidence limit');
     }
     const hash = createHash('sha256');
     const buffer = Buffer.allocUnsafe(64 * 1024);
-    let bytesRead;
     let position = 0;
-    while ((bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, position)) > 0) {
+    while (position < initial.size) {
+      const bytesRead = fs.readSync(
+        descriptor,
+        buffer,
+        0,
+        Math.min(buffer.length, initial.size - position),
+        position,
+      );
+      if (bytesRead === 0 || position + bytesRead > 128 * 1024 * 1024) {
+        throw refusal('native addon changed while reading evidence');
+      }
       hash.update(buffer.subarray(0, bytesRead));
       position += bytesRead;
+    }
+    if (fs.readSync(descriptor, buffer, 0, 1, position) !== 0) {
+      throw refusal('native addon changed while reading evidence');
+    }
+    const final = fs.fstatSync(descriptor);
+    if (
+      final.dev !== initial.dev ||
+      final.ino !== initial.ino ||
+      final.size !== initial.size ||
+      final.mtimeMs !== initial.mtimeMs ||
+      final.ctimeMs !== initial.ctimeMs
+    ) {
+      throw refusal('native addon changed while reading evidence');
     }
     return hash.digest('hex');
   } finally {
     fs.closeSync(descriptor);
-  }
-}
-function stageNativeAddonSnapshot(file, digest, requestId) {
-  const stagedPath = path.join(
-    path.dirname(file),
-    '.rn-dev-agent-' + requestId + '-' + path.basename(file),
-  );
-  const sourceDescriptor = fs.openSync(
-    file,
-    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
-  );
-  let stagedDescriptor;
-  try {
-    const stat = fs.fstatSync(sourceDescriptor);
-    if (!stat.isFile() || stat.size > 128 * 1024 * 1024) {
-      throw new Error('unsupported runtime module file');
-    }
-    stagedDescriptor = fs.openSync(
-      stagedPath,
-      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-      0o400,
-    );
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let position = 0;
-    let bytesRead;
-    while (
-      (bytesRead = fs.readSync(sourceDescriptor, buffer, 0, buffer.length, position)) > 0
-    ) {
-      hash.update(buffer.subarray(0, bytesRead));
-      let written = 0;
-      while (written < bytesRead) {
-        written += fs.writeSync(
-          stagedDescriptor,
-          buffer,
-          written,
-          bytesRead - written,
-          position + written,
-        );
-      }
-      position += bytesRead;
-    }
-    if (hash.digest('hex') !== digest) {
-      throw new Error('native addon changed while staging');
-    }
-    fs.fsyncSync(stagedDescriptor);
-    return stagedPath;
-  } catch (error) {
-    try {
-      fs.unlinkSync(stagedPath);
-    } catch {}
-    throw error;
-  } finally {
-    fs.closeSync(sourceDescriptor);
-    if (stagedDescriptor !== undefined) fs.closeSync(stagedDescriptor);
   }
 }
 function waitForNativeAddonAcknowledgment(requestId, digest) {
@@ -2107,12 +2082,12 @@ function waitForNativeAddonAcknowledgment(requestId, digest) {
     error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
     return error;
   };
-  const stagingRoot = process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_STAGING_ROOT;
+  const acknowledgmentRoot = process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
   if (!usesExternalEvidenceOwner) return null;
-  if (!stagingRoot || !/^[a-f0-9]{32}$/.test(requestId)) {
+  if (!acknowledgmentRoot || !/^[a-f0-9]{32}$/.test(requestId)) {
     throw refusal('launcher acknowledgment channel is unavailable');
   }
-  const acknowledgmentPath = path.join(stagingRoot, requestId + '.json');
+  const acknowledgmentPath = path.join(acknowledgmentRoot, requestId + '.json');
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     try {
@@ -2122,11 +2097,15 @@ function waitForNativeAddonAcknowledgment(requestId, digest) {
         acknowledgment.requestId !== requestId ||
         acknowledgment.digest !== digest ||
         acknowledgment.accepted !== true ||
-        typeof acknowledgment.stagedPath !== 'string'
+        typeof acknowledgment.path !== 'string'
       ) {
-        throw refusal('launcher rejected the requested bytes');
+        throw refusal(
+          typeof acknowledgment.reason === 'string'
+            ? acknowledgment.reason
+            : 'launcher rejected the requested bytes',
+        );
       }
-      return acknowledgment.stagedPath;
+      return acknowledgment.path;
     } catch (error) {
       if (error && error.code !== 'ENOENT') throw error;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
@@ -2145,40 +2124,24 @@ function prepareNativeAddonLoad(file) {
   }
   const digest = digestRuntimeFile(resolved);
   const requestId = randomBytes(16).toString('hex');
-  let loadPath;
   if (usesExternalEvidenceOwner) {
     persistLoaderObservation(
       'native-addon-request',
       canonicalAuthorityJson({ requestId, path: resolved, digest }),
     );
-    loadPath = waitForNativeAddonAcknowledgment(requestId, digest);
-  } else {
-    loadPath = stageNativeAddonSnapshot(resolved, digest, requestId);
-    persistLoaderObservation('input', resolved, digest);
-  }
-  if (
-    path.dirname(loadPath) !== path.dirname(resolved) ||
-    digestRuntimeFile(loadPath) !== digest
-  ) {
-    if (usesExternalEvidenceOwner) {
-      persistLoaderObservation('native-addon-completion', requestId);
-    } else {
-      try {
-        fs.unlinkSync(loadPath);
-      } catch {}
+    const acknowledgedPath = waitForNativeAddonAcknowledgment(requestId, digest);
+    if (acknowledgedPath !== resolved) {
+      throw new Error('native addon acknowledgment path changed');
     }
-    const error = new Error(
-      'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: staged bytes changed after acknowledgment',
-    );
-    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
-    throw error;
+  } else {
+    persistLoaderObservation('input', resolved, digest);
   }
   if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
     privateMapSet(observedLoaderDigests, resolved, digest);
     privateSetAdd(accumulatedRuntimeInputs, resolved);
     loaderEpoch += 1;
   }
-  return { requestId, resolved, loadPath };
+  return { requestId, resolved, digest };
 }
 function recordRuntimeFileInput(file) {
   const resolved = fs.realpathSync(file);
@@ -2220,18 +2183,43 @@ const attestNativeAddonLoad = function(module, file) {
     throw error;
   }
   const args = privateArraySlice(arguments);
-  args[1] = prepared.loadPath;
+  args[1] = prepared.resolved;
+  const result = intrinsicReflectApply(originalDlopen, process, args);
+  let postLoadDigest;
   try {
-    return intrinsicReflectApply(originalDlopen, process, args);
-  } finally {
-    if (usesExternalEvidenceOwner) {
-      persistLoaderObservation('native-addon-completion', prepared.requestId);
-    } else {
-      try {
-        fs.unlinkSync(prepared.loadPath);
-      } catch {}
-    }
+    postLoadDigest = digestRuntimeFile(prepared.resolved);
+  } catch (caught) {
+    const message =
+      caught && caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE'
+        ? caught.message
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon stability could not be verified';
+    recordLoaderViolation(message);
+    const error = new Error(message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    throw error;
   }
+  if (usesExternalEvidenceOwner) {
+    persistLoaderObservation(
+      'native-addon-completion',
+      canonicalAuthorityJson({
+        requestId: prepared.requestId,
+        path: prepared.resolved,
+        digest: postLoadDigest,
+      }),
+    );
+  }
+  if (postLoadDigest !== prepared.digest) {
+    const message =
+      'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon changed during load';
+    recordLoaderViolation(message);
+    const error = new Error(message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    throw error;
+  }
+  if (!usesExternalEvidenceOwner) {
+    persistLoaderObservation('stability', prepared.resolved, postLoadDigest);
+  }
+  return result;
 };
 Object.defineProperty(process, 'dlopen', {
   configurable: false,
@@ -2268,7 +2256,9 @@ function recordLoaderResult(url, result) {
       recordRuntimeFileInput(fileURLToPath(url));
     } catch (caught) {
       const message =
-        caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
+        caught &&
+        (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
+          caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
           ? caught.message
           : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' +
             sanitizedNativeAddonPath(fileURLToPath(url));

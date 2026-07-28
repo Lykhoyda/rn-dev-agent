@@ -398,12 +398,13 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntime
                 load.kind !== 'attestation' &&
                 load.kind !== 'semantics' &&
                 load.kind !== 'pending' &&
-                load.kind !== 'completion') ||
+                load.kind !== 'completion' &&
+                load.kind !== 'stability') ||
             typeof load.value !== 'string' ||
             !Number.isSafeInteger(load.sequence) ||
             load.sequence !== evidenceSequence + 1 ||
             load.previousSignature !== previousEvidenceSignature ||
-            (load.kind === 'input'
+            (load.kind === 'input' || load.kind === 'stability'
                 ? typeof load.digest !== 'string' || !/^[a-f0-9]{64}$/.test(load.digest)
                 : load.digest !== null) ||
             observedLoad.length !== expectedLoad.length ||

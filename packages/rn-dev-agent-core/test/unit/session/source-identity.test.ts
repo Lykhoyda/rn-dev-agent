@@ -601,6 +601,9 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
   publishRuntimeLoads([runtimeLoadPayload]);
   const first = strictProofSourceIdentity(identity, dependencies);
+  const stabilityPayload = { ...runtimeLoadPayload, kind: 'stability' };
+  publishRuntimeLoads([runtimeLoadPayload, stabilityPayload]);
+  assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
   evidenceAuthority = 'reported-v1';
   publishPolicy('unsupported');
   publishRuntimeLoads([{ ...runtimeLoadPayload, runtimeEvidenceAuthority: 'reported-v1' }]);
