@@ -248,12 +248,7 @@ export function probeProcessBirth(pid, dependencies = {}) {
                 return { status: 'unknown' };
             const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
                 `if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
-            const started = run(powershell, [
-                '-NoProfile',
-                '-NonInteractive',
-                '-Command',
-                script,
-            ]).trim();
+            const started = run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script]).trim();
             if (started === 'ABSENT')
                 return { status: 'absent' };
             if (!/^\d+$/.test(started))

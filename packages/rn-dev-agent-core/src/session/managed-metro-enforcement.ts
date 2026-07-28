@@ -399,8 +399,12 @@ ${pathFilters(readRoots)})
 ${pathAncestors.map((path) => `    (path-ancestors ${sandboxString(path)})`).join('\n')})
 (allow file-write* file-test-existence
 ${pathFilters(writeRoots)})
-${protectedRuntimeRoots.length > 0 ? `(deny file-write* file-test-existence
-${pathFilters(protectedRuntimeRoots)})` : ''}
+${
+  protectedRuntimeRoots.length > 0
+    ? `(deny file-write* file-test-existence
+${pathFilters(protectedRuntimeRoots)})`
+    : ''
+}
 (allow network-bind
     (local tcp ${sandboxString(`*:${input.port}`)}))
 (allow network-inbound

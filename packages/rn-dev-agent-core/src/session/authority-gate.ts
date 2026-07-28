@@ -736,9 +736,7 @@ export function createAuthorityGate(
                 try {
                   const rollback = await handler({ action: 'discard' });
                   if (!proofDiscardConfirmed(rollback)) {
-                    throw new Error(
-                      'PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected',
-                    );
+                    throw new Error('PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected');
                   }
                 } catch (rollbackError) {
                   retainProofCleanupFence = operation !== null;

@@ -638,12 +638,7 @@ import { existsSync as existsSync3 } from "node:fs";
 import { win32 } from "node:path";
 function trustedWindowsRoots(environment) {
   return [
-    ...new Set([
-      environment.SystemRoot,
-      environment.SYSTEMROOT,
-      environment.windir,
-      environment.WINDIR
-    ].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root)).concat("C:\\Windows"))
+    ...new Set([environment.SystemRoot, environment.SYSTEMROOT, environment.windir, environment.WINDIR].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root)).concat("C:\\Windows"))
   ];
 }
 function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
@@ -837,12 +832,7 @@ function probeProcessBirth(pid, dependencies = {}) {
       if (!powershell)
         return { status: "unknown" };
       const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
-      const started = run(powershell, [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        script
-      ]).trim();
+      const started = run(powershell, ["-NoProfile", "-NonInteractive", "-Command", script]).trim();
       if (started === "ABSENT")
         return { status: "absent" };
       if (!/^\d+$/.test(started))

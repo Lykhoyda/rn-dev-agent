@@ -1,4 +1,4 @@
-# Managed Metro Broker-v2 Implementation Plan
+# Managed Metro Provenance Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -12,7 +12,7 @@
 
 - Preserve every existing PR 621 review-fix commit and add changes only on top.
 - Never weaken or bypass `STRICT_PROOF_UNVERIFIED_METRO_POLICY`.
-- Keep non-Darwin and failed-enforcement runtimes ineligible for strict proof.
+- Keep strict proof fail-closed when required managed-provenance evidence is unavailable or mismatched; sandbox availability remains receipt evidence, not a precondition.
 - Do not introduce an always-on broker daemon.
 - Do not merge PR 621.
 
@@ -33,7 +33,7 @@
 - [x] Implement the minimal planner, platform binary verification, profile generation, and probe contract.
 - [x] Run the focused test and confirm it passes.
 
-### Task 2: Broker launch and attestation
+### Task 2: Managed launch and attestation
 
 **Files:**
 - Modify: `packages/rn-dev-agent-core/src/session/managed-metro.ts`
@@ -45,7 +45,7 @@
 
 - [x] Write failing tests that preserve `reported-v1` for unsupported enforcement and require `managed-sandbox-v1` for the successful attested launch.
 - [x] Run the focused test and confirm the new expectations fail against the prior unconditional sandbox label.
-- [x] Launch Metro through the exact Seatbelt plan, broker-validate runtime inputs, and authenticate the enforcement receipt in the management proof.
+- [x] Launch Metro through the exact Seatbelt plan, validate runtime inputs, and authenticate the enforcement receipt in the management proof.
 - [x] Run the focused tests and confirm they pass.
 
 ### Task 3: Strict refusal and successful accepted path
@@ -56,13 +56,13 @@
 
 **Interfaces:**
 - Consumes: the managed-sandbox enforcement receipt and journal.
-- Produces: strict source identity only for a matching enforced receipt.
+- Produces: strict source identity only for matching managed-provenance evidence.
 
-- [x] Add a regression for the exact reproduced refusal when enforcement is unsupported.
-- [x] Add a regression for a complete broker-attested enforced path.
+- [x] Add regressions for invalid enforcement evidence and bounded unsupported-sandbox evidence.
+- [x] Add a regression for a complete sandbox-attested path.
 - [x] Run both tests and confirm the attested path fails before implementation.
 - [x] Validate the attestation fields and bind them into the strict digest.
-- [x] Run both tests and confirm refusal remains red-safe while the attested path passes.
+- [x] Run both tests and confirm invalid evidence remains red-safe while both bounded provenance tiers pass.
 
 ### Task 4: Workflow, documentation, and packaged runtimes
 

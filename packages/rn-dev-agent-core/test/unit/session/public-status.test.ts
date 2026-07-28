@@ -87,10 +87,7 @@ test('session status exposes the bounded managed-sandbox tier', () => {
     }).sandbox,
     'managed-sandbox-v1',
   );
-  assert.equal(
-    projectPublicAuthorityStatus({ ...base, bindings: {} }).sandbox,
-    'unavailable',
-  );
+  assert.equal(projectPublicAuthorityStatus({ ...base, bindings: {} }).sandbox, 'unavailable');
 });
 
 test('blocked public status exposes only bounded opaque recovery handles', () => {

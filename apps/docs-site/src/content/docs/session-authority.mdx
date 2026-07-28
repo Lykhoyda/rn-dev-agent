@@ -38,6 +38,8 @@ Use `rn_session` for staged transitions:
 7. `prepare_handoff` / `accept_handoff` transfer ownership explicitly, but never adopt a live runner, Observe server, or managed Metro. Acceptance durably records and proves each source-resource shutdown before completing; interrupted cleanup remains resumable by the accepting worker or a later conservatively authorized stale adoption.
 8. `release` proves the authority-bound runner, Observe server, and managed Metro stopped before releasing claims. Managed Metro cleanup uses its HMAC-authenticated management proof plus exact launcher, listener, and port identities; any unproven cleanup leaves the session claimed.
 
+Status includes the exact opaque session ID so local workflows can remain pinned after handoff without exposing capabilities or device identities.
+
 Supervisor shutdown follows the same fail-closed resource cleanup. It first reserves the session for closing and cancels active operations, then releases claims only after runner, Observe, and managed Metro teardown succeeds.
 
 Session initialization is transactional: if port allocation, resource claiming, shared-knowledge preparation, or receipt creation fails, partial claims are released before startup reports the failure.

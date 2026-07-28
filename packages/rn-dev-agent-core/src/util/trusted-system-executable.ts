@@ -11,12 +11,7 @@ export type TrustedSystemExecutable = 'lsof' | 'powershell' | 'ps' | 'ss' | 'tas
 function trustedWindowsRoots(environment: NodeJS.ProcessEnv): string[] {
   return [
     ...new Set(
-      [
-        environment.SystemRoot,
-        environment.SYSTEMROOT,
-        environment.windir,
-        environment.WINDIR,
-      ]
+      [environment.SystemRoot, environment.SYSTEMROOT, environment.windir, environment.WINDIR]
         .filter(
           (root): root is string =>
             typeof root === 'string' &&

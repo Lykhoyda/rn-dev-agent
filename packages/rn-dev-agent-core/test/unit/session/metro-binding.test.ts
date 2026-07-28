@@ -8,8 +8,7 @@ import {
 } from '../../../dist/session/metro-binding.js';
 
 test('listener probes select an existing trusted absolute executable', () => {
-  const windowsExecutable =
-    'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  const windowsExecutable = 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
   assert.equal(
     resolveMetroListenerExecutable('win32', {
       environment: { SystemRoot: 'D:\\Windows' },
@@ -20,8 +19,7 @@ test('listener probes select an existing trusted absolute executable', () => {
   assert.equal(
     resolveMetroListenerExecutable('win32', {
       environment: { SystemRoot: 'D:\\untrusted' },
-      exists: (path) =>
-        path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      exists: (path) => path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     }),
     'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
   );

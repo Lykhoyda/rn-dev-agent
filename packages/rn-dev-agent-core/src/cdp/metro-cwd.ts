@@ -64,9 +64,7 @@ export function pidForPort(
       return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
     }
     const lsof = resolveTrustedSystemExecutable('lsof', platform, executableDependencies);
-    return lsof
-      ? parseLsofPid(exec(lsof, ['-ti', `tcp:${port}`, '-sTCP:LISTEN']))
-      : null;
+    return lsof ? parseLsofPid(exec(lsof, ['-ti', `tcp:${port}`, '-sTCP:LISTEN'])) : null;
   } catch {
     return null;
   }

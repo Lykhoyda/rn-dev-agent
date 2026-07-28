@@ -1,7 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
-  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -1492,11 +1491,7 @@ export function signalManagedMetroProcessTree(
   executableDependencies: TrustedSystemExecutableDependencies = {},
 ): void {
   if (platform === 'win32') {
-    const executable = resolveTrustedSystemExecutable(
-      'taskkill',
-      platform,
-      executableDependencies,
-    );
+    const executable = resolveTrustedSystemExecutable('taskkill', platform, executableDependencies);
     if (!executable) throw new Error('METRO_CLEANUP_EXECUTABLE_UNAVAILABLE');
     const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
     execute(executable, ['/PID', String(pid), '/T'], {

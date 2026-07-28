@@ -329,8 +329,7 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntime
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid');
     }
     if (authority.evidenceAuthority === 'reported-v1' &&
-        (receipt.runtimeEnforcement !== 'unsupported' ||
-            receipt.runtimeEnforcementReceipt !== null)) {
+        (receipt.runtimeEnforcement !== 'unsupported' || receipt.runtimeEnforcementReceipt !== null)) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: sandbox tier is invalid');
     }
     if (receipt.violations.length > 0) {

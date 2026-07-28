@@ -991,9 +991,7 @@ test('failed rehearsal rollback retains its operation fence', async () => {
   });
 
   const result = await gate.wrap('proof_capture', async (args: { action: string }) =>
-    args.action === 'discard'
-      ? okResult({ discarded: false })
-      : okResult({ rehearsing: true }),
+    args.action === 'discard' ? okResult({ discarded: false }) : okResult({ rehearsing: true }),
   )({ action: 'begin_rehearsal', runId: 'proof-new' });
   const envelope = JSON.parse(result.content[0].text);
 

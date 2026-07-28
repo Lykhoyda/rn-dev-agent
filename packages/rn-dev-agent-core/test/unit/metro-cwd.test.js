@@ -101,8 +101,7 @@ test('cwdForProcess: rejects a Windows Metro root inferred only from dependency 
   assert.equal(parseWindowsMetroRoot(commandLine), null);
   assert.equal(
     cwdForProcess(777, 'win32', () => commandLine, undefined, {
-      exists: (path) =>
-        path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      exists: (path) => path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     }),
     null,
   );
@@ -118,8 +117,7 @@ test('cwdForPort: resolves Windows listener ownership before proving the Metro r
 
   assert.equal(
     cwdForPort(8081, exec, 'win32', {
-      exists: (path) =>
-        path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      exists: (path) => path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     }),
     resolve('C:\\repo\\worktreeA'),
   );

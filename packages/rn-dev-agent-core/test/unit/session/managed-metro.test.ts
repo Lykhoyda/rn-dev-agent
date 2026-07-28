@@ -142,10 +142,7 @@ test('managed Metro discovers listener PIDs with platform-native commands', () =
     managedMetroListenerPid(8341, 'linux', execute, listenerExecutableDependencies),
     513,
   );
-  assert.equal(
-    calls[0]?.[0],
-    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-  );
+  assert.equal(calls[0]?.[0], 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
   assert.equal(calls[1]?.[0], '/usr/bin/ss');
   let darwinCommand = '';
   const darwinProbe = probeManagedMetroListener(
@@ -172,12 +169,7 @@ test('managed Metro listener probes require platform-specific positive absence',
     { status: 'absent' },
   );
   assert.deepEqual(
-    probeManagedMetroListener(
-      8341,
-      'linux',
-      (() => '') as never,
-      listenerExecutableDependencies,
-    ),
+    probeManagedMetroListener(8341, 'linux', (() => '') as never, listenerExecutableDependencies),
     { status: 'absent' },
   );
   assert.deepEqual(
@@ -204,12 +196,7 @@ test('managed Metro listener probes reject ambiguous platform output', () => {
     { status: 'unknown' },
   );
   assert.deepEqual(
-    probeManagedMetroListener(
-      8341,
-      'win32',
-      (() => '') as never,
-      listenerExecutableDependencies,
-    ),
+    probeManagedMetroListener(8341, 'win32', (() => '') as never, listenerExecutableDependencies),
     { status: 'unknown' },
   );
   assert.deepEqual(
@@ -231,12 +218,7 @@ test('managed Metro listener probes reject ambiguous platform output', () => {
     { status: 'unknown' },
   );
   assert.deepEqual(
-    probeManagedMetroListener(
-      8341,
-      'darwin',
-      (() => '') as never,
-      listenerExecutableDependencies,
-    ),
+    probeManagedMetroListener(8341, 'darwin', (() => '') as never, listenerExecutableDependencies),
     { status: 'unknown' },
   );
   assert.deepEqual(

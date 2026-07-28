@@ -47,9 +47,7 @@ export function resolveMetroListenerExecutable(
         : platform === 'darwin'
           ? 'lsof'
           : null;
-  return executable
-    ? resolveTrustedSystemExecutable(executable, platform, dependencies)
-    : null;
+  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
 }
 
 function numericListener(output: unknown, emptyStatus: 'absent' | 'unknown'): MetroListenerProbe {
