@@ -53,6 +53,7 @@ export interface ManagedMetroBinding extends MetroBinding {
 }
 
 interface ManagedMetroDependencies {
+  environment?: NodeJS.ProcessEnv;
   exists?: (path: string) => boolean;
   readText?: (path: string) => string;
   spawnProcess?: (
@@ -1493,6 +1494,9 @@ interface ManagedMetroLauncherDiagnostic {
   detail: string;
 }
 
+const MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME =
+  /(?:access[_-]?key|token|secret|password|passwd|pwd|credential|api[_-]?key|authorization|auth|cookie|private[_-]?key)/i;
+
 function readManagedMetroLauncherDiagnostic(path: string): ManagedMetroLauncherDiagnostic | null {
   try {
     const source = readFileSync(path, 'utf8');
@@ -1517,10 +1521,16 @@ function readManagedMetroLauncherDiagnostic(path: string): ManagedMetroLauncherD
 
 function sanitizeManagedMetroStartupDetail(value: string, redactions: readonly string[]): string {
   let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, '?');
-  for (const redaction of redactions) {
+  for (const redaction of [...redactions].sort((left, right) => right.length - left.length)) {
     if (redaction) sanitized = sanitized.replaceAll(redaction, '<redacted>');
   }
   return sanitized
+    .replace(/\b(?:Basic|Bearer)\s+\S+/gi, '<redacted-authorization>')
+    .replace(
+      /(\b[A-Za-z_][A-Za-z0-9_.-]*(?:access[-_]?key|token|secret|password|passwd|pwd|credential|api[-_]?key|authorization|auth|cookie|private[-_]?key)[A-Za-z0-9_.-]*\b["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi,
+      '$1<redacted>',
+    )
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, '$1<redacted>@')
     .replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, '<path>')
     .replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, '<path>')
     .trim()
@@ -1547,6 +1557,7 @@ function managedMetroStartupError(input: {
   sessionId: string;
   metroInstanceId: string;
   signerCapability: string;
+  credentialRedactions: readonly string[];
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   lastError: unknown;
@@ -1574,6 +1585,7 @@ function managedMetroStartupError(input: {
     input.metroInstanceId,
     input.signerCapability,
     input.runtimePolicyCapability,
+    ...input.credentialRedactions,
   ];
   const lastError =
     input.lastError instanceof Error
@@ -1731,7 +1743,7 @@ export async function startManagedMetro(
     if (!exists(path)) mkdirSync(path, { recursive: true, mode: 0o700 });
   }
   const metroEnvironment = managedMetroChildEnvironment({
-    ...process.env,
+    ...(dependencies.environment ?? process.env),
     HOME: metroHome,
     TMPDIR: metroTemporaryRoot,
     TMP: metroTemporaryRoot,
@@ -2004,6 +2016,14 @@ export async function startManagedMetro(
     sessionId: input.sessionId,
     metroInstanceId: instanceId,
     signerCapability: input.signerCapability,
+    credentialRedactions: Object.entries(childEnvironment)
+      .filter(
+        ([name, value]) =>
+          value !== undefined &&
+          (MANAGED_METRO_SENSITIVE_ENVIRONMENT_NAME.test(name) ||
+            /^[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i.test(value)),
+      )
+      .map(([, value]) => value as string),
     exitCode: child.exitCode,
     signalCode: child.signalCode,
     lastError,

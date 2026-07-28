@@ -1068,6 +1068,12 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
           signerCapability: 'secret-signer-capability',
         },
         {
+          environment: {
+            AWS_ACCESS_KEY_ID: 'inherited-access-key',
+            DATABASE_URL: 'postgres://user:database-password@example.test/service',
+            NPM_TOKEN: 'inherited-npm-secret',
+            SERVICE_CREDENTIAL: 'inherited-service-credential',
+          },
           readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
           exists: () => true,
           spawnProcess: () => child,
@@ -1096,7 +1102,7 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
             );
             writeFileSync(
               join(runtimeRoot, 'metro.log'),
-              `${appRoot}/private-entry.cjs secret-session-id secret-signer-capability\n`,
+              `${appRoot}/private-entry.cjs secret-session-id secret-signer-capability\nAWS_ACCESS_KEY_ID=inherited-access-key\nDATABASE_URL=postgres://user:database-password@example.test/service\nNPM_TOKEN=inherited-npm-secret\nSERVICE_CREDENTIAL: inherited-service-credential\nAuthorization: Bearer child-controlled-credential\n`,
               { flag: 'a' },
             );
             child.exitCode = 1;
@@ -1120,6 +1126,15 @@ test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnosti
       new RegExp(runtimeRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
     );
     assert.doesNotMatch(failure.message, /secret-session-id|secret-metro-instance|secret-signer/);
+    assert.doesNotMatch(
+      failure.message,
+      /database-password|inherited-access-key|inherited-npm-secret|inherited-service-credential|child-controlled-credential/,
+    );
+    assert.match(failure.message, /AWS_ACCESS_KEY_ID=<redacted>/);
+    assert.match(failure.message, /DATABASE_URL=<redacted>/);
+    assert.match(failure.message, /NPM_TOKEN=<redacted>/);
+    assert.match(failure.message, /SERVICE_CREDENTIAL: <redacted>/);
+    assert.match(failure.message, /Authorization: <redacted-authorization>/);
     assert.ok(failure.message.length <= 4_096);
   } finally {
     rmSync(runtimeRoot, { force: true, recursive: true });

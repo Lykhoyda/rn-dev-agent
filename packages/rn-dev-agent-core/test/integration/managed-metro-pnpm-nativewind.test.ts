@@ -23,6 +23,16 @@ import { stopManagedMetro } from '../../dist/session/managed-metro.js';
 
 const requireFromTest = createRequire(import.meta.url);
 const managedMetroModuleUrl = new URL('../../dist/session/managed-metro.js', import.meta.url).href;
+const supportedDarwinArchitecture = process.arch === 'arm64' || process.arch === 'x64';
+
+function resolveOxfmtAddonPath(): string {
+  if (!supportedDarwinArchitecture) {
+    throw new Error(`unsupported Darwin architecture: ${process.arch}`);
+  }
+  return requireFromTest.resolve(
+    `@oxfmt/binding-darwin-${process.arch}/oxfmt.darwin-${process.arch}.node`,
+  );
+}
 
 async function availablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -42,7 +52,7 @@ async function availablePort(): Promise<number> {
 
 test(
   'literal pnpm ios starts managed Expo Metro with NativeWind addon evidence',
-  { skip: process.platform !== 'darwin', timeout: 45_000 },
+  { skip: process.platform !== 'darwin' || !supportedDarwinArchitecture, timeout: 45_000 },
   async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-metro-pnpm-nativewind-')));
     const runtimeRoot = join(root, 'runtime');
@@ -106,10 +116,7 @@ test(
         writeFileSync(join(packageRoot, 'index.js'), source);
         symlinkSync(packageRoot, join(root, 'node_modules', name), 'dir');
       }
-      copyFileSync(
-        requireFromTest.resolve('@oxfmt/binding-darwin-arm64/oxfmt.darwin-arm64.node'),
-        addonPath,
-      );
+      copyFileSync(resolveOxfmtAddonPath(), addonPath);
       writeFileSync(
         join(expoRoot, 'package.json'),
         JSON.stringify({ name: 'expo', version: '1.0.0', bin: { expo: 'bin/cli.cjs' } }),
