@@ -229,7 +229,7 @@ ${pathAncestors.map((path) => `    (path-ancestors ${sandboxString(path)})`).joi
 (allow file-write* file-test-existence
 ${pathFilters(writeRoots)})
 ${protectedRuntimeRoots.length > 0
-        ? `(deny file-write* file-test-existence
+        ? `(deny file-write*
 ${pathFilters(protectedRuntimeRoots)})`
         : ''}
 (allow network-bind
@@ -514,7 +514,10 @@ export function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
         writeCanary(plan.canaryPath, 'rn-dev-agent sandbox canary');
         canaryCreated = true;
         mkdirSync(dirname(plan.preflightEnvironmentPath), { recursive: true });
-        writeCanary(plan.preflightEnvironmentPath, canonicalAuthorityJson(Object.fromEntries(Object.entries(dependencies.environment ?? process.env))));
+        const preflightEnvironment = Object.fromEntries(Object.entries(dependencies.environment ?? process.env));
+        delete preflightEnvironment.RN_DEV_AGENT_METRO_EVIDENCE_FD;
+        delete preflightEnvironment.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
+        writeCanary(plan.preflightEnvironmentPath, canonicalAuthorityJson(preflightEnvironment));
         environmentCreated = true;
         mkdirSync(dirname(plan.symlinkCanaryPath), { recursive: true });
         rmSync(plan.symlinkCanaryPath, { force: true });

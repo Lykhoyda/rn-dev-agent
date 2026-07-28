@@ -392,6 +392,10 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE,
     '/tmp/metro-runtime-evidence.jsonl',
   );
+  assert.equal(
+    calls[0]?.env?.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT,
+    '/tmp/native-addon-acknowledgments',
+  );
   const runtimeEvidenceSocket = binding.runtimeEvidenceSocket;
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET, runtimeEvidenceSocket);
   assert.ok(runtimeEvidenceSocket.length < 100);
@@ -1032,10 +1036,94 @@ test('managed Metro startup failure stops the owned tree before returning', asyn
         },
       },
     ),
-    /METRO_START_UNAVAILABLE/,
+    /METRO_LAUNCHER_PRE_EVIDENCE_FAILED/,
   );
 
   assert.deepEqual(signals, [101]);
+});
+
+test('managed Metro surfaces a bounded sanitized pre-evidence launcher diagnostic', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'rn-metro-pre-evidence-'));
+  const appRoot = join(runtimeRoot, 'app');
+  const child = {
+    pid: 101,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    kill: () => true,
+    unref: () => {},
+  };
+  let stopped = false;
+  try {
+    let failure: Error | undefined;
+    try {
+      await startManagedMetro(
+        {
+          appRoot,
+          runtimeRoot,
+          sourceRoot: appRoot,
+          sessionId: 'secret-session-id',
+          port: 8341,
+          instanceId: 'secret-metro-instance',
+          buildGeneration: 1,
+          signerCapability: 'secret-signer-capability',
+        },
+        {
+          readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+          exists: () => true,
+          spawnProcess: () => child,
+          listenerPid: () => null,
+          readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+          probeBirth: () =>
+            stopped
+              ? { status: 'absent' }
+              : {
+                  status: 'present',
+                  birth: { pid: 101, source: 'linux-proc', token: 'birth-101' },
+                },
+          probeListener: () => ({ status: 'absent' }),
+          signalTree: () => {
+            stopped = true;
+          },
+          wait: async () => {
+            writeFileSync(
+              join(runtimeRoot, 'metro-launcher-diagnostic.json'),
+              `${JSON.stringify({
+                version: 1,
+                code: 'METRO_LAUNCHER_ENVIRONMENT_INVALID',
+                stage: 'environment',
+                detail: 'native-addon-ack-root-missing',
+              })}\n`,
+            );
+            writeFileSync(
+              join(runtimeRoot, 'metro.log'),
+              `${appRoot}/private-entry.cjs secret-session-id secret-signer-capability\n`,
+              { flag: 'a' },
+            );
+            child.exitCode = 1;
+          },
+        },
+      );
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
+
+    assert.ok(failure);
+    assert.match(
+      failure.message,
+      /^METRO_LAUNCHER_ENVIRONMENT_INVALID: managed Metro launcher failed before runtime evidence/,
+    );
+    assert.match(failure.message, /stage environment/);
+    assert.match(failure.message, /launcher exit 1/);
+    assert.match(failure.message, /native-addon-ack-root-missing/);
+    assert.doesNotMatch(
+      failure.message,
+      new RegExp(runtimeRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    );
+    assert.doesNotMatch(failure.message, /secret-session-id|secret-metro-instance|secret-signer/);
+    assert.ok(failure.message.length <= 4_096);
+  } finally {
+    rmSync(runtimeRoot, { force: true, recursive: true });
+  }
 });
 
 test('managed Metro cleans the spawned group when launcher birth is unavailable', async () => {
@@ -1130,7 +1218,7 @@ test('managed Metro startup cleanup signals its group before listener birth is k
         },
       },
     ),
-    /METRO_START_UNAVAILABLE/,
+    /METRO_LAUNCHER_PRE_EVIDENCE_FAILED/,
   );
 
   assert.deepEqual(signals, [101]);

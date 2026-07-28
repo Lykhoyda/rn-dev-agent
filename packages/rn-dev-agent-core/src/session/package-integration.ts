@@ -2149,23 +2149,93 @@ function waitForNativeAddonAcknowledgment(requestId, digest) {
   }
   throw refusal('launcher acknowledgment timed out');
 }
+function nativeAddonEvidenceStageError(stage, caught) {
+  if (
+    caught &&
+    (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
+      caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
+  ) {
+    return caught;
+  }
+  const code =
+    caught && typeof caught.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(caught.code)
+      ? caught.code
+      : 'UNKNOWN';
+  const error = new Error(
+    'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + stage + ' failed (' + code + ')',
+  );
+  error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+  return error;
+}
 function prepareNativeAddonLoad(file) {
-  const resolved = fs.realpathSync(file);
-  if (!fs.statSync(resolved).isFile() || !isWithinAllowedCodeRoot(resolved)) {
+  const requestedPath = path.resolve(String(file));
+  let resolved;
+  try {
+    resolved = fs.realpathSync(requestedPath);
+  } catch (caught) {
+    if (caught && (caught.code === 'ENOENT' || caught.code === 'ENOTDIR')) {
+      const error = new Error(
+        'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
+      );
+      error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+      throw error;
+    }
+    throw nativeAddonEvidenceStageError('canonical-path', caught);
+  }
+  let regularFile;
+  try {
+    regularFile = fs.statSync(resolved).isFile();
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('file-metadata', caught);
+  }
+  if (!regularFile) {
+    const error = new Error(
+      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: not-regular:' +
+        sanitizedNativeAddonBasename(resolved),
+    );
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  let withinAllowedRoot;
+  try {
+    withinAllowedRoot = isWithinAllowedCodeRoot(resolved);
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('root-containment', caught);
+  }
+  if (!withinAllowedRoot) {
     const error = new Error(
       'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
     );
     error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
     throw error;
   }
-  const digest = digestRuntimeFile(resolved);
-  const requestId = randomBytes(16).toString('hex');
+  let digest;
+  try {
+    digest = digestRuntimeFile(resolved);
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('pre-load-digest', caught);
+  }
+  let requestId;
+  try {
+    requestId = randomBytes(16).toString('hex');
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('request-id', caught);
+  }
   if (usesExternalEvidenceOwner) {
-    persistLoaderObservation(
-      'native-addon-request',
-      canonicalAuthorityJson({ requestId, path: resolved, digest }),
-    );
-    const acknowledgedPath = waitForNativeAddonAcknowledgment(requestId, digest);
+    try {
+      persistLoaderObservation(
+        'native-addon-request',
+        canonicalAuthorityJson({ requestId, path: resolved, digest }),
+      );
+    } catch (caught) {
+      throw nativeAddonEvidenceStageError('request-publish', caught);
+    }
+    let acknowledgedPath;
+    try {
+      acknowledgedPath = waitForNativeAddonAcknowledgment(requestId, digest);
+    } catch (caught) {
+      throw nativeAddonEvidenceStageError('acknowledgment-read', caught);
+    }
     if (acknowledgedPath !== resolved) {
       throw new Error('native addon acknowledgment path changed');
     }
@@ -2220,21 +2290,28 @@ function reportNativeAddonCompletion(prepared, outcome, digest) {
 const attestNativeAddonLoad = function(module, file) {
   let prepared;
   try {
-    prepared = prepareNativeAddonLoad(path.resolve(String(file)));
+    prepared = prepareNativeAddonLoad(file);
   } catch (caught) {
     const sanitizedPath = sanitizedNativeAddonPath(file);
+    const preparationCode =
+      caught && typeof caught.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(caught.code)
+        ? caught.code
+        : 'UNKNOWN';
     const message =
       caught &&
       (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
         caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
         ? caught.message
-        : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedPath;
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: preparation failed (' +
+          preparationCode +
+          '): ' +
+          sanitizedPath;
     recordLoaderViolation(message);
     const error = new Error(message);
     error.code =
-      caught && caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE'
+      caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
         ? caught.code
-        : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
     throw error;
   }
   const args = privateArraySlice(arguments);

@@ -105,8 +105,29 @@ function canonicalAuthorityJson(value) {
   };
   return encode(value);
 }
+const launcherDiagnosticPath = process.env.RN_DEV_AGENT_METRO_LAUNCHER_DIAGNOSTIC;
+function failLauncher(code, stage, detail) {
+  const diagnostic = { version: 1, code, stage, detail };
+  if (launcherDiagnosticPath) {
+    try {
+      writeFileSync(launcherDiagnosticPath, intrinsicJsonStringify(diagnostic), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    } catch {}
+  }
+  try {
+    process.stderr.write(code + ': stage=' + stage + '; detail=' + detail + '\n');
+  } catch {}
+  process.exit(1);
+}
 const executable = process.env.RN_DEV_AGENT_METRO_EXECUTABLE;
-const args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
+let args;
+try {
+  args = JSON.parse(process.env.RN_DEV_AGENT_METRO_ARGS || '[]');
+} catch {
+  failLauncher('METRO_LAUNCHER_ENVIRONMENT_INVALID', 'environment', 'arguments-invalid');
+}
 const evidencePath = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE;
 const evidenceSocket = process.env.RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET;
 const policyPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_POLICY;
@@ -120,11 +141,39 @@ const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
 const runtimeManifestSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST;
 const runtimeEnforcementSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT;
 const nativeAddonAcknowledgmentRoot = process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
-if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource || !runtimeEnforcementSource || !nativeAddonAcknowledgmentRoot) {
-  process.exit(1);
+const requiredEnvironment = [
+  [launcherDiagnosticPath, 'diagnostic-path-missing'],
+  [executable, 'executable-missing'],
+  [evidencePath, 'evidence-path-missing'],
+  [evidenceSocket, 'evidence-socket-missing'],
+  [policyPath, 'policy-path-missing'],
+  [capability, 'policy-capability-missing'],
+  [sessionId, 'session-id-missing'],
+  [metroInstanceId, 'metro-instance-id-missing'],
+  [childNodeOptions, 'child-node-options-missing'],
+  [contentRoot, 'content-root-missing'],
+  [appRoot, 'app-root-missing'],
+  [childEnvironmentSource, 'child-environment-missing'],
+  [runtimeManifestSource, 'runtime-manifest-missing'],
+  [runtimeEnforcementSource, 'runtime-enforcement-missing'],
+  [nativeAddonAcknowledgmentRoot, 'native-addon-ack-root-missing'],
+];
+const missingEnvironment = requiredEnvironment.find(([value]) => !value);
+if (missingEnvironment) {
+  failLauncher(
+    'METRO_LAUNCHER_ENVIRONMENT_INVALID',
+    'environment',
+    missingEnvironment[1],
+  );
 }
-const runtimeManifest = JSON.parse(runtimeManifestSource);
-const runtimeEnforcement = JSON.parse(runtimeEnforcementSource);
+let runtimeManifest;
+let runtimeEnforcement;
+try {
+  runtimeManifest = JSON.parse(runtimeManifestSource);
+  runtimeEnforcement = JSON.parse(runtimeEnforcementSource);
+} catch {
+  failLauncher('METRO_LAUNCHER_ENVIRONMENT_INVALID', 'environment', 'manifest-invalid');
+}
 const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
 const enforcementReceipt = runtimeEnforcement.receipt;
 const snapshotAttestedFiles = (entries, arguments_, firstDescriptor) => {
@@ -195,7 +244,7 @@ const liveCodeIdentityMatches = (pid, identity) => {
     fields.get('CDHash') === identity.cdHash
   );
 };
-const waitForLiveNodeIdentity = (pid, identity) => {
+const waitForLiveCodeIdentity = (pid, identity) => {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     if (liveCodeIdentityMatches(pid, identity)) return true;
@@ -249,7 +298,12 @@ let managedSandbox =
     canonicalAuthorityJson(runtimeEnforcement.commandChainAttestation);
 let runtimeEvidenceAuthority = managedSandbox ? 'managed-sandbox-v1' : 'reported-v1';
 const evidenceDescriptor = 9;
-const journalDescriptor = openSync(evidencePath, 'w', 0o600);
+let journalDescriptor;
+try {
+  journalDescriptor = openSync(evidencePath, 'w', 0o600);
+} catch {
+  failLauncher('METRO_LAUNCHER_EVIDENCE_UNAVAILABLE', 'evidence-journal', 'journal-open-failed');
+}
 let sequence = 0;
 let previousSignature = null;
 let buffered = '';
@@ -552,7 +606,13 @@ const headServer = createServer((connection) => {
     }
   });
 });
-headServer.once('error', () => process.exit(1));
+headServer.once('error', () =>
+  failLauncher(
+    'METRO_LAUNCHER_EVIDENCE_UNAVAILABLE',
+    'evidence-listener',
+    'evidence-listener-error',
+  ),
+);
 headServer.listen(evidenceSocket, () => {
   if (process.platform !== 'win32') chmodSync(evidenceSocket, 0o600);
 });
@@ -560,8 +620,20 @@ const childEnvironment = JSON.parse(childEnvironmentSource);
 const environmentDigest = createHash('sha256')
   .update(canonicalAuthorityJson(childEnvironment))
   .digest('hex');
-if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
-if (runtimeEnforcement.status === 'enforced' && !managedSandbox) process.exit(1);
+if (environmentDigest !== runtimeManifest.environmentDigest) {
+  failLauncher(
+    'METRO_LAUNCHER_ENVIRONMENT_INVALID',
+    'environment-digest',
+    'child-environment-mismatch',
+  );
+}
+if (runtimeEnforcement.status === 'enforced' && !managedSandbox) {
+  failLauncher(
+    'METRO_LAUNCHER_ENFORCEMENT_REFUSED',
+    'enforcement',
+    'sandbox-admission-invalid',
+  );
+}
 const sandboxExecutable = runtimeEnforcement.sandboxExecutable;
 const boundArgs = args.map((argument) =>
   argument.startsWith(logicalArgumentPrefix)
@@ -588,20 +660,28 @@ child = spawn(managedSandbox ? sandboxExecutable : executable, sandboxArgs, {
     ...(commandChainSnapshot?.snapshots.map(() => 'pipe') ?? []),
   ],
 });
-if (!Number.isSafeInteger(child.pid)) process.exit(1);
+if (!Number.isSafeInteger(child.pid)) {
+  failLauncher(
+    'METRO_LAUNCHER_CHILD_SPAWN_FAILED',
+    'child-spawn',
+    'child-pid-unavailable',
+  );
+}
 for (let index = 0; index < (commandChainSnapshot?.snapshots.length ?? 0); index += 1) {
   child.stdio[10 + index].end(commandChainSnapshot.snapshots[index]);
 }
 if (
   managedSandbox &&
-  !waitForLiveNodeIdentity(
+  !waitForLiveCodeIdentity(
     child.pid,
-    enforcementReceipt.nodeRuntimeAttestation?.executable?.signingIdentity,
+    enforcementReceipt.commandChainAttestation?.find(
+      (entry) => entry.path === executable,
+    )?.signingIdentity,
   )
 ) {
   managedSandbox = false;
   runtimeEvidenceAuthority = 'reported-v1';
-  appendViolation('Metro executable kernel identity did not match attestation');
+  appendViolation('Metro command executable kernel identity did not match attestation');
   try {
     process.kill(-child.pid, 'SIGKILL');
   } catch {
@@ -609,7 +689,11 @@ if (
       child.kill('SIGKILL');
     } catch {}
   }
-  process.exit(1);
+  failLauncher(
+    'METRO_LAUNCHER_ENFORCEMENT_REFUSED',
+    'child-admission',
+    'command-identity-mismatch',
+  );
 }
 runtimeManifest.descendantAuthority.rootIdentity = 'process:' + child.pid;
 appendEvidence({
@@ -743,7 +827,13 @@ evidence.on('data', (chunk) => {
     }
   }
 });
-child.once('error', () => process.exit(1));
+child.once('error', () =>
+  failLauncher(
+    'METRO_LAUNCHER_CHILD_SPAWN_FAILED',
+    'child-spawn',
+    'child-process-error',
+  ),
+);
 evidence.once('end', finishEvidence);
 evidence.once('close', finishEvidence);
 evidence.once('error', () => {
@@ -1190,6 +1280,44 @@ function boundedMetroLogTail(path, maxBytes = 4_096) {
             closeSync(descriptor);
     }
 }
+function readManagedMetroLauncherDiagnostic(path) {
+    try {
+        const source = readFileSync(path, 'utf8');
+        if (Buffer.byteLength(source) > 4_096)
+            return null;
+        const diagnostic = JSON.parse(source);
+        if (diagnostic.version !== 1 ||
+            typeof diagnostic.code !== 'string' ||
+            !/^METRO_LAUNCHER_[A-Z0-9_]+$/.test(diagnostic.code) ||
+            typeof diagnostic.stage !== 'string' ||
+            !/^[a-z0-9-]{1,64}$/.test(diagnostic.stage) ||
+            typeof diagnostic.detail !== 'string' ||
+            !/^[a-z0-9-]{1,96}$/.test(diagnostic.detail)) {
+            return null;
+        }
+        return diagnostic;
+    }
+    catch {
+        return null;
+    }
+}
+function sanitizeManagedMetroStartupDetail(value, redactions) {
+    let sanitized = value.replace(/[^\t\n\r\x20-\x7e]/g, '?');
+    for (const redaction of redactions) {
+        if (redaction)
+            sanitized = sanitized.replaceAll(redaction, '<redacted>');
+    }
+    return sanitized
+        .replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, '<path>')
+        .replace(/(?:\/[A-Za-z0-9._@%+~=-]+){2,}/g, '<path>')
+        .trim()
+        .slice(-4_096);
+}
+function boundedManagedMetroStartupMessage(code, details) {
+    const compactDetails = details.filter((detail) => Boolean(detail));
+    const suffix = compactDetails.length > 0 ? ` (${compactDetails.join('; ')})` : '';
+    return `${code}: managed Metro launcher failed before runtime evidence${suffix}`.slice(0, 4_096);
+}
 function managedMetroStartupError(input) {
     const violation = latestSignedRuntimeViolation(input.runtimeEvidencePath, input.runtimePolicyCapability, {
         sessionId: input.sessionId,
@@ -1200,16 +1328,55 @@ function managedMetroStartupError(input) {
         : input.signalCode
             ? `launcher signal ${input.signalCode}`
             : null;
-    const logTail = boundedMetroLogTail(input.logPath);
+    const launcherDiagnostic = readManagedMetroLauncherDiagnostic(input.launcherDiagnosticPath);
+    const redactions = [
+        input.appRoot,
+        input.sourceRoot,
+        input.runtimeRoot,
+        input.sessionId,
+        input.metroInstanceId,
+        input.signerCapability,
+        input.runtimePolicyCapability,
+    ];
+    const lastError = input.lastError instanceof Error
+        ? sanitizeManagedMetroStartupDetail(input.lastError.message, redactions)
+        : null;
+    const logTailSource = boundedMetroLogTail(input.logPath);
+    const logTail = logTailSource
+        ? sanitizeManagedMetroStartupDetail(logTailSource, redactions)
+        : null;
     const details = [
+        launcherDiagnostic ? `stage ${launcherDiagnostic.stage}` : null,
         childOutcome,
-        input.lastError instanceof Error ? input.lastError.message : null,
+        launcherDiagnostic?.detail,
+        lastError,
         logTail ? `Metro log tail:\n${logTail}` : null,
-    ].filter(Boolean);
-    if (violation && /^[A-Z][A-Z0-9_]+:/.test(violation)) {
-        return new Error(`${violation}${details.length > 0 ? `; ${details.join('; ')}` : ''}`);
+    ].filter((detail) => Boolean(detail));
+    if (launcherDiagnostic) {
+        return new Error(boundedManagedMetroStartupMessage(launcherDiagnostic.code, details));
     }
-    return new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${details.length > 0 ? ` (${details.join('; ')})` : ''}`);
+    if (violation && /^[A-Z][A-Z0-9_]+:/.test(violation)) {
+        return new Error(`${sanitizeManagedMetroStartupDetail(violation, redactions)}${details.length > 0 ? `; ${details.join('; ')}` : ''}`.slice(0, 4_096));
+    }
+    let runtimeEvidenceInitialized = false;
+    let runtimeEvidenceDescriptor = null;
+    try {
+        runtimeEvidenceDescriptor = openSync(input.runtimeEvidencePath, 'r');
+        runtimeEvidenceInitialized = fstatSync(runtimeEvidenceDescriptor).size > 0;
+    }
+    catch {
+    }
+    finally {
+        if (runtimeEvidenceDescriptor !== null)
+            closeSync(runtimeEvidenceDescriptor);
+    }
+    if (!runtimeEvidenceInitialized) {
+        return new Error(boundedManagedMetroStartupMessage('METRO_LAUNCHER_PRE_EVIDENCE_FAILED', [
+            'stage node-startup',
+            ...details,
+        ]));
+    }
+    return new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${details.length > 0 ? ` (${details.join('; ')})` : ''}`.slice(0, 4_096));
 }
 async function stopSpawnedProcessGroup(input, dependencies) {
     const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
@@ -1257,6 +1424,7 @@ export async function startManagedMetro(input, dependencies = {}) {
     }
     const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
     const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');
+    const launcherDiagnosticPath = join(input.runtimeRoot, 'metro-launcher-diagnostic.json');
     const nativeAddonAcknowledgmentRoot = join(input.runtimeRoot, 'native-addon-acknowledgments');
     const runtimePolicyPath = join(input.appRoot, '.rn-agent', 'integration', 'metro-runtime-policy.json');
     const runtimeEvidenceEndpointId = createHmac('sha256', input.signerCapability)
@@ -1343,7 +1511,9 @@ export async function startManagedMetro(input, dependencies = {}) {
         commandProbeArguments: launchCommand.probeArgs,
         commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
         commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
-        protectedRuntimeRoots: launchCommand.protectedRuntimeRoots.map(canonicalRuntimeInput),
+        protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot]
+            .map(canonicalRuntimeInput)
+            .filter((value, index, entries) => entries.indexOf(value) === index),
         nativeAddonRoots: allowedCodeRoots,
         nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
         nodeVersion: process.version,
@@ -1381,7 +1551,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         commandProbeArguments: launchCommand.probeArgs,
         commandExecutableMappings: launchCommand.executableMappings,
         commandChainInputs,
-        protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot],
+        protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
         nativeAddonRoots: allowedCodeRoots,
         port: input.port,
         instanceId,
@@ -1408,6 +1578,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         ? runtimeEnforcement.receipt
         : null;
     const logPath = join(input.runtimeRoot, 'metro.log');
+    rmSync(launcherDiagnosticPath, { force: true });
     const log = openSync(logPath, 'a', 0o600);
     const child = (dependencies.spawnProcess ?? spawn)(launchCommand.nodeExecutable, ['-e', METRO_LAUNCHER_SOURCE], {
         cwd: input.appRoot,
@@ -1421,6 +1592,7 @@ export async function startManagedMetro(input, dependencies = {}) {
             RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD: authorityPreload,
             RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS: baseNodeOptions,
             RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE: runtimeEvidencePath,
+            RN_DEV_AGENT_METRO_LAUNCHER_DIAGNOSTIC: launcherDiagnosticPath,
             RN_DEV_AGENT_METRO_RUNTIME_EVIDENCE_SOCKET: runtimeEvidenceSocket,
             RN_DEV_AGENT_METRO_RUNTIME_POLICY: runtimePolicyPath,
             RN_DEV_AGENT_METRO_CONTENT_ROOT: input.sourceRoot,
@@ -1429,6 +1601,7 @@ export async function startManagedMetro(input, dependencies = {}) {
             RN_DEV_AGENT_METRO_RUNTIME_MANIFEST: canonicalAuthorityJson(runtimeManifest),
             RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT: canonicalAuthorityJson(runtimeEnforcement),
             RN_DEV_AGENT_METRO_CHILD_NODE_OPTIONS: authorityNodeOptions,
+            RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT: nativeAddonAcknowledgmentRoot,
             NODE_OPTIONS: baseNodeOptions,
         },
         detached: true,
@@ -1523,9 +1696,14 @@ export async function startManagedMetro(input, dependencies = {}) {
     throw managedMetroStartupError({
         runtimeEvidencePath,
         runtimePolicyCapability,
+        launcherDiagnosticPath,
         logPath,
+        appRoot: input.appRoot,
+        sourceRoot: input.sourceRoot,
+        runtimeRoot: input.runtimeRoot,
         sessionId: input.sessionId,
         metroInstanceId: instanceId,
+        signerCapability: input.signerCapability,
         exitCode: child.exitCode,
         signalCode: child.signalCode,
         lastError,
