@@ -11256,6 +11256,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     appRoot,
     commandExecutable,
     commandArguments,
+    baseNodeOptions: input.baseNodeOptions ?? "",
     preflightEnvironmentPath: resolve2(runtimeRoot, `preflight-environment-${canaryId}.json`),
     nodeRuntimeAttestation,
     commandChainAttestation
@@ -11342,6 +11343,7 @@ const processGroupExists = (pid) => {
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
   const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
+  stdio[8] = 'pipe';
   stdio.push('pipe');
   stdio.push(...commandSnapshots.map(() => 'pipe'));
   const command = spawn(
@@ -11358,6 +11360,7 @@ const processGroupExists = (pid) => {
     stdio,
     },
   );
+  command.stdio[8].end('admitted\n');
   for (let index = 0; index < commandSnapshots.length; index += 1) {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
@@ -11440,6 +11443,7 @@ function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
     canaryCreated = true;
     mkdirSync(dirname2(plan.preflightEnvironmentPath), { recursive: true });
     const preflightEnvironment = Object.fromEntries(Object.entries(dependencies.environment ?? process.env));
+    preflightEnvironment.NODE_OPTIONS = plan.baseNodeOptions;
     delete preflightEnvironment.RN_DEV_AGENT_METRO_EVIDENCE_FD;
     delete preflightEnvironment.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
     writeCanary(plan.preflightEnvironmentPath, canonicalAuthorityJson(preflightEnvironment));
@@ -12161,7 +12165,7 @@ child = spawn(managedSandbox ? sandboxExecutable : executable, sandboxArgs, {
     'ignore',
     'ignore',
     'ignore',
-    'ignore',
+    'pipe',
     'pipe',
     ...(commandChainSnapshot?.snapshots.map(() => 'pipe') ?? []),
   ],
@@ -12201,6 +12205,7 @@ if (
     'command-identity-mismatch',
   );
 }
+child.stdio[8].end('admitted\n');
 runtimeManifest.descendantAuthority.rootIdentity = 'process:' + child.pid;
 appendEvidence({
   version: 1,
@@ -12529,7 +12534,7 @@ function resolveManagedMetroLaunchCommand(command, dependencies) {
       nodeExecutable: process.execPath,
       args: [
         "-c",
-        'script=$1; shift; . "$script"',
+        'read -r rn_dev_agent_admission <&8; script=$1; shift; . "$script"',
         `rn-dev-agent-logical-path:${command.executable}`,
         command.executable,
         ...command.args
@@ -12931,6 +12936,7 @@ async function startManagedMetro(input, dependencies = {}) {
     commandExecutable: launchCommand.executable,
     commandArguments: metroArgs,
     commandProbeArguments: launchCommand.probeArgs,
+    baseNodeOptions,
     commandExecutableMappings: launchCommand.executableMappings,
     commandChainInputs,
     protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,

@@ -2435,6 +2435,11 @@ loaderEpoch += 1;
 persistLoaderObservation('input', preloadPath, preloadDigest);
 function sourceRoot() {
   if (sourceRootResolved) return cachedSourceRoot;
+  if (process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT) {
+    cachedSourceRoot = fs.realpathSync(process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT);
+    sourceRootResolved = true;
+    return cachedSourceRoot;
+  }
   try {
     cachedSourceRoot = fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8',

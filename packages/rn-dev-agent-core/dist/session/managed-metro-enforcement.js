@@ -329,6 +329,7 @@ export function prepareManagedMetroEnforcement(input, dependencies = {}) {
         appRoot,
         commandExecutable,
         commandArguments,
+        baseNodeOptions: input.baseNodeOptions ?? '',
         preflightEnvironmentPath: resolve(runtimeRoot, `preflight-environment-${canaryId}.json`),
         nodeRuntimeAttestation,
         commandChainAttestation,
@@ -415,6 +416,7 @@ const processGroupExists = (pid) => {
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
   const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
+  stdio[8] = 'pipe';
   stdio.push('pipe');
   stdio.push(...commandSnapshots.map(() => 'pipe'));
   const command = spawn(
@@ -431,6 +433,7 @@ const processGroupExists = (pid) => {
     stdio,
     },
   );
+  command.stdio[8].end('admitted\n');
   for (let index = 0; index < commandSnapshots.length; index += 1) {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
@@ -515,6 +518,7 @@ export function runManagedMetroEnforcementPreflight(plan, dependencies = {}) {
         canaryCreated = true;
         mkdirSync(dirname(plan.preflightEnvironmentPath), { recursive: true });
         const preflightEnvironment = Object.fromEntries(Object.entries(dependencies.environment ?? process.env));
+        preflightEnvironment.NODE_OPTIONS = plan.baseNodeOptions;
         delete preflightEnvironment.RN_DEV_AGENT_METRO_EVIDENCE_FD;
         delete preflightEnvironment.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
         writeCanary(plan.preflightEnvironmentPath, canonicalAuthorityJson(preflightEnvironment));

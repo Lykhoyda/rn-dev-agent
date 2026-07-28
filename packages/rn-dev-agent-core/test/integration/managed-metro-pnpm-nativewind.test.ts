@@ -249,10 +249,7 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
         port: String(port),
       });
       const binding = JSON.parse(readFileSync(bindingPath, 'utf8')) as Record<string, unknown>;
-      assert.match(
-        String(binding.runtimeEvidenceAuthority),
-        /^(?:managed-sandbox-v1|reported-v1)$/,
-      );
+      assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
       assert.equal(binding.runtimeEvidenceProtocol, 2);
       const evidence = readFileSync(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), 'utf8')
         .trim()

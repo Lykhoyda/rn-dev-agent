@@ -63216,6 +63216,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
     appRoot,
     commandExecutable,
     commandArguments,
+    baseNodeOptions: input.baseNodeOptions ?? "",
     preflightEnvironmentPath: resolve5(runtimeRoot, `preflight-environment-${canaryId}.json`),
     nodeRuntimeAttestation,
     commandChainAttestation
@@ -63302,6 +63303,7 @@ const processGroupExists = (pid) => {
   const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
   const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
   while (stdio.length < 9) stdio.push('ignore');
+  stdio[8] = 'pipe';
   stdio.push('pipe');
   stdio.push(...commandSnapshots.map(() => 'pipe'));
   const command = spawn(
@@ -63318,6 +63320,7 @@ const processGroupExists = (pid) => {
     stdio,
     },
   );
+  command.stdio[8].end('admitted\n');
   for (let index = 0; index < commandSnapshots.length; index += 1) {
     command.stdio[10 + index].end(commandSnapshots[index]);
   }
@@ -64038,7 +64041,7 @@ child = spawn(managedSandbox ? sandboxExecutable : executable, sandboxArgs, {
     'ignore',
     'ignore',
     'ignore',
-    'ignore',
+    'pipe',
     'pipe',
     ...(commandChainSnapshot?.snapshots.map(() => 'pipe') ?? []),
   ],
@@ -64078,6 +64081,7 @@ if (
     'command-identity-mismatch',
   );
 }
+child.stdio[8].end('admitted\n');
 runtimeManifest.descendantAuthority.rootIdentity = 'process:' + child.pid;
 appendEvidence({
   version: 1,
@@ -74958,6 +74962,11 @@ loaderEpoch += 1;
 persistLoaderObservation('input', preloadPath, preloadDigest);
 function sourceRoot() {
   if (sourceRootResolved) return cachedSourceRoot;
+  if (process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT) {
+    cachedSourceRoot = fs.realpathSync(process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT);
+    sourceRootResolved = true;
+    return cachedSourceRoot;
+  }
   try {
     cachedSourceRoot = fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8',

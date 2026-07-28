@@ -655,7 +655,7 @@ child = spawn(managedSandbox ? sandboxExecutable : executable, sandboxArgs, {
     'ignore',
     'ignore',
     'ignore',
-    'ignore',
+    'pipe',
     'pipe',
     ...(commandChainSnapshot?.snapshots.map(() => 'pipe') ?? []),
   ],
@@ -695,6 +695,7 @@ if (
     'command-identity-mismatch',
   );
 }
+child.stdio[8].end('admitted\n');
 runtimeManifest.descendantAuthority.rootIdentity = 'process:' + child.pid;
 appendEvidence({
   version: 1,
@@ -1031,7 +1032,7 @@ function resolveManagedMetroLaunchCommand(command, dependencies) {
             nodeExecutable: process.execPath,
             args: [
                 '-c',
-                'script=$1; shift; . "$script"',
+                'read -r rn_dev_agent_admission <&8; script=$1; shift; . "$script"',
                 `rn-dev-agent-logical-path:${command.executable}`,
                 command.executable,
                 ...command.args,
@@ -1554,6 +1555,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         commandExecutable: launchCommand.executable,
         commandArguments: metroArgs,
         commandProbeArguments: launchCommand.probeArgs,
+        baseNodeOptions,
         commandExecutableMappings: launchCommand.executableMappings,
         commandChainInputs,
         protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
