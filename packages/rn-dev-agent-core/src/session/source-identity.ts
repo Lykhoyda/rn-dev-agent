@@ -143,10 +143,7 @@ function updateStableFile(
   maximumBytes: number,
   framed: boolean,
 ): number {
-  const descriptor = openSync(
-    path,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const initial = fstatSync(descriptor);
     if (!initial.isFile() || initial.size > maximumBytes) {
@@ -174,9 +171,7 @@ function updateStableFile(
       offset += bytesRead;
     }
     if (readSync(descriptor, buffer, 0, 1, offset) !== 0) {
-      throw new Error(
-        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing',
-      );
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing');
     }
     const final = fstatSync(descriptor);
     if (
@@ -186,9 +181,7 @@ function updateStableFile(
       final.mtimeMs !== initial.mtimeMs ||
       final.ctimeMs !== initial.ctimeMs
     ) {
-      throw new Error(
-        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing',
-      );
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing');
     }
     return initial.size;
   } finally {
@@ -285,11 +278,7 @@ function updateDependencyPath(
       throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
     }
     updateFramed(hash, 'file');
-    const stableSize = updateFramedFile(
-      hash,
-      current.path,
-      MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES,
-    );
+    const stableSize = updateFramedFile(hash, current.path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES);
     state.totalBytes += stableSize;
     if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
       throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit');
@@ -1177,11 +1166,7 @@ export function strictProofSourceIdentity(
       }
       updateFramed(dirtyHash, 'symlink');
       updateFramed(dirtyHash, link);
-      const stableSize = updateFramedFile(
-        dirtyHash,
-        target,
-        MAX_STRICT_PROOF_FILE_BYTES,
-      );
+      const stableSize = updateFramedFile(dirtyHash, target, MAX_STRICT_PROOF_FILE_BYTES);
       totalBytes += Buffer.byteLength(link) + stableSize;
       if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
         throw new Error('STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit');

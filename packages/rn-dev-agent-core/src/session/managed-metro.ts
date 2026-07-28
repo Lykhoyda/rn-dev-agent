@@ -1497,10 +1497,7 @@ export async function startManagedMetro(
   }
   const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
   const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');
-  const nativeAddonAcknowledgmentRoot = join(
-    input.runtimeRoot,
-    'native-addon-acknowledgments',
-  );
+  const nativeAddonAcknowledgmentRoot = join(input.runtimeRoot, 'native-addon-acknowledgments');
   const runtimePolicyPath = join(
     input.appRoot,
     '.rn-agent',
@@ -1634,10 +1631,7 @@ export async function startManagedMetro(
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings,
     commandChainInputs,
-    protectedRuntimeRoots: [
-      ...launchCommand.protectedRuntimeRoots,
-      nativeAddonAcknowledgmentRoot,
-    ],
+    protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot],
     nativeAddonRoots: allowedCodeRoots,
     port: input.port,
     instanceId,
