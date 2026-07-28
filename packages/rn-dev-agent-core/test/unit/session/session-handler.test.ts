@@ -211,7 +211,7 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
         installedBySessionId: 'donor',
         manifestSha256: 'a'.repeat(64),
       },
-    },
+    } as Record<string, unknown>,
   };
   const targetStatus = {
     sessionId: 'target',
@@ -221,12 +221,46 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
     worker: { instanceId: 'worker-target' },
   };
   let accepted = 0;
+  let stopAttempts = 0;
   let stopSucceeds = false;
+  let reservation:
+    | {
+        handoffId: string;
+        phase: 'shutdown_reserved' | 'shutdown_completed';
+        metro: Record<string, unknown>;
+      }
+    | undefined;
   const registry = {
     getSessionStatus: (sessionId: string) =>
       sessionId === donorStatus.sessionId ? donorStatus : targetStatus,
     getHandoffOwner: () => donorStatus.sessionId,
-    validateHandoffInto: () => {},
+    reserveManagedMetroHandoffCleanup: (
+      _session: unknown,
+      input: { handoffId: string },
+    ) => {
+      reservation ??= {
+        handoffId: input.handoffId,
+        phase: 'shutdown_reserved',
+        metro: {
+          ...(donorStatus.bindings.metro as Record<string, unknown>),
+          sourceSessionId: donorStatus.sessionId,
+          stopRequestedAt: Date.now(),
+          completedAt: null,
+        },
+      };
+      donorStatus.bindings.managedMetroHandoffReservation = reservation;
+      return reservation;
+    },
+    completeManagedMetroHandoffCleanup: () => {
+      assert.ok(reservation);
+      reservation.phase = 'shutdown_completed';
+      reservation.metro.completedAt = Date.now();
+    },
+    refuseManagedMetroHandoffCleanup: () => {
+      donorStatus.state = 'ready';
+      donorStatus.bindings.managedMetroHandoffReservation = null;
+      reservation = undefined;
+    },
     acceptHandoffInto: () => {
       accepted += 1;
       donorStatus.state = 'released';
@@ -236,9 +270,6 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
         packageIntegration: donorStatus.bindings.packageIntegration,
       };
       return targetStatus.bindings.handoffCleanup;
-    },
-    cancelHandoff: () => {
-      donorStatus.state = 'ready';
     },
     finishHandoffCleanup: () => {
       targetStatus.state = 'source_bound';
@@ -259,7 +290,9 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
       getSignerCapability: (sessionId) =>
         sessionId === donorStatus.sessionId ? 'donor-signer' : null,
       stopManagedMetro: async () => {
+        stopAttempts += 1;
         assert.equal(listener.listening, true);
+        if (stopAttempts === 1) throw new Error('managed Metro shutdown interrupted');
         if (!stopSucceeds) return false;
         await new Promise<void>((resolve) => listener.close(() => resolve()));
         return true;
@@ -274,15 +307,26 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
   });
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0]!.text, /before handoff ownership transfer/);
+  assert.match(result.content[0]!.text, /shutdown interrupted/);
   assert.equal(accepted, 0);
   assert.equal(donorStatus.state, 'handoff');
   assert.equal(targetStatus.state, 'blocked');
+  assert.equal(reservation?.phase, 'shutdown_reserved');
   assert.ok(donorStatus.bindings.packageIntegration);
   assert.equal(listener.listening, true);
 
-  registry.cancelHandoff();
+  const refusedResult = await handler({
+    action: 'accept_handoff',
+    handoffId: 'handoff',
+    token: 'token',
+  });
+
+  assert.equal(refusedResult.isError, true);
+  assert.match(refusedResult.content[0]!.text, /donor authority was restored/);
   assert.equal(donorStatus.state, 'ready');
+  assert.equal(reservation, undefined);
+  assert.equal(listener.listening, true);
+
   donorStatus.state = 'handoff';
   stopSucceeds = true;
   const acceptedResult = await handler({

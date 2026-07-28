@@ -902,8 +902,8 @@ test('handoff cancellation and explicit expiry recovery restore the unchanged ow
   assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
 });
 
-test('managed Metro handoff stays cancellable until shutdown is proven and transfers once', () => {
-  const { registry, create } = fixture();
+test('managed Metro handoff cleanup is reserved, resumable, and transferred once', () => {
+  const { registry, create, advance } = fixture();
   const owner = create('a', 'shared-worktree');
   const target = create('b', 'shared-worktree');
   registry.bindWorker(target, {
@@ -944,7 +944,7 @@ test('managed Metro handoff stays cancellable until shutdown is proven and trans
         ...refused,
         targetInstance: 'worker-next',
       }),
-    /managed Metro shutdown must be proven before handoff ownership transfers/,
+    /shutdown reservation must be durably completed/,
   );
   assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'handoff');
   assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'blocked');
@@ -954,10 +954,35 @@ test('managed Metro handoff stays cancellable until shutdown is proven and trans
   assert.ok(registry.getSessionStatus(owner.sessionId)?.bindings.packageIntegration);
 
   const accepted = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+  const reservation = registry.reserveManagedMetroHandoffCleanup(target, {
+    ...accepted,
+    targetInstance: 'worker-next',
+  });
+  assert.equal(reservation?.phase, 'shutdown_reserved');
+  assert.equal(reservation?.metro.sourceSessionId, owner.sessionId);
+  assert.deepEqual(
+    registry.getSessionStatus(owner.sessionId)?.bindings.managedMetroHandoffReservation,
+    reservation,
+  );
+  assert.throws(
+    () => registry.cancelHandoff(owner, accepted.handoffId),
+    /cancellation is fenced while managed Metro shutdown is reserved/,
+  );
+  advance(15_001);
+  assert.deepEqual(
+    registry.reserveManagedMetroHandoffCleanup(target, {
+      ...accepted,
+      targetInstance: 'worker-next',
+    }),
+    reservation,
+  );
+  registry.completeManagedMetroHandoffCleanup(target, {
+    ...accepted,
+    targetInstance: 'worker-next',
+  });
   const cleanup = registry.acceptHandoffInto(target, {
     ...accepted,
     targetInstance: 'worker-next',
-    managedMetroStopped: true,
   });
 
   assert.equal(cleanup.metro, null);
@@ -970,9 +995,64 @@ test('managed Metro handoff stays cancellable until shutdown is proven and trans
       registry.acceptHandoffInto(target, {
         ...accepted,
         targetInstance: 'worker-next',
-        managedMetroStopped: true,
       }),
     /HANDOFF_NOT_AUTHORIZED/,
+  );
+});
+
+test('managed Metro shutdown refusal restores coherent donor authority', () => {
+  const { registry, create } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.bindWorker(target, {
+    instanceId: 'worker-next',
+    pid: 202,
+    token: 'birth-worker-next',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-target' },
+  });
+  registry.claimResources(owner, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'metro-port', key: '8341' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      metro: { mode: 'managed', port: 8341, instanceId: 'metro-a' },
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: owner.sessionId,
+        manifestSha256: 'a'.repeat(64),
+      },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+  registry.reserveManagedMetroHandoffCleanup(target, {
+    ...handoff,
+    targetInstance: 'worker-next',
+  });
+
+  registry.refuseManagedMetroHandoffCleanup(target, {
+    ...handoff,
+    targetInstance: 'worker-next',
+  });
+
+  const restored = registry.getSessionStatus(owner.sessionId);
+  assert.equal(restored?.state, 'ready');
+  assert.equal(restored?.bindings.managedMetroHandoffReservation, null);
+  assert.ok(restored?.bindings.metro);
+  assert.ok(restored?.bindings.packageIntegration);
+  assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, owner.sessionId);
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'blocked');
+  assert.throws(
+    () =>
+      registry.acceptHandoffInto(target, {
+        ...handoff,
+        targetInstance: 'worker-next',
+      }),
+    /HANDOFF_ALREADY_CONSUMED/,
   );
 });
 
@@ -1284,10 +1364,17 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
     },
   });
   const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-cleanup' });
+  registry.reserveManagedMetroHandoffCleanup(cleanupOwner, {
+    ...handoff,
+    targetInstance: 'worker-cleanup',
+  });
+  registry.completeManagedMetroHandoffCleanup(cleanupOwner, {
+    ...handoff,
+    targetInstance: 'worker-cleanup',
+  });
   registry.acceptHandoffInto(cleanupOwner, {
     ...handoff,
     targetInstance: 'worker-cleanup',
-    managedMetroStopped: true,
   });
   const accepted = registry.getSessionStatus(cleanupOwner.sessionId);
   assert.ok(accepted);

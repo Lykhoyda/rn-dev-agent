@@ -601,18 +601,13 @@ export function createSessionHandler(
           );
         }
         if (status.state !== 'handoff_cleanup') {
-          registry.validateHandoffInto(session, {
-            handoffId,
-            token,
-            targetInstance: status.worker.instanceId,
-          });
           const priorManagedMetro =
             priorStatus?.bindings.metro &&
             typeof priorStatus.bindings.metro === 'object' &&
             (priorStatus.bindings.metro as Record<string, unknown>).mode === 'managed'
               ? (priorStatus.bindings.metro as ManagedMetroBinding)
               : null;
-          let managedMetroStopped = false;
+          let signerCapability: string | null = null;
           if (priorManagedMetro) {
             if (!priorSessionId) {
               throw new SessionAuthorityError(
@@ -620,32 +615,55 @@ export function createSessionHandler(
                 'managed Metro handoff source authority is unavailable',
               );
             }
-            const signerCapability = dependencies.getSignerCapability?.(priorSessionId);
+            signerCapability = dependencies.getSignerCapability?.(priorSessionId) ?? null;
             if (!signerCapability) {
               throw new SessionAuthorityError(
                 'SESSION_AUTHORITY_REQUIRED',
                 'managed Metro handoff requires the source session signer capability',
               );
             }
-            managedMetroStopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(
-              priorManagedMetro,
+          }
+          const reservation = registry.reserveManagedMetroHandoffCleanup(session, {
+            handoffId,
+            token,
+            targetInstance: status.worker.instanceId,
+          });
+          if (reservation && reservation.phase !== 'shutdown_completed') {
+            const sourceSessionId = reservation.metro.sourceSessionId;
+            if (typeof sourceSessionId !== 'string' || !signerCapability) {
+              throw new SessionAuthorityError(
+                'SESSION_AUTHORITY_REQUIRED',
+                'managed Metro handoff reservation requires the source session signer capability',
+              );
+            }
+            const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(
+              reservation.metro,
               {
-                sessionId: priorSessionId,
+                sessionId: sourceSessionId,
                 signerCapability,
               },
             );
-            if (!managedMetroStopped) {
+            if (!stopped) {
+              registry.refuseManagedMetroHandoffCleanup(session, {
+                handoffId,
+                token,
+                targetInstance: status.worker.instanceId,
+              });
               throw new SessionAuthorityError(
                 'METRO_AUTHORITY_MISMATCH',
-                'managed Metro could not be stopped before handoff ownership transfer',
+                'managed Metro shutdown was refused; the handoff was cancelled and donor authority was restored',
               );
             }
+            registry.completeManagedMetroHandoffCleanup(session, {
+              handoffId,
+              token,
+              targetInstance: status.worker.instanceId,
+            });
           }
           cleanup = registry.acceptHandoffInto(session, {
             handoffId,
             token,
             targetInstance: status.worker.instanceId,
-            managedMetroStopped,
           });
         }
         if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {
