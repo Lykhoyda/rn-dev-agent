@@ -12,6 +12,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');
 const { chmodSync, closeSync, constants, fstatSync, fsyncSync, openSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
+const { basename, dirname, join } = require('node:path');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
@@ -310,6 +311,62 @@ function publishNativeAddonAcknowledgment(requestId, acknowledgment) {
     { encoding: 'utf8', flag: 'wx', mode: 0o400 },
   );
 }
+const stagedNativeAddons = new Map();
+function stageNativeAddon(candidate, digest, requestId) {
+  const stagedPath = join(dirname(candidate), '.rn-dev-agent-' + requestId + '-' + basename(candidate));
+  const sourceDescriptor = openSync(candidate, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let stagedDescriptor;
+  try {
+    const stat = fstatSync(sourceDescriptor);
+    if (!stat.isFile() || stat.size > 128 * 1024 * 1024) {
+      throw new Error('unsupported runtime module file');
+    }
+    stagedDescriptor = openSync(
+      stagedPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      0o400,
+    );
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    let bytesRead;
+    while (
+      (bytesRead = readSync(sourceDescriptor, buffer, 0, buffer.length, position)) > 0
+    ) {
+      hash.update(buffer.subarray(0, bytesRead));
+      let written = 0;
+      while (written < bytesRead) {
+        written += writeSync(
+          stagedDescriptor,
+          buffer,
+          written,
+          bytesRead - written,
+          position + written,
+        );
+      }
+      position += bytesRead;
+    }
+    if (hash.digest('hex') !== digest) throw new Error('digest changed');
+    fsyncSync(stagedDescriptor);
+    stagedNativeAddons.set(requestId, stagedPath);
+    return stagedPath;
+  } catch (error) {
+    try {
+      rmSync(stagedPath, { force: true });
+    } catch {}
+    throw error;
+  } finally {
+    closeSync(sourceDescriptor);
+    if (stagedDescriptor !== undefined) closeSync(stagedDescriptor);
+  }
+}
+function cleanupNativeAddon(requestId) {
+  const stagedPath = stagedNativeAddons.get(requestId);
+  if (!stagedPath) return;
+  stagedNativeAddons.delete(requestId);
+  rmSync(stagedPath, { force: true });
+  rmSync(nativeAddonStagingRoot + '/' + requestId + '.json', { force: true });
+}
 function handleNativeAddonRequest(payload) {
   let request;
   try {
@@ -334,26 +391,27 @@ function handleNativeAddonRequest(payload) {
     ) {
       throw new Error('outside roots');
     }
-    const bytes = readFileSync(candidate);
-    const digest = createHash('sha256').update(bytes).digest('hex');
-    if (digest !== request.digest) throw new Error('digest changed');
-    const stagedPath = nativeAddonStagingRoot + '/' + request.requestId + '.node';
-    writeFileSync(stagedPath, bytes, { flag: 'wx', mode: 0o400 });
+    const stagedPath = stageNativeAddon(candidate, request.digest, request.requestId);
     appendEvidence({
       version: 1,
       sessionId,
       metroInstanceId,
       kind: 'input',
       value: candidate,
-      digest,
+      digest: request.digest,
     });
     fsyncSync(journalDescriptor);
     publishNativeAddonAcknowledgment(request.requestId, {
       accepted: true,
-      digest,
+      digest: request.digest,
       stagedPath,
     });
   } catch {
+    if (request && /^[a-f0-9]{32}$/.test(request.requestId || '')) {
+      try {
+        cleanupNativeAddon(request.requestId);
+      } catch {}
+    }
     appendViolation('RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: launcher refused staged bytes');
     if (request && /^[a-f0-9]{32}$/.test(request.requestId || '')) {
       try {
@@ -545,6 +603,7 @@ evidence.on('data', (chunk) => {
           'completion',
           'barrier',
           'native-addon-request',
+          'native-addon-completion',
         ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
@@ -555,6 +614,11 @@ evidence.on('data', (chunk) => {
       }
       if (payload.kind === 'native-addon-request') {
         handleNativeAddonRequest(payload);
+        continue;
+      }
+      if (payload.kind === 'native-addon-completion') {
+        if (/^[a-f0-9]{32}$/.test(payload.value)) cleanupNativeAddon(payload.value);
+        else appendViolation('Metro native addon completion record is invalid');
         continue;
       }
       if (payload.kind === 'barrier') {
@@ -610,6 +674,11 @@ evidence.once('error', () => {
   finishEvidence();
 });
 child.once('exit', (code, signal) => {
+  for (const requestId of stagedNativeAddons.keys()) {
+    try {
+      cleanupNativeAddon(requestId);
+    } catch {}
+  }
   childOutcome = { code: code ?? 1, signal };
   finishLauncher();
 });

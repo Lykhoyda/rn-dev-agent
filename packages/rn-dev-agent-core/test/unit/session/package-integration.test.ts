@@ -13,6 +13,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1554,7 +1555,7 @@ test('Metro preload attests direct native addon bytes before invoking the origin
       process.execPath,
       [
         '-e',
-        `const fs = require('node:fs'); const expected = fs.realpathSync(${JSON.stringify(addonPath)}); const pinnedBytes = (path) => { const descriptor = fs.openSync(path, 'r'); const buffer = Buffer.alloc(64); const count = fs.readSync(descriptor, buffer, 0, buffer.length, 0); fs.closeSync(descriptor); return buffer.subarray(0, count).toString('utf8'); }; let calls = 0; process.dlopen = (_module, path) => { const evidence = fs.readFileSync(${JSON.stringify(join(integration, 'metro-runtime-loads.jsonl'))}, 'utf8'); if (!evidence.includes(expected)) process.exit(3); if (!path.startsWith('/dev/fd/') || pinnedBytes(path) !== 'fixture native addon bytes') process.exit(4); fs.writeFileSync(expected, 'replacement bytes'); if (pinnedBytes(path) !== 'fixture native addon bytes') process.exit(5); calls += 1; return 'loaded'; }; const compose = require(${JSON.stringify(adapterPath)}); compose({}); const guardedDlopen = process.dlopen; if (process.dlopen({}, ${JSON.stringify(addonPath)}) !== 'loaded' || calls !== 1) process.exit(1); try { process.dlopen = () => {}; } catch {} if (process.dlopen !== guardedDlopen || require('node:process').dlopen !== guardedDlopen) process.exit(2);`,
+        `const fs = require('node:fs'); const pathApi = require('node:path'); const expected = fs.realpathSync(${JSON.stringify(addonPath)}); let stagedPath; let calls = 0; process.dlopen = (_module, path) => { stagedPath = path; const evidence = fs.readFileSync(${JSON.stringify(join(integration, 'metro-runtime-loads.jsonl'))}, 'utf8'); if (!evidence.includes(expected)) process.exit(3); if (pathApi.dirname(path) !== pathApi.dirname(expected) || fs.readFileSync(path, 'utf8') !== 'fixture native addon bytes') process.exit(4); fs.writeFileSync(expected, 'replacement bytes'); if (fs.readFileSync(path, 'utf8') !== 'fixture native addon bytes') process.exit(5); calls += 1; return 'loaded'; }; const compose = require(${JSON.stringify(adapterPath)}); compose({}); const guardedDlopen = process.dlopen; if (process.dlopen({}, ${JSON.stringify(addonPath)}) !== 'loaded' || calls !== 1) process.exit(1); if (fs.existsSync(stagedPath)) process.exit(6); try { process.dlopen = () => {}; } catch {} if (process.dlopen !== guardedDlopen || require('node:process').dlopen !== guardedDlopen) process.exit(2);`,
       ],
       {
         cwd: root,
@@ -1576,6 +1577,40 @@ test('Metro preload attests direct native addon bytes before invoking the origin
           entry.value === realpathSync(addonPath) &&
           entry.digest === createHash('sha256').update('fixture native addon bytes').digest('hex'),
       ),
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro preload refuses oversized native addons before staging or loading', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-oversized-native-addon-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const addonPath = join(root, 'oversized.node');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(addonPath, '');
+    truncateSync(addonPath, 128 * 1024 * 1024 + 1);
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `process.dlopen = () => process.exit(5); const compose = require(${JSON.stringify(adapterPath)}); compose({}); let error; try { process.dlopen({}, ${JSON.stringify(addonPath)}); } catch (caught) { error = caught; } if (error?.code !== 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON') process.exit(1);`,
+      ],
+      {
+        cwd: root,
+        env: metroPolicyEnvironment(adapterPath, [root]),
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readdirSync(root).some((entry) => entry.startsWith('.rn-dev-agent-')),
+      false,
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
