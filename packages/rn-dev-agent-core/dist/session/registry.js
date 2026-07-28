@@ -113,8 +113,8 @@ function managedMetroHandoffReservation(bindings) {
         !['shutdown_reserved', 'shutdown_completed'].includes(String(value.phase)) ||
         typeof value.metro !== 'object' ||
         value.metro === null ||
-        typeof value.metro
-            .sourceSessionId !== 'string') {
+        typeof value.metro.sourceSessionId !==
+            'string') {
         throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro handoff reservation is malformed');
     }
     return value;
@@ -1645,8 +1645,7 @@ export class SessionRegistry {
                 ? this.#requireHandoffSession(session)
                 : this.#requireSession(session);
             if (handoffCancellation &&
-                JSON.parse(owner.bindings_json)
-                    .managedMetroHandoffReservation) {
+                JSON.parse(owner.bindings_json).managedMetroHandoffReservation) {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'handoff cancellation is fenced while managed Metro shutdown is reserved');
             }
             const active = this.#database
