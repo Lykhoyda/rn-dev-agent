@@ -424,11 +424,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants6);
+          this.rhs = optimizeExpr(this.rhs, names, constants7);
         return this;
       }
       get names() {
@@ -445,10 +445,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants6);
+        this.rhs = optimizeExpr(this.rhs, names, constants7);
         return this;
       }
       get names() {
@@ -509,8 +509,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants6) {
-        this.code = optimizeExpr(this.code, names, constants6);
+      optimizeNames(names, constants7) {
+        this.code = optimizeExpr(this.code, names, constants7);
         return this;
       }
       get names() {
@@ -539,12 +539,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants6))
+          if (n.optimizeNames(names, constants7))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -597,12 +597,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants6);
-        if (!(super.optimizeNames(names, constants6) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants7);
+        if (!(super.optimizeNames(names, constants7) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants6);
+        this.condition = optimizeExpr(this.condition, names, constants7);
         return this;
       }
       get names() {
@@ -625,10 +625,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants6) {
-        if (!super.optimizeNames(names, constants6))
+      optimizeNames(names, constants7) {
+        if (!super.optimizeNames(names, constants7))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants6);
+        this.iteration = optimizeExpr(this.iteration, names, constants7);
         return this;
       }
       get names() {
@@ -664,10 +664,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants6) {
-        if (!super.optimizeNames(names, constants6))
+      optimizeNames(names, constants7) {
+        if (!super.optimizeNames(names, constants7))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants6);
+        this.iterable = optimizeExpr(this.iterable, names, constants7);
         return this;
       }
       get names() {
@@ -709,11 +709,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         var _a, _b;
-        super.optimizeNames(names, constants6);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants6);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants6);
+        super.optimizeNames(names, constants7);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants7);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants7);
         return this;
       }
       get names() {
@@ -1014,7 +1014,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants6) {
+    function optimizeExpr(expr, names, constants7) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1029,14 +1029,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants6[n.str];
+        const c = constants7[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants6[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants7[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -63750,7 +63750,7 @@ function digestNativeAddon(candidate) {
     closeSync(sourceDescriptor);
   }
 }
-function nativeAddonWithinRoot(candidate, root) {
+function runtimeInputWithinRoot(candidate, root) {
   const nested = relative(root, candidate);
   return nested === '' || (
     nested !== '..' &&
@@ -63775,7 +63775,7 @@ function handleNativeAddonRequest(payload) {
     if (
       !Array.isArray(allowedRoots) ||
       !allowedRoots.some(
-        (root) => typeof root === 'string' && nativeAddonWithinRoot(candidate, root),
+        (root) => typeof root === 'string' && runtimeInputWithinRoot(candidate, root),
       )
     ) {
       const error = new Error('outside:' + basename(request.path));
@@ -63831,7 +63831,8 @@ function handleNativeAddonCompletion(payload) {
       !completion ||
       !/^[a-f0-9]{32}$/.test(completion.requestId || '') ||
       typeof completion.path !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(completion.digest || '')
+      !/^[a-f0-9]{64}$/.test(completion.digest || '') ||
+      !['success', 'failure'].includes(completion.outcome)
     ) {
       throw new Error('completion record is invalid');
     }
@@ -63848,15 +63849,25 @@ function handleNativeAddonCompletion(payload) {
     rmSync(nativeAddonAcknowledgmentRoot + '/' + completion.requestId + '.json', {
       force: true,
     });
-    appendEvidence({
-      version: 1,
-      sessionId,
-      metroInstanceId,
-      kind: 'stability',
-      value: pending.path,
-      digest: pending.digest,
-    });
+    if (completion.outcome === 'success') {
+      appendEvidence({
+        version: 1,
+        sessionId,
+        metroInstanceId,
+        kind: 'stability',
+        value: pending.path,
+        digest: pending.digest,
+      });
+    } else {
+      appendViolation('METRO_NATIVE_ADDON_LOAD_FAILED: ' + basename(pending.path));
+    }
   } catch (error) {
+    if (completion && /^[a-f0-9]{32}$/.test(completion.requestId || '')) {
+      pendingNativeAddons.delete(completion.requestId);
+      rmSync(nativeAddonAcknowledgmentRoot + '/' + completion.requestId + '.json', {
+        force: true,
+      });
+    }
     appendViolation(
       'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' +
         (error instanceof Error ? error.message : 'native addon stability could not be verified'),
@@ -63873,6 +63884,10 @@ function closeHeadConnection(connection) {
   }
 }
 function respondWithHead(connection, challenge) {
+  if (pendingNativeAddons.size > 0) {
+    connection.destroy();
+    return;
+  }
   const payload = {
     version: 1,
     runtimeEvidenceAuthority,
@@ -64096,8 +64111,7 @@ evidence.on('data', (chunk) => {
         ];
         const withinManifest = allowedRoots.some(
           (root) =>
-            candidate === root ||
-            candidate.startsWith(root.endsWith('/') ? root : root + '/'),
+            typeof root === 'string' && runtimeInputWithinRoot(candidate, root),
         );
         if (!withinManifest || digest !== payload.digest) {
           appendViolation('Metro runtime input is outside the managed sandbox manifest');
@@ -74614,6 +74628,25 @@ function recordRuntimeFileInput(file) {
   return resolved;
 }
 const originalDlopen = process.dlopen;
+function reportNativeAddonCompletion(prepared, outcome, digest) {
+  if (usesExternalEvidenceOwner) {
+    persistLoaderObservation(
+      'native-addon-completion',
+      canonicalAuthorityJson({
+        requestId: prepared.requestId,
+        path: prepared.resolved,
+        digest,
+        outcome,
+      }),
+    );
+  } else if (outcome === 'success') {
+    persistLoaderObservation('stability', prepared.resolved, digest);
+  } else {
+    recordLoaderViolation(
+      'METRO_NATIVE_ADDON_LOAD_FAILED: ' + sanitizedNativeAddonPath(prepared.resolved),
+    );
+  }
+}
 const attestNativeAddonLoad = function(module, file) {
   let prepared;
   try {
@@ -74636,7 +74669,13 @@ const attestNativeAddonLoad = function(module, file) {
   }
   const args = privateArraySlice(arguments);
   args[1] = prepared.resolved;
-  const result = intrinsicReflectApply(originalDlopen, process, args);
+  let result;
+  try {
+    result = intrinsicReflectApply(originalDlopen, process, args);
+  } catch (caught) {
+    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
+    throw caught;
+  }
   let postLoadDigest;
   try {
     postLoadDigest = digestRuntimeFile(prepared.resolved);
@@ -74645,32 +74684,22 @@ const attestNativeAddonLoad = function(module, file) {
       caught && caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE'
         ? caught.message
         : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon stability could not be verified';
+    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
     recordLoaderViolation(message);
     const error = new Error(message);
     error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
     throw error;
-  }
-  if (usesExternalEvidenceOwner) {
-    persistLoaderObservation(
-      'native-addon-completion',
-      canonicalAuthorityJson({
-        requestId: prepared.requestId,
-        path: prepared.resolved,
-        digest: postLoadDigest,
-      }),
-    );
   }
   if (postLoadDigest !== prepared.digest) {
     const message =
       'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon changed during load';
+    reportNativeAddonCompletion(prepared, 'failure', postLoadDigest);
     recordLoaderViolation(message);
     const error = new Error(message);
     error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
     throw error;
   }
-  if (!usesExternalEvidenceOwner) {
-    persistLoaderObservation('stability', prepared.resolved, postLoadDigest);
-  }
+  reportNativeAddonCompletion(prepared, 'success', postLoadDigest);
   return result;
 };
 Object.defineProperty(process, 'dlopen', {
@@ -76385,7 +76414,7 @@ init_registry();
 init_metro_cwd();
 import { createHash as createHash17, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { closeSync as closeSync10, existsSync as existsSync38, lstatSync as lstatSync12, openSync as openSync10, readdirSync as readdirSync14, readFileSync as readFileSync38, readlinkSync as readlinkSync3, readSync as readSync4, realpathSync as realpathSync10 } from "node:fs";
+import { closeSync as closeSync10, constants as constants6, existsSync as existsSync38, fstatSync as fstatSync6, lstatSync as lstatSync12, openSync as openSync10, readdirSync as readdirSync14, readFileSync as readFileSync38, readlinkSync as readlinkSync3, readSync as readSync4, realpathSync as realpathSync10 } from "node:fs";
 import { dirname as dirname21, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve9 } from "node:path";
 function digest2(parts) {
   const hash = createHash17("sha256");
@@ -76460,45 +76489,43 @@ function updateFramed(hash, part) {
   hash.update(`${bytes.byteLength}:`);
   hash.update(bytes);
 }
-function updateFramedFile(hash, path, size) {
-  hash.update(`${size}:`);
-  const descriptor = openSync10(path, "r");
-  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(size, 1)));
+function updateStableFile(hash, path, maximumBytes, framed) {
+  const descriptor = openSync10(path, constants6.O_RDONLY | (constants6.O_NOFOLLOW ?? 0));
   try {
-    let offset = 0;
-    while (offset < size) {
-      const bytesRead = readSync4(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
-      if (bytesRead === 0) {
-        throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: source file changed while hashing");
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
+    const initial = fstatSync6(descriptor);
+    if (!initial.isFile() || initial.size > maximumBytes) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
     }
-  } finally {
-    closeSync10(descriptor);
-  }
-}
-function fileDigest(path) {
-  const stat2 = lstatSync12(path);
-  if (!stat2.isFile() || stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
-  }
-  const hash = createHash17("sha256");
-  const descriptor = openSync10(path, "r");
-  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(stat2.size, 1)));
-  try {
+    if (framed)
+      hash.update(`${initial.size}:`);
+    const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(initial.size, 1)));
     let offset = 0;
-    while (offset < stat2.size) {
-      const bytesRead = readSync4(descriptor, buffer, 0, Math.min(buffer.length, stat2.size - offset), offset);
-      if (bytesRead === 0) {
+    while (offset < initial.size) {
+      const bytesRead = readSync4(descriptor, buffer, 0, Math.min(buffer.length, initial.size - offset), offset);
+      if (bytesRead === 0 || offset + bytesRead > maximumBytes) {
         throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
       }
       hash.update(buffer.subarray(0, bytesRead));
       offset += bytesRead;
     }
+    if (readSync4(descriptor, buffer, 0, 1, offset) !== 0) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
+    }
+    const final = fstatSync6(descriptor);
+    if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
+    }
+    return initial.size;
   } finally {
     closeSync10(descriptor);
   }
+}
+function updateFramedFile(hash, path, maximumBytes) {
+  return updateStableFile(hash, path, maximumBytes, true);
+}
+function fileDigest(path) {
+  const hash = createHash17("sha256");
+  updateStableFile(hash, path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, false);
   return hash.digest("hex");
 }
 function updateDependencyPath(hash, path, label, state) {
@@ -76556,12 +76583,12 @@ function updateDependencyPath(hash, path, label, state) {
     if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
       throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
     }
-    state.totalBytes += stat2.size;
+    updateFramed(hash, "file");
+    const stableSize = updateFramedFile(hash, current.path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES);
+    state.totalBytes += stableSize;
     if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
       throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
     }
-    updateFramed(hash, "file");
-    updateFramedFile(hash, current.path, stat2.size);
   }
 }
 function isContained(root, candidate) {
@@ -77068,12 +77095,12 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       if (stat2.size > MAX_STRICT_PROOF_FILE_BYTES) {
         throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
       }
-      totalBytes += stat2.size;
+      updateFramed(dirtyHash, "file");
+      const stableSize = updateFramedFile(dirtyHash, file, MAX_STRICT_PROOF_FILE_BYTES);
+      totalBytes += stableSize;
       if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
         throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
       }
-      updateFramed(dirtyHash, "file");
-      updateFramedFile(dirtyHash, file, stat2.size);
       continue;
     }
     if (stat2.isSymbolicLink()) {
@@ -77087,13 +77114,13 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
         throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
       }
-      totalBytes += Buffer.byteLength(link) + targetStat.size;
+      updateFramed(dirtyHash, "symlink");
+      updateFramed(dirtyHash, link);
+      const stableSize = updateFramedFile(dirtyHash, target, MAX_STRICT_PROOF_FILE_BYTES);
+      totalBytes += Buffer.byteLength(link) + stableSize;
       if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
         throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
       }
-      updateFramed(dirtyHash, "symlink");
-      updateFramed(dirtyHash, link);
-      updateFramedFile(dirtyHash, target, targetStat.size);
       continue;
     }
     throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");

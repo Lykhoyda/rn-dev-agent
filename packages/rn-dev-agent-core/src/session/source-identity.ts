@@ -2,7 +2,9 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { execFileSync } from 'node:child_process';
 import {
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
   openSync,
   readdirSync,
@@ -135,52 +137,35 @@ function updateFramed(hash: ReturnType<typeof createHash>, part: string | Buffer
   hash.update(bytes);
 }
 
-function updateFramedFile(hash: ReturnType<typeof createHash>, path: string, size: number): void {
-  hash.update(`${size}:`);
-  const descriptor = openSync(path, 'r');
-  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(size, 1)));
-  try {
-    let offset = 0;
-    while (offset < size) {
-      const bytesRead = readSync(
-        descriptor,
-        buffer,
-        0,
-        Math.min(buffer.length, size - offset),
-        offset,
-      );
-      if (bytesRead === 0) {
-        throw new Error('STRICT_PROOF_SOURCE_READ_FAILED: source file changed while hashing');
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-function fileDigest(path: string): string {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
-    throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded');
-  }
-  const hash = createHash('sha256');
-  const descriptor = openSync(path, 'r');
-  const buffer = Buffer.allocUnsafe(
-    Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(stat.size, 1)),
+function updateStableFile(
+  hash: ReturnType<typeof createHash>,
+  path: string,
+  maximumBytes: number,
+  framed: boolean,
+): number {
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
   );
   try {
+    const initial = fstatSync(descriptor);
+    if (!initial.isFile() || initial.size > maximumBytes) {
+      throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded');
+    }
+    if (framed) hash.update(`${initial.size}:`);
+    const buffer = Buffer.allocUnsafe(
+      Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(initial.size, 1)),
+    );
     let offset = 0;
-    while (offset < stat.size) {
+    while (offset < initial.size) {
       const bytesRead = readSync(
         descriptor,
         buffer,
         0,
-        Math.min(buffer.length, stat.size - offset),
+        Math.min(buffer.length, initial.size - offset),
         offset,
       );
-      if (bytesRead === 0) {
+      if (bytesRead === 0 || offset + bytesRead > maximumBytes) {
         throw new Error(
           'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing',
         );
@@ -188,9 +173,40 @@ function fileDigest(path: string): string {
       hash.update(buffer.subarray(0, bytesRead));
       offset += bytesRead;
     }
+    if (readSync(descriptor, buffer, 0, 1, offset) !== 0) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing',
+      );
+    }
+    const final = fstatSync(descriptor);
+    if (
+      final.dev !== initial.dev ||
+      final.ino !== initial.ino ||
+      final.size !== initial.size ||
+      final.mtimeMs !== initial.mtimeMs ||
+      final.ctimeMs !== initial.ctimeMs
+    ) {
+      throw new Error(
+        'STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing',
+      );
+    }
+    return initial.size;
   } finally {
     closeSync(descriptor);
   }
+}
+
+function updateFramedFile(
+  hash: ReturnType<typeof createHash>,
+  path: string,
+  maximumBytes: number,
+): number {
+  return updateStableFile(hash, path, maximumBytes, true);
+}
+
+function fileDigest(path: string): string {
+  const hash = createHash('sha256');
+  updateStableFile(hash, path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, false);
   return hash.digest('hex');
 }
 
@@ -268,12 +284,16 @@ function updateDependencyPath(
     if (stat.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
       throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
     }
-    state.totalBytes += stat.size;
+    updateFramed(hash, 'file');
+    const stableSize = updateFramedFile(
+      hash,
+      current.path,
+      MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES,
+    );
+    state.totalBytes += stableSize;
     if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
       throw new Error('STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit');
     }
-    updateFramed(hash, 'file');
-    updateFramedFile(hash, current.path, stat.size);
   }
 }
 
@@ -1134,12 +1154,12 @@ export function strictProofSourceIdentity(
       if (stat.size > MAX_STRICT_PROOF_FILE_BYTES) {
         throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
       }
-      totalBytes += stat.size;
+      updateFramed(dirtyHash, 'file');
+      const stableSize = updateFramedFile(dirtyHash, file, MAX_STRICT_PROOF_FILE_BYTES);
+      totalBytes += stableSize;
       if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
         throw new Error('STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit');
       }
-      updateFramed(dirtyHash, 'file');
-      updateFramedFile(dirtyHash, file, stat.size);
       continue;
     }
     if (stat.isSymbolicLink()) {
@@ -1155,13 +1175,17 @@ export function strictProofSourceIdentity(
       if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
         throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
       }
-      totalBytes += Buffer.byteLength(link) + targetStat.size;
+      updateFramed(dirtyHash, 'symlink');
+      updateFramed(dirtyHash, link);
+      const stableSize = updateFramedFile(
+        dirtyHash,
+        target,
+        MAX_STRICT_PROOF_FILE_BYTES,
+      );
+      totalBytes += Buffer.byteLength(link) + stableSize;
       if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
         throw new Error('STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit');
       }
-      updateFramed(dirtyHash, 'symlink');
-      updateFramed(dirtyHash, link);
-      updateFramedFile(dirtyHash, target, targetStat.size);
       continue;
     }
     throw new Error(

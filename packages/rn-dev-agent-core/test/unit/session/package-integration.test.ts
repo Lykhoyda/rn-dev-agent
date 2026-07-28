@@ -1531,8 +1531,12 @@ test('Metro preload attests ESM native addons within managed code roots', () => 
       ),
     );
     assert.equal(
-      observations.some((entry) => entry.kind === 'violation'),
-      false,
+      observations.some(
+        (entry) =>
+          entry.kind === 'violation' &&
+          entry.value === 'METRO_NATIVE_ADDON_LOAD_FAILED: outside:fixture.node',
+      ),
+      true,
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -1585,6 +1589,37 @@ test('Metro preload attests direct native addon bytes before invoking the origin
           entry.value === realpathSync(addonPath) &&
           entry.digest === createHash('sha256').update('fixture native addon bytes').digest('hex'),
       ),
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('Metro preload records a terminal failure when a native addon loader throws', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-failed-native-addon-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const addonPath = join(root, 'fixture.node');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(addonPath, 'fixture native addon bytes');
+    const env = metroPolicyEnvironment(adapterPath, [root]);
+    env.NODE_OPTIONS = '';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `process.dlopen = () => { throw new Error('optional addon unavailable'); }; const compose = require(${JSON.stringify(adapterPath)}); compose({}); try { process.dlopen({}, ${JSON.stringify(addonPath)}); } catch {}`,
+      ],
+      { cwd: root, env, encoding: 'utf8' },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8'),
+      /METRO_NATIVE_ADDON_LOAD_FAILED: outside:fixture\.node/,
     );
   } finally {
     rmSync(root, { force: true, recursive: true });

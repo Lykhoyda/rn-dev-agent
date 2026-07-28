@@ -11870,7 +11870,7 @@ function digestNativeAddon(candidate) {
     closeSync(sourceDescriptor);
   }
 }
-function nativeAddonWithinRoot(candidate, root) {
+function runtimeInputWithinRoot(candidate, root) {
   const nested = relative(root, candidate);
   return nested === '' || (
     nested !== '..' &&
@@ -11895,7 +11895,7 @@ function handleNativeAddonRequest(payload) {
     if (
       !Array.isArray(allowedRoots) ||
       !allowedRoots.some(
-        (root) => typeof root === 'string' && nativeAddonWithinRoot(candidate, root),
+        (root) => typeof root === 'string' && runtimeInputWithinRoot(candidate, root),
       )
     ) {
       const error = new Error('outside:' + basename(request.path));
@@ -11951,7 +11951,8 @@ function handleNativeAddonCompletion(payload) {
       !completion ||
       !/^[a-f0-9]{32}$/.test(completion.requestId || '') ||
       typeof completion.path !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(completion.digest || '')
+      !/^[a-f0-9]{64}$/.test(completion.digest || '') ||
+      !['success', 'failure'].includes(completion.outcome)
     ) {
       throw new Error('completion record is invalid');
     }
@@ -11968,15 +11969,25 @@ function handleNativeAddonCompletion(payload) {
     rmSync(nativeAddonAcknowledgmentRoot + '/' + completion.requestId + '.json', {
       force: true,
     });
-    appendEvidence({
-      version: 1,
-      sessionId,
-      metroInstanceId,
-      kind: 'stability',
-      value: pending.path,
-      digest: pending.digest,
-    });
+    if (completion.outcome === 'success') {
+      appendEvidence({
+        version: 1,
+        sessionId,
+        metroInstanceId,
+        kind: 'stability',
+        value: pending.path,
+        digest: pending.digest,
+      });
+    } else {
+      appendViolation('METRO_NATIVE_ADDON_LOAD_FAILED: ' + basename(pending.path));
+    }
   } catch (error) {
+    if (completion && /^[a-f0-9]{32}$/.test(completion.requestId || '')) {
+      pendingNativeAddons.delete(completion.requestId);
+      rmSync(nativeAddonAcknowledgmentRoot + '/' + completion.requestId + '.json', {
+        force: true,
+      });
+    }
     appendViolation(
       'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' +
         (error instanceof Error ? error.message : 'native addon stability could not be verified'),
@@ -11993,6 +12004,10 @@ function closeHeadConnection(connection) {
   }
 }
 function respondWithHead(connection, challenge) {
+  if (pendingNativeAddons.size > 0) {
+    connection.destroy();
+    return;
+  }
   const payload = {
     version: 1,
     runtimeEvidenceAuthority,
@@ -12216,8 +12231,7 @@ evidence.on('data', (chunk) => {
         ];
         const withinManifest = allowedRoots.some(
           (root) =>
-            candidate === root ||
-            candidate.startsWith(root.endsWith('/') ? root : root + '/'),
+            typeof root === 'string' && runtimeInputWithinRoot(candidate, root),
         );
         if (!withinManifest || digest !== payload.digest) {
           appendViolation('Metro runtime input is outside the managed sandbox manifest');
@@ -13092,7 +13106,7 @@ init_registry();
 init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { closeSync as closeSync4, existsSync as existsSync5, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync3, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve4 } from "node:path";
 function digest2(parts) {
   const hash = createHash6("sha256");
@@ -13313,7 +13327,7 @@ import { join as join8 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync5, constants as constants3, existsSync as existsSync6, fstatSync as fstatSync3, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync6, fstatSync as fstatSync4, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -14590,7 +14604,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory is closed");
   }
   if (directory.descriptor !== void 0) {
-    const retained = fstatSync3(directory.descriptor, { bigint: true });
+    const retained = fstatSync4(directory.descriptor, { bigint: true });
     if (!retained.isDirectory() || retained.dev !== directory.identity.dev || retained.ino !== directory.identity.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed");
     }
@@ -14719,8 +14733,8 @@ function openValidatedDirectory(path, expected) {
     if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
     }
-    descriptor = openSync5(path, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
-    const opened = fstatSync3(descriptor, { bigint: true });
+    descriptor = openSync5(path, constants4.O_RDONLY | (constants4.O_DIRECTORY ?? 0) | (constants4.O_NOFOLLOW ?? 0));
+    const opened = fstatSync4(descriptor, { bigint: true });
     const after = lstatSync7(path, { bigint: true });
     const realPath = realpathSync7(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {

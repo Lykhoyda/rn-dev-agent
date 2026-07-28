@@ -367,7 +367,7 @@ function digestNativeAddon(candidate) {
     closeSync(sourceDescriptor);
   }
 }
-function nativeAddonWithinRoot(candidate, root) {
+function runtimeInputWithinRoot(candidate, root) {
   const nested = relative(root, candidate);
   return nested === '' || (
     nested !== '..' &&
@@ -392,7 +392,7 @@ function handleNativeAddonRequest(payload) {
     if (
       !Array.isArray(allowedRoots) ||
       !allowedRoots.some(
-        (root) => typeof root === 'string' && nativeAddonWithinRoot(candidate, root),
+        (root) => typeof root === 'string' && runtimeInputWithinRoot(candidate, root),
       )
     ) {
       const error = new Error('outside:' + basename(request.path));
@@ -448,7 +448,8 @@ function handleNativeAddonCompletion(payload) {
       !completion ||
       !/^[a-f0-9]{32}$/.test(completion.requestId || '') ||
       typeof completion.path !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(completion.digest || '')
+      !/^[a-f0-9]{64}$/.test(completion.digest || '') ||
+      !['success', 'failure'].includes(completion.outcome)
     ) {
       throw new Error('completion record is invalid');
     }
@@ -465,15 +466,25 @@ function handleNativeAddonCompletion(payload) {
     rmSync(nativeAddonAcknowledgmentRoot + '/' + completion.requestId + '.json', {
       force: true,
     });
-    appendEvidence({
-      version: 1,
-      sessionId,
-      metroInstanceId,
-      kind: 'stability',
-      value: pending.path,
-      digest: pending.digest,
-    });
+    if (completion.outcome === 'success') {
+      appendEvidence({
+        version: 1,
+        sessionId,
+        metroInstanceId,
+        kind: 'stability',
+        value: pending.path,
+        digest: pending.digest,
+      });
+    } else {
+      appendViolation('METRO_NATIVE_ADDON_LOAD_FAILED: ' + basename(pending.path));
+    }
   } catch (error) {
+    if (completion && /^[a-f0-9]{32}$/.test(completion.requestId || '')) {
+      pendingNativeAddons.delete(completion.requestId);
+      rmSync(nativeAddonAcknowledgmentRoot + '/' + completion.requestId + '.json', {
+        force: true,
+      });
+    }
     appendViolation(
       'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' +
         (error instanceof Error ? error.message : 'native addon stability could not be verified'),
@@ -490,6 +501,10 @@ function closeHeadConnection(connection) {
   }
 }
 function respondWithHead(connection, challenge) {
+  if (pendingNativeAddons.size > 0) {
+    connection.destroy();
+    return;
+  }
   const payload = {
     version: 1,
     runtimeEvidenceAuthority,
@@ -713,8 +728,7 @@ evidence.on('data', (chunk) => {
         ];
         const withinManifest = allowedRoots.some(
           (root) =>
-            candidate === root ||
-            candidate.startsWith(root.endsWith('/') ? root : root + '/'),
+            typeof root === 'string' && runtimeInputWithinRoot(candidate, root),
         );
         if (!withinManifest || digest !== payload.digest) {
           appendViolation('Metro runtime input is outside the managed sandbox manifest');

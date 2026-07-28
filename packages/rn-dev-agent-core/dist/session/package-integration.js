@@ -2162,6 +2162,25 @@ function recordRuntimeFileInput(file) {
   return resolved;
 }
 const originalDlopen = process.dlopen;
+function reportNativeAddonCompletion(prepared, outcome, digest) {
+  if (usesExternalEvidenceOwner) {
+    persistLoaderObservation(
+      'native-addon-completion',
+      canonicalAuthorityJson({
+        requestId: prepared.requestId,
+        path: prepared.resolved,
+        digest,
+        outcome,
+      }),
+    );
+  } else if (outcome === 'success') {
+    persistLoaderObservation('stability', prepared.resolved, digest);
+  } else {
+    recordLoaderViolation(
+      'METRO_NATIVE_ADDON_LOAD_FAILED: ' + sanitizedNativeAddonPath(prepared.resolved),
+    );
+  }
+}
 const attestNativeAddonLoad = function(module, file) {
   let prepared;
   try {
@@ -2184,7 +2203,13 @@ const attestNativeAddonLoad = function(module, file) {
   }
   const args = privateArraySlice(arguments);
   args[1] = prepared.resolved;
-  const result = intrinsicReflectApply(originalDlopen, process, args);
+  let result;
+  try {
+    result = intrinsicReflectApply(originalDlopen, process, args);
+  } catch (caught) {
+    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
+    throw caught;
+  }
   let postLoadDigest;
   try {
     postLoadDigest = digestRuntimeFile(prepared.resolved);
@@ -2193,32 +2218,22 @@ const attestNativeAddonLoad = function(module, file) {
       caught && caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE'
         ? caught.message
         : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon stability could not be verified';
+    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
     recordLoaderViolation(message);
     const error = new Error(message);
     error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
     throw error;
-  }
-  if (usesExternalEvidenceOwner) {
-    persistLoaderObservation(
-      'native-addon-completion',
-      canonicalAuthorityJson({
-        requestId: prepared.requestId,
-        path: prepared.resolved,
-        digest: postLoadDigest,
-      }),
-    );
   }
   if (postLoadDigest !== prepared.digest) {
     const message =
       'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon changed during load';
+    reportNativeAddonCompletion(prepared, 'failure', postLoadDigest);
     recordLoaderViolation(message);
     const error = new Error(message);
     error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
     throw error;
   }
-  if (!usesExternalEvidenceOwner) {
-    persistLoaderObservation('stability', prepared.resolved, postLoadDigest);
-  }
+  reportNativeAddonCompletion(prepared, 'success', postLoadDigest);
   return result;
 };
 Object.defineProperty(process, 'dlopen', {
