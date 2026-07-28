@@ -12777,10 +12777,7 @@ async function startManagedMetro(input, dependencies = {}) {
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings,
     commandChainInputs,
-    protectedRuntimeRoots: [
-      ...launchCommand.protectedRuntimeRoots,
-      nativeAddonAcknowledgmentRoot
-    ],
+    protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonAcknowledgmentRoot],
     nativeAddonRoots: allowedCodeRoots,
     port: input.port,
     instanceId,
