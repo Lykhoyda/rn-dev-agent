@@ -305,8 +305,8 @@ function managedMetroHandoffReservation(
     ) ||
     typeof (value as Record<string, unknown>).metro !== 'object' ||
     (value as Record<string, unknown>).metro === null ||
-    typeof ((value as Record<string, unknown>).metro as Record<string, unknown>)
-      .sourceSessionId !== 'string'
+    typeof ((value as Record<string, unknown>).metro as Record<string, unknown>).sourceSessionId !==
+      'string'
   ) {
     throw new SessionAuthorityError(
       'HANDOFF_NOT_AUTHORIZED',
@@ -1886,10 +1886,7 @@ export class SessionRegistry {
     });
   }
 
-  acceptHandoffInto(
-    target: SessionRef,
-    input: HandoffIntoInput,
-  ): HandoffCleanupPlan {
+  acceptHandoffInto(target: SessionRef, input: HandoffIntoInput): HandoffCleanupPlan {
     const now = this.#now();
     return this.#transaction(() => {
       const context = this.#requireHandoffIntoContext(target, input, true);
@@ -2731,8 +2728,7 @@ export class SessionRegistry {
         : this.#requireSession(session);
       if (
         handoffCancellation &&
-        (JSON.parse(owner.bindings_json) as Record<string, unknown>)
-          .managedMetroHandoffReservation
+        (JSON.parse(owner.bindings_json) as Record<string, unknown>).managedMetroHandoffReservation
       ) {
         throw new SessionAuthorityError(
           'HANDOFF_NOT_AUTHORIZED',

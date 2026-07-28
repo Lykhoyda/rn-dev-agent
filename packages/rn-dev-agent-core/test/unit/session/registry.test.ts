@@ -1062,7 +1062,10 @@ test('managed Metro handoff reservation follows an authenticated recovery worker
 
   const rotated = registry.getSessionStatus(owner.sessionId)?.bindings
     .managedMetroHandoffReservation;
-  assert.equal(registry.getSessionStatus(target.sessionId)?.worker.instanceId, 'worker-after-crash');
+  assert.equal(
+    registry.getSessionStatus(target.sessionId)?.worker.instanceId,
+    'worker-after-crash',
+  );
   assert.equal(rotated?.handoffId, handoff.handoffId);
   assert.equal(rotated?.targetSessionId, target.sessionId);
   assert.equal(rotated?.targetClaimEpoch, target.claimEpoch);

@@ -485,7 +485,8 @@ When you hit the budget:
    than Metro is serving. **Do NOT retry or clear app data.** Instead:
    - Report: "Binary mismatch — the installed app was built with a
      different SDK version than Metro is serving."
-   - Suggest: "Rebuild with `npx expo run:ios` or `npx expo run:android`"
+   - Suggest: "Rebuild with literal `pnpm ios` or `pnpm android` through the
+     confirmed session integration."
    - STOP testing — retries will not fix a binary mismatch.
 
 8. **Verification fidelity — no silent shortcuts** (GH #61): Verification

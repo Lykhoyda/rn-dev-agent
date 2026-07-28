@@ -64,14 +64,6 @@ edge cases, generate persistent test.
 /rn-dev-agent:build-and-test --eas preview payment flow -- test a specific EAS profile
 ```
 
-## Build Modes
-
-| Mode | When | Command |
-|------|------|---------|
-| Local dev build | Default, no `--eas` flag | `npx expo run:ios` / `npx expo run:android` |
-| EAS artifact | `--eas` flag provided | Downloads from EAS, installs on simulator |
-| Skip build | App already running | Proceeds directly to testing |
-
 ## Prerequisites
 
 - iOS Simulator or Android Emulator **booted** (not necessarily with app installed)

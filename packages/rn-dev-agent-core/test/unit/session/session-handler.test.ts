@@ -234,10 +234,7 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
     getSessionStatus: (sessionId: string) =>
       sessionId === donorStatus.sessionId ? donorStatus : targetStatus,
     getHandoffOwner: () => donorStatus.sessionId,
-    reserveManagedMetroHandoffCleanup: (
-      _session: unknown,
-      input: { handoffId: string },
-    ) => {
+    reserveManagedMetroHandoffCleanup: (_session: unknown, input: { handoffId: string }) => {
       reservation ??= {
         handoffId: input.handoffId,
         phase: 'shutdown_reserved',
