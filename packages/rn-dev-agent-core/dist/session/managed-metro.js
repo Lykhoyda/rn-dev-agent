@@ -657,11 +657,11 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
     }
     return false;
 }
-export function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync) {
-    return metroListenerPid(port, platform, execute);
+export function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync, executableDependencies = {}) {
+    return metroListenerPid(port, platform, execute, executableDependencies);
 }
-export function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync) {
-    return probeMetroListener(port, platform, execute);
+export function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync, executableDependencies = {}) {
+    return probeMetroListener(port, platform, execute, executableDependencies);
 }
 export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
     const exists = dependencies.exists ?? existsSync;

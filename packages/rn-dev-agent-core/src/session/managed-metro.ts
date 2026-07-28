@@ -16,6 +16,7 @@ import {
   metroListenerPid,
   probeMetroListener,
   type MetroBinding,
+  type MetroListenerExecutableDependencies,
   type MetroListenerProbe,
 } from './metro-binding.js';
 import {
@@ -750,8 +751,9 @@ export function managedMetroListenerPid(
   port: number,
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
+  executableDependencies: MetroListenerExecutableDependencies = {},
 ): number | null {
-  return metroListenerPid(port, platform, execute);
+  return metroListenerPid(port, platform, execute, executableDependencies);
 }
 
 export type ManagedMetroListenerProbe = MetroListenerProbe;
@@ -760,8 +762,9 @@ export function probeManagedMetroListener(
   port: number,
   platform: NodeJS.Platform = process.platform,
   execute: typeof execFileSync = execFileSync,
+  executableDependencies: MetroListenerExecutableDependencies = {},
 ): ManagedMetroListenerProbe {
-  return probeMetroListener(port, platform, execute);
+  return probeMetroListener(port, platform, execute, executableDependencies);
 }
 
 export function resolveManagedMetroCommand(

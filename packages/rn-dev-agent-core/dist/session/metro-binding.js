@@ -1,6 +1,31 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { win32 } from 'node:path';
 import { cwdForProcess, pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import { readProcessBirth } from './process-birth.js';
+export function resolveMetroListenerExecutable(platform, dependencies = {}) {
+    const exists = dependencies.exists ?? existsSync;
+    const environment = dependencies.environment ?? process.env;
+    let candidates;
+    if (platform === 'win32') {
+        const roots = [environment.SystemRoot, environment.SYSTEMROOT, environment.windir]
+            .filter((root) => typeof root === 'string' &&
+            /^[a-z]:\\/i.test(root) &&
+            win32.basename(win32.normalize(root)).toLowerCase() === 'windows')
+            .map((root) => win32.normalize(root));
+        candidates = [...new Set([...roots, 'C:\\Windows'])].map((root) => win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+    }
+    else if (platform === 'linux') {
+        candidates = ['/usr/bin/ss', '/usr/sbin/ss', '/bin/ss', '/sbin/ss'];
+    }
+    else if (platform === 'darwin') {
+        candidates = ['/usr/sbin/lsof'];
+    }
+    else {
+        return null;
+    }
+    return candidates.find(exists) ?? null;
+}
 function numericListener(output, emptyStatus) {
     const value = String(output).trim();
     if (!value)
@@ -15,10 +40,13 @@ function numericListener(output, emptyStatus) {
         ? { status: 'listening', pid }
         : { status: 'unknown' };
 }
-export function probeMetroListener(port, platform = process.platform, execute = execFileSync) {
+export function probeMetroListener(port, platform = process.platform, execute = execFileSync, executableDependencies = {}) {
+    const executable = resolveMetroListenerExecutable(platform, executableDependencies);
+    if (!executable)
+        return { status: 'unknown' };
     try {
         if (platform === 'win32') {
-            const output = execute('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', [
+            const output = execute(executable, [
                 '-NoProfile',
                 '-NonInteractive',
                 '-Command',
@@ -30,7 +58,7 @@ export function probeMetroListener(port, platform = process.platform, execute = 
                 : numericListener(output, 'unknown');
         }
         if (platform === 'linux') {
-            const output = execute('/usr/bin/ss', ['-H', '-ltnp', `sport = :${port}`], {
+            const output = execute(executable, ['-H', '-ltnp', `sport = :${port}`], {
                 encoding: 'utf8',
                 stdio: ['ignore', 'pipe', 'ignore'],
                 timeout: 2_000,
@@ -45,7 +73,7 @@ export function probeMetroListener(port, platform = process.platform, execute = 
                 : { status: 'unknown' };
         }
         if (platform === 'darwin') {
-            const output = execute('/usr/sbin/lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
+            const output = execute(executable, ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
                 encoding: 'utf8',
                 stdio: ['ignore', 'pipe', 'pipe'],
                 timeout: 2_000,
@@ -64,8 +92,8 @@ export function probeMetroListener(port, platform = process.platform, execute = 
             : { status: 'unknown' };
     }
 }
-export function metroListenerPid(port, platform = process.platform, execute = execFileSync) {
-    const probe = probeMetroListener(port, platform, execute);
+export function metroListenerPid(port, platform = process.platform, execute = execFileSync, executableDependencies = {}) {
+    const probe = probeMetroListener(port, platform, execute, executableDependencies);
     return probe.status === 'listening' ? probe.pid : null;
 }
 async function fetchMetroStatus(port) {

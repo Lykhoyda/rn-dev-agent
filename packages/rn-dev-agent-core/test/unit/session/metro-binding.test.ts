@@ -1,6 +1,53 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { captureMetroBinding } from '../../../dist/session/metro-binding.js';
+import {
+  captureMetroBinding,
+  probeMetroListener,
+  resolveMetroListenerExecutable,
+} from '../../../dist/session/metro-binding.js';
+
+test('listener probes select an existing trusted absolute executable', () => {
+  const windowsExecutable =
+    'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  assert.equal(
+    resolveMetroListenerExecutable('win32', {
+      environment: { SystemRoot: 'D:\\Windows' },
+      exists: (path) => path === windowsExecutable,
+    }),
+    windowsExecutable,
+  );
+  assert.equal(
+    resolveMetroListenerExecutable('win32', {
+      environment: { SystemRoot: 'D:\\untrusted' },
+      exists: (path) =>
+        path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    }),
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+  );
+  assert.equal(
+    resolveMetroListenerExecutable('linux', {
+      exists: (path) => path === '/usr/sbin/ss',
+    }),
+    '/usr/sbin/ss',
+  );
+});
+
+test('listener probes fail closed when no trusted executable exists', () => {
+  let executed = false;
+  assert.deepEqual(
+    probeMetroListener(
+      8341,
+      'linux',
+      (() => {
+        executed = true;
+        return '';
+      }) as never,
+      { exists: () => false },
+    ),
+    { status: 'unknown' },
+  );
+  assert.equal(executed, false);
+});
 
 test('Metro binding requires exact port, process birth, serving root, and instance', async () => {
   const binding = await captureMetroBinding(

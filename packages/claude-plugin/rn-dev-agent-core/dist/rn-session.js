@@ -9503,7 +9503,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync7, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync8, statSync as statSync5 } from "node:fs";
 import { join as join9 } from "node:path";
 function compactUnique(paths) {
   const out = [];
@@ -9635,7 +9635,7 @@ var init_no_change_tracker = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/logger.js
-import { createWriteStream, mkdirSync as mkdirSync6, existsSync as existsSync8 } from "node:fs";
+import { createWriteStream, mkdirSync as mkdirSync6, existsSync as existsSync9 } from "node:fs";
 import { join as join11 } from "node:path";
 import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
 function resolveLogPath() {
@@ -9646,7 +9646,7 @@ function resolveLogPath() {
   const pluginData = process.env.CLAUDE_PLUGIN_DATA;
   if (pluginData) {
     try {
-      if (!existsSync8(pluginData))
+      if (!existsSync9(pluginData))
         mkdirSync6(pluginData, { recursive: true });
       return join11(pluginData, "cdp-bridge.log");
     } catch {
@@ -9654,7 +9654,7 @@ function resolveLogPath() {
   }
   const fallbackDir = join11(homedir2(), ".claude", "logs");
   try {
-    if (!existsSync8(fallbackDir))
+    if (!existsSync9(fallbackDir))
       mkdirSync6(fallbackDir, { recursive: true });
     return join11(fallbackDir, "rn-dev-agent-cdp-bridge.log");
   } catch {
@@ -10716,6 +10716,24 @@ function createMetroAuthorityModule(marker) {
 init_metro_cwd();
 init_process_birth();
 import { execFileSync as execFileSync4 } from "node:child_process";
+import { existsSync as existsSync2 } from "node:fs";
+import { win32 } from "node:path";
+function resolveMetroListenerExecutable(platform, dependencies = {}) {
+  const exists = dependencies.exists ?? existsSync2;
+  const environment = dependencies.environment ?? process.env;
+  let candidates;
+  if (platform === "win32") {
+    const roots = [environment.SystemRoot, environment.SYSTEMROOT, environment.windir].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root));
+    candidates = [.../* @__PURE__ */ new Set([...roots, "C:\\Windows"])].map((root) => win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
+  } else if (platform === "linux") {
+    candidates = ["/usr/bin/ss", "/usr/sbin/ss", "/bin/ss", "/sbin/ss"];
+  } else if (platform === "darwin") {
+    candidates = ["/usr/sbin/lsof"];
+  } else {
+    return null;
+  }
+  return candidates.find(exists) ?? null;
+}
 function numericListener(output, emptyStatus) {
   const value = String(output).trim();
   if (!value)
@@ -10728,10 +10746,13 @@ function numericListener(output, emptyStatus) {
   const [pid] = pids;
   return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
 }
-function probeMetroListener(port, platform = process.platform, execute = execFileSync4) {
+function probeMetroListener(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
+  if (!executable)
+    return { status: "unknown" };
   try {
     if (platform === "win32") {
-      const output = execute("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
+      const output = execute(executable, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -10740,7 +10761,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
     }
     if (platform === "linux") {
-      const output = execute("/usr/bin/ss", ["-H", "-ltnp", `sport = :${port}`], {
+      const output = execute(executable, ["-H", "-ltnp", `sport = :${port}`], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 2e3
@@ -10753,7 +10774,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
     }
     if (platform === "darwin") {
-      const output = execute("/usr/sbin/lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      const output = execute(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 2e3
@@ -10766,8 +10787,8 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
     return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
   }
 }
-function metroListenerPid(port, platform = process.platform, execute = execFileSync4) {
-  const probe = probeMetroListener(port, platform, execute);
+function metroListenerPid(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+  const probe = probeMetroListener(port, platform, execute, executableDependencies);
   return probe.status === "listening" ? probe.pid : null;
 }
 async function fetchMetroStatus(port) {
@@ -10817,7 +10838,7 @@ async function captureMetroBinding(input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-import { closeSync as closeSync3, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync4, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 init_process_birth();
 
@@ -10914,7 +10935,7 @@ function canonicalAuthorityJson(value) {
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync2, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
+import { closeSync as closeSync2, constants as constants2, existsSync as existsSync3, mkdirSync, openSync as openSync2, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync } from "node:fs";
 import { dirname as dirname2, resolve as resolve2 } from "node:path";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
@@ -10938,7 +10959,7 @@ function field(details, name) {
   return details.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length).trim() ?? null;
 }
 function verifiedSandboxExecutable(dependencies) {
-  const exists = dependencies.exists ?? existsSync2;
+  const exists = dependencies.exists ?? existsSync3;
   const canonicalize = dependencies.canonicalize ?? realpathSync4;
   const stat = dependencies.stat ?? statSync2;
   const readBytes = dependencies.readBytes ?? readFileSync3;
@@ -11028,7 +11049,7 @@ function attestRuntimeFile(path, dependencies) {
 }
 function attestNodeRuntime(input, executableMappings, dependencies) {
   const run = dependencies.run ?? defaultRun2;
-  const exists = dependencies.exists ?? existsSync2;
+  const exists = dependencies.exists ?? existsSync3;
   const runtimeVersion = dependencies.runtimeVersion?.(input.nodeExecutable) ?? defaultRuntimeVersion(input.nodeExecutable, run);
   if (runtimeVersion !== input.nodeVersion)
     return null;
@@ -12100,14 +12121,14 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
   }
   return false;
 }
-function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync5) {
-  return metroListenerPid(port, platform, execute);
+function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+  return metroListenerPid(port, platform, execute, executableDependencies);
 }
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync5) {
-  return probeMetroListener(port, platform, execute);
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+  return probeMetroListener(port, platform, execute, executableDependencies);
 }
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync3;
+  const exists = dependencies.exists ?? existsSync4;
   const readText = dependencies.readText ?? ((path) => readFileSync4(path, "utf8"));
   const packageJson = JSON.parse(readText(join3(appRoot, "package.json")));
   const all = { ...packageJson.dependencies, ...packageJson.devDependencies };
@@ -12128,7 +12149,7 @@ function resolveManagedMetroCommand(appRoot, dependencies = {}) {
   throw new Error("METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native");
 }
 function resolveManagedMetroLaunchCommand(command, dependencies) {
-  const exists = dependencies.exists ?? existsSync3;
+  const exists = dependencies.exists ?? existsSync4;
   const readText = dependencies.readText ?? ((path) => readFileSync4(path, "utf8"));
   let firstLine = "";
   try {
@@ -12337,7 +12358,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const runtimeEvidenceEndpointId = createHmac3("sha256", input.signerCapability).update(`metro-runtime-evidence\0${instanceId}`).digest("hex").slice(0, 32);
   const runtimeEvidenceSocket = process.platform === "win32" ? `\\\\.\\pipe\\rn-dev-agent-${runtimeEvidenceEndpointId}` : `/tmp/rn-dev-agent-${runtimeEvidenceEndpointId}.sock`;
   const authorityNodeOptions = [baseNodeOptions, `--require=${JSON.stringify(authorityPreload)}`].filter(Boolean).join(" ");
-  const exists = dependencies.exists ?? existsSync3;
+  const exists = dependencies.exists ?? existsSync4;
   const resolvedDependencyRoots = dependencyRoots(input.appRoot, input.sourceRoot, exists).map(canonicalRuntimeInput);
   const allowedCodeRoots = [
     canonicalRuntimeInput(input.sourceRoot),
@@ -12747,7 +12768,7 @@ init_registry();
 init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { closeSync as closeSync4, existsSync as existsSync4, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync6 } from "node:fs";
+import { closeSync as closeSync4, existsSync as existsSync5, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve4 } from "node:path";
 function digest2(parts) {
   const hash = createHash6("sha256");
@@ -12962,13 +12983,13 @@ function sessionRuntimeDirectory(layout, sessionId) {
 }
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
-import { existsSync as existsSync6, readFileSync as readFileSync9 } from "node:fs";
+import { existsSync as existsSync7, readFileSync as readFileSync9 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync5, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync2, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants3, existsSync as existsSync6, fstatSync as fstatSync2, lstatSync as lstatSync7, mkdtempSync, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync7, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
@@ -14035,11 +14056,11 @@ function sameIdentity(left, right) {
 function waitForFile(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync5(path))
+    if (existsSync6(path))
       return true;
     Atomics.wait(WAIT_BUFFER, 0, 0, 5);
   }
-  return existsSync5(path);
+  return existsSync6(path);
 }
 function stopWorker(worker, signal = "SIGTERM") {
   const stoppedPath = join7(worker.controlPath, "stopped");
@@ -14049,7 +14070,7 @@ function stopWorker(worker, signal = "SIGTERM") {
     } catch {
     }
     if (waitForFile(stoppedPath, 1e3)) {
-      if (!existsSync5(join7(worker.controlPath, "lock-retained"))) {
+      if (!existsSync6(join7(worker.controlPath, "lock-retained"))) {
         rmSync4(worker.controlPath, { force: true, recursive: true });
       }
       return;
@@ -14065,7 +14086,7 @@ function stopWorker(worker, signal = "SIGTERM") {
   if (!waitForFile(stoppedPath, 1e4)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound-directory worker exit was not confirmed");
   }
-  if (!existsSync5(join7(worker.controlPath, "lock-retained"))) {
+  if (!existsSync6(join7(worker.controlPath, "lock-retained"))) {
     rmSync4(worker.controlPath, { force: true, recursive: true });
   }
 }
@@ -14659,7 +14680,7 @@ init_registry();
 function readPackageIntegrationManifest(appRoot, dependencies) {
   const manifestPath = join8(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
   if (dependencies.exists || dependencies.readText) {
-    const exists = dependencies.exists ?? existsSync6;
+    const exists = dependencies.exists ?? existsSync7;
     if (!exists(manifestPath))
       return void 0;
     const readText = dependencies.readText ?? ((path) => readFileSync9(path, "utf8"));
@@ -14680,7 +14701,7 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
   }
 }
 function inspectAuthorityMigration(status, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync6;
+  const exists = dependencies.exists ?? existsSync7;
   const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
   let packageIntegrationInstalled = false;
   if (appRoot) {

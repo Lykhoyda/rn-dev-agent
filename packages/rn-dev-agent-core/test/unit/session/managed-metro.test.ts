@@ -15,6 +15,11 @@ import {
   verifyManagedMetroManagementProof,
 } from '../../../dist/session/managed-metro.js';
 
+const listenerExecutableDependencies = {
+  exists: () => true,
+  environment: { SystemRoot: 'C:\\Windows' },
+};
+
 test('shipping artifacts omit retired runtime-authority claims', () => {
   for (const retiredClaim of [
     ['broker', 'v2'].join('-'),
@@ -76,8 +81,14 @@ test('managed Metro discovers listener PIDs with platform-native commands', () =
     return file.endsWith('powershell.exe') ? '412\n' : 'users:(("node",pid=513,fd=19))\n';
   }) as never;
 
-  assert.equal(managedMetroListenerPid(8341, 'win32', execute), 412);
-  assert.equal(managedMetroListenerPid(8341, 'linux', execute), 513);
+  assert.equal(
+    managedMetroListenerPid(8341, 'win32', execute, listenerExecutableDependencies),
+    412,
+  );
+  assert.equal(
+    managedMetroListenerPid(8341, 'linux', execute, listenerExecutableDependencies),
+    513,
+  );
   assert.equal(
     calls[0]?.[0],
     'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
@@ -91,55 +102,103 @@ test('managed Metro discovers listener PIDs with platform-native commands', () =
       darwinCommand = file;
       return '412';
     }) as never,
+    listenerExecutableDependencies,
   );
   assert.equal(darwinProbe.status, 'listening');
   assert.equal(darwinCommand, '/usr/sbin/lsof');
 });
 
 test('managed Metro listener probes require platform-specific positive absence', () => {
-  assert.deepEqual(probeManagedMetroListener(8341, 'win32', (() => 'ABSENT') as never), {
-    status: 'absent',
-  });
-  assert.deepEqual(probeManagedMetroListener(8341, 'linux', (() => '') as never), {
-    status: 'absent',
-  });
   assert.deepEqual(
-    probeManagedMetroListener(8341, 'darwin', (() => {
-      throw Object.assign(new Error('no matches'), { status: 1, stdout: '', stderr: '' });
-    }) as never),
+    probeManagedMetroListener(
+      8341,
+      'win32',
+      (() => 'ABSENT') as never,
+      listenerExecutableDependencies,
+    ),
+    { status: 'absent' },
+  );
+  assert.deepEqual(
+    probeManagedMetroListener(
+      8341,
+      'linux',
+      (() => '') as never,
+      listenerExecutableDependencies,
+    ),
+    { status: 'absent' },
+  );
+  assert.deepEqual(
+    probeManagedMetroListener(
+      8341,
+      'darwin',
+      (() => {
+        throw Object.assign(new Error('no matches'), { status: 1, stdout: '', stderr: '' });
+      }) as never,
+      listenerExecutableDependencies,
+    ),
     { status: 'absent' },
   );
 });
 
 test('managed Metro listener probes reject ambiguous platform output', () => {
-  assert.deepEqual(probeManagedMetroListener(8341, 'win32', (() => 'Access denied') as never), {
-    status: 'unknown',
-  });
-  assert.deepEqual(probeManagedMetroListener(8341, 'win32', (() => '') as never), {
-    status: 'unknown',
-  });
+  assert.deepEqual(
+    probeManagedMetroListener(
+      8341,
+      'win32',
+      (() => 'Access denied') as never,
+      listenerExecutableDependencies,
+    ),
+    { status: 'unknown' },
+  );
+  assert.deepEqual(
+    probeManagedMetroListener(
+      8341,
+      'win32',
+      (() => '') as never,
+      listenerExecutableDependencies,
+    ),
+    { status: 'unknown' },
+  );
   assert.deepEqual(
     probeManagedMetroListener(
       8341,
       'linux',
       (() => 'LISTEN 0 511 *:8341 *:* users:(("node",fd=19))') as never,
+      listenerExecutableDependencies,
     ),
     { status: 'unknown' },
   );
-  assert.deepEqual(probeManagedMetroListener(8341, 'darwin', (() => '412 warning') as never), {
-    status: 'unknown',
-  });
-  assert.deepEqual(probeManagedMetroListener(8341, 'darwin', (() => '') as never), {
-    status: 'unknown',
-  });
   assert.deepEqual(
-    probeManagedMetroListener(8341, 'darwin', (() => {
-      throw Object.assign(new Error('permission denied'), {
-        status: 1,
-        stdout: '',
-        stderr: 'permission denied',
-      });
-    }) as never),
+    probeManagedMetroListener(
+      8341,
+      'darwin',
+      (() => '412 warning') as never,
+      listenerExecutableDependencies,
+    ),
+    { status: 'unknown' },
+  );
+  assert.deepEqual(
+    probeManagedMetroListener(
+      8341,
+      'darwin',
+      (() => '') as never,
+      listenerExecutableDependencies,
+    ),
+    { status: 'unknown' },
+  );
+  assert.deepEqual(
+    probeManagedMetroListener(
+      8341,
+      'darwin',
+      (() => {
+        throw Object.assign(new Error('permission denied'), {
+          status: 1,
+          stdout: '',
+          stderr: 'permission denied',
+        });
+      }) as never,
+      listenerExecutableDependencies,
+    ),
     { status: 'unknown' },
   );
 });
