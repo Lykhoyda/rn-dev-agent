@@ -1000,6 +1000,116 @@ test('managed Metro handoff cleanup is reserved, resumable, and transferred once
   );
 });
 
+test('managed Metro handoff reservation follows an authenticated recovery worker respawn', () => {
+  const { registry, create } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  const recoveryCapability = 'recovery-capability';
+  registry.bindWorker(target, {
+    instanceId: 'worker-before-crash',
+    pid: 202,
+    token: 'birth-before-crash',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update(recoveryCapability).digest('hex'),
+    },
+  });
+  registry.claimResources(owner, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'metro-port', key: '8341' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      metro: {
+        mode: 'managed',
+        port: 8341,
+        pid: 301,
+        birth: 'metro-birth',
+        instanceId: 'metro-a',
+      },
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: owner.sessionId,
+        manifestSha256: 'a'.repeat(64),
+      },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, {
+    targetInstance: 'worker-before-crash',
+  });
+  registry.reserveManagedMetroHandoffCleanup(target, {
+    ...handoff,
+    targetInstance: 'worker-before-crash',
+  });
+
+  assert.throws(
+    () =>
+      registry.bindRecoveryWorker(
+        target,
+        { instanceId: 'worker-forged', pid: 303, token: 'birth-forged' },
+        'forged-capability',
+      ),
+    /blocked recovery capability is invalid/,
+  );
+  registry.bindRecoveryWorker(
+    target,
+    { instanceId: 'worker-after-crash', pid: 304, token: 'birth-after-crash' },
+    recoveryCapability,
+  );
+
+  const rotated = registry.getSessionStatus(owner.sessionId)?.bindings
+    .managedMetroHandoffReservation;
+  assert.equal(registry.getSessionStatus(target.sessionId)?.worker.instanceId, 'worker-after-crash');
+  assert.equal(rotated?.handoffId, handoff.handoffId);
+  assert.equal(rotated?.targetSessionId, target.sessionId);
+  assert.equal(rotated?.targetClaimEpoch, target.claimEpoch);
+  assert.equal(rotated?.targetInstance, 'worker-after-crash');
+  assert.equal(rotated?.metro.sourceSessionId, owner.sessionId);
+  assert.equal(rotated?.sourceClaimEpoch, owner.claimEpoch);
+  assert.ok(registry.getSessionStatus(owner.sessionId)?.bindings.packageIntegration);
+  assert.throws(
+    () => registry.cancelHandoff(owner, handoff.handoffId),
+    /cancellation is fenced while managed Metro shutdown is reserved/,
+  );
+  assert.throws(
+    () =>
+      registry.reserveManagedMetroHandoffCleanup(target, {
+        ...handoff,
+        targetInstance: 'worker-before-crash',
+      }),
+    /target is not the current fenced worker instance/,
+  );
+  assert.throws(
+    () =>
+      registry.reserveManagedMetroHandoffCleanup(target, {
+        handoffId: handoff.handoffId,
+        token: 'forged-handoff-token',
+        targetInstance: 'worker-after-crash',
+      }),
+    /handoff capability is invalid/,
+  );
+  assert.equal(
+    registry.reserveManagedMetroHandoffCleanup(target, {
+      ...handoff,
+      targetInstance: 'worker-after-crash',
+    })?.targetInstance,
+    'worker-after-crash',
+  );
+  registry.completeManagedMetroHandoffCleanup(target, {
+    ...handoff,
+    targetInstance: 'worker-after-crash',
+  });
+  registry.acceptHandoffInto(target, {
+    ...handoff,
+    targetInstance: 'worker-after-crash',
+  });
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'released');
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'handoff_cleanup');
+});
+
 test('managed Metro shutdown refusal restores coherent donor authority', () => {
   const { registry, create } = fixture();
   const owner = create('a', 'shared-worktree');

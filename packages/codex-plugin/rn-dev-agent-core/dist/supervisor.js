@@ -15505,6 +15505,15 @@ function bindingsRunnerPresent(bindingsJson) {
   const bindings = JSON.parse(bindingsJson);
   return Boolean(bindings.runner && typeof bindings.runner === "object");
 }
+function managedMetroHandoffReservation(bindings) {
+  const value = bindings.managedMetroHandoffReservation;
+  if (value === null || value === void 0)
+    return null;
+  if (typeof value !== "object" || typeof value.handoffId !== "string" || typeof value.sourceClaimEpoch !== "number" || typeof value.targetSessionId !== "string" || typeof value.targetClaimEpoch !== "number" || typeof value.targetInstance !== "string" || !["shutdown_reserved", "shutdown_completed"].includes(String(value.phase)) || typeof value.metro !== "object" || value.metro === null || typeof value.metro.sourceSessionId !== "string") {
+    throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation is malformed");
+  }
+  return value;
+}
 function openSessionRegistry(path, dependencies) {
   const store = openAuthorityStore(path, { sqliteCtor: dependencies.sqliteCtor });
   try {
@@ -15712,6 +15721,51 @@ var init_registry = __esm({
           const actual = createHash9("sha256").update(capability).digest();
           if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is invalid");
+          }
+          const pendingHandoffs = this.#database.prepare(`SELECT handoff.handoff_id, handoff.claim_epoch, handoff.target_instance,
+                  donor.session_id, donor.claim_epoch AS donor_claim_epoch,
+                  donor.bindings_json
+           FROM handoffs handoff
+           JOIN sessions donor ON donor.session_id = handoff.session_id
+           WHERE handoff.consumed_ms IS NULL
+             AND donor.state = 'handoff'
+             AND donor.source_key = ?
+             AND donor.worktree_key = ?
+             AND donor.app_root_key = ?`).all(row.source_key, row.worktree_key, row.app_root_key);
+          const rotations = pendingHandoffs.flatMap((handoff) => {
+            const donorBindings = JSON.parse(handoff.bindings_json);
+            const reservation = managedMetroHandoffReservation(donorBindings);
+            if (!reservation || reservation.targetSessionId !== session.sessionId || reservation.targetClaimEpoch !== session.claimEpoch) {
+              return [];
+            }
+            if (reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.sourceClaimEpoch !== handoff.donor_claim_epoch || reservation.targetInstance !== row.worker_instance || handoff.target_instance !== row.worker_instance || reservation.metro.sourceSessionId !== handoff.session_id) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
+            }
+            return [{ handoff, donorBindings, reservation }];
+          });
+          if (rotations.length > 1) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "multiple managed Metro handoffs target the same recovery session");
+          }
+          const rotation = rotations[0];
+          if (rotation) {
+            const rotatedReservation = {
+              ...rotation.reservation,
+              targetInstance: worker.instanceId
+            };
+            const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
+             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(worker.instanceId, rotation.handoff.handoff_id, row.worker_instance);
+            if (handoffChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recovery worker rotation");
+            }
+            const donorChanged = this.#database.prepare(`UPDATE sessions
+             SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify({
+              ...rotation.donorBindings,
+              managedMetroHandoffReservation: rotatedReservation
+            }), now, rotation.handoff.session_id, rotation.handoff.donor_claim_epoch);
+            if (donorChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recovery worker rotation");
+            }
           }
           const adoptionRequired = bindings.adoptionRequired;
           const expiresMs = now + 5 * 6e4;
@@ -17058,8 +17112,7 @@ var init_registry = __esm({
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "handoff source does not match the target session");
         }
         const bindings = JSON.parse(prior.bindings_json);
-        const persistedReservation = bindings.managedMetroHandoffReservation;
-        const reservation = persistedReservation && typeof persistedReservation === "object" ? persistedReservation : null;
+        const reservation = managedMetroHandoffReservation(bindings);
         const exactReservation = reservation?.handoffId === handoff.handoff_id && reservation.sourceClaimEpoch === handoff.claim_epoch && reservation.targetSessionId === target.sessionId && reservation.targetClaimEpoch === target.claimEpoch && reservation.targetInstance === input.targetInstance && reservation.metro?.sourceSessionId === prior.session_id;
         if (reservation && !exactReservation) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro cleanup reservation belongs to a different handoff recipient");
