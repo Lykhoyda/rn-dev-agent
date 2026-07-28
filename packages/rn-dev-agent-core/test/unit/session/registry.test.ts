@@ -902,6 +902,80 @@ test('handoff cancellation and explicit expiry recovery restore the unchanged ow
   assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
 });
 
+test('managed Metro handoff stays cancellable until shutdown is proven and transfers once', () => {
+  const { registry, create } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.bindWorker(target, {
+    instanceId: 'worker-next',
+    pid: 202,
+    token: 'birth-worker-next',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-target' },
+  });
+  registry.claimResources(owner, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'metro-port', key: '8341' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      metro: {
+        mode: 'managed',
+        port: 8341,
+        pid: 301,
+        birth: 'metro-birth',
+        instanceId: 'metro-a',
+      },
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: owner.sessionId,
+        manifestSha256: 'a'.repeat(64),
+      },
+    },
+  });
+  const refused = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+
+  assert.throws(
+    () =>
+      registry.acceptHandoffInto(target, {
+        ...refused,
+        targetInstance: 'worker-next',
+      }),
+    /managed Metro shutdown must be proven before handoff ownership transfers/,
+  );
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'handoff');
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'blocked');
+  assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, owner.sessionId);
+  registry.cancelHandoff(owner, refused.handoffId);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'ready');
+  assert.ok(registry.getSessionStatus(owner.sessionId)?.bindings.packageIntegration);
+
+  const accepted = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+  const cleanup = registry.acceptHandoffInto(target, {
+    ...accepted,
+    targetInstance: 'worker-next',
+    managedMetroStopped: true,
+  });
+
+  assert.equal(cleanup.metro, null);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'released');
+  assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'handoff_cleanup');
+  assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, target.sessionId);
+  assert.ok(registry.getSessionStatus(target.sessionId)?.bindings.packageIntegration);
+  assert.throws(
+    () =>
+      registry.acceptHandoffInto(target, {
+        ...accepted,
+        targetInstance: 'worker-next',
+        managedMetroStopped: true,
+      }),
+    /HANDOFF_NOT_AUTHORIZED/,
+  );
+});
+
 test('handoff cancellation advances its active controller operation fence', async () => {
   const { registry, create } = fixture();
   const owner = create('a');
@@ -1213,22 +1287,18 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
   registry.acceptHandoffInto(cleanupOwner, {
     ...handoff,
     targetInstance: 'worker-cleanup',
+    managedMetroStopped: true,
   });
   const accepted = registry.getSessionStatus(cleanupOwner.sessionId);
   assert.ok(accepted);
   assert.equal(accepted.bindings.metro, null);
-  assert.deepEqual(
+  assert.equal(
     (
       accepted.bindings.handoffCleanup as {
         metro?: Record<string, unknown>;
       }
     ).metro,
-    {
-      ...metro,
-      sourceSessionId: owner.sessionId,
-      stopRequestedAt: null,
-      completedAt: null,
-    },
+    null,
   );
   registry.beginHandoffCleanupResource(cleanupOwner, 'worker-cleanup', 'runner');
   const interruptedPlan = registry.getSessionStatus(cleanupOwner.sessionId)?.bindings
@@ -1244,8 +1314,6 @@ test('stale adoption transfers interrupted explicit handoff cleanup unchanged', 
   assert.equal(registry.getClaim('metro-port', '8341')?.sessionId, contender.sessionId);
   assert.equal(registry.getClaim('runner', 'ios:device-a:9100')?.sessionId, contender.sessionId);
   registry.completeHandoffCleanupResource(contender, 'worker-contender', 'runner');
-  registry.beginHandoffCleanupResource(contender, 'worker-contender', 'metro');
-  registry.completeHandoffCleanupResource(contender, 'worker-contender', 'metro');
   registry.finishHandoffCleanup(contender, 'worker-contender');
   const completed = registry.getSessionStatus(contender.sessionId);
   assert.equal(completed?.state, 'source_bound');

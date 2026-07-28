@@ -42,11 +42,10 @@ test('Expo iOS receives exact device and Metro pinning', () => {
     'Debug',
     '--device',
     iosSession.deviceId,
-    '--port',
-    '8341',
     '--no-bundler',
   ]);
   assert.deepEqual(plan.env, {
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8341',
     RCT_METRO_PORT: '8341',
     RN_DEV_AGENT_SESSION_ID: 'session-ios',
   });
@@ -64,10 +63,38 @@ test('Expo Android receives exact device and Metro pinning', () => {
     'run:android',
     '--device',
     androidSession.deviceId,
-    '--port',
-    '8342',
     '--no-bundler',
   ]);
+  assert.deepEqual(plan.env, {
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8342',
+    RCT_METRO_PORT: '8342',
+    RN_DEV_AGENT_SESSION_ID: 'session-android',
+  });
+});
+
+test('Expo removes a matching CLI port and refuses a conflicting one', () => {
+  const matching = createBuildLaunchPlan({
+    platform: 'ios',
+    command: ['expo', 'run:ios', '--port', '8341'],
+    session: iosSession,
+  });
+
+  assert.deepEqual(matching.command, [
+    'expo',
+    'run:ios',
+    '--device',
+    iosSession.deviceId,
+    '--no-bundler',
+  ]);
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'ios',
+        command: ['expo', 'run:ios', '--port', '8081'],
+        session: iosSession,
+      }),
+    /SESSION_BUILD_IDENTITY_CONFLICT/,
+  );
 });
 
 test('bare React Native iOS uses UDID and external managed Metro', () => {

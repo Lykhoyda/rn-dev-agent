@@ -16261,6 +16261,10 @@ var init_registry = __esm({
             throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "handoff runner binding has no exclusive cleanup claim");
           }
           const bindings = JSON.parse(prior.bindings_json);
+          const managedMetro = bindings.metro && typeof bindings.metro === "object" && bindings.metro.mode === "managed" ? bindings.metro : null;
+          if (managedMetro && input.managedMetroStopped !== true) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro shutdown must be proven before handoff ownership transfers");
+          }
           const priorRecorderClaim = this.#database.prepare(`SELECT resource_key FROM claims
            WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'recorder'`).get(prior.session_id, prior.claim_epoch);
           if (bindings.recorder && !priorRecorderClaim?.resource_key) {
@@ -16274,7 +16278,6 @@ var init_registry = __esm({
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
           const targetBindings = JSON.parse(targetRow.bindings_json);
-          const managedMetro = bindings.metro && typeof bindings.metro === "object" && bindings.metro.mode === "managed" ? bindings.metro : null;
           this.#database.prepare(`UPDATE sessions
            SET state = 'handoff_cleanup', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
@@ -16289,12 +16292,7 @@ var init_registry = __esm({
             pendingBuild: null,
             recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
             handoffCleanup: {
-              metro: managedMetro ? {
-                ...managedMetro,
-                sourceSessionId: prior.session_id,
-                stopRequestedAt: null,
-                completedAt: null
-              } : null,
+              metro: null,
               observe: bindings.observe && typeof bindings.observe === "object" ? {
                 ...bindings.observe,
                 stopRequestedAt: null,
@@ -74978,6 +74976,13 @@ function ensureFlag(command, flag) {
   if (!command.includes(flag))
     command.push(flag);
 }
+function removeValue(command, flag, value) {
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
+    if (command[index + 1] !== value)
+      conflict(flag);
+    command.splice(index, 2);
+  }
+}
 function commandKind(command) {
   const offset = command[0] === "npx" ? 1 : 0;
   const executable = command[offset];
@@ -75004,7 +75009,7 @@ function createBuildLaunchPlan(input) {
   }
   if (kind === "expo") {
     ensureValue(command, "--device", input.session.deviceId);
-    ensureValue(command, "--port", String(input.session.metroPort));
+    removeValue(command, "--port", String(input.session.metroPort));
     ensureFlag(command, "--no-bundler");
   } else if (kind === "bare-ios") {
     ensureValue(command, "--udid", input.session.deviceId);
@@ -75019,6 +75024,7 @@ function createBuildLaunchPlan(input) {
     mode: "session",
     command,
     env: {
+      ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
       RCT_METRO_PORT: String(input.session.metroPort),
       RN_DEV_AGENT_SESSION_ID: input.session.sessionId
     }
@@ -77942,6 +77948,15 @@ function ensureValue(flag, value) {
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
 }
+function removeValue(flag, value) {
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
+    if (command[index + 1] !== value) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
+      process.exit(2);
+    }
+    command.splice(index, 2);
+  }
+}
 
 if (session) {
   if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
@@ -77957,7 +77972,7 @@ if (session) {
   const subcommand = command[offset + 1];
   if (executable === 'expo' && subcommand === 'run:' + platform) {
     ensureValue('--device', session.deviceId);
-    ensureValue('--port', String(session.metroPort));
+    removeValue('--port', String(session.metroPort));
     ensureFlag('--no-bundler');
   } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
     ensureValue('--udid', session.deviceId);
@@ -77977,6 +77992,7 @@ const child = spawnSync(command[0], command.slice(1), {
   cwd: process.cwd(),
   env: session ? {
     ...process.env,
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
     RCT_METRO_PORT: String(session.metroPort),
     RN_DEV_AGENT_SESSION_ID: session.sessionId,
   } : process.env,
@@ -78282,7 +78298,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     assertBoundDirectoryCurrent(directories.integration);
     return preview;
   } catch (error2) {
-    const rollbackErrors = rollbackWrites(applied, dependencies.boundOperationDependencies);
+    const rollbackErrors = rollbackWrites(applied);
     primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
     throw primaryError;
   } finally {
@@ -78759,10 +78775,29 @@ function createSessionHandler(runtime, dependencies = {}) {
             token: token2,
             targetInstance: status2.worker.instanceId
           });
+          const priorManagedMetro = priorStatus?.bindings.metro && typeof priorStatus.bindings.metro === "object" && priorStatus.bindings.metro.mode === "managed" ? priorStatus.bindings.metro : null;
+          let managedMetroStopped = false;
+          if (priorManagedMetro) {
+            if (!priorSessionId) {
+              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro handoff source authority is unavailable");
+            }
+            const signerCapability = dependencies.getSignerCapability?.(priorSessionId);
+            if (!signerCapability) {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff requires the source session signer capability");
+            }
+            managedMetroStopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(priorManagedMetro, {
+              sessionId: priorSessionId,
+              signerCapability
+            });
+            if (!managedMetroStopped) {
+              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped before handoff ownership transfer");
+            }
+          }
           cleanup = registry2.acceptHandoffInto(session, {
             handoffId,
             token: token2,
-            targetInstance: status2.worker.instanceId
+            targetInstance: status2.worker.instanceId,
+            managedMetroStopped
           });
         }
         if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {

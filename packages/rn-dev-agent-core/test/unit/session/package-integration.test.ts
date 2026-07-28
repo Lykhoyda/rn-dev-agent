@@ -3345,7 +3345,7 @@ test('integration rolls back committed files when cleanup remains pending', () =
             error.message,
             ...(error instanceof AggregateError ? error.errors.map((entry) => String(entry)) : []),
           ].join('\n'),
-          /committed cleanup remains pending|bound-directory cleanup/,
+          /SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending/,
         );
         return true;
       },
@@ -3615,7 +3615,7 @@ test('copied adapter accepts build identity only from the package-local session 
     const fakeNpx = join(binRoot, 'npx');
     writeFileSync(
       fakeNpx,
-      "#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.ADAPTER_RECORD,JSON.stringify({args:process.argv.slice(2),port:process.env.RCT_METRO_PORT,session:process.env.RN_DEV_AGENT_SESSION_ID}))\n",
+      "#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.ADAPTER_RECORD,JSON.stringify({args:process.argv.slice(2),iosPort:process.env.RCT_METRO_PORT,androidPort:process.env.ORG_GRADLE_PROJECT_reactNativeDevServerPort,session:process.env.RN_DEV_AGENT_SESSION_ID}))\n",
     );
     chmodSync(fakeNpx, 0o755);
     writeFileSync(
@@ -3644,8 +3644,9 @@ test('copied adapter accepts build identity only from the package-local session 
 
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(readFileSync(outputPath, 'utf8')), {
-      args: ['expo', 'run:ios', '--device', 'session-ios-device', '--port', '8341', '--no-bundler'],
-      port: '8341',
+      args: ['expo', 'run:ios', '--device', 'session-ios-device', '--no-bundler'],
+      androidPort: '8341',
+      iosPort: '8341',
       session: 'session-ios',
     });
     assert.deepEqual(JSON.parse(readFileSync(completionPath, 'utf8')), {

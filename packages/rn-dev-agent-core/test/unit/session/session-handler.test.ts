@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:net';
 import { test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 
@@ -183,6 +184,122 @@ test('handoff cleanup remains fenced when exact shutdown is not proven', async (
 
   assert.equal(finished, false);
   assert.equal(result.isError, true);
+});
+
+test('failed live managed Metro shutdown preserves donor ownership before transfer', async (t) => {
+  const listener = createServer((socket) => socket.end());
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        if (listener.listening) listener.close(() => resolve());
+        else resolve();
+      }),
+  );
+  const address = listener.address();
+  assert.ok(address && typeof address !== 'string');
+  const donorStatus = {
+    sessionId: 'donor',
+    state: 'handoff',
+    bindings: {
+      metro: { mode: 'managed', port: address.port, instanceId: 'validator-owned-metro' },
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: 'donor',
+        manifestSha256: 'a'.repeat(64),
+      },
+    },
+  };
+  const targetStatus = {
+    sessionId: 'target',
+    state: 'blocked',
+    source: { kind: 'git' },
+    bindings: {} as Record<string, unknown>,
+    worker: { instanceId: 'worker-target' },
+  };
+  let accepted = 0;
+  let stopSucceeds = false;
+  const registry = {
+    getSessionStatus: (sessionId: string) =>
+      sessionId === donorStatus.sessionId ? donorStatus : targetStatus,
+    getHandoffOwner: () => donorStatus.sessionId,
+    validateHandoffInto: () => {},
+    acceptHandoffInto: () => {
+      accepted += 1;
+      donorStatus.state = 'released';
+      targetStatus.state = 'handoff_cleanup';
+      targetStatus.bindings = {
+        handoffCleanup: { metro: null, observe: null, recorder: null, runner: null },
+        packageIntegration: donorStatus.bindings.packageIntegration,
+      };
+      return targetStatus.bindings.handoffCleanup;
+    },
+    cancelHandoff: () => {
+      donorStatus.state = 'ready';
+    },
+    finishHandoffCleanup: () => {
+      targetStatus.state = 'source_bound';
+    },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...targetStatus }),
+      requireRecovery: () => ({
+        registry,
+        session: { sessionId: targetStatus.sessionId, claimEpoch: 1 },
+      }),
+      requireOperational: () => {
+        throw new Error('unexpected operational access');
+      },
+    } as never,
+    {
+      getSignerCapability: (sessionId) =>
+        sessionId === donorStatus.sessionId ? 'donor-signer' : null,
+      stopManagedMetro: async () => {
+        assert.equal(listener.listening, true);
+        if (!stopSucceeds) return false;
+        await new Promise<void>((resolve) => listener.close(() => resolve()));
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({
+    action: 'accept_handoff',
+    handoffId: 'handoff',
+    token: 'token',
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /before handoff ownership transfer/);
+  assert.equal(accepted, 0);
+  assert.equal(donorStatus.state, 'handoff');
+  assert.equal(targetStatus.state, 'blocked');
+  assert.ok(donorStatus.bindings.packageIntegration);
+  assert.equal(listener.listening, true);
+
+  registry.cancelHandoff();
+  assert.equal(donorStatus.state, 'ready');
+  donorStatus.state = 'handoff';
+  stopSucceeds = true;
+  const acceptedResult = await handler({
+    action: 'accept_handoff',
+    handoffId: 'replacement-handoff',
+    token: 'replacement-token',
+  });
+
+  assert.equal(acceptedResult.isError, undefined);
+  assert.equal(accepted, 1);
+  assert.equal(donorStatus.state, 'released');
+  assert.equal(targetStatus.state, 'source_bound');
+  assert.deepEqual(
+    targetStatus.bindings.packageIntegration,
+    donorStatus.bindings.packageIntegration,
+  );
+  assert.equal(listener.listening, false);
 });
 
 test('handoff cleanup finalizes the session recorder before release', async () => {

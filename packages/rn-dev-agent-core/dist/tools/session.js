@@ -375,10 +375,33 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         token,
                         targetInstance: status.worker.instanceId,
                     });
+                    const priorManagedMetro = priorStatus?.bindings.metro &&
+                        typeof priorStatus.bindings.metro === 'object' &&
+                        priorStatus.bindings.metro.mode === 'managed'
+                        ? priorStatus.bindings.metro
+                        : null;
+                    let managedMetroStopped = false;
+                    if (priorManagedMetro) {
+                        if (!priorSessionId) {
+                            throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'managed Metro handoff source authority is unavailable');
+                        }
+                        const signerCapability = dependencies.getSignerCapability?.(priorSessionId);
+                        if (!signerCapability) {
+                            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'managed Metro handoff requires the source session signer capability');
+                        }
+                        managedMetroStopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(priorManagedMetro, {
+                            sessionId: priorSessionId,
+                            signerCapability,
+                        });
+                        if (!managedMetroStopped) {
+                            throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'managed Metro could not be stopped before handoff ownership transfer');
+                        }
+                    }
                     cleanup = registry.acceptHandoffInto(session, {
                         handoffId,
                         token,
                         targetInstance: status.worker.instanceId,
+                        managedMetroStopped,
                     });
                 }
                 if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {

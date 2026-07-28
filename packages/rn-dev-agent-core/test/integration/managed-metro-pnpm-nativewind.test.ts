@@ -23,6 +23,7 @@ import { stopManagedMetro } from '../../dist/session/managed-metro.js';
 
 const requireFromTest = createRequire(import.meta.url);
 const managedMetroModuleUrl = new URL('../../dist/session/managed-metro.js', import.meta.url).href;
+const expoBundlerPropsPath = requireFromTest.resolve('@expo/cli/build/src/run/resolveBundlerProps');
 const supportedDarwinArchitecture = process.arch === 'arm64' || process.arch === 'x64';
 
 function resolveOxfmtAddonPath(): string {
@@ -51,7 +52,7 @@ async function availablePort(): Promise<number> {
 }
 
 test(
-  'literal pnpm ios starts managed Expo Metro with NativeWind addon evidence',
+  'literal pnpm ios passes installed Expo parsing and retains managed NativeWind evidence',
   { skip: process.platform !== 'darwin' || !supportedDarwinArchitecture, timeout: 45_000 },
   async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-metro-pnpm-nativewind-')));
@@ -140,6 +141,12 @@ if (args[0] === 'start') {
   }).listen(port, '127.0.0.1');
   setInterval(() => {}, 1 << 30);
 } else if (args[0] === 'run:ios') {
+  const portIndex = args.indexOf('--port');
+  const options = {
+    bundler: !args.includes('--no-bundler'),
+    ...(portIndex >= 0 ? { port: Number(args[portIndex + 1]) } : {})
+  };
+  require(${JSON.stringify(expoBundlerPropsPath)}).resolveBundlerPropsAsync(process.cwd(), options).then(() => {
   const evidence = fs.readFileSync(path.join(process.env.FIXTURE_RUNTIME_ROOT, 'metro-runtime-evidence.jsonl'), 'utf8')
     .trim()
     .split('\\n')
@@ -152,13 +159,21 @@ if (args[0] === 'start') {
     entry.digest === digest &&
     /^[a-f0-9]{64}$/.test(entry.signature || '')
   );
-  if (!args.includes('--no-bundler') || !observed('input') || !observed('stability')) process.exit(7);
+  if (args.includes('--port') || !args.includes('--no-bundler') || !observed('input') || !observed('stability')) process.exit(7);
+  if (process.env.ORG_GRADLE_PROJECT_reactNativeDevServerPort !== process.env.RCT_METRO_PORT) process.exit(13);
   const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.env.RCT_METRO_PORT) });
   socket.setTimeout(2000, () => process.exit(8));
   socket.once('error', () => process.exit(9));
   socket.once('connect', () => {
     socket.destroy();
-    fs.writeFileSync(process.env.FIXTURE_BUILD_RESULT, JSON.stringify({ port: process.env.RCT_METRO_PORT }));
+    fs.writeFileSync(process.env.FIXTURE_BUILD_RESULT, JSON.stringify({
+      enteredNativeBuildInstall: true,
+      port: process.env.RCT_METRO_PORT
+    }));
+  });
+  }).catch((error) => {
+    process.stderr.write(String(error && error.message || error) + '\\n');
+    process.exit(2);
   });
 } else {
   process.exit(10);
@@ -246,6 +261,7 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
 
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(readFileSync(buildResultPath, 'utf8')), {
+        enteredNativeBuildInstall: true,
         port: String(port),
       });
       const binding = JSON.parse(readFileSync(bindingPath, 'utf8')) as Record<string, unknown>;

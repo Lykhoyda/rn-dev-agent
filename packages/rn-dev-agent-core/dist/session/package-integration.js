@@ -2927,6 +2927,15 @@ function ensureValue(flag, value) {
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
 }
+function removeValue(flag, value) {
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
+    if (command[index + 1] !== value) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
+      process.exit(2);
+    }
+    command.splice(index, 2);
+  }
+}
 
 if (session) {
   if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
@@ -2942,7 +2951,7 @@ if (session) {
   const subcommand = command[offset + 1];
   if (executable === 'expo' && subcommand === 'run:' + platform) {
     ensureValue('--device', session.deviceId);
-    ensureValue('--port', String(session.metroPort));
+    removeValue('--port', String(session.metroPort));
     ensureFlag('--no-bundler');
   } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
     ensureValue('--udid', session.deviceId);
@@ -2962,6 +2971,7 @@ const child = spawnSync(command[0], command.slice(1), {
   cwd: process.cwd(),
   env: session ? {
     ...process.env,
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
     RCT_METRO_PORT: String(session.metroPort),
     RN_DEV_AGENT_SESSION_ID: session.sessionId,
   } : process.env,
@@ -3284,7 +3294,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
         return preview;
     }
     catch (error) {
-        const rollbackErrors = rollbackWrites(applied, dependencies.boundOperationDependencies);
+        const rollbackErrors = rollbackWrites(applied);
         primaryError =
             rollbackErrors.length > 0 ? new AggregateError([error, ...rollbackErrors]) : error;
         throw primaryError;

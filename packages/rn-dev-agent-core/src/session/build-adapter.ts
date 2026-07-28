@@ -28,6 +28,13 @@ function ensureFlag(command: string[], flag: string): void {
   if (!command.includes(flag)) command.push(flag);
 }
 
+function removeValue(command: string[], flag: string, value: string): void {
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
+    if (command[index + 1] !== value) conflict(flag);
+    command.splice(index, 2);
+  }
+}
+
 function commandKind(command: readonly string[]): 'expo' | 'bare-ios' | 'bare-android' | null {
   const offset = command[0] === 'npx' ? 1 : 0;
   const executable = command[offset];
@@ -58,7 +65,7 @@ export function createBuildLaunchPlan(input: {
 
   if (kind === 'expo') {
     ensureValue(command, '--device', input.session.deviceId);
-    ensureValue(command, '--port', String(input.session.metroPort));
+    removeValue(command, '--port', String(input.session.metroPort));
     ensureFlag(command, '--no-bundler');
   } else if (kind === 'bare-ios') {
     ensureValue(command, '--udid', input.session.deviceId);
@@ -74,6 +81,7 @@ export function createBuildLaunchPlan(input: {
     mode: 'session',
     command,
     env: {
+      ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
       RCT_METRO_PORT: String(input.session.metroPort),
       RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
     },

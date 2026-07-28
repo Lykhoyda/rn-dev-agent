@@ -1570,7 +1570,12 @@ export class SessionRegistry {
 
   acceptHandoffInto(
     target: SessionRef,
-    input: { handoffId: string; token: string; targetInstance: string },
+    input: {
+      handoffId: string;
+      token: string;
+      targetInstance: string;
+      managedMetroStopped?: boolean;
+    },
   ): HandoffCleanupPlan {
     const now = this.#now();
     return this.#transaction(() => {
@@ -1676,6 +1681,18 @@ export class SessionRegistry {
         );
       }
       const bindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
+      const managedMetro =
+        bindings.metro &&
+        typeof bindings.metro === 'object' &&
+        (bindings.metro as Record<string, unknown>).mode === 'managed'
+          ? (bindings.metro as Record<string, unknown>)
+          : null;
+      if (managedMetro && input.managedMetroStopped !== true) {
+        throw new SessionAuthorityError(
+          'METRO_AUTHORITY_MISMATCH',
+          'managed Metro shutdown must be proven before handoff ownership transfers',
+        );
+      }
       const priorRecorderClaim = this.#database
         .prepare(
           `SELECT resource_key FROM claims
@@ -1715,12 +1732,6 @@ export class SessionRegistry {
           prior.claim_epoch,
         );
       const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
-      const managedMetro =
-        bindings.metro &&
-        typeof bindings.metro === 'object' &&
-        (bindings.metro as Record<string, unknown>).mode === 'managed'
-          ? (bindings.metro as Record<string, unknown>)
-          : null;
       this.#database
         .prepare(
           `UPDATE sessions
@@ -1740,14 +1751,7 @@ export class SessionRegistry {
             pendingBuild: null,
             recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
             handoffCleanup: {
-              metro: managedMetro
-                ? {
-                    ...managedMetro,
-                    sourceSessionId: prior.session_id,
-                    stopRequestedAt: null,
-                    completedAt: null,
-                  }
-                : null,
+              metro: null,
               observe:
                 bindings.observe && typeof bindings.observe === 'object'
                   ? {
