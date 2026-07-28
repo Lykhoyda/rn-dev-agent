@@ -379,7 +379,7 @@ test('reload atomically replaces target authority and permits only B-axis identi
     calls.filter((call) => call === 'refresh-binding' || call === 'replace-binding'),
     ['refresh-binding', 'replace-binding'],
   );
-  assert.equal(envelope.meta.authorityReceipt.authorityVersion, 10);
+  assert.equal(envelope.meta.authorityReceipt.authorityVersion, 11);
 });
 
 test('failed reload invalidates stale bundle authority under the active fence', async () => {
@@ -773,7 +773,7 @@ test('nested suite reload refreshes bundle generation under the outer fence', as
     calls.filter((call) => call === 'refresh-binding' || call === 'replace-binding'),
     ['refresh-binding', 'replace-binding'],
   );
-  assert.equal(envelope.meta.authorityReceipt.authorityVersion, 10);
+  assert.equal(envelope.meta.authorityReceipt.authorityVersion, 11);
 });
 
 test('legacy omitted targets are filled from the session before dispatch', async () => {
@@ -792,6 +792,34 @@ test('legacy omitted targets are filled from the session before dispatch', async
   assert.equal(dispatched.appId, 'dev.example');
   assert.equal(dispatched.bundleId, 'dev.example');
   assert.equal(dispatched.metroPort, 8193);
+});
+
+test('bind_device can replace iOS authority with an exact Android device', async () => {
+  const { runtime, status } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  let dispatched: Record<string, unknown> | undefined;
+  const result = await gate.wrap('rn_session', async (args) => {
+    dispatched = args;
+    status.bindings.device = {
+      platform: args.platform,
+      deviceId: args.deviceId,
+      appId: args.appId,
+    };
+    status.authorityVersion += 1;
+    return okResult({ rebound: true });
+  })({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'dev.example',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(dispatched?.platform, 'android');
+  assert.equal(dispatched?.deviceId, 'emulator-5554');
 });
 
 test('explicit target conflicts fail before the handler runs', async () => {

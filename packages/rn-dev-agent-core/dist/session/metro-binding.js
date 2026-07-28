@@ -18,7 +18,7 @@ function numericListener(output, emptyStatus) {
 export function probeMetroListener(port, platform = process.platform, execute = execFileSync) {
     try {
         if (platform === 'win32') {
-            const output = execute('powershell.exe', [
+            const output = execute('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', [
                 '-NoProfile',
                 '-NonInteractive',
                 '-Command',
@@ -30,7 +30,7 @@ export function probeMetroListener(port, platform = process.platform, execute = 
                 : numericListener(output, 'unknown');
         }
         if (platform === 'linux') {
-            const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
+            const output = execute('/usr/bin/ss', ['-H', '-ltnp', `sport = :${port}`], {
                 encoding: 'utf8',
                 stdio: ['ignore', 'pipe', 'ignore'],
                 timeout: 2_000,
@@ -45,7 +45,7 @@ export function probeMetroListener(port, platform = process.platform, execute = 
                 : { status: 'unknown' };
         }
         if (platform === 'darwin') {
-            const output = execute('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
+            const output = execute('/usr/sbin/lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
                 encoding: 'utf8',
                 stdio: ['ignore', 'pipe', 'pipe'],
                 timeout: 2_000,

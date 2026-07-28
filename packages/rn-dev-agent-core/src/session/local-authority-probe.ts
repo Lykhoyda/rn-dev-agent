@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type { CDPClient } from '../cdp-client.js';
 import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
-import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
+import { cwdForPort, pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import type { HermesTarget } from '../types.js';
 import {
   captureInstalledArtifact,
@@ -267,7 +267,7 @@ export function createLocalAuthorityProbe(
           ? metro.servingRoot
           : null);
       const expectedRoot = String((status.source as Record<string, unknown>).contentRoot ?? '');
-      if (!servingRoot || !pathMatchesRoot(servingRoot, expectedRoot)) {
+      if (!servingRoot || !pathIsWithinRoot(servingRoot, expectedRoot)) {
         throw new SessionAuthorityError(
           'METRO_AUTHORITY_MISMATCH',
           'Metro serving root cannot be proven for this worktree',

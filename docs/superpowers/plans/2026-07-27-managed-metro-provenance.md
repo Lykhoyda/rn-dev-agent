@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make strict proof eligible only when the per-launch broker independently enforces and attests a closed-world managed-Metro runtime.
+**Goal:** Make strict proof eligible from bounded managed-Metro provenance.
 
-**Architecture:** On Darwin, the broker verifies the platform `sandbox-exec` binary, derives a deterministic Seatbelt profile from the exact runtime manifest, and permits only broker-authenticated Node descendants transitively bound to their parent identity and nonce, executable bytes, invocation, environment, working directory, code roots, session, and project. Node trust is attested from executable and loaded-runtime bytes, signing identity when available, runtime version, and explicit executable mappings. The broker proves all other executable launches, unmanifested file access, and unallocated network listeners are denied; strict source identity accepts only that broker-v2 attestation and continues to refuse unsupported or failed enforcement.
+**Architecture:** Strict proof binds managed Metro ownership, serving-root containment, a signed initial-bundle marker, exact device and install identity, and source and dirty digests. Darwin additionally reports Apple-signed absolute-path Seatbelt containment and command-chain change detection as `managed-sandbox-v1`; unsupported hosts report `unavailable`.
 
 **Tech Stack:** TypeScript, Node.js 22+, macOS Seatbelt, Node test runner, Yarn 4, generated Claude/Codex host runtimes.
 
@@ -41,10 +41,10 @@
 
 **Interfaces:**
 - Consumes: the enforcement plan from Task 1.
-- Produces: a managed binding whose `runtimeEvidenceAuthority` is `broker-v2` only after the broker publishes a valid enforced policy.
+- Produces: a managed binding whose sandbox tier is `managed-sandbox-v1` only after the launcher publishes a valid enforced policy.
 
-- [x] Write failing tests that preserve `reported-v1` for unsupported enforcement and require broker-v2 for the successful attested launch.
-- [x] Run the focused test and confirm the new expectations fail against the current unconditional broker-v2 label.
+- [x] Write failing tests that preserve `reported-v1` for unsupported enforcement and require `managed-sandbox-v1` for the successful attested launch.
+- [x] Run the focused test and confirm the new expectations fail against the prior unconditional sandbox label.
 - [x] Launch Metro through the exact Seatbelt plan, broker-validate runtime inputs, and authenticate the enforcement receipt in the management proof.
 - [x] Run the focused tests and confirm they pass.
 
@@ -55,7 +55,7 @@
 - Modify: `packages/rn-dev-agent-core/test/unit/session/source-identity.test.ts`
 
 **Interfaces:**
-- Consumes: the broker-v2 enforcement receipt and journal.
+- Consumes: the managed-sandbox enforcement receipt and journal.
 - Produces: strict source identity only for a matching enforced receipt.
 
 - [x] Add a regression for the exact reproduced refusal when enforcement is unsupported.
@@ -80,7 +80,7 @@
 - Produces: a strict workflow that attempts proof only through the authority gate and reports the same refusal when enforcement is absent.
 
 - [x] Replace the unconditional command-level refusal with authority-gated proof startup.
-- [x] Update docs to describe Darwin broker-v2 eligibility and fail-closed unsupported hosts.
+- [x] Update docs to describe bounded provenance and optional Darwin sandbox evidence.
 - [x] Confirm the existing one-sentence issue changeset covers the shippable authority change.
 - [x] Run host-runtime generation and package-sync checks.
 

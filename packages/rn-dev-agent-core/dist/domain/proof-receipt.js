@@ -130,6 +130,7 @@ export const proofAuthoritySchema = z
         pid: z.number().int().positive(),
         birthDigest: sha256Schema,
         buildGeneration: z.number().int().positive(),
+        sandbox: z.enum(['managed-sandbox-v1', 'unavailable']),
     })
         .strict(),
     bundle: z

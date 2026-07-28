@@ -985,6 +985,9 @@ export function createProofCaptureHandler(
   deps: ProofCaptureDeps,
 ): (args: ProofCaptureArgs) => Promise<ToolResult> {
   let session: Session | null = null;
+  const authorityFailureCode = (error: unknown): string =>
+    /^([A-Z][A-Z0-9_]+):/.exec(error instanceof Error ? error.message : String(error))?.[1] ??
+    'PROOF_AUTHORITY_UNAVAILABLE';
 
   const contextIsCurrent = (active: Session): boolean => {
     try {
@@ -1000,24 +1003,26 @@ export function createProofCaptureHandler(
     return proofFailure(active.invalidationReasons, active.stage);
   };
 
-  const currentAuthority = (active: Session): ProofAuthority | null => {
+  const currentAuthority = (
+    active: Session,
+  ): { ok: true; value: ProofAuthority } | { ok: false; reason: string } => {
     try {
-      return deps.authority(active.context.runId);
-    } catch {
-      return null;
+      return { ok: true, value: deps.authority(active.context.runId) };
+    } catch (error) {
+      return { ok: false, reason: authorityFailureCode(error) };
     }
   };
 
   const authorityMatches = (active: Session): boolean => {
     const current = currentAuthority(active);
-    return current !== null && hashProofValue(current) === hashProofValue(active.authority);
+    return current.ok && hashProofValue(current.value) === hashProofValue(active.authority);
   };
 
-  const refreshAuthority = (active: Session): boolean => {
+  const refreshAuthority = (active: Session): string | null => {
     const current = currentAuthority(active);
-    if (!current) return false;
-    active.authority = current;
-    return true;
+    if (!current.ok) return current.reason;
+    active.authority = current.value;
+    return null;
   };
 
   const artifactPaths = (active: Session): string[] => [
@@ -1411,8 +1416,8 @@ export function createProofCaptureHandler(
       let authority: ProofAuthority;
       try {
         authority = deps.authority(args.runId);
-      } catch {
-        return proofFailure(['PROOF_AUTHORITY_UNAVAILABLE'], 'idle');
+      } catch (error) {
+        return proofFailure([authorityFailureCode(error)], 'idle');
       }
       const startedAt = deps.now();
       session = {
@@ -1644,8 +1649,9 @@ export function createProofCaptureHandler(
         ...(started.output !== active.context.videoPath ? ['RECORDING_PATH_MISMATCH'] : []),
       ];
       if (reasons.length > 0) return rejectCapture(active, reasons);
-      if (!refreshAuthority(active)) {
-        return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
+      const startAuthorityFailure = refreshAuthority(active);
+      if (startAuthorityFailure) {
+        return rejectCapture(active, [startAuthorityFailure]);
       }
       active.recordingStartedAt = deps.now();
       active.stage = 'recording';
@@ -1672,8 +1678,9 @@ export function createProofCaptureHandler(
       if (authorityChanged) {
         return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
       }
-      if (!refreshAuthority(active)) {
-        return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
+      const stopAuthorityFailure = refreshAuthority(active);
+      if (stopAuthorityFailure) {
+        return rejectCapture(active, [stopAuthorityFailure]);
       }
       const saved = shutdown.stopData?.saved;
       if (!Array.isArray(saved)) return rejectCapture(active, ['RECORDING_STOP_FAILED']);
@@ -1761,8 +1768,8 @@ export function createProofCaptureHandler(
         ) {
           evidenceReasons.push('PROOF_AUTHORITY_CHANGED');
         }
-      } catch {
-        evidenceReasons.push('PROOF_AUTHORITY_UNAVAILABLE');
+      } catch (error) {
+        evidenceReasons.push(authorityFailureCode(error));
       }
       evidenceReasons.push(...(git.ok ? gitReasons(active, git.value, 'validation') : git.reasons));
       evidenceReasons.push(
@@ -1855,11 +1862,11 @@ export function createProofCaptureHandler(
         return proofFailure(['EVIDENCE_REVIEW_TARGET_MISMATCH'], active.stage);
       }
       const acceptedAuthority = currentAuthority(active);
-      if (!acceptedAuthority) {
-        return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
+      if (!acceptedAuthority.ok) {
+        return rejectCapture(active, [acceptedAuthority.reason]);
       }
       if (
-        hashProofValue(acceptedAuthority) !==
+        hashProofValue(acceptedAuthority.value) !==
         hashProofValue(active.mechanicalReceipt.authority)
       ) {
         return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
@@ -1869,7 +1876,7 @@ export function createProofCaptureHandler(
       try {
         finalReceipt = finalProofReceiptSchema.parse({
           ...acceptedEvidence,
-          authority: acceptedAuthority,
+          authority: acceptedAuthority.value,
           evidenceReview: review,
           verdict: 'accepted',
         });
@@ -1878,10 +1885,10 @@ export function createProofCaptureHandler(
       }
       if (!contextIsCurrent(active)) return rejectPathDrift(active);
       const writeAuthority = currentAuthority(active);
-      if (!writeAuthority) {
-        return rejectCapture(active, ['PROOF_AUTHORITY_UNAVAILABLE']);
+      if (!writeAuthority.ok) {
+        return rejectCapture(active, [writeAuthority.reason]);
       }
-      if (hashProofValue(writeAuthority) !== hashProofValue(finalReceipt.authority)) {
+      if (hashProofValue(writeAuthority.value) !== hashProofValue(finalReceipt.authority)) {
         return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
       }
       try {

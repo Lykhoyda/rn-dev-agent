@@ -74,11 +74,13 @@ walk only the novel remainder. Persist a verified novel flow under
 
 ### Strict proof
 
-Strict proof is fail-closed and requires an independently attested `broker-v2`
-managed Metro runtime. `$rn-dev-agent:proof-capture --strict` follows the proof
-controller contract; unsupported hosts, invalid enforcement receipts, or
-runtime violations stop before acceptance. Never substitute interactive
-artifacts or report merge-ready evidence without a finalized accepted receipt.
+Strict proof is fail-closed and requires managed Metro ownership, a serving
+root contained by the bound worktree, a signed initial-bundle marker, exact
+device and install bindings, and the source and dirty digest.
+`$rn-dev-agent:proof-capture --strict` follows the proof controller contract;
+the optional Darwin managed-sandbox tier is reported in the receipt. Never
+substitute interactive artifacts or report merge-ready evidence without a
+finalized accepted receipt.
 
 ### Recovery truth
 

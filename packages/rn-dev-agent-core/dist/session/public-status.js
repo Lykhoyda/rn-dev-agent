@@ -22,6 +22,7 @@ export function projectPublicAuthorityStatus(status, options = {}) {
                 : undefined,
         }
         : undefined;
+    const metro = status.bindings.metro;
     return {
         available: true,
         ...(options.includeSessionId ? { sessionId: status.sessionId } : {}),
@@ -33,6 +34,9 @@ export function projectPublicAuthorityStatus(status, options = {}) {
         deviceBound: Boolean(status.bindings.device),
         installBound: Boolean(status.bindings.install),
         metroBound: Boolean(status.bindings.metro),
+        sandbox: metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1'
+            ? 'managed-sandbox-v1'
+            : 'unavailable',
         bundleBound: Boolean(status.bindings.bundle),
         runnerBound: Boolean(status.bindings.runner),
         recorderBound: Boolean(status.bindings.recorder),

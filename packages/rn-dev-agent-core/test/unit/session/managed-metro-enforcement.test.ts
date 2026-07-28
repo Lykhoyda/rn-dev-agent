@@ -367,10 +367,10 @@ test(
 );
 
 test(
-  'managed Metro earns broker-v2 only after an actual attested sandbox launch',
+  'managed Metro earns managed-sandbox-v1 only after an attested sandbox launch',
   { skip: process.platform !== 'darwin', timeout: 30_000 },
   async () => {
-    const root = mkdtempSync(join(tmpdir(), 'rn-metro-broker-v2-'));
+    const root = mkdtempSync(join(tmpdir(), 'rn-metro-managed-sandbox-'));
     roots.push(root);
     const appRoot = realpathSync(root);
     const runtimeRoot = join(appRoot, 'runtime');
@@ -451,7 +451,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
     );
 
     try {
-      assert.equal(binding.runtimeEvidenceAuthority, 'broker-v2');
+      assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
       assert.equal(
         verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
           sessionId: 'integration-session',
@@ -464,6 +464,11 @@ exec node "$basedir/../expo/bin/cli" "$@"
       ) as Record<string, unknown>;
       const runtimeManifest = policy.runtimeManifest as Record<string, unknown>;
       assert.equal(policy.runtimeEnforcement, 'os-enforced-v1');
+      assert.ok(
+        (runtimeManifest.commandChainInputs as string[]).includes(
+          join(integrationRoot, 'rn-session-metro.cjs'),
+        ),
+      );
       assert.equal(
         (policy.runtimeEnforcementReceipt as Record<string, unknown>).networkOutboundDenied,
         true,

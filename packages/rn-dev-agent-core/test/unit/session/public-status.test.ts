@@ -64,6 +64,35 @@ test('session status can include its opaque session identity', () => {
   assert.equal(projected.sessionId, 'session-exact');
 });
 
+test('session status exposes the bounded managed-sandbox tier', () => {
+  const base = {
+    available: true as const,
+    sessionId: 'session',
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    state: 'ready' as const,
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+
+  assert.equal(
+    projectPublicAuthorityStatus({
+      ...base,
+      bindings: { metro: { runtimeEvidenceAuthority: 'managed-sandbox-v1' } },
+    }).sandbox,
+    'managed-sandbox-v1',
+  );
+  assert.equal(
+    projectPublicAuthorityStatus({ ...base, bindings: {} }).sandbox,
+    'unavailable',
+  );
+});
+
 test('blocked public status exposes only bounded opaque recovery handles', () => {
   const projected = projectPublicAuthorityStatus({
     available: true,

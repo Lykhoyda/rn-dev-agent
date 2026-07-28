@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
@@ -13,6 +14,25 @@ import {
   stopManagedMetro,
   verifyManagedMetroManagementProof,
 } from '../../../dist/session/managed-metro.js';
+
+test('shipping artifacts omit retired runtime-authority claims', () => {
+  for (const retiredClaim of [
+    ['broker', 'v2'].join('-'),
+    ['closed', 'world'].join('-'),
+    ['exact executable', 'bytes'].join(' '),
+  ]) {
+    let matches = '';
+    try {
+      matches = execFileSync('git', ['grep', '-n', '--fixed-strings', retiredClaim, '--', '.'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      if ((error as { status?: unknown }).status !== 1) throw error;
+    }
+    assert.equal(matches, '', retiredClaim);
+  }
+});
 
 test('managed Metro rejects every Node loader option alias', () => {
   for (const option of [
@@ -53,13 +73,27 @@ test('managed Metro discovers listener PIDs with platform-native commands', () =
   const calls: Array<[string, string[]]> = [];
   const execute = ((file: string, args: string[]) => {
     calls.push([file, args]);
-    return file === 'powershell.exe' ? '412\n' : 'users:(("node",pid=513,fd=19))\n';
+    return file.endsWith('powershell.exe') ? '412\n' : 'users:(("node",pid=513,fd=19))\n';
   }) as never;
 
   assert.equal(managedMetroListenerPid(8341, 'win32', execute), 412);
   assert.equal(managedMetroListenerPid(8341, 'linux', execute), 513);
-  assert.equal(calls[0]?.[0], 'powershell.exe');
-  assert.equal(calls[1]?.[0], 'ss');
+  assert.equal(
+    calls[0]?.[0],
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+  );
+  assert.equal(calls[1]?.[0], '/usr/bin/ss');
+  let darwinCommand = '';
+  const darwinProbe = probeManagedMetroListener(
+    8341,
+    'darwin',
+    ((file: string) => {
+      darwinCommand = file;
+      return '412';
+    }) as never,
+  );
+  assert.equal(darwinProbe.status, 'listening');
+  assert.equal(darwinCommand, '/usr/sbin/lsof');
 });
 
 test('managed Metro listener probes require platform-specific positive absence', () => {
@@ -277,7 +311,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(calls[0]?.env?.NODE_OPTIONS, (process.env.NODE_OPTIONS ?? '').trim());
   assert.equal(binding.runtimeEvidencePath, '/tmp/metro-runtime-evidence.jsonl');
   assert.equal(binding.runtimeEvidenceSocket, runtimeEvidenceSocket);
-  assert.equal(binding.runtimeEvidenceAuthority, 'broker-v2');
+  assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
   assert.equal(binding.runtimeEvidenceProtocol, 2);
   assert.equal(runtimeAdmissionChecked, true);
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
@@ -325,6 +359,11 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     allowedCodeRoots,
   });
   assert.ok(Array.isArray(runtimeManifest.runtimeInputs));
+  assert.ok(
+    (runtimeManifest.commandChainInputs as string[]).includes(
+      '/app/.rn-agent/integration/rn-session-metro.cjs',
+    ),
+  );
   assert.equal(
     verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, {
       sessionId: 'session-a',
@@ -379,24 +418,28 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.match(calls[0]?.args[1] ?? '', /journalSignature: previousSignature/);
   assert.match(
     calls[0]?.args[1] ?? '',
-    /runtimeEvidenceAuthority = brokerEnforced \? 'broker-v2' : 'reported-v1'/,
+    /runtimeEvidenceAuthority = managedSandbox \? 'managed-sandbox-v1' : 'reported-v1'/,
   );
-  assert.match(calls[0]?.args[1] ?? '', /runtimeEnforcement: brokerEnforced/);
+  assert.match(calls[0]?.args[1] ?? '', /runtimeEnforcement: managedSandbox/);
   assert.match(
     calls[0]?.args[1] ?? '',
-    /runtimeEnforcement\.status === 'enforced' && !brokerEnforced/,
+    /runtimeEnforcement\.status === 'enforced' && !managedSandbox/,
   );
   assert.match(calls[0]?.args[1] ?? '', /snapshots\.map\(\(\) => 'pipe'\)/);
   assert.match(calls[0]?.args[1] ?? '', /\.end\(commandChainSnapshot\.snapshots\[index\]\)/);
-  assert.match(calls[0]?.args[1] ?? '', /spawn\(brokerEnforced \? sandboxExecutable : executable/);
+  assert.match(calls[0]?.args[1] ?? '', /spawn\(managedSandbox \? sandboxExecutable : executable/);
+  assert.match(
+    calls[0]?.args[1] ?? '',
+    /createHash\('sha256'\)\.update\(snapshot\).*if \(!argumentPaths\.has\(entry\.path\)\) continue/s,
+  );
   assert.match(
     calls[0]?.args[1] ?? '',
     /if \(payload\.kind === 'violation'\) \{\s+appendViolation/,
   );
-  assert.match(calls[0]?.args[1] ?? '', /if \(brokerEnforced\) \{\s+appendEvidence\(payload\);/);
+  assert.match(calls[0]?.args[1] ?? '', /appendEvidence\(payload\);/);
 });
 
-test('managed Metro cannot claim broker-v2 when runtime enforcement is unavailable', async () => {
+test('managed Metro cannot claim managed sandbox when enforcement is unavailable', async () => {
   const calls: NodeJS.ProcessEnv[] = [];
   const child = {
     pid: process.pid,

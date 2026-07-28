@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
-import { cwdForPort, pathMatchesRoot } from '../cdp/metro-cwd.js';
+import { cwdForPort, pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import { captureInstalledArtifact, captureInstallGeneration, verifyInstalledArtifact, } from './install-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 import { metroListenerPid } from './metro-binding.js';
@@ -180,7 +180,7 @@ export function createLocalAuthorityProbe(dependencies) {
                     ? metro.servingRoot
                     : null);
             const expectedRoot = String(status.source.contentRoot ?? '');
-            if (!servingRoot || !pathMatchesRoot(servingRoot, expectedRoot)) {
+            if (!servingRoot || !pathIsWithinRoot(servingRoot, expectedRoot)) {
                 throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'Metro serving root cannot be proven for this worktree');
             }
             return {

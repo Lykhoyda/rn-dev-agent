@@ -45,7 +45,7 @@ export function probeMetroListener(
   try {
     if (platform === 'win32') {
       const output = execute(
-        'powershell.exe',
+        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
         [
           '-NoProfile',
           '-NonInteractive',
@@ -60,7 +60,7 @@ export function probeMetroListener(
         : numericListener(output, 'unknown');
     }
     if (platform === 'linux') {
-      const output = execute('ss', ['-H', '-ltnp', `sport = :${port}`], {
+      const output = execute('/usr/bin/ss', ['-H', '-ltnp', `sport = :${port}`], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 2_000,
@@ -74,7 +74,7 @@ export function probeMetroListener(
         : { status: 'unknown' };
     }
     if (platform === 'darwin') {
-      const output = execute('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
+      const output = execute('/usr/sbin/lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 2_000,

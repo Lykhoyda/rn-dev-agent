@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import { canonicalAuthorityJson } from './authority-json.js';
 import { verifyManagedMetroEnforcementReceipt } from './managed-metro-enforcement.js';
 function digest(parts) {
@@ -217,9 +218,6 @@ function assertFinalMetroIntegration(identity) {
 function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntimeEnforcement) {
     if (!authority)
         return { paths: [], semantics: [] };
-    if (authority.evidenceAuthority !== 'broker-v2') {
-        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: reported Metro evidence cannot grant strict authority');
-    }
     const raw = readFileSync(join(identity.appRoot, METRO_RUNTIME_POLICY), 'utf8');
     const receipt = JSON.parse(raw);
     const payload = {
@@ -294,6 +292,9 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntime
         !timingSafeEqual(observed, expected)) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid');
     }
+    if (!pathIsWithinRoot(runtimeManifest.servingRoot, identity.contentRoot)) {
+        throw new Error('STRICT_PROOF_SERVING_ROOT_MISMATCH: Metro serving root is outside the bound worktree');
+    }
     const descendantAuthority = runtimeManifest.descendantAuthority;
     if (descendantAuthority.version !== 1 ||
         typeof descendantAuthority.rootNonce !== 'string' ||
@@ -306,27 +307,31 @@ function metroRuntimeInputs(identity, authority, readEvidenceHead, verifyRuntime
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant authority is invalid');
     }
     const allowedCodeRoots = descendantAuthority.allowedCodeRoots;
-    if (receipt.runtimeEnforcement !== 'os-enforced-v1') {
-        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable');
-    }
-    if (!verifyRuntimeEnforcement({
-        platform: process.platform,
-        appRoot: identity.appRoot,
-        sourceRoot: identity.contentRoot,
-        runtimeRoot: dirname(authority.evidencePath),
-        nodeExecutable: runtimeManifest.nodeExecutable,
-        nodeVersion: runtimeManifest.nodeVersion,
-        commandExecutable: runtimeManifest.executable,
-        commandArguments: runtimeManifest.args,
-        commandProbeArguments: runtimeManifest.commandProbeArguments,
-        commandExecutableMappings: runtimeManifest.commandExecutableMappings,
-        commandChainInputs: runtimeManifest.commandChainInputs,
-        protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
-        port: runtimeManifest.port,
-        instanceId: authority.metroInstanceId,
-        runtimeInputs: receipt.runtimeInputs,
-    }, receipt.runtimeEnforcementReceipt)) {
+    if (authority.evidenceAuthority === 'managed-sandbox-v1' &&
+        (receipt.runtimeEnforcement !== 'os-enforced-v1' ||
+            !verifyRuntimeEnforcement({
+                platform: process.platform,
+                appRoot: identity.appRoot,
+                sourceRoot: identity.contentRoot,
+                runtimeRoot: dirname(authority.evidencePath),
+                nodeExecutable: runtimeManifest.nodeExecutable,
+                nodeVersion: runtimeManifest.nodeVersion,
+                commandExecutable: runtimeManifest.executable,
+                commandArguments: runtimeManifest.args,
+                commandProbeArguments: runtimeManifest.commandProbeArguments,
+                commandExecutableMappings: runtimeManifest.commandExecutableMappings,
+                commandChainInputs: runtimeManifest.commandChainInputs,
+                protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
+                port: runtimeManifest.port,
+                instanceId: authority.metroInstanceId,
+                runtimeInputs: receipt.runtimeInputs,
+            }, receipt.runtimeEnforcementReceipt))) {
         throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid');
+    }
+    if (authority.evidenceAuthority === 'reported-v1' &&
+        (receipt.runtimeEnforcement !== 'unsupported' ||
+            receipt.runtimeEnforcementReceipt !== null)) {
+        throw new Error('STRICT_PROOF_UNVERIFIED_METRO_POLICY: sandbox tier is invalid');
     }
     if (receipt.violations.length > 0) {
         throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt.violations[0]}`);

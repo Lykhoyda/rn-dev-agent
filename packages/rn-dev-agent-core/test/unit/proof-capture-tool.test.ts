@@ -384,6 +384,7 @@ interface Harness {
   setProofRootTracked: (value: boolean) => void;
   setReadiness: (fn: () => Promise<ProofReadiness>) => void;
   setAuthorityVersion: (value: number) => void;
+  setAuthority: (fn: ProofCaptureDeps['authority']) => void;
   setActionIdentity: (value: { id: string; version: string; sha256: string } | null) => void;
   setActionIdentityReader: (
     fn: (actionId: string) => { id: string; version: string; sha256: string } | null,
@@ -460,6 +461,51 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   let actionIdentityReader = () => structuredClone(actionIdentity);
   let readinessImpl = async (): Promise<ProofReadiness> => structuredClone(readiness);
   let authorityVersion = 2;
+  let authorityImpl: ProofCaptureDeps['authority'] = (runId) => ({
+    sessionId: 'session-test',
+    claimEpoch: 1,
+    authorityVersion,
+    controller: {
+      instanceId: 'worker-test',
+      pid: 42,
+      birthDigest: HASH('controller-birth'),
+    },
+    source: {
+      sourceKey: HASH('source'),
+      worktreeKey: HASH('worktree'),
+      appRootKey: HASH('app-root'),
+      head: SOURCE_SHA,
+      dirtyDigest: HASH('dirty'),
+    },
+    install: {
+      artifactDigest: HASH('artifact'),
+      buildGeneration: 1,
+      appId: 'dev.rnproof.fixture',
+    },
+    metro: {
+      port: 8081,
+      instanceId: 'metro-test',
+      pid: 43,
+      birthDigest: HASH('metro-birth'),
+      buildGeneration: 1,
+      sandbox: 'unavailable',
+    },
+    bundle: {
+      targetId: 'target-test',
+      connectionGeneration: 1,
+      markerDigest: HASH('marker'),
+      authorityScope: 'initial-bundle',
+      sourceFidelity: 'not-proven',
+    },
+    device: { platform: 'ios', deviceId: 'SIM-1' },
+    runner: {
+      instanceId: 'runner-test',
+      protocolVersion: 1,
+      capabilityDigest: HASH('runner-capability'),
+      processBirthDigest: HASH('runner-birth'),
+    },
+    proof: { runId },
+  });
   let recordedOutput = beginArgs(expectedProjectRoot).videoPath;
   let recordImpl = async (args: DeviceRecordArgs): Promise<ToolResult> => {
     if (args.action === 'status') return okResult({ action: 'status', active: [] });
@@ -486,50 +532,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     getGitInfo: () => gitImpl(),
     proofRootTracked: () => proofRootTracked,
     readiness: () => readinessImpl(),
-    authority: (runId) => ({
-      sessionId: 'session-test',
-      claimEpoch: 1,
-      authorityVersion,
-      controller: {
-        instanceId: 'worker-test',
-        pid: 42,
-        birthDigest: HASH('controller-birth'),
-      },
-      source: {
-        sourceKey: HASH('source'),
-        worktreeKey: HASH('worktree'),
-        appRootKey: HASH('app-root'),
-        head: SOURCE_SHA,
-        dirtyDigest: HASH('dirty'),
-      },
-      install: {
-        artifactDigest: HASH('artifact'),
-        buildGeneration: 1,
-        appId: 'dev.rnproof.fixture',
-      },
-      metro: {
-        port: 8081,
-        instanceId: 'metro-test',
-        pid: 43,
-        birthDigest: HASH('metro-birth'),
-        buildGeneration: 1,
-      },
-      bundle: {
-        targetId: 'target-test',
-        connectionGeneration: 1,
-        markerDigest: HASH('marker'),
-        authorityScope: 'initial-bundle',
-        sourceFidelity: 'not-proven',
-      },
-      device: { platform: 'ios', deviceId: 'SIM-1' },
-      runner: {
-        instanceId: 'runner-test',
-        protocolVersion: 1,
-        capabilityDigest: HASH('runner-capability'),
-        processBirthDigest: HASH('runner-birth'),
-      },
-      proof: { runId },
-    }),
+    authority: (runId) => authorityImpl(runId),
     record: async (args) => {
       recordCalls.push(structuredClone(args));
       return recordImpl(args);
@@ -585,6 +588,9 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     },
     setAuthorityVersion: (value) => {
       authorityVersion = value;
+    },
+    setAuthority: (fn) => {
+      authorityImpl = fn;
     },
     setActionIdentity: (value) => {
       actionIdentity = value;
@@ -901,6 +907,19 @@ test('begin accepts normalized distinct descendants of the injected project root
     (envelope(await harness.handler({ action: 'status' })).data as { stage: string }).stage,
     'rehearsing',
   );
+});
+
+test('begin preserves a specific managed-provenance refusal code', async (t) => {
+  const harness = createHarness(t);
+  harness.setAuthority(() => {
+    throw new Error(
+      'STRICT_PROOF_UNMANAGED_METRO: strict proof requires Metro started by the managed launcher',
+    );
+  });
+
+  const result = await harness.handler(beginArgs());
+
+  assert.deepEqual(reasons(result), ['STRICT_PROOF_UNMANAGED_METRO']);
 });
 
 test('begin binds each declared assertion wait to its canonical argument hash', async (t) => {

@@ -63,9 +63,12 @@ Execute the transitions exactly:
 8. Call `finalize(evidenceReview=...)` and report only values from the accepted
    finalized receipt.
 
-The controller accepts only an independently attested `broker-v2` managed
-Metro runtime and fails with `STRICT_PROOF_UNVERIFIED_METRO_POLICY` when host
-enforcement, the broker receipt, or runtime evidence is unavailable or invalid.
+The controller requires managed Metro ownership, a serving root contained by
+the bound worktree, a signed initial-bundle marker, exact device and install
+bindings, and the source and dirty digest. Darwin receipts report
+`managed-sandbox-v1` when the Apple-signed absolute-path Seatbelt sandbox and
+command-chain change detection are available; other hosts report `unavailable`.
+The sandbox level is evidence, not a strict-proof precondition.
 Do not record before the controller permits it, substitute screenshots for the
 required video, repair or reload during rehearsal or recording, reuse rejected
 artifacts, or report merge-ready evidence without a finalized accepted receipt.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import {
   resolveSourceIdentity,
@@ -472,9 +472,10 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     },
     commandChainAttestation: [],
   };
+  let evidenceAuthority: 'managed-sandbox-v1' | 'reported-v1' = 'managed-sandbox-v1';
   const policyPayload = (runtimeEnforcement: 'os-enforced-v1' | 'unsupported') => ({
     version: 1,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority: evidenceAuthority,
     sessionId: 'session',
     metroInstanceId: 'metro',
     contentRoot: root,
@@ -500,7 +501,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   publishPolicy('os-enforced-v1');
   const runtimeLoadPayload = {
     version: 1,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority: 'managed-sandbox-v1',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'input',
@@ -529,7 +530,9 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
     capability,
     evidencePath: runtimeEvidencePath,
     evidenceSocket: runtimeEvidenceSocket,
-    evidenceAuthority: 'broker-v2' as const,
+    get evidenceAuthority() {
+      return evidenceAuthority;
+    },
   };
   const signRuntimeLoads = (entries: Record<string, unknown>[]) => {
     let previousSignature: string | null = null;
@@ -563,7 +566,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   const readMetroEvidenceHead = (_socket: string, challenge: string) => {
     const headPayload = {
       version: 1,
-      runtimeEvidenceAuthority: 'broker-v2',
+      runtimeEvidenceAuthority: evidenceAuthority,
       sessionId: 'session',
       metroInstanceId: 'metro',
       challenge,
@@ -585,7 +588,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   publishPolicy('unsupported');
   assert.throws(
     () => strictProofSourceIdentity(identity, dependencies),
-    /closed-world runtime enforcement is unavailable/,
+    /runtime enforcement attestation is invalid/,
   );
   publishPolicy('os-enforced-v1');
   assert.throws(
@@ -598,6 +601,21 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
   publishRuntimeLoads([runtimeLoadPayload]);
   const first = strictProofSourceIdentity(identity, dependencies);
+  evidenceAuthority = 'reported-v1';
+  publishPolicy('unsupported');
+  publishRuntimeLoads([{ ...runtimeLoadPayload, runtimeEvidenceAuthority: 'reported-v1' }]);
+  assert.doesNotThrow(() => strictProofSourceIdentity(identity, dependencies));
+  evidenceAuthority = 'managed-sandbox-v1';
+  publishPolicy('os-enforced-v1');
+  publishRuntimeLoads([runtimeLoadPayload]);
+  runtimeManifest.servingRoot = dirname(root);
+  publishPolicy('os-enforced-v1');
+  assert.throws(
+    () => strictProofSourceIdentity(identity, dependencies),
+    /STRICT_PROOF_SERVING_ROOT_MISMATCH/,
+  );
+  runtimeManifest.servingRoot = root;
+  publishPolicy('os-enforced-v1');
   const semanticsValue = canonicalAuthorityJson({
     mode: 'node',
     entrypoint: runtimeFile,
@@ -616,7 +634,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   });
   const semanticsPayload = {
     version: 1,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority: 'managed-sandbox-v1',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'semantics',
@@ -645,7 +663,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
   const launchPayload = {
     version: 1,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority: 'managed-sandbox-v1',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'launch',
@@ -725,7 +743,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
   const pendingPayload = {
     version: 1,
-    runtimeEvidenceAuthority: 'broker-v2',
+    runtimeEvidenceAuthority: 'managed-sandbox-v1',
     sessionId: 'session',
     metroInstanceId: 'metro',
     kind: 'pending',
@@ -782,7 +800,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
   assert.throws(
     () => strictProofSourceIdentity(identity, dependencies),
-    /runtime load evidence is unbounded/,
+    /runtime load evidence is invalid/,
   );
   publishRuntimeLoads([runtimeLoadPayload]);
   writeFileSync(runtimeFile, 'module.exports = "second";');
@@ -806,7 +824,7 @@ test('strict proof rejects unenforced reporter silence and validates enforced ru
   );
 });
 
-test('strict proof rejects Metro-reported runtime evidence', () => {
+test('strict proof requires a signed policy for Metro-reported evidence', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-source-proof-reported-metro-'));
   roots.push(root);
   writeFileSync(join(root, 'metro.config.js'), previewMetroIntegration('module.exports = {};\n'));
@@ -832,7 +850,7 @@ test('strict proof rejects Metro-reported runtime evidence', () => {
           evidenceAuthority: 'reported-v1',
         },
       }),
-    /reported Metro evidence cannot grant strict authority/,
+    /metro-runtime-policy\.json/,
   );
 });
 

@@ -909,3861 +909,6 @@ var init_process_owner = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/authority-json.js
-function quoted(value) {
-  return intrinsicReflectApply(intrinsicJsonStringify, JSON, [value]);
-}
-function sortedOwnNames(value) {
-  const names = intrinsicReflectApply(intrinsicObjectGetOwnPropertyNames, IntrinsicObject, [
-    value
-  ]);
-  const enumerable = [];
-  for (let index = 0; index < names.length; index += 1) {
-    const name = names[index];
-    const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [value, name]);
-    if (descriptor?.enumerable)
-      enumerable.push(name);
-  }
-  return intrinsicReflectApply(intrinsicArraySort, enumerable, []);
-}
-function canonicalAuthorityJson(value) {
-  const active = new IntrinsicWeakSet();
-  const encode = (candidate) => {
-    if (candidate === null)
-      return "null";
-    if (typeof candidate === "string")
-      return quoted(candidate);
-    if (typeof candidate === "boolean")
-      return candidate ? "true" : "false";
-    if (typeof candidate === "number") {
-      return intrinsicNumberIsFinite(candidate) ? quoted(candidate) : "null";
-    }
-    if (typeof candidate !== "object") {
-      throw new TypeError("AUTHORITY_JSON_UNSUPPORTED_VALUE");
-    }
-    if (intrinsicReflectApply(intrinsicWeakSetHas, active, [candidate])) {
-      throw new TypeError("AUTHORITY_JSON_CYCLE");
-    }
-    intrinsicReflectApply(intrinsicWeakSetAdd, active, [candidate]);
-    try {
-      if (intrinsicArrayIsArray(candidate)) {
-        let serialized2 = "[";
-        for (let index = 0; index < candidate.length; index += 1) {
-          if (index > 0)
-            serialized2 += ",";
-          const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [candidate, String(index)]);
-          if (!descriptor || !("value" in descriptor)) {
-            throw new TypeError("AUTHORITY_JSON_ACCESSOR");
-          }
-          serialized2 += encode(descriptor.value);
-        }
-        return `${serialized2}]`;
-      }
-      const prototype = intrinsicReflectApply(intrinsicObjectGetPrototypeOf, IntrinsicObject, [
-        candidate
-      ]);
-      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
-        throw new TypeError("AUTHORITY_JSON_UNSUPPORTED_OBJECT");
-      }
-      const names = sortedOwnNames(candidate);
-      let serialized = "{";
-      for (let index = 0; index < names.length; index += 1) {
-        if (index > 0)
-          serialized += ",";
-        const name = names[index];
-        const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [candidate, name]);
-        if (!descriptor || !("value" in descriptor)) {
-          throw new TypeError("AUTHORITY_JSON_ACCESSOR");
-        }
-        serialized += `${quoted(name)}:${encode(descriptor.value)}`;
-      }
-      return `${serialized}}`;
-    } finally {
-      intrinsicReflectApply(intrinsicWeakSetDelete, active, [candidate]);
-    }
-  };
-  return encode(value);
-}
-var intrinsicJsonStringify, intrinsicObjectGetOwnPropertyDescriptor, intrinsicObjectGetOwnPropertyNames, intrinsicObjectGetPrototypeOf, intrinsicArrayIsArray, intrinsicArraySort, intrinsicNumberIsFinite, intrinsicReflectApply, IntrinsicObject, intrinsicObjectPrototype, IntrinsicWeakSet, intrinsicWeakSetAdd, intrinsicWeakSetDelete, intrinsicWeakSetHas;
-var init_authority_json = __esm({
-  "packages/rn-dev-agent-core/dist/session/authority-json.js"() {
-    "use strict";
-    intrinsicJsonStringify = JSON.stringify;
-    intrinsicObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
-    intrinsicObjectGetOwnPropertyNames = Object.getOwnPropertyNames;
-    intrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
-    intrinsicArrayIsArray = Array.isArray;
-    intrinsicArraySort = Array.prototype.sort;
-    intrinsicNumberIsFinite = Number.isFinite;
-    intrinsicReflectApply = Reflect.apply;
-    IntrinsicObject = Object;
-    intrinsicObjectPrototype = Object.prototype;
-    IntrinsicWeakSet = WeakSet;
-    intrinsicWeakSetAdd = WeakSet.prototype.add;
-    intrinsicWeakSetDelete = WeakSet.prototype.delete;
-    intrinsicWeakSetHas = WeakSet.prototype.has;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
-import { spawnSync } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants2, existsSync as existsSync4, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync3, realpathSync as realpathSync2, rmSync, statSync as statSync2, symlinkSync, writeSync as writeSync2 } from "node:fs";
-import { dirname as dirname2, resolve as resolve2 } from "node:path";
-function sha256(value) {
-  return createHash3("sha256").update(value).digest("hex");
-}
-function defaultRun2(command, args) {
-  const result = spawnSync(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 25e3
-  });
-  return {
-    status: result.status,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? result.error?.message ?? ""
-  };
-}
-function field(details, name) {
-  const prefix = `${name}=`;
-  return details.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length).trim() ?? null;
-}
-function verifiedSandboxExecutable(dependencies) {
-  const exists = dependencies.exists ?? existsSync4;
-  const canonicalize = dependencies.canonicalize ?? realpathSync2;
-  const stat2 = dependencies.stat ?? statSync2;
-  const readBytes = dependencies.readBytes ?? readFileSync3;
-  const run = dependencies.run ?? defaultRun2;
-  try {
-    if (!exists(DARWIN_SANDBOX_EXECUTABLE))
-      return null;
-    if (canonicalize(DARWIN_SANDBOX_EXECUTABLE) !== DARWIN_SANDBOX_EXECUTABLE)
-      return null;
-    const metadata = stat2(DARWIN_SANDBOX_EXECUTABLE);
-    if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 18) !== 0)
-      return null;
-    const verification = run(DARWIN_CODESIGN_EXECUTABLE, [
-      "--verify",
-      "--strict",
-      DARWIN_SANDBOX_EXECUTABLE
-    ]);
-    if (verification.status !== 0)
-      return null;
-    const details = run(DARWIN_CODESIGN_EXECUTABLE, [
-      "-dv",
-      "--verbose=4",
-      DARWIN_SANDBOX_EXECUTABLE
-    ]);
-    const authorities = details.stderr.split("\n").filter((line) => line.startsWith("Authority="));
-    const cdHash = field(details.stderr, "CDHash");
-    if (details.status !== 0 || field(details.stderr, "Identifier") !== "com.apple.sandbox-exec" || !/^\d+$/.test(field(details.stderr, "Platform identifier") ?? "") || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") || !authorities.includes("Authority=Software Signing") || !authorities.includes("Authority=Apple Code Signing Certification Authority") || !authorities.includes("Authority=Apple Root CA")) {
-      return null;
-    }
-    return {
-      path: DARWIN_SANDBOX_EXECUTABLE,
-      sha256: sha256(readBytes(DARWIN_SANDBOX_EXECUTABLE)),
-      cdHash
-    };
-  } catch {
-    return null;
-  }
-}
-function signingIdentity(path, run) {
-  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ["--verify", "--strict", path]);
-  if (verification.status !== 0)
-    return null;
-  const details = run(DARWIN_CODESIGN_EXECUTABLE, ["-dv", "--verbose=4", path]);
-  const identifier = field(details.stderr, "Identifier");
-  const cdHash = field(details.stderr, "CDHash");
-  if (details.status !== 0 || !identifier || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "")) {
-    return null;
-  }
-  return {
-    identifier,
-    cdHash,
-    authorities: details.stderr.split("\n").filter((line) => line.startsWith("Authority=")).map((line) => line.slice("Authority=".length)).sort()
-  };
-}
-function defaultRuntimeVersion(nodeExecutable, run) {
-  const result = run(nodeExecutable, ["--version"]);
-  if (result.status !== 0)
-    throw new Error("node version unavailable");
-  return result.stdout.trim();
-}
-function defaultRuntimeFiles(nodeExecutable, run) {
-  const result = run("/usr/bin/otool", ["-L", nodeExecutable]);
-  if (result.status !== 0)
-    throw new Error("node runtime dependencies unavailable");
-  return result.stdout.split("\n").slice(1).map((line) => line.trim().split(/\s+\(/, 1)[0]).filter((path) => path.startsWith("/"));
-}
-function defaultRuntimeCache(exists) {
-  const architecture = process.arch === "arm64" ? "arm64e" : process.arch;
-  return [
-    `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_${architecture}`,
-    `/System/Library/dyld/dyld_shared_cache_${architecture}`
-  ].find(exists) ?? null;
-}
-function attestRuntimeFile(path, dependencies) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync2;
-  const stat2 = dependencies.stat ?? statSync2;
-  const readBytes = dependencies.readBytes ?? readFileSync3;
-  const run = dependencies.run ?? defaultRun2;
-  const canonical = canonicalize(path);
-  if (!stat2(canonical).isFile())
-    throw new Error("runtime input is not a file");
-  return {
-    path: canonical,
-    sha256: sha256(readBytes(canonical)),
-    signingIdentity: signingIdentity(canonical, run)
-  };
-}
-function attestNodeRuntime(input, executableMappings, dependencies) {
-  const run = dependencies.run ?? defaultRun2;
-  const exists = dependencies.exists ?? existsSync4;
-  const runtimeVersion = dependencies.runtimeVersion?.(input.nodeExecutable) ?? defaultRuntimeVersion(input.nodeExecutable, run);
-  if (runtimeVersion !== input.nodeVersion)
-    return null;
-  try {
-    const executable = attestRuntimeFile(input.nodeExecutable, dependencies);
-    const linkedRuntimePaths = [
-      ...new Set(dependencies.runtimeFiles?.(executable.path) ?? defaultRuntimeFiles(executable.path, run))
-    ].sort();
-    if (linkedRuntimePaths.length === 0)
-      return null;
-    const missingRuntimePaths = linkedRuntimePaths.filter((path) => !exists(path));
-    if (missingRuntimePaths.some((path) => !path.startsWith("/System/Library/") && !path.startsWith("/usr/lib/"))) {
-      return null;
-    }
-    const runtimeCachePath = missingRuntimePaths.length > 0 ? dependencies.runtimeCache?.() ?? defaultRuntimeCache(exists) : null;
-    if (missingRuntimePaths.length > 0 && !runtimeCachePath)
-      return null;
-    const loadedRuntimeFiles = [executable.path, ...linkedRuntimePaths.filter(exists)].sort().map((path) => attestRuntimeFile(path, dependencies));
-    const mappings = [...new Set(executableMappings)].sort().map((path) => attestRuntimeFile(path, dependencies));
-    return {
-      version: 1,
-      executable,
-      runtimeVersion,
-      linkedRuntimePaths,
-      loadedRuntimeFiles,
-      sharedRuntimeCache: runtimeCachePath ? attestRuntimeFile(runtimeCachePath, dependencies) : null,
-      executableMappings: mappings
-    };
-  } catch {
-    return null;
-  }
-}
-function sandboxString(value) {
-  if (value.includes("\0"))
-    throw new Error("METRO_RUNTIME_ENFORCEMENT_PATH_INVALID");
-  return JSON.stringify(value);
-}
-function canonicalPath(path, canonicalize) {
-  try {
-    return canonicalize(path);
-  } catch {
-    return resolve2(path);
-  }
-}
-function pathFilters(paths) {
-  return paths.flatMap((path) => [
-    `    (literal ${sandboxString(path)})`,
-    `    (subpath ${sandboxString(path)})`
-  ]).join("\n");
-}
-function managedMetroSandboxProfile(input) {
-  const readRoots = [...new Set(input.readRoots)].sort();
-  const writeRoots = [...new Set(input.writeRoots)].sort();
-  const executablePaths = [...new Set(input.executablePaths)].sort();
-  const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
-  const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
-  const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
-  const pathAncestors = [.../* @__PURE__ */ new Set([...readRoots, ...writeRoots])].sort();
-  return `(version 1)
-(deny default)
-(import "system.sb")
-(allow process-fork)
-(allow signal (target children))
-(deny network-outbound)
-(deny file-map-executable
-${pathFilters(executableMapDenyRoots)})
-(allow file-map-executable
-${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
-(allow process-exec
-${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
-(allow file-read* file-test-existence
-${pathFilters(readRoots)})
-(allow file-read-metadata file-test-existence
-${pathAncestors.map((path) => `    (path-ancestors ${sandboxString(path)})`).join("\n")})
-(allow file-write* file-test-existence
-${pathFilters(writeRoots)})
-${protectedRuntimeRoots.length > 0 ? `(deny file-write* file-test-existence
-${pathFilters(protectedRuntimeRoots)})` : ""}
-(allow network-bind
-    (local tcp ${sandboxString(`*:${input.port}`)}))
-(allow network-inbound
-    (local tcp ${sandboxString(`*:${input.port}`)}))
-`;
-}
-function prepareManagedMetroEnforcement(input, dependencies = {}) {
-  if (input.platform !== "darwin") {
-    return { status: "unsupported", reason: "host-enforcement-unavailable" };
-  }
-  const sandbox = verifiedSandboxExecutable(dependencies);
-  if (!sandbox) {
-    return { status: "unsupported", reason: "sandbox-executable-unverified" };
-  }
-  const canonicalize = dependencies.canonicalize ?? realpathSync2;
-  const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
-  const appRoot = canonicalPath(input.appRoot, canonicalize);
-  const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
-  const nodeExecutable = canonicalPath(input.nodeExecutable, canonicalize);
-  const commandExecutable = canonicalPath(input.commandExecutable, canonicalize);
-  const commandArguments = [...input.commandArguments ?? []];
-  const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) => canonicalPath(path, canonicalize));
-  const commandChainInputs = (input.commandChainInputs ?? []).map((path) => canonicalPath(path, canonicalize));
-  const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) => canonicalPath(path, canonicalize));
-  const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
-  const expoStateRoot = resolve2(appRoot, ".expo");
-  const readRoots = [
-    "/dev/fd",
-    sourceRoot,
-    appRoot,
-    runtimeRoot,
-    nodeExecutable,
-    commandExecutable,
-    ...commandExecutableMappings,
-    ...commandChainInputs,
-    ...runtimeInputs
-  ];
-  const executablePaths = [
-    nodeExecutable,
-    commandExecutable,
-    ...commandExecutableMappings,
-    "/usr/bin/env"
-  ];
-  const nodeRuntimeAttestation = attestNodeRuntime({
-    ...input,
-    nodeExecutable,
-    commandExecutable,
-    runtimeInputs
-  }, executablePaths, dependencies);
-  if (!nodeRuntimeAttestation) {
-    return { status: "unsupported", reason: "node-runtime-unverified" };
-  }
-  let commandChainAttestation;
-  try {
-    commandChainAttestation = [...new Set(commandChainInputs)].sort().map((path) => attestRuntimeFile(path, dependencies));
-  } catch {
-    return { status: "unsupported", reason: "node-runtime-unverified" };
-  }
-  const profile = managedMetroSandboxProfile({
-    readRoots,
-    writeRoots: [runtimeRoot, expoStateRoot],
-    executablePaths,
-    executableMapPaths: [
-      ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
-      ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path)
-    ],
-    executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
-    protectedRuntimeRoots,
-    port: input.port
-  });
-  const canaryId = sha256(`${input.instanceId}\0${input.port}`).slice(0, 32);
-  return {
-    status: "enforced",
-    kind: "darwin-seatbelt-v2",
-    sandboxExecutable: sandbox.path,
-    sandboxExecutableSha256: sandbox.sha256,
-    sandboxExecutableCdHash: sandbox.cdHash,
-    commandLaunchSha256: sha256(canonicalAuthorityJson({ executable: commandExecutable, arguments: commandArguments })),
-    resolvedCommandSha256: sha256(canonicalAuthorityJson({
-      executable: commandExecutable,
-      arguments: commandArguments
-    })),
-    profile,
-    profileSha256: sha256(profile),
-    canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
-    descendantCanaryPath: resolve2(runtimeRoot, `descendant-${canaryId}.cjs`),
-    symlinkCanaryPath: resolve2(runtimeRoot, `enforcement-${canaryId}.canary`),
-    port: input.port,
-    unallocatedPort: 0,
-    nodeExecutable,
-    appRoot,
-    commandExecutable,
-    commandArguments,
-    preflightEnvironmentPath: resolve2(runtimeRoot, `preflight-environment-${canaryId}.json`),
-    nodeRuntimeAttestation,
-    commandChainAttestation
-  };
-}
-function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}) {
-  if (!receipt2 || typeof receipt2 !== "object")
-    return false;
-  const observed = receipt2;
-  const plan = prepareManagedMetroEnforcement(input, dependencies);
-  return plan.status === "enforced" && observed.version === 2 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.commandLaunchSha256 === plan.commandLaunchSha256 && observed.resolvedCommandSha256 === plan.resolvedCommandSha256 && observed.descendantCreationAllowed === true && observed.unauthorizedExecutableDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true && observed.resolvedCommandAllowed === true && observed.commandCleanupConfirmed === true && observed.commandChainStable === true && canonicalAuthorityJson(observed.nodeRuntimeAttestation) === canonicalAuthorityJson(plan.nodeRuntimeAttestation) && canonicalAuthorityJson(observed.commandChainAttestation) === canonicalAuthorityJson(plan.commandChainAttestation);
-}
-var DARWIN_SANDBOX_EXECUTABLE, DARWIN_CODESIGN_EXECUTABLE, PREFLIGHT_SOURCE;
-var init_managed_metro_enforcement = __esm({
-  "packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js"() {
-    "use strict";
-    init_authority_json();
-    DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
-    DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
-    PREFLIGHT_SOURCE = String.raw`
-const { spawn, spawnSync } = require('node:child_process');
-const { createHash } = require('node:crypto');
-const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, writeFileSync } = require('node:fs');
-const { createConnection, createServer } = require('node:net');
-const input = JSON.parse(process.argv[1]);
-const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
-const denied = (run) => {
-  try {
-    run();
-    return false;
-  } catch (error) {
-    return error && (error.code === 'EPERM' || error.code === 'EACCES');
-  }
-};
-const unauthorizedResult = spawnSync('/usr/bin/true', []);
-const unauthorizedExecutableDenied =
-  unauthorizedResult.status === null &&
-  unauthorizedResult.error &&
-  (unauthorizedResult.error.code === 'EPERM' || unauthorizedResult.error.code === 'EACCES');
-const unmanifestedReadDenied = denied(() => readFileSync(input.canaryPath));
-const unmanifestedWriteDenied = denied(() => writeFileSync(input.canaryPath, 'forged'));
-const symlinkEscapeDenied = denied(() => readFileSync(input.symlinkCanaryPath));
-const listen = (port) =>
-  new Promise((resolve) => {
-    const server = createServer();
-    server.once('error', (error) => resolve({ ok: false, code: error.code }));
-    server.listen(port, '127.0.0.1', () =>
-      server.close((error) => resolve({ ok: !error, code: error && error.code })),
-    );
-  });
-const waitUntil = async (predicate, timeoutMs) => {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  return false;
-};
-const processGroupExists = (pid) => {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    return error && error.code !== 'ESRCH';
-  }
-};
-(async () => {
-  const commandSnapshots = [];
-  const boundPaths = new Map();
-  const argumentPaths = new Set(
-    input.commandArguments.map((argument) =>
-      argument.startsWith(logicalArgumentPrefix)
-        ? argument.slice(logicalArgumentPrefix.length)
-        : argument,
-    ),
-  );
-  for (const entry of input.commandChainAttestation) {
-    if (!argumentPaths.has(entry.path)) continue;
-    const descriptor = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const size = fstatSync(descriptor).size;
-    const contents = Buffer.alloc(size);
-    let offset = 0;
-    while (offset < size) {
-      const count = readSync(descriptor, contents, offset, size - offset, offset);
-      if (count === 0) break;
-      offset += count;
-    }
-    closeSync(descriptor);
-    const snapshot = contents.subarray(0, offset);
-    if (createHash('sha256').update(snapshot).digest('hex') !== entry.sha256) {
-      throw new Error('command-chain identity mismatch');
-    }
-    boundPaths.set(entry.path, '/dev/fd/' + (10 + commandSnapshots.length));
-    commandSnapshots.push(snapshot);
-  }
-  const allocated = await listen(input.port);
-  if (!allocated.ok) throw new Error('allocated listener unavailable before command');
-  const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
-  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
-  while (stdio.length < 9) stdio.push('ignore');
-  stdio.push('pipe');
-  stdio.push(...commandSnapshots.map(() => 'pipe'));
-  const command = spawn(
-    input.commandExecutable,
-    input.commandArguments.map((argument) =>
-      argument.startsWith(logicalArgumentPrefix)
-        ? argument.slice(logicalArgumentPrefix.length)
-        : boundPaths.get(argument) ?? argument,
-    ),
-    {
-    cwd: input.appRoot,
-    detached: true,
-    env: commandEnvironment,
-    stdio,
-    },
-  );
-  for (let index = 0; index < commandSnapshots.length; index += 1) {
-    command.stdio[10 + index].end(commandSnapshots[index]);
-  }
-  command.stdio[9].resume();
-  command.once('error', () => {});
-  const resolvedCommandAllowed = await waitUntil(async () => {
-    const probe = await listen(input.port);
-    return !probe.ok && probe.code === 'EADDRINUSE';
-  }, 15000);
-  let commandCleanupConfirmed = false;
-  if (Number.isSafeInteger(command.pid)) {
-    try {
-      command.kill('SIGTERM');
-    } catch {}
-    try {
-      process.kill(-command.pid, 'SIGTERM');
-    } catch {}
-    await waitUntil(() => command.exitCode !== null, 2000);
-    commandCleanupConfirmed = !processGroupExists(command.pid);
-    if (!commandCleanupConfirmed) {
-      try {
-        command.kill('SIGKILL');
-      } catch {}
-      try {
-        process.kill(-command.pid, 'SIGKILL');
-      } catch {}
-      await waitUntil(() => command.exitCode !== null, 2000);
-      commandCleanupConfirmed = !processGroupExists(command.pid);
-    }
-  }
-  const released = await listen(input.port);
-  commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
-  const commandChainStable = true;
-  const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
-  const unallocated = await listen(input.unallocatedPort);
-  const networkOutboundDenied = await new Promise((resolve) => {
-    const connection = createConnection(input.port, '127.0.0.1');
-    connection.once('connect', () => {
-      connection.destroy();
-      resolve(false);
-    });
-    connection.once('error', (error) =>
-      resolve(error.code === 'EPERM' || error.code === 'EACCES'),
-    );
-  });
-  const receipt = {
-    descendantCreationAllowed,
-    unauthorizedExecutableDenied: Boolean(unauthorizedExecutableDenied),
-    unmanifestedReadDenied,
-    unmanifestedWriteDenied,
-    symlinkEscapeDenied,
-    unallocatedListenerDenied:
-      !unallocated.ok && (unallocated.code === 'EPERM' || unallocated.code === 'EACCES'),
-    allocatedListenerAllowed: allocated.ok,
-    networkOutboundDenied,
-    resolvedCommandAllowed,
-    commandCleanupConfirmed,
-    commandChainStable,
-  };
-  process.stdout.write(JSON.stringify(receipt));
-  process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
-})().catch(() => process.exit(1));
-`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/source-identity.js
-import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { closeSync as closeSync4, existsSync as existsSync5, lstatSync as lstatSync2, openSync as openSync4, readdirSync, readFileSync as readFileSync4, readlinkSync, readSync as readSync2, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname3, isAbsolute, join as join4, relative, resolve as resolve3 } from "node:path";
-function digest(parts) {
-  const hash = createHash4("sha256");
-  for (const part of parts) {
-    hash.update(part);
-    hash.update("\0");
-  }
-  return hash.digest("hex");
-}
-function readMetroEvidenceHead(socket, challenge) {
-  return execFileSync3(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
-    encoding: "utf8",
-    maxBuffer: 4096,
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3
-  });
-}
-function updateFramed(hash, part) {
-  const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
-  hash.update(`${bytes.byteLength}:`);
-  hash.update(bytes);
-}
-function updateFramedFile(hash, path, size) {
-  hash.update(`${size}:`);
-  const descriptor = openSync4(path, "r");
-  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(size, 1)));
-  try {
-    let offset = 0;
-    while (offset < size) {
-      const bytesRead = readSync2(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
-      if (bytesRead === 0) {
-        throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: source file changed while hashing");
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
-  } finally {
-    closeSync4(descriptor);
-  }
-}
-function fileDigest(path) {
-  const stat2 = lstatSync2(path);
-  if (!stat2.isFile() || stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
-  }
-  const hash = createHash4("sha256");
-  const descriptor = openSync4(path, "r");
-  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(stat2.size, 1)));
-  try {
-    let offset = 0;
-    while (offset < stat2.size) {
-      const bytesRead = readSync2(descriptor, buffer, 0, Math.min(buffer.length, stat2.size - offset), offset);
-      if (bytesRead === 0) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
-  } finally {
-    closeSync4(descriptor);
-  }
-  return hash.digest("hex");
-}
-function updateDependencyPath(hash, path, label, state) {
-  const pending2 = [{ path, label, depth: 0 }];
-  while (pending2.length > 0) {
-    const current = pending2.pop();
-    state.entries += 1;
-    if (state.entries > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency entry count exceeds the limit");
-    }
-    if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
-      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit");
-    }
-    const stat2 = lstatSync2(current.path);
-    updateFramed(hash, current.label);
-    updateFramed(hash, String(stat2.mode & 511));
-    if (stat2.isSymbolicLink()) {
-      const link = readlinkSync(current.path);
-      const target = realpathSync3(current.path);
-      state.totalBytes += Buffer.byteLength(link);
-      if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
-        throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
-      }
-      updateFramed(hash, "symlink");
-      updateFramed(hash, link);
-      updateFramed(hash, target);
-      pending2.push({
-        path: target,
-        label: `target:${target}`,
-        depth: current.depth + 1
-      });
-      continue;
-    }
-    if (stat2.isDirectory()) {
-      const canonical = realpathSync3(current.path);
-      if (state.visitedDirectories.has(canonical)) {
-        updateFramed(hash, "directory-reference");
-        updateFramed(hash, canonical);
-        continue;
-      }
-      state.visitedDirectories.add(canonical);
-      updateFramed(hash, "directory");
-      for (const entry of readdirSync(current.path).sort().reverse()) {
-        pending2.push({
-          path: join4(current.path, entry),
-          label: `${current.label}/${entry}`,
-          depth: current.depth + 1
-        });
-      }
-      continue;
-    }
-    if (!stat2.isFile()) {
-      throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${current.label} is not a regular file, directory, or symlink`);
-    }
-    if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
-      throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
-    }
-    state.totalBytes += stat2.size;
-    if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
-      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
-    }
-    updateFramed(hash, "file");
-    updateFramedFile(hash, current.path, stat2.size);
-  }
-}
-function isContained(root, candidate) {
-  const child = relative(root, candidate);
-  return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(child);
-}
-function isExcludedRuntimePath(root, candidate) {
-  const entry = relative(root, candidate).split("\\").join("/");
-  return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded || entry.startsWith(`${excluded}/`) || entry.endsWith(`/${excluded}`) || entry.includes(`/${excluded}/`));
-}
-function assertFinalMetroIntegration(identity2) {
-  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join4(identity2.appRoot, entry)).filter(existsSync5);
-  if (candidates.length === 0)
-    return;
-  const source = readFileSync4(candidates[0], "utf8");
-  const start = source.indexOf(METRO_INTEGRATION_START);
-  const end = source.indexOf(METRO_INTEGRATION_END);
-  if (start < 0 || end < start || source.indexOf(METRO_INTEGRATION_START, start + METRO_INTEGRATION_START.length) >= 0 || source.indexOf(METRO_INTEGRATION_END, end + METRO_INTEGRATION_END.length) >= 0 || source.slice(start, end + METRO_INTEGRATION_END.length) !== METRO_INTEGRATION_BLOCK || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
-  }
-}
-function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntimeEnforcement) {
-  if (!authority)
-    return { paths: [], semantics: [] };
-  if (authority.evidenceAuthority !== "broker-v2") {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: reported Metro evidence cannot grant strict authority");
-  }
-  const raw = readFileSync4(join4(identity2.appRoot, METRO_RUNTIME_POLICY), "utf8");
-  const receipt2 = JSON.parse(raw);
-  const payload = {
-    version: receipt2.version,
-    runtimeEvidenceAuthority: receipt2.runtimeEvidenceAuthority,
-    sessionId: receipt2.sessionId,
-    metroInstanceId: receipt2.metroInstanceId,
-    contentRoot: receipt2.contentRoot,
-    appRoot: receipt2.appRoot,
-    runtimeEnforcement: receipt2.runtimeEnforcement,
-    runtimeEnforcementReceipt: receipt2.runtimeEnforcementReceipt,
-    runtimeManifest: receipt2.runtimeManifest,
-    runtimeInputs: receipt2.runtimeInputs,
-    violations: receipt2.violations
-  };
-  const expected = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
-  const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
-  const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.sourceExecutable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandProbeArguments) || runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandExecutableMappings) || runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandChainInputs) || runtimeManifest.commandChainInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.protectedRuntimeRoots) || runtimeManifest.protectedRuntimeRoots.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
-  }
-  const descendantAuthority = runtimeManifest.descendantAuthority;
-  if (descendantAuthority.version !== 1 || typeof descendantAuthority.rootNonce !== "string" || !/^[a-f0-9]{32}$/.test(descendantAuthority.rootNonce) || typeof descendantAuthority.rootIdentity !== "string" || !/^process:\d+$/.test(descendantAuthority.rootIdentity) || !Array.isArray(descendantAuthority.allowedCodeRoots) || descendantAuthority.allowedCodeRoots.length === 0 || descendantAuthority.allowedCodeRoots.some((entry) => typeof entry !== "string")) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant authority is invalid");
-  }
-  const allowedCodeRoots = descendantAuthority.allowedCodeRoots;
-  if (receipt2.runtimeEnforcement !== "os-enforced-v1") {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: closed-world runtime enforcement is unavailable");
-  }
-  if (!verifyRuntimeEnforcement({
-    platform: process.platform,
-    appRoot: identity2.appRoot,
-    sourceRoot: identity2.contentRoot,
-    runtimeRoot: dirname3(authority.evidencePath),
-    nodeExecutable: runtimeManifest.nodeExecutable,
-    nodeVersion: runtimeManifest.nodeVersion,
-    commandExecutable: runtimeManifest.executable,
-    commandArguments: runtimeManifest.args,
-    commandProbeArguments: runtimeManifest.commandProbeArguments,
-    commandExecutableMappings: runtimeManifest.commandExecutableMappings,
-    commandChainInputs: runtimeManifest.commandChainInputs,
-    protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
-    port: runtimeManifest.port,
-    instanceId: authority.metroInstanceId,
-    runtimeInputs: receipt2.runtimeInputs
-  }, receipt2.runtimeEnforcementReceipt)) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid");
-  }
-  if (receipt2.violations.length > 0) {
-    throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
-  }
-  const runtimeInputs = new Set(receipt2.runtimeInputs);
-  const runtimeLoadsPath = authority.evidencePath;
-  let runtimeLoadsRaw;
-  try {
-    const runtimeLoadsStat = lstatSync2(runtimeLoadsPath);
-    if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
-      throw new Error("runtime load evidence is not a bounded regular file");
-    }
-    runtimeLoadsRaw = readFileSync4(runtimeLoadsPath, "utf8");
-  } catch (error2) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
-      cause: error2
-    });
-  }
-  const runtimeLoads = /* @__PURE__ */ new Map();
-  const descendantLaunches = /* @__PURE__ */ new Map();
-  const descendantAttestations = /* @__PURE__ */ new Map();
-  const descendantSemanticDigests = /* @__PURE__ */ new Set();
-  const pendingIpcCompletions = /* @__PURE__ */ new Set();
-  const completedIpcCompletions = /* @__PURE__ */ new Set();
-  const runtimeSemantics = /* @__PURE__ */ new Set();
-  const runtimeSemanticsByDigest = /* @__PURE__ */ new Map();
-  const orderedRuntimeSemantics = [];
-  const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
-  let runtimeEvidenceEntryCount = 0;
-  let evidenceSequence = 0;
-  let previousEvidenceSignature = null;
-  for (const rawLoad of runtimeLoadsRaw.split("\n").filter(Boolean)) {
-    let load;
-    try {
-      load = JSON.parse(rawLoad);
-    } catch (error2) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
-        cause: error2
-      });
-    }
-    const loadPayload = {
-      version: load.version,
-      runtimeEvidenceAuthority: load.runtimeEvidenceAuthority,
-      sessionId: load.sessionId,
-      metroInstanceId: load.metroInstanceId,
-      kind: load.kind,
-      value: load.value,
-      digest: load.digest,
-      sequence: load.sequence,
-      previousSignature: load.previousSignature
-    };
-    const expectedLoad = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(loadPayload)).digest();
-    const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-    }
-    evidenceSequence = load.sequence;
-    previousEvidenceSignature = load.signature;
-    runtimeEvidenceEntryCount += 1;
-    if (runtimeEvidenceEntryCount > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
-    }
-    const key = `${load.kind}\0${load.value}`;
-    runtimeEvidenceKeys.add(key);
-    if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
-    }
-    if (load.kind === "launch" || load.kind === "attestation") {
-      let execution;
-      try {
-        execution = JSON.parse(load.value);
-      } catch {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      if (execution.version !== 1 || typeof execution.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.nonce) || typeof execution.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.identity) || !execution.parent || typeof execution.parent.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.parent.identity) || typeof execution.parent.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.parent.nonce) || typeof execution.semantics !== "string" || !/^[a-f0-9]{64}$/.test(execution.semantics) || !execution.authority || execution.authority.sessionId !== authority.sessionId || execution.authority.metroInstanceId !== authority.metroInstanceId || execution.authority.contentRoot !== identity2.contentRoot || execution.authority.appRoot !== identity2.appRoot) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      const target = load.kind === "launch" ? descendantLaunches : descendantAttestations;
-      const priorExecution = target.get(load.value);
-      if (priorExecution && canonicalAuthorityJson(priorExecution) !== load.value) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      target.set(load.value, execution);
-      descendantSemanticDigests.add(execution.semantics);
-      continue;
-    }
-    if (load.kind === "semantics") {
-      if (load.value.length > 4096) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded");
-      }
-      runtimeSemantics.add(load.value);
-      runtimeSemanticsByDigest.set(createHash4("sha256").update(load.value).digest("hex"), load.value);
-      orderedRuntimeSemantics.push(load.value);
-      continue;
-    }
-    if (load.kind === "pending" || load.kind === "completion") {
-      if (!/^[a-f0-9]{32}$/.test(load.value)) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      (load.kind === "pending" ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
-      continue;
-    }
-    const prior = runtimeLoads.get(key);
-    if (prior && prior.digest !== load.digest) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed between executions");
-    }
-    runtimeLoads.set(key, {
-      kind: load.kind,
-      value: load.value,
-      digest: load.digest
-    });
-  }
-  if (evidenceSequence === 0 || previousEvidenceSignature === null) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");
-  }
-  const challenge = randomBytes(32).toString("hex");
-  let head;
-  try {
-    head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
-  } catch (error2) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is unavailable", {
-      cause: error2
-    });
-  }
-  const headPayload = {
-    version: head.version,
-    runtimeEvidenceAuthority: head.runtimeEvidenceAuthority,
-    sessionId: head.sessionId,
-    metroInstanceId: head.metroInstanceId,
-    challenge: head.challenge,
-    sequence: head.sequence,
-    journalSignature: head.journalSignature
-  };
-  const expectedHead = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(headPayload)).digest();
-  const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
-  if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual(observedHead, expectedHead)) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
-  }
-  for (const launch of descendantLaunches.keys()) {
-    if (!descendantAttestations.has(launch)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested");
-    }
-  }
-  for (const attestation of descendantAttestations.keys()) {
-    if (!descendantLaunches.has(attestation)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch");
-    }
-  }
-  for (const pending2 of pendingIpcCompletions) {
-    if (!completedIpcCompletions.has(pending2)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion is pending");
-    }
-  }
-  for (const completion of completedIpcCompletions) {
-    if (!pendingIpcCompletions.has(completion)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
-    }
-  }
-  const observedSemanticDigests = new Set(runtimeSemanticsByDigest.keys());
-  for (const semantics of descendantSemanticDigests) {
-    if (!observedSemanticDigests.has(semantics)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
-    }
-  }
-  const descendantsByNonce = /* @__PURE__ */ new Map();
-  for (const execution of descendantLaunches.values()) {
-    if (descendantsByNonce.has(execution.nonce)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant nonce was reused");
-    }
-    descendantsByNonce.set(execution.nonce, execution);
-  }
-  for (const execution of descendantLaunches.values()) {
-    let current = execution;
-    const visited = /* @__PURE__ */ new Set();
-    while (current.parent.nonce !== descendantAuthority.rootNonce) {
-      if (visited.has(current.nonce)) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant tree contains a cycle");
-      }
-      visited.add(current.nonce);
-      const parent = descendantsByNonce.get(current.parent.nonce);
-      if (!parent || parent.identity !== current.parent.identity) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant parent is outside the attested tree");
-      }
-      current = parent;
-    }
-    if (current.parent.identity !== descendantAuthority.rootIdentity) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant root identity does not match Metro");
-    }
-    const semanticsValue = runtimeSemanticsByDigest.get(execution.semantics);
-    if (!semanticsValue) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
-    }
-    let semantics;
-    try {
-      semantics = JSON.parse(semanticsValue);
-    } catch {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
-    }
-    const semanticAuthority = semantics.authority && typeof semantics.authority === "object" ? semantics.authority : null;
-    if (!["node", "sync", "fork", "worker"].includes(semantics.mode) || typeof semantics.entrypoint !== "string" || typeof semantics.entrypointDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.entrypointDigest) || !Array.isArray(semantics.execArgv) || semantics.execArgv.some((entry) => typeof entry !== "string") || typeof semantics.invocationDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.invocationDigest) || canonicalAuthorityJson(semantics.allowedCodeRoots) !== canonicalAuthorityJson(allowedCodeRoots) || !semanticAuthority || semanticAuthority.sessionId !== authority.sessionId || semanticAuthority.metroInstanceId !== authority.metroInstanceId || semanticAuthority.contentRoot !== identity2.contentRoot || semanticAuthority.appRoot !== identity2.appRoot || semanticAuthority.parentIdentity !== execution.parent.identity || semanticAuthority.parentNonce !== execution.parent.nonce) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
-    }
-    const entrypoint = realpathSync3(semantics.entrypoint);
-    if (!allowedCodeRoots.some((root) => isContained(realpathSync3(root), entrypoint))) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant entrypoint is outside allowed code roots");
-    }
-    const observedEntrypoint = runtimeLoads.get(`input\0${entrypoint}`);
-    if (!observedEntrypoint || observedEntrypoint.digest !== semantics.entrypointDigest) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant executable bytes are not attested");
-    }
-  }
-  for (const load of runtimeLoads.values()) {
-    if (load.kind === "violation") {
-      throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
-    }
-    const candidate = realpathSync3(load.value);
-    if (fileDigest(candidate) !== load.digest) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution");
-    }
-    runtimeInputs.add(candidate);
-  }
-  return {
-    paths: [...runtimeInputs].sort().flatMap((entry) => {
-      const candidate = realpathSync3(entry);
-      return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
-    }),
-    semantics: orderedRuntimeSemantics
-  };
-}
-function dependencyStoreRoots(identity2, git, pathExists) {
-  const entries = git(identity2.contentRoot, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "--directory",
-    "-z",
-    "--",
-    ...DEPENDENCY_STORE_PATHS
-  ]).split("\0").filter(Boolean);
-  for (const candidate of [
-    join4(identity2.contentRoot, "node_modules"),
-    join4(identity2.appRoot, "node_modules")
-  ]) {
-    if (pathExists(candidate))
-      entries.push(relative(identity2.contentRoot, candidate));
-  }
-  const pnpRoots = [];
-  let pnpRoot = identity2.appRoot;
-  while (true) {
-    pnpRoots.push(pnpRoot);
-    if (pnpRoot === identity2.contentRoot)
-      break;
-    const parent = dirname3(pnpRoot);
-    if (parent === pnpRoot || !isContained(identity2.contentRoot, parent))
-      break;
-    pnpRoot = parent;
-  }
-  const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => [".pnp.js", ".pnp.cjs", ".pnp.loader.mjs"].map((entry) => join4(root, entry)).filter(pathExists));
-  if (pnpLoaders.length > 0) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
-  }
-  let ancestor = dirname3(identity2.contentRoot);
-  while (true) {
-    if (pathExists(join4(ancestor, "node_modules"))) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
-    }
-    const parent = dirname3(ancestor);
-    if (parent === ancestor)
-      break;
-    ancestor = parent;
-  }
-  const roots = [...new Set(entries.map((entry) => resolve3(identity2.contentRoot, entry)))].sort();
-  for (const root of roots) {
-    assertContained(identity2.contentRoot, root, "STRICT_PROOF_DEPENDENCY_PATH_ESCAPE");
-  }
-  return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
-}
-function updateDependencyStores(hash, identity2, git, pathExists, runtimeInputs) {
-  const roots = dependencyStoreRoots(identity2, git, pathExists);
-  const state = {
-    entries: 0,
-    totalBytes: 0,
-    visitedDirectories: /* @__PURE__ */ new Set()
-  };
-  updateFramed(hash, "dependency-stores-v1");
-  for (const root of [.../* @__PURE__ */ new Set([...roots, ...runtimeInputs])].sort()) {
-    if (!pathExists(root))
-      continue;
-    updateDependencyPath(hash, root, relative(identity2.contentRoot, root), state);
-  }
-}
-function defaultGit(root, args) {
-  return execFileSync3("git", ["-C", root, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 5e3,
-    maxBuffer: 64 * 1024 * 1024
-  }).trim();
-}
-function isDefinitiveNonGitError(error2) {
-  if (!(error2 instanceof Error))
-    return false;
-  const stderr = "stderr" in error2 && typeof error2.stderr === "string" ? error2.stderr : "stderr" in error2 && Buffer.isBuffer(error2.stderr) ? error2.stderr.toString("utf8") : "";
-  return `${error2.message}
-${stderr}`.toLowerCase().includes("not a git repository");
-}
-function assertContained(root, candidate, code) {
-  const child = relative(root, candidate);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(child)) {
-    throw new Error(`${code}: path is outside the declared content root`);
-  }
-}
-function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
-  if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
-    throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
-  }
-  const contentRoot = canonicalize(resolve3(dependencies.declaredRoot));
-  assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
-  const manifestParts = [];
-  for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve3(contentRoot, entry));
-    assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
-    manifestParts.push(relative(contentRoot, manifest), readFileSync4(manifest));
-  }
-  const manifestDigest = digest(manifestParts);
-  const appRelative = relative(contentRoot, appRoot) || ".";
-  return {
-    kind: "declared-root",
-    contentRoot,
-    appRoot,
-    sourceKey: digest(["declared-source", contentRoot, manifestDigest]),
-    worktreeKey: digest(["declared-root", contentRoot]),
-    appRootKey: digest(["declared-app", appRelative]),
-    manifestDigest,
-    declaredManifests: [...dependencies.declaredManifests]
-  };
-}
-function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
-  const appRoot = canonicalize(resolve3(inputRoot));
-  const git = dependencies.git ?? defaultGit;
-  try {
-    const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
-    assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
-    const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
-    const commonDirectory = canonicalize(isAbsolute(commonRaw) ? commonRaw : join4(appRoot, commonRaw));
-    const head = git(appRoot, ["rev-parse", "HEAD"]);
-    const appRelative = relative(contentRoot, appRoot) || ".";
-    return {
-      kind: "git",
-      contentRoot,
-      appRoot,
-      sourceKey: digest(["git-source", commonDirectory]),
-      worktreeKey: digest(["git-worktree", contentRoot]),
-      appRootKey: digest(["git-app", appRelative]),
-      head
-    };
-  } catch (error2) {
-    if (error2 instanceof Error && (error2.message.startsWith("APP_ROOT_OUTSIDE_WORKTREE") || error2.message.startsWith("NON_GIT_"))) {
-      throw error2;
-    }
-    if (!isDefinitiveNonGitError(error2))
-      throw error2;
-    return resolveDeclaredIdentity(appRoot, dependencies, canonicalize);
-  }
-}
-function strictProofSourceIdentity(identity2, dependencies = {}) {
-  if (identity2.kind !== "git") {
-    throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
-  }
-  const git = dependencies.git ?? defaultGit;
-  const pathExists = dependencies.exists ?? existsSync5;
-  assertFinalMetroIntegration(identity2);
-  const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
-  const runtimeEnforcementVerifier = dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
-  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
-  const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
-  const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
-  const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
-  const ignored = git(identity2.contentRoot, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "-z",
-    "--",
-    ...IGNORED_RUNTIME_INPUT_PATHS
-  ]).split("\0").filter(Boolean).sort();
-  const gitlinks = git(identity2.contentRoot, ["ls-files", "--stage", "-z"]).split("\0").flatMap((entry) => {
-    const match = /^160000 [0-9a-f]+ \d+\t(.+)$/i.exec(entry);
-    return match?.[1] ? [match[1]] : [];
-  });
-  for (const entry of gitlinks) {
-    const submodule = resolve3(identity2.contentRoot, entry);
-    assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
-    const status = git(submodule, [
-      "status",
-      "--porcelain=v1",
-      "--untracked-files=all",
-      "--ignore-submodules=none"
-    ]);
-    if (status) {
-      throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
-    }
-  }
-  const dirtyHash = createHash4("sha256");
-  updateFramed(dirtyHash, "git-dirty-v3");
-  updateFramed(dirtyHash, diff);
-  for (const semantics of runtimeInputs.semantics) {
-    updateFramed(dirtyHash, "runtime-semantics");
-    updateFramed(dirtyHash, semantics);
-  }
-  updateDependencyStores(dirtyHash, identity2, git, pathExists, runtimeInputs.paths);
-  const sourceEntries = [
-    ...untracked.map((entry) => ["untracked", entry]),
-    ...ignored.map((entry) => ["ignored-runtime", entry])
-  ];
-  if (sourceEntries.length > MAX_STRICT_PROOF_FILES) {
-    throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs");
-  }
-  let totalBytes = 0;
-  for (const [classification, entry] of sourceEntries) {
-    const file = resolve3(identity2.contentRoot, entry);
-    assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
-    const stat2 = lstatSync2(file);
-    updateFramed(dirtyHash, classification);
-    updateFramed(dirtyHash, entry);
-    if (stat2.isFile()) {
-      if (stat2.size > MAX_STRICT_PROOF_FILE_BYTES) {
-        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
-      }
-      totalBytes += stat2.size;
-      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
-        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
-      }
-      updateFramed(dirtyHash, "file");
-      updateFramedFile(dirtyHash, file, stat2.size);
-      continue;
-    }
-    if (stat2.isSymbolicLink()) {
-      const target = realpathSync3(file);
-      assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
-      const link = readlinkSync(file);
-      const targetStat = lstatSync2(target);
-      if (!targetStat.isFile()) {
-        throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
-      }
-      if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
-        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
-      }
-      totalBytes += Buffer.byteLength(link) + targetStat.size;
-      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
-        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
-      }
-      updateFramed(dirtyHash, "symlink");
-      updateFramed(dirtyHash, link);
-      updateFramedFile(dirtyHash, target, targetStat.size);
-      continue;
-    }
-    throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
-  }
-  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
-  if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
-    throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
-  }
-  return {
-    kind: "git-strict-proof",
-    sourceKey: identity2.sourceKey,
-    worktreeKey: identity2.worktreeKey,
-    appRootKey: identity2.appRootKey,
-    head,
-    dirtyDigest: dirtyHash.digest("hex")
-  };
-}
-var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY, METRO_EVIDENCE_HEAD_CLIENT;
-var init_source_identity = __esm({
-  "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
-    "use strict";
-    init_authority_json();
-    init_managed_metro_enforcement();
-    MAX_STRICT_PROOF_FILES = 4096;
-    MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
-    MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-    MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
-    MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
-    MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
-    MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
-    STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
-    DEPENDENCY_STORE_PATHS = [
-      ":(top,glob)**/node_modules/**",
-      ":(top,glob)**/.yarn/cache/**",
-      ":(top,glob)**/.yarn/unplugged/**"
-    ];
-    EXCLUDED_RUNTIME_DIRECTORIES = [
-      ".gradle",
-      ".expo",
-      ".cache",
-      "ios/Pods",
-      "ios/build",
-      "ios/DerivedData",
-      "android/build",
-      "android/app/build",
-      "android/app/.cxx"
-    ];
-    IGNORED_RUNTIME_INPUT_PATHS = [
-      ":(top,glob)**",
-      ":(top,exclude,glob)**/node_modules/**",
-      ":(top,exclude,glob)**/.yarn/cache/**",
-      ":(top,exclude,glob)**/.yarn/unplugged/**",
-      ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
-    ];
-    METRO_INTEGRATION_START = "// rn-dev-agent session integration: begin";
-    METRO_INTEGRATION_END = "// rn-dev-agent session integration: end";
-    METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
-module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
-${METRO_INTEGRATION_END}`;
-    METRO_RUNTIME_POLICY = ".rn-agent/integration/metro-runtime-policy.json";
-    METRO_EVIDENCE_HEAD_CLIENT = String.raw`
-const { createConnection } = require('node:net');
-const socket = createConnection(process.argv[1]);
-let response = '';
-socket.setEncoding('utf8');
-socket.setTimeout(1500);
-socket.once('connect', () => socket.write(process.argv[2] + '\n'));
-socket.on('data', (chunk) => {
-  response += chunk;
-  if (response.length > 4096) process.exit(2);
-});
-socket.once('end', () => process.stdout.write(response));
-socket.once('timeout', () => process.exit(3));
-socket.once('error', () => process.exit(4));
-`;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js
-import { createHash as createHash5 } from "node:crypto";
-function normalizeNodeForHash(node) {
-  const q = (v) => Math.round(v / BOUNDS_QUANTUM_PX);
-  return JSON.stringify([
-    node.identifier ?? "",
-    node.type,
-    node.label ?? "",
-    q(node.rect.x),
-    q(node.rect.y),
-    q(node.rect.width),
-    q(node.rect.height),
-    node.enabled ?? null
-  ]);
-}
-function hashSnapshotNodes(nodes) {
-  const h = createHash5("sha256");
-  for (const node of nodes) {
-    h.update(normalizeNodeForHash(node));
-    h.update("\n");
-  }
-  return h.digest("hex");
-}
-var BOUNDS_QUANTUM_PX;
-var init_settle_hash = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js"() {
-    "use strict";
-    BOUNDS_QUANTUM_PX = 4;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/fast-runner-ref-map.js
-function extentToRect(right, bottom) {
-  return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
-}
-function windowCap(entries) {
-  let right = 0;
-  let bottom = 0;
-  for (const e of entries) {
-    if (e.type === void 0 || !WINDOW_TYPES.has(e.type))
-      continue;
-    const { x, y, width, height } = e.rect;
-    if (width <= 0 || height <= 0)
-      continue;
-    right = Math.max(right, x + width);
-    bottom = Math.max(bottom, y + height);
-  }
-  return right > 300 && bottom > 0 ? { right, bottom } : null;
-}
-function resolveScreenRect(entries) {
-  const cap2 = windowCap(entries);
-  let allRight = 0;
-  let allBottom = 0;
-  let hitRight = 0;
-  let hitBottom = 0;
-  const usable = [];
-  for (const e of entries) {
-    const { x, y, width, height } = e.rect;
-    if (width <= 0 || height <= 0)
-      continue;
-    usable.push(e);
-    allRight = Math.max(allRight, x + width);
-    allBottom = Math.max(allBottom, y + height);
-    if (e.hittable === true) {
-      hitRight = Math.max(hitRight, x + width);
-      hitBottom = Math.max(hitBottom, y + height);
-    }
-  }
-  if (cap2 !== null) {
-    allRight = Math.min(allRight, cap2.right);
-    allBottom = Math.min(allBottom, cap2.bottom);
-    hitRight = Math.min(hitRight, cap2.right);
-    hitBottom = Math.min(hitBottom, cap2.bottom);
-  }
-  if (hitRight <= 0 || hitBottom <= 0)
-    return extentToRect(allRight, allBottom);
-  let right = hitRight;
-  let bottom = hitBottom;
-  for (let pass = 0; pass < 10; pass++) {
-    let grew = false;
-    for (const e of usable) {
-      const { x, y, width, height } = e.rect;
-      const intersects = x < right && y < bottom && x + width > 0 && y + height > 0;
-      if (!intersects)
-        continue;
-      if (x + width > right) {
-        right = x + width;
-        grew = true;
-      }
-      if (y + height > bottom) {
-        bottom = y + height;
-        grew = true;
-      }
-    }
-    if (!grew)
-      break;
-  }
-  if (cap2 !== null) {
-    right = Math.min(right, cap2.right);
-    bottom = Math.min(bottom, cap2.bottom);
-  }
-  return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
-}
-function lookupRef(ref) {
-  const clean = ref.startsWith("@") ? ref.slice(1) : ref;
-  return refMap.get(clean) ?? null;
-}
-function refCenter(ref) {
-  const rect = lookupRef(ref);
-  if (!rect)
-    return null;
-  return {
-    x: Math.round(rect.x + rect.width / 2),
-    y: Math.round(rect.y + rect.height / 2)
-  };
-}
-function getScreenRect() {
-  return screenRect;
-}
-function getRefMapAge() {
-  return lastUpdated ? Date.now() - lastUpdated : Infinity;
-}
-function isRefMapFresh(maxAgeMs = MAX_REF_MAP_AGE_MS) {
-  return getRefMapAge() <= maxAgeMs;
-}
-function clearRefMap() {
-  refMap.clear();
-  metadataMap.clear();
-  screenRect = null;
-  lastUpdated = 0;
-  lastSnapshotHash = null;
-  snapshotGeneration = 0;
-  keyboardStateAtSnapshot = null;
-}
-function buildSnapshotVerdict(source, nodeCount, outcome) {
-  const reasons = [];
-  if (nodeCount === 0)
-    reasons.push("empty-capture");
-  return {
-    state: reasons.length > 0 ? "degraded" : "ok",
-    source,
-    nodeCount,
-    refMapUpdated: outcome.applied,
-    reasons
-  };
-}
-function updateRefMapFromFlat(nodes, freshness = {}) {
-  let validCount = 0;
-  for (const node of nodes) {
-    if (node.ref && node.rect)
-      validCount++;
-  }
-  if (validCount === 0 && refMap.size > 0) {
-    return { applied: false, reason: "empty-capture" };
-  }
-  refMap.clear();
-  screenRect = null;
-  snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
-  keyboardStateAtSnapshot = freshness.keyboardVisible ?? null;
-  const hashed = [];
-  const entries = [];
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    if (!node.ref || !node.rect)
-      continue;
-    const key = node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
-    refMap.set(key, node.rect);
-    const meta = {
-      type: node.type,
-      flatIndex: i,
-      nodeCount: nodes.length,
-      snapshotGeneration,
-      keyboardStateAtSnapshot
-    };
-    if (node.label !== void 0)
-      meta.label = node.label;
-    if (node.identifier !== void 0)
-      meta.identifier = node.identifier;
-    metadataMap.set(key, meta);
-    hashed.push(node);
-    entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
-  }
-  screenRect = resolveScreenRect(entries);
-  try {
-    lastSnapshotHash = hashSnapshotNodes(hashed);
-  } catch {
-    lastSnapshotHash = null;
-  }
-  lastUpdated = Date.now();
-  return { applied: true };
-}
-function getFreshRefTarget(ref, opts = {}) {
-  if (!isRefMapFresh())
-    return null;
-  const key = ref.startsWith("@") ? ref.slice(1) : ref;
-  const rect = refMap.get(key);
-  const record2 = metadataMap.get(key);
-  if (!rect || !record2 || record2.snapshotGeneration !== snapshotGeneration || record2.keyboardStateAtSnapshot === null && opts.allowUnknownKeyboardState !== true)
-    return null;
-  return {
-    rect,
-    snapshotGeneration: record2.snapshotGeneration,
-    keyboardStateAtSnapshot: record2.keyboardStateAtSnapshot
-  };
-}
-function getCachedMetadata(ref) {
-  const key = ref.startsWith("@") ? ref.slice(1) : ref;
-  const rec = metadataMap.get(key);
-  if (!rec)
-    return null;
-  const meta = { type: rec.type };
-  if (rec.label !== void 0)
-    meta.label = rec.label;
-  if (rec.identifier !== void 0)
-    meta.identifier = rec.identifier;
-  return meta;
-}
-function getCachedSignature(ref) {
-  const key = ref.startsWith("@") ? ref.slice(1) : ref;
-  const rec = metadataMap.get(key);
-  if (!rec)
-    return null;
-  const sig = {
-    type: rec.type,
-    flatIndex: rec.flatIndex,
-    nodeCount: rec.nodeCount
-  };
-  if (rec.label !== void 0)
-    sig.label = rec.label;
-  if (rec.identifier !== void 0)
-    sig.identifier = rec.identifier;
-  return sig;
-}
-function getLastSnapshotHash() {
-  return lastSnapshotHash;
-}
-function invalidateLastSnapshotHash() {
-  lastSnapshotHash = null;
-}
-function identityMatches(sig, node) {
-  return node.type === sig.type && node.label === sig.label && node.identifier === sig.identifier;
-}
-function refreshRef(sig, nodes) {
-  const matches = [];
-  for (let i = 0; i < nodes.length; i++) {
-    if (identityMatches(sig, nodes[i]))
-      matches.push({ node: nodes[i], index: i });
-  }
-  if (matches.length === 0)
-    return { kind: "absent" };
-  if (matches.length === 1)
-    return { kind: "unique", node: matches[0].node };
-  if (nodes.length === sig.nodeCount) {
-    const atSameIndex = matches.filter((m) => m.index === sig.flatIndex);
-    if (atSameIndex.length === 1)
-      return { kind: "unique", node: atSameIndex[0].node };
-  }
-  return { kind: "ambiguous", candidates: matches.map((m) => m.node) };
-}
-var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, snapshotGeneration, keyboardStateAtSnapshot, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
-var init_fast_runner_ref_map = __esm({
-  "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
-    "use strict";
-    init_settle_hash();
-    refMap = /* @__PURE__ */ new Map();
-    metadataMap = /* @__PURE__ */ new Map();
-    screenRect = null;
-    lastUpdated = 0;
-    lastSnapshotHash = null;
-    snapshotGeneration = 0;
-    keyboardStateAtSnapshot = null;
-    WINDOW_TYPES = /* @__PURE__ */ new Set(["Application", "Window"]);
-    MAX_REF_MAP_AGE_MS = 6e4;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/keyboard-guard.js
-function resolveKeyboardGuard(env) {
-  const raw = (env.RN_KEYBOARD_GUARD ?? "").trim().toLowerCase();
-  return !(raw === "0" || raw === "false");
-}
-function withKeyboardGuard(payload, verb, env) {
-  if (!GUARDED_VERBS.has(verb))
-    return payload;
-  return { ...payload, guardKeyboard: resolveKeyboardGuard(env) };
-}
-function surfaceKeyboardGuard(result) {
-  const text = result.content?.[0]?.text;
-  if (typeof text !== "string")
-    return result;
-  let envelope;
-  try {
-    envelope = JSON.parse(text);
-  } catch {
-    return result;
-  }
-  if (envelope === null || typeof envelope !== "object")
-    return result;
-  const data = envelope.data;
-  const keyboardGuard = data?.keyboardGuard;
-  if (typeof keyboardGuard !== "string")
-    return result;
-  const meta = envelope.meta ?? {};
-  envelope.meta = { ...meta, keyboardGuard };
-  const keyboardGuardMs = data?.keyboardGuardMs;
-  if (typeof keyboardGuardMs === "number") {
-    const timings = meta.timings_ms ?? {};
-    envelope.meta = {
-      ...envelope.meta,
-      timings_ms: { ...timings, keyboardGuard: keyboardGuardMs }
-    };
-  }
-  return {
-    ...result,
-    content: [{ type: "text", text: JSON.stringify(envelope) }]
-  };
-}
-function isKeyboardOccludedRefusal(result) {
-  if (!result.isError)
-    return false;
-  const text = result.content?.[0]?.text;
-  if (typeof text !== "string")
-    return false;
-  let envelope;
-  try {
-    envelope = JSON.parse(text);
-  } catch {
-    return false;
-  }
-  if (envelope === null || typeof envelope !== "object")
-    return false;
-  const { code, error: error2 } = envelope;
-  if (code === "KEYBOARD_OCCLUDED" || code === "KEYBOARD_DISMISS_FAILED")
-    return true;
-  return typeof error2 === "string" && (error2.startsWith("KEYBOARD_OCCLUDED") || error2.startsWith("KEYBOARD_DISMISS_FAILED"));
-}
-function keyboardVisibility(result) {
-  const text = result?.content?.[0]?.text;
-  if (typeof text !== "string")
-    return null;
-  try {
-    const envelope = JSON.parse(text);
-    if (envelope.ok === false)
-      return null;
-    if (typeof envelope.data?.keyboardVisible === "boolean") {
-      return envelope.data.keyboardVisible;
-    }
-    return typeof envelope.data?.visible === "boolean" ? envelope.data.visible : null;
-  } catch {
-    return null;
-  }
-}
-async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms))) {
-  let last = "unknown";
-  for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
-    const visible = keyboardVisibility(await refreshSnapshot());
-    if (visible === false)
-      return "hidden";
-    if (visible === null)
-      return "unknown";
-    last = "visible";
-    if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1)
-      await sleep6(KEYBOARD_POSTCHECK_DELAY_MS);
-  }
-  return last;
-}
-function nativeDismissTiers(via) {
-  return via === "native-control" ? ["native-control"] : ["native-control", via];
-}
-function nativeTiersAttempted(native) {
-  if (!native.isError)
-    return ["native-control", "native-swipe"];
-  const text = native.content?.[0]?.text ?? "";
-  return text.includes("KEYBOARD_DISMISS_FAILED") ? ["native-control", "native-swipe"] : [];
-}
-async function dismissKeyboardWithParity(deps) {
-  const native = await deps.nativeDismiss();
-  if (!native.isError) {
-    let data = {};
-    try {
-      data = JSON.parse(native.content[0]?.text ?? "{}").data ?? {};
-    } catch {
-    }
-    if (data.wasVisible === false && data.visible !== true) {
-      return okResult({
-        dismissed: false,
-        keyboardGuard: "no_keyboard",
-        via: "no_keyboard",
-        attemptedTiers: []
-      });
-    }
-    if (data.dismissed === true && data.visible !== true) {
-      const via = typeof data.via === "string" ? data.via : "native-control";
-      const observed = data.visible === false ? "hidden" : await waitForKeyboardHidden(deps.refreshSnapshot);
-      if (observed !== "visible") {
-        return okResult({
-          dismissed: true,
-          keyboardGuard: "auto_dismissed",
-          via,
-          attemptedTiers: nativeDismissTiers(via),
-          visibilityProof: observed === "hidden" ? "observed-hidden" : "unavailable"
-        });
-      }
-    }
-  }
-  const attemptedTiers = nativeTiersAttempted(native);
-  if (deps.dismissViaJs) {
-    attemptedTiers.push("js");
-    try {
-      if (await deps.dismissViaJs()) {
-        const observed = await waitForKeyboardHidden(deps.refreshSnapshot);
-        if (observed !== "visible") {
-          return okResult({
-            dismissed: true,
-            keyboardGuard: "auto_dismissed",
-            via: "js",
-            attemptedTiers,
-            visibilityProof: observed === "hidden" ? "observed-hidden" : "unavailable"
-          });
-        }
-      }
-    } catch {
-    }
-  }
-  return failResult("KEYBOARD_DISMISS_FAILED: no dismissal tier proved the keyboard hidden; it was still visible or its state could not be established.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers });
-}
-async function healKeyboardOccludedTap(first, deps) {
-  if (!deps || !isKeyboardOccludedRefusal(first))
-    return first;
-  const t0 = Date.now();
-  let dismissed = false;
-  try {
-    dismissed = await deps.dismissViaJs();
-  } catch {
-    return first;
-  }
-  if (!dismissed)
-    return first;
-  try {
-    if (await waitForKeyboardHidden(deps.refreshSnapshot) === "visible")
-      return first;
-  } catch {
-    return first;
-  }
-  const retried = await deps.retryTap();
-  return tagKeyboardAutoHeal(retried, Date.now() - t0);
-}
-function tagKeyboardAutoHeal(result, healMs) {
-  const text = result.content?.[0]?.text;
-  if (typeof text !== "string")
-    return result;
-  let envelope;
-  try {
-    envelope = JSON.parse(text);
-  } catch {
-    return result;
-  }
-  if (envelope === null || typeof envelope !== "object")
-    return result;
-  const meta = envelope.meta ?? {};
-  envelope.meta = {
-    ...meta,
-    // A retry that refused again keeps its own guard status; only a served
-    // tap is stamped as JS-dismissed.
-    ...result.isError ? {} : { keyboardGuard: "auto_dismissed", via: "js" },
-    keyboardAutoHeal: { dismissed: true, via: "js", healMs }
-  };
-  return {
-    ...result,
-    content: [{ type: "text", text: JSON.stringify(envelope) }]
-  };
-}
-var GUARDED_VERBS, KEYBOARD_POSTCHECK_ATTEMPTS, KEYBOARD_POSTCHECK_DELAY_MS;
-var init_keyboard_guard = __esm({
-  "packages/rn-dev-agent-core/dist/runners/keyboard-guard.js"() {
-    "use strict";
-    init_utils();
-    GUARDED_VERBS = /* @__PURE__ */ new Set(["tap", "press", "longPress"]);
-    KEYBOARD_POSTCHECK_ATTEMPTS = 5;
-    KEYBOARD_POSTCHECK_DELAY_MS = 100;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync5, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync3 } from "node:fs";
-import { join as join5, dirname as dirname4 } from "node:path";
-import { homedir as homedir2 } from "node:os";
-function getStateDir() {
-  if (process.env.XDG_STATE_HOME) {
-    return join5(process.env.XDG_STATE_HOME, "rn-dev-agent");
-  }
-  if (process.platform === "darwin") {
-    return join5(homedir2(), "Library", "Application Support", "rn-dev-agent");
-  }
-  return join5(homedir2(), ".rn-dev-agent");
-}
-function runnerStatePath(key) {
-  const safe = key.replace(/[^A-Za-z0-9._:-]/g, "_");
-  return join5(getStateDir(), "runner-state", `${safe}.json`);
-}
-function readJsonStateFile(path) {
-  try {
-    const stat2 = lstatSync3(path);
-    if (stat2.isSymbolicLink())
-      return null;
-    return JSON.parse(readFileSync5(path, "utf8"));
-  } catch {
-    return null;
-  }
-}
-function writeJsonStateFileAtomic(path, value) {
-  mkdirSync4(dirname4(path), { recursive: true });
-  const tmpPath = `${path}.tmp.${process.pid}`;
-  writeFileSync2(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
-  renameSync(tmpPath, path);
-}
-function deleteStateFile(path) {
-  try {
-    unlinkSync2(path);
-  } catch {
-  }
-}
-function readLegacyTmpState(kind) {
-  return readJsonStateFile(LEGACY_TMP_STATE_FILES[kind]);
-}
-function cleanupLegacyTmpState() {
-  for (const p of Object.values(LEGACY_TMP_STATE_FILES))
-    deleteStateFile(p);
-}
-var LEGACY_TMP_STATE_FILES;
-var init_secure_state_file = __esm({
-  "packages/rn-dev-agent-core/dist/util/secure-state-file.js"() {
-    "use strict";
-    LEGACY_TMP_STATE_FILES = {
-      ios: "/tmp/rn-fast-runner-state.json",
-      android: "/tmp/rn-android-runner-state.json"
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync6, statSync as statSync3 } from "node:fs";
-import { join as join6 } from "node:path";
-function compactUnique(paths) {
-  const out = [];
-  for (const path of paths) {
-    if (!path || out.includes(path))
-      continue;
-    out.push(path);
-  }
-  return out;
-}
-function isDirectory(path) {
-  try {
-    return statSync3(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
-  const runnerRoot = process.env.RN_DEV_AGENT_NATIVE_RUNNER_ROOT;
-  const repoRoot = process.env.RN_DEV_AGENT_ROOT;
-  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
-  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
-  return compactUnique([
-    runnerRoot ? join6(runnerRoot, runnerName) : void 0,
-    repoRoot ? join6(repoRoot, "packages", runnerName) : void 0,
-    repoRoot ? join6(repoRoot, "scripts", runnerName) : void 0,
-    codexPluginRoot ? join6(codexPluginRoot, "scripts", runnerName) : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, "..", runnerName) : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, "scripts", runnerName) : void 0,
-    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join6(baseDir, "..", "..", "scripts", runnerName),
-    // Source checkout: packages/rn-dev-agent-core/dist/runners.
-    // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
-    join6(baseDir, "..", "..", "..", runnerName),
-    // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
-    join6(baseDir, "..", "..", "..", "..", "scripts", runnerName)
-  ]);
-}
-function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
-  const candidates = candidateNativeRunnerDirs(runnerName, baseDir);
-  return candidates.find(isDirectory) ?? candidates[0];
-}
-function candidateRunnerManifestFiles(baseDir = import.meta.dirname) {
-  const repoRoot = process.env.RN_DEV_AGENT_ROOT;
-  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
-  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
-  return compactUnique([
-    process.env.RN_DEV_AGENT_RUNNER_MANIFEST,
-    repoRoot ? join6(repoRoot, "runner-manifest.json") : void 0,
-    codexPluginRoot ? join6(codexPluginRoot, "runner-manifest.json") : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, "..", "..", "runner-manifest.json") : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, "runner-manifest.json") : void 0,
-    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join6(baseDir, "..", "..", "runner-manifest.json"),
-    // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
-    join6(baseDir, "..", "..", "..", "..", "runner-manifest.json"),
-    // Legacy source checkout: scripts/cdp-bridge/dist/runners.
-    join6(baseDir, "..", "..", "..", "runner-manifest.json")
-  ]);
-}
-function candidatePluginManifestFiles(baseDir = import.meta.dirname) {
-  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
-  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
-  return compactUnique([
-    process.env.RN_DEV_AGENT_PLUGIN_MANIFEST,
-    codexPluginRoot ? join6(codexPluginRoot, ".codex-plugin", "plugin.json") : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, ".claude-plugin", "plugin.json") : void 0,
-    claudePluginRoot ? join6(claudePluginRoot, "plugin.json") : void 0,
-    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join6(baseDir, "..", "..", ".codex-plugin", "plugin.json"),
-    // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
-    join6(baseDir, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
-    join6(baseDir, "..", "..", "..", "claude-plugin", "plugin.json"),
-    // Core package fallback. This is enough for artifact versioning in Codex.
-    join6(baseDir, "..", "package.json"),
-    join6(baseDir, "..", "..", "package.json")
-  ]);
-}
-function firstExistingFile(candidates) {
-  return candidates.find((path) => existsSync6(path)) ?? null;
-}
-var init_runtime_paths = __esm({
-  "packages/rn-dev-agent-core/dist/runners/runtime-paths.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/protocol.js
-import { readFileSync as readFileSync6 } from "node:fs";
-function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
-  if (health.protocolVersion === void 0)
-    return { compatible: false, reason: "legacy" };
-  if (health.protocolVersion < MIN_SUPPORTED_RUNNER_PROTOCOL) {
-    return { compatible: false, reason: "protocol-older" };
-  }
-  if (health.protocolVersion > RUNNER_PROTOCOL_VERSION) {
-    return { compatible: false, reason: "protocol-newer" };
-  }
-  if (pluginVersion !== null && health.runnerVersion !== void 0 && health.runnerVersion !== pluginVersion) {
-    return { compatible: false, reason: "version-skew" };
-  }
-  if (requiredCommands !== void 0) {
-    const advertised = new Set(health.commands ?? []);
-    const missing = requiredCommands.filter((c) => !advertised.has(c));
-    if (missing.length > 0) {
-      return { compatible: false, reason: "missing-commands", missing };
-    }
-  }
-  return { compatible: true };
-}
-function getPluginVersion() {
-  if (cachedPluginVersion !== void 0)
-    return cachedPluginVersion;
-  try {
-    const manifestPath = firstExistingFile(candidatePluginManifestFiles());
-    if (!manifestPath) {
-      cachedPluginVersion = null;
-      return cachedPluginVersion;
-    }
-    const parsed = JSON.parse(readFileSync6(manifestPath, "utf-8"));
-    cachedPluginVersion = typeof parsed.version === "string" ? parsed.version : null;
-  } catch {
-    cachedPluginVersion = null;
-  }
-  return cachedPluginVersion;
-}
-var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
-var init_protocol = __esm({
-  "packages/rn-dev-agent-core/dist/runners/protocol.js"() {
-    "use strict";
-    init_runtime_paths();
-    RUNNER_PROTOCOL_VERSION = 2;
-    MIN_SUPPORTED_RUNNER_PROTOCOL = 1;
-    REQUIRED_IOS_COMMANDS = [
-      "tap",
-      "type",
-      "drag",
-      "longPress",
-      "pinch",
-      "snapshot",
-      "screenshot",
-      "back",
-      "keyboardDismiss",
-      "status"
-    ];
-    REQUIRED_ANDROID_COMMANDS = [
-      "tap",
-      "type",
-      "drag",
-      "longPress",
-      "pinch",
-      "snapshot",
-      "screenshot",
-      "back",
-      "dismissKeyboard",
-      "status"
-    ];
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/quiescence.js
-function resolveQuiescenceBypass(env) {
-  const raw = (env.RN_QUIESCENCE_BYPASS ?? "").trim().toLowerCase();
-  return !(raw === "0" || raw === "false");
-}
-function buildRunnerQuiescenceEnv(env) {
-  const value = resolveQuiescenceBypass(env) ? "1" : "0";
-  return {
-    RN_QUIESCENCE_BYPASS: value,
-    TEST_RUNNER_RN_QUIESCENCE_BYPASS: value
-  };
-}
-var init_quiescence = __esm({
-  "packages/rn-dev-agent-core/dist/runners/quiescence.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
-import { execFileSync as execFileSync4 } from "node:child_process";
-import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync7, mkdirSync as mkdirSync5, readdirSync as readdirSync2, readFileSync as readFileSync7, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname5, join as join7 } from "node:path";
-function resolveArtifactDecision(input) {
-  if (input.envOverride)
-    return "build-local";
-  if (!input.hasManifestAssets)
-    return "build-local";
-  if (input.cacheValid)
-    return "cache";
-  return "download";
-}
-function assertNoTraversal(entryNames) {
-  for (const name of entryNames) {
-    const norm = name.replace(/\\/g, "/");
-    if (name.startsWith("/") || name.startsWith("\\") || /^[A-Za-z]:/.test(name) || norm.split("/").includes("..")) {
-      throw new Error(`unsafe zip entry (path traversal): ${name}`);
-    }
-  }
-}
-function verifyChecksums(expected, actualByName) {
-  const mismatched = [];
-  const missing = [];
-  for (const a of expected) {
-    const got = actualByName[a.name];
-    if (got === void 0)
-      missing.push(a.name);
-    else if (got !== a.sha256)
-      mismatched.push(a.name);
-  }
-  return { ok: mismatched.length === 0 && missing.length === 0, mismatched, missing };
-}
-function releaseAssetUrl(repo, version2, assetName) {
-  return `https://github.com/${repo}/releases/download/v${version2}/${assetName}`;
-}
-function cacheDirFor(home, platformOS, version2, platform) {
-  const root = platformOS === "darwin" ? join7(home, "Library", "Caches", "rn-dev-agent", "runners") : join7(home, ".cache", "rn-dev-agent", "runners");
-  return join7(root, version2, platform);
-}
-function formatArtifactSize(bytes) {
-  return `~${Math.max(1, Math.round(bytes / 1e6))} MB`;
-}
-function artifactProvenanceToState(p) {
-  return p === "build-local" ? "local" : "prebuilt";
-}
-async function acquireArtifact(platform, version2, deps, extractedOk) {
-  if (deps.env.RN_RUNNER_BUILD === "local")
-    return { provenance: "build-local" };
-  const manifest = deps.readManifest();
-  if (!version2 || !manifest || manifest.version !== version2)
-    return { provenance: "build-local" };
-  const assets = manifest.assets?.[platform] ?? [];
-  if (assets.length === 0)
-    return { provenance: "build-local" };
-  const cacheDir = deps.cacheDir(version2, platform);
-  const productsDir = join7(cacheDir, "products");
-  const actualByName = {};
-  let allZipsPresent = true;
-  for (const a of assets) {
-    const zp = join7(cacheDir, a.name);
-    if (deps.existsSync(zp)) {
-      try {
-        actualByName[a.name] = deps.sha256File(zp);
-      } catch {
-        allZipsPresent = false;
-      }
-    } else {
-      allZipsPresent = false;
-    }
-  }
-  const cacheValid = allZipsPresent && verifyChecksums(assets, actualByName).ok && extractedOk(productsDir);
-  const decision = resolveArtifactDecision({
-    envOverride: false,
-    hasManifestAssets: true,
-    cacheValid
-  });
-  if (decision === "cache")
-    return { provenance: "cache", productsDir };
-  try {
-    deps.mkdirp(cacheDir);
-    for (const a of assets) {
-      const zp = join7(cacheDir, a.name);
-      await deps.fetchToFile(releaseAssetUrl(RUNNER_REPO, version2, a.name), zp, {
-        timeoutMs: DOWNLOAD_TIMEOUT_MS,
-        maxBytes: a.bytes + DOWNLOAD_SIZE_SLACK_BYTES
-      });
-      const got = deps.sha256File(zp);
-      if (got !== a.sha256) {
-        throw new Error(`checksum mismatch for ${a.name} (expected ${a.sha256}, got ${got})`);
-      }
-      deps.unzip(zp, productsDir);
-    }
-    if (!extractedOk(productsDir)) {
-      throw new Error("prebuilt archive missing expected runner products after unzip");
-    }
-    const totalBytes = assets.reduce((sum, a) => sum + a.bytes, 0);
-    return {
-      provenance: "downloaded",
-      productsDir,
-      note: `downloaded prebuilt runner (${formatArtifactSize(totalBytes)})`
-    };
-  } catch (err) {
-    try {
-      deps.rm(productsDir);
-    } catch {
-    }
-    const msg3 = err instanceof Error ? err.message : String(err);
-    return {
-      provenance: "build-local",
-      note: `prebuilt runner unavailable (${msg3}); building locally`
-    };
-  }
-}
-function iosExtractedOk(deps) {
-  return (productsDir) => deps.listFiles(join7(productsDir, "Build", "Products")).some((f) => f.endsWith(".xctestrun"));
-}
-function androidExtractedOk(deps) {
-  return (productsDir) => deps.existsSync(join7(productsDir, ANDROID_APP_APK_NAME)) && deps.existsSync(join7(productsDir, ANDROID_TEST_APK_NAME));
-}
-async function resolveIosRunnerArtifacts(version2, localDerivedDataPath, deps = defaultArtifactDeps(), forceLocalBuild = false) {
-  if (forceLocalBuild) {
-    return { provenance: "build-local", derivedDataPath: localDerivedDataPath };
-  }
-  const r = await acquireArtifact("ios", version2, deps, iosExtractedOk(deps));
-  const derivedDataPath = r.provenance === "build-local" ? localDerivedDataPath : r.productsDir;
-  return { provenance: r.provenance, derivedDataPath, note: r.note };
-}
-async function resolveAndroidRunnerArtifacts(version2, local, deps = defaultArtifactDeps(), forceLocalBuild = false) {
-  if (forceLocalBuild) {
-    return { provenance: "build-local", appApk: local.appApk, testApk: local.testApk };
-  }
-  const r = await acquireArtifact("android", version2, deps, androidExtractedOk(deps));
-  if (r.provenance === "build-local") {
-    return { provenance: r.provenance, appApk: local.appApk, testApk: local.testApk, note: r.note };
-  }
-  return {
-    provenance: r.provenance,
-    appApk: join7(r.productsDir, ANDROID_APP_APK_NAME),
-    testApk: join7(r.productsDir, ANDROID_TEST_APK_NAME),
-    note: r.note
-  };
-}
-function readCommittedManifest() {
-  try {
-    const manifestPath = firstExistingFile(candidateRunnerManifestFiles());
-    if (!manifestPath)
-      return null;
-    const parsed = JSON.parse(readFileSync7(manifestPath, "utf-8"));
-    if (parsed && typeof parsed === "object" && parsed.assets)
-      return parsed;
-    return null;
-  } catch {
-    return null;
-  }
-}
-function sha256File(p) {
-  return createHash6("sha256").update(readFileSync7(p)).digest("hex");
-}
-async function fetchToFile(url, dest, opts) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-  try {
-    const res = await fetch(url, { signal: controller.signal, redirect: "follow" });
-    if (!res.ok)
-      throw new Error(`HTTP ${res.status} fetching ${url}`);
-    if (!res.body)
-      throw new Error(`empty response body for ${url}`);
-    mkdirSync5(dirname5(dest), { recursive: true });
-    const reader = res.body.getReader();
-    const chunks = [];
-    let total = 0;
-    for (; ; ) {
-      const { done, value } = await reader.read();
-      if (done)
-        break;
-      total += value.byteLength;
-      if (total > opts.maxBytes) {
-        throw new Error(`artifact exceeds size cap (${opts.maxBytes} bytes)`);
-      }
-      chunks.push(Buffer.from(value));
-    }
-    writeFileSync3(dest, Buffer.concat(chunks));
-  } finally {
-    clearTimeout(timer);
-  }
-}
-function unzipWithGuard(zipPath, destDir) {
-  const listing = execFileSync4("unzip", ["-Z1", zipPath], { encoding: "utf-8" });
-  const entries = listing.split("\n").map((s) => s.trim()).filter(Boolean);
-  assertNoTraversal(entries);
-  mkdirSync5(destDir, { recursive: true });
-  execFileSync4("unzip", ["-o", "-qq", zipPath, "-d", destDir], { stdio: "ignore" });
-}
-function defaultArtifactDeps() {
-  return {
-    env: process.env,
-    readManifest: readCommittedManifest,
-    cacheDir: (version2, platform) => cacheDirFor(homedir3(), process.platform, version2, platform),
-    existsSync: existsSync7,
-    sha256File,
-    listFiles: (dir) => {
-      try {
-        return readdirSync2(dir);
-      } catch {
-        return [];
-      }
-    },
-    fetchToFile,
-    unzip: unzipWithGuard,
-    mkdirp: (p) => {
-      mkdirSync5(p, { recursive: true });
-    },
-    rm: (p) => {
-      rmSync2(p, { recursive: true, force: true });
-    }
-  };
-}
-var RUNNER_REPO, ANDROID_APP_APK_NAME, ANDROID_TEST_APK_NAME, DOWNLOAD_TIMEOUT_MS, DOWNLOAD_SIZE_SLACK_BYTES;
-var init_runner_artifacts = __esm({
-  "packages/rn-dev-agent-core/dist/runners/runner-artifacts.js"() {
-    "use strict";
-    init_runtime_paths();
-    RUNNER_REPO = "Lykhoyda/rn-dev-agent";
-    ANDROID_APP_APK_NAME = "app-debug.apk";
-    ANDROID_TEST_APK_NAME = "app-debug-androidTest.apk";
-    DOWNLOAD_TIMEOUT_MS = 6e4;
-    DOWNLOAD_SIZE_SLACK_BYTES = 65536;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/transport-recovery.js
-import { randomUUID } from "node:crypto";
-function isMutatingCommand(command) {
-  return MUTATING_COMMANDS.has(String(command));
-}
-function generateCommandId() {
-  return `c-${randomUUID()}`;
-}
-function isAmbiguousTransportFailure(message) {
-  if (message.startsWith("RUNNER_PROTOCOL_MISMATCH"))
-    return false;
-  if (/not started/i.test(message))
-    return false;
-  return true;
-}
-function parseStatusProbeReply(resp, expectedCommandId) {
-  if (!resp || typeof resp !== "object")
-    return null;
-  const r = resp;
-  if (r.ok !== true || !r.data || typeof r.data !== "object")
-    return null;
-  const data = r.data;
-  if (data.commandId !== expectedCommandId)
-    return null;
-  if (typeof data.state !== "string" || !PROBE_STATES.has(data.state))
-    return null;
-  const reply = { state: data.state };
-  if (data.result !== void 0 && data.result !== null && typeof data.result === "object" && typeof data.result.ok === "boolean") {
-    reply.result = data.result;
-  }
-  return reply;
-}
-function decideRecovery(probe, command) {
-  if (!probe || probe.state === "unknown")
-    return { action: "rethrow" };
-  if (probe.result !== void 0) {
-    return {
-      action: "return-recovered",
-      response: probe.result,
-      outcome: probe.state === "failed" ? "recovered-error" : "recovered"
-    };
-  }
-  if (probe.state === "completed" && !isMutatingCommand(command)) {
-    return { action: "resend-once" };
-  }
-  return { action: "rethrow" };
-}
-var MUTATING_COMMANDS, PROBE_STATES;
-var init_transport_recovery = __esm({
-  "packages/rn-dev-agent-core/dist/runners/transport-recovery.js"() {
-    "use strict";
-    MUTATING_COMMANDS = /* @__PURE__ */ new Set([
-      "tap",
-      "mouseClick",
-      "tapSeries",
-      "longPress",
-      "drag",
-      "dragSeries",
-      "remotePress",
-      "type",
-      "fill",
-      "press",
-      "swipe",
-      "scroll",
-      "back",
-      "backInApp",
-      "backSystem",
-      "home",
-      "pressHome",
-      "rotate",
-      "appSwitcher",
-      "keyboardDismiss",
-      "dismissKeyboard",
-      "keyboard",
-      "alert",
-      "pinch",
-      "activate",
-      "terminate",
-      "shutdown"
-    ]);
-    PROBE_STATES = /* @__PURE__ */ new Set(["completed", "failed", "unknown"]);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
-var rn_fast_runner_client_exports = {};
-__export(rn_fast_runner_client_exports, {
-  _resetCapabilitiesForTest: () => _resetCapabilitiesForTest,
-  _resetQuiescenceAnnouncementForTest: () => _resetQuiescenceAnnouncementForTest,
-  _resetStaleHittableWarnForTest: () => _resetStaleHittableWarnForTest,
-  _setFastRunnerStateForTest: () => _setFastRunnerStateForTest,
-  _setFetchForTest: () => _setFetchForTest,
-  _setHttpTimeoutForTest: () => _setHttpTimeoutForTest,
-  _setRunnerStateForTest: () => _setRunnerStateForTest,
-  acquireRunnerRebuildLock: () => acquireRunnerRebuildLock,
-  adoptPersistedFastRunnerState: () => adoptPersistedFastRunnerState,
-  buildRunnerAuthorityEnv: () => buildRunnerAuthorityEnv,
-  buildRunnerPortEnv: () => buildRunnerPortEnv,
-  buildRunnerTestFaultEnv: () => buildRunnerTestFaultEnv,
-  buildRunnerVersionEnv: () => buildRunnerVersionEnv,
-  captureFastRunnerCommandAuthority: () => captureFastRunnerCommandAuthority,
-  clearFastRunnerAfterVerifiedStop: () => clearFastRunnerAfterVerifiedStop,
-  consumePendingFastRunnerArtifactNote: () => consumePendingFastRunnerArtifactNote,
-  createReadySignalParser: () => createReadySignalParser,
-  derivedDataPathForRunner: () => derivedDataPathForRunner,
-  fastHealthCheck: () => fastHealthCheck,
-  fastSwipe: () => fastSwipe,
-  getFastRunnerCapabilities: () => getFastRunnerCapabilities,
-  getFastRunnerState: () => getFastRunnerState,
-  getRunnerPostMortem: () => getRunnerPostMortem,
-  hasBuiltTestProduct: () => hasBuiltTestProduct,
-  iosStatePath: () => iosStatePath,
-  isFastRunnerAvailable: () => isFastRunnerAvailable,
-  parseLegacyRunnerState: () => parseLegacyRunnerState,
-  parsePersistedRunnerState: () => parsePersistedRunnerState,
-  parseReadySignal: () => parseReadySignal,
-  probeFastRunnerAuthority: () => probeFastRunnerAuthority,
-  probeFastRunnerLiveness: () => probeFastRunnerLiveness,
-  probeFastRunnerLivenessDetailed: () => probeFastRunnerLivenessDetailed,
-  reapStaleFastRunner: () => reapStaleFastRunner,
-  releaseRunnerRebuildLock: () => releaseRunnerRebuildLock,
-  resolveReadyTimeoutMs: () => resolveReadyTimeoutMs,
-  resolveRunnerRequestedPort: () => resolveRunnerRequestedPort,
-  resolveRunnerStartPlan: () => resolveRunnerStartPlan,
-  runIOS: () => runIOS,
-  runnerRebuildBudget: () => runnerRebuildBudget,
-  shouldReuseRunner: () => shouldReuseRunner,
-  startFastRunner: () => startFastRunner,
-  stopFastRunner: () => stopFastRunner,
-  verifyTypeResultAfterSettle: () => verifyTypeResultAfterSettle
-});
-import { spawn } from "node:child_process";
-import { join as join8 } from "node:path";
-import { randomBytes as randomBytes2, randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync8, readdirSync as readdirSync3, mkdirSync as mkdirSync6, rmSync as rmSync3, statSync as statSync4, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "node:fs";
-function resolveReadyTimeoutMs() {
-  const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
-}
-function parseReadySignal(buf) {
-  const parser = createReadySignalParser();
-  return parser.feed(buf);
-}
-function createReadySignalParser() {
-  let pending2 = "";
-  let seenReady = false;
-  let quiescence;
-  return {
-    feed(chunk) {
-      pending2 += chunk;
-      let nl;
-      while ((nl = pending2.indexOf("\n")) !== -1) {
-        const line = pending2.slice(0, nl).replace(/\r$/, "");
-        pending2 = pending2.slice(nl + 1);
-        if (line.includes("RN_FAST_RUNNER_LISTENER_FAILED")) {
-          return { error: "RN_FAST_RUNNER_LISTENER_FAILED" };
-        }
-        if (line.includes("RN_FAST_RUNNER_PORT_NOT_SET")) {
-          return { error: "RN_FAST_RUNNER_PORT_NOT_SET" };
-        }
-        if (line.includes("RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE")) {
-          quiescence = "active";
-        } else if (line.includes("RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED")) {
-          quiescence = "disabled";
-        } else if (line.includes("RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE")) {
-          quiescence = "unavailable";
-        }
-        if (!seenReady) {
-          if (line.includes("RN_FAST_RUNNER_LISTENER_READY")) {
-            seenReady = true;
-          }
-          continue;
-        }
-        const portMatch = line.match(/RN_FAST_RUNNER_PORT=(\d+)/);
-        if (portMatch) {
-          return {
-            ready: true,
-            port: Number(portMatch[1]),
-            ...quiescence !== void 0 ? { quiescence } : {}
-          };
-        }
-      }
-      return null;
-    }
-  };
-}
-function appendRunnerOutput(stream, chunk) {
-  runnerOutputTail = `${runnerOutputTail}${stream}: ${chunk}`.slice(-8e3);
-}
-function getRunnerPostMortem() {
-  return lastRunnerPostMortem ?? {
-    available: false,
-    provenance: runnerProcess ? "spawned" : "adopted"
-  };
-}
-function getFastRunnerCapabilities() {
-  return lastKnownCapabilities;
-}
-function _resetCapabilitiesForTest() {
-  lastKnownCapabilities = [];
-}
-function _setFastRunnerStateForTest(state) {
-  runnerState = state ? {
-    ...state,
-    capability: state.capability ?? "test-capability".repeat(3)
-  } : null;
-  runnerProcess = null;
-  lastRunnerPostMortem = null;
-}
-function _resetQuiescenceAnnouncementForTest(pending2) {
-  quiescenceAnnouncementPending = pending2;
-}
-function takeQuiescenceAnnouncement() {
-  if (!quiescenceAnnouncementPending)
-    return null;
-  quiescenceAnnouncementPending = false;
-  if (!runnerState?.quiescence || !QUIESCENCE_STATUSES.has(runnerState.quiescence))
-    return null;
-  return { quiescenceBypass: runnerState.quiescence };
-}
-function iosStatePath(deviceId) {
-  return runnerStatePath(`ios-${deviceId}`);
-}
-function parsePersistedRunnerState(raw, pidAlive = defaultProcessAlive2) {
-  if (!raw || typeof raw !== "object")
-    return null;
-  const s = raw;
-  if (s.schemaVersion !== 1)
-    return null;
-  if (typeof s.pid !== "number" || typeof s.port !== "number")
-    return null;
-  if (typeof s.deviceId !== "string" || typeof s.bundleId !== "string")
-    return null;
-  if (!pidAlive(s.pid))
-    return null;
-  return s;
-}
-function parseLegacyRunnerState(raw, pidAlive = defaultProcessAlive2) {
-  if (!raw || typeof raw !== "object")
-    return null;
-  const s = raw;
-  if (typeof s.pid !== "number" || typeof s.port !== "number")
-    return null;
-  if (typeof s.deviceId !== "string")
-    return null;
-  if (!pidAlive(s.pid))
-    return null;
-  return {
-    schemaVersion: 1,
-    pid: s.pid,
-    port: s.port,
-    deviceId: s.deviceId,
-    bundleId: typeof s.bundleId === "string" ? s.bundleId : "",
-    startedAt: "",
-    protocolVersion: 0
-  };
-}
-function adoptPersistedFastRunnerState(deviceId) {
-  if (runnerState || !deviceId)
-    return;
-  const path = iosStatePath(deviceId);
-  const raw = readJsonStateFile(path);
-  if (raw !== null) {
-    const parsed = parsePersistedRunnerState(raw);
-    if (!parsed) {
-      deleteStateFile(path);
-      return;
-    }
-    runnerState = parsed;
-    quiescenceAnnouncementPending = true;
-    return;
-  }
-  const legacy = readLegacyTmpState("ios");
-  if (legacy === null)
-    return;
-  const parsedLegacy = parseLegacyRunnerState(legacy);
-  if (!parsedLegacy) {
-    cleanupLegacyTmpState();
-    return;
-  }
-  if (parsedLegacy.deviceId === deviceId) {
-    runnerState = parsedLegacy;
-    quiescenceAnnouncementPending = true;
-  }
-}
-function getFastRunnerState() {
-  return runnerState;
-}
-function captureFastRunnerCommandAuthority() {
-  if (!runnerState)
-    return null;
-  return {
-    pid: runnerState.pid,
-    port: runnerState.port,
-    deviceId: runnerState.deviceId,
-    statePath: iosStatePath(runnerState.deviceId),
-    provenance: runnerProcess?.pid === runnerState.pid ? "spawned" : "adopted"
-  };
-}
-function _setRunnerStateForTest(state) {
-  _setFastRunnerStateForTest(state);
-}
-function isFastRunnerAvailable() {
-  if (!runnerState)
-    return false;
-  try {
-    process.kill(runnerState.pid, 0);
-    return true;
-  } catch {
-  }
-  clearStateFile();
-  return false;
-}
-function resolveRunnerStartPlan(opts) {
-  const common = [
-    "-project",
-    opts.projectPath,
-    "-scheme",
-    opts.scheme,
-    "-destination",
-    `platform=iOS Simulator,id=${opts.deviceId}`,
-    "-derivedDataPath",
-    opts.derivedDataPath
-  ];
-  const launch = {
-    action: "test-without-building",
-    args: ["test-without-building", ...common, `-only-testing:${opts.onlyTesting}`]
-  };
-  if (opts.hasBuiltTestProduct)
-    return [launch];
-  return [{ action: "build-for-testing", args: ["build-for-testing", ...common] }, launch];
-}
-function hasBuiltTestProduct(derivedDataPath) {
-  try {
-    const productsDir = join8(derivedDataPath, "Build", "Products");
-    if (!existsSync8(productsDir))
-      return false;
-    return readdirSync3(productsDir).some((entry) => entry.endsWith(".xctestrun"));
-  } catch {
-    return false;
-  }
-}
-function derivedDataPathForRunner() {
-  return join8(FAST_RUNNER_PROJECT, "build", "DerivedData");
-}
-function acquireRunnerRebuildLock() {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      mkdirSync6(REBUILD_LOCK_DIR, { recursive: false });
-      return true;
-    } catch (err) {
-      if (err.code !== "EEXIST")
-        return true;
-      try {
-        const age = Date.now() - statSync4(REBUILD_LOCK_DIR).mtimeMs;
-        if (age < REBUILD_LOCK_STALE_MS)
-          return false;
-        rmSync3(REBUILD_LOCK_DIR, { recursive: true, force: true });
-      } catch {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-function releaseRunnerRebuildLock() {
-  try {
-    rmSync3(REBUILD_LOCK_DIR, { recursive: true, force: true });
-  } catch {
-  }
-}
-function consumePendingFastRunnerArtifactNote() {
-  const note = pendingFastRunnerArtifactNote;
-  pendingFastRunnerArtifactNote = void 0;
-  return note;
-}
-function _resetStaleHittableWarnForTest() {
-  staleHittableWarned = false;
-}
-function noteStaleHittableArtifact(capabilities) {
-  if (staleHittableWarned || (capabilities ?? []).includes("HONEST_HITTABLE"))
-    return;
-  if (pendingFastRunnerArtifactNote !== void 0)
-    return;
-  staleHittableWarned = true;
-  pendingFastRunnerArtifactNote = "runner artifact predates honest hittable (#395): snapshot hittable values are stale (always false) \u2014 delete packages/rn-fast-runner/build/DerivedData and reopen the device session to rebuild, or upgrade the plugin.";
-}
-function shouldReuseRunner(state, deviceId) {
-  const authority = runnerAuthorityFromEnvironment(false);
-  return state !== null && state.deviceId === deviceId && authority !== null && state.sessionId === authority.sessionId && state.claimEpoch === authority.claimEpoch && typeof state.capability === "string" && state.capability.length >= 32;
-}
-function runnerAuthorityFromEnvironment(required3) {
-  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
-  const claimEpoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
-    if (!required3)
-      return null;
-    throw new Error("SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session");
-  }
-  return {
-    instanceId: randomUUID2(),
-    sessionId,
-    claimEpoch,
-    capability: randomBytes2(32).toString("base64url")
-  };
-}
-function buildRunnerAuthorityEnv(authority) {
-  const values = {
-    RN_RUNNER_INSTANCE_ID: authority.instanceId,
-    RN_RUNNER_SESSION_ID: authority.sessionId,
-    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
-    RN_RUNNER_CAPABILITY: authority.capability
-  };
-  return Object.fromEntries(Object.entries(values).flatMap(([key, value]) => [
-    [key, value],
-    [`TEST_RUNNER_${key}`, value]
-  ]));
-}
-function buildRunnerTargetEnv(deviceId, appId) {
-  return {
-    RN_RUNNER_DEVICE_ID: deviceId,
-    TEST_RUNNER_RN_RUNNER_DEVICE_ID: deviceId,
-    RN_RUNNER_APP_ID: appId,
-    TEST_RUNNER_RN_RUNNER_APP_ID: appId
-  };
-}
-function buildRunnerVersionEnv(pluginVersion) {
-  if (pluginVersion === null)
-    return {};
-  return {
-    RN_PLUGIN_VERSION: pluginVersion,
-    TEST_RUNNER_RN_PLUGIN_VERSION: pluginVersion
-  };
-}
-function buildRunnerPortEnv(port) {
-  const value = String(port);
-  return {
-    RN_FAST_RUNNER_PORT: value,
-    TEST_RUNNER_RN_FAST_RUNNER_PORT: value
-  };
-}
-function buildRunnerTestFaultEnv(env) {
-  const value = env.TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT ?? env.RN_FAST_RUNNER_TEST_FAULT;
-  if (!value)
-    return {};
-  return {
-    RN_FAST_RUNNER_TEST_FAULT: value,
-    TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT: value
-  };
-}
-function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve11, reject) => {
-    const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
-    let stderrTail = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`xcodebuild ${args[0]} did not complete within ${timeoutMs / 1e3}s (cold build \u2014 first run compiles the runner)`));
-    }, timeoutMs);
-    child.stderr.setEncoding("utf-8");
-    child.stderr.on("data", (chunk) => {
-      stderrTail = (stderrTail + chunk).slice(-2e3);
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      if (code === 0)
-        resolve11();
-      else
-        reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
-    });
-  });
-}
-function resolveRunnerRequestedPort(explicitPort) {
-  return explicitPort ?? 0;
-}
-async function startFastRunner(deviceId, bundleId, port, opts = {}) {
-  adoptPersistedFastRunnerState(deviceId);
-  if (shouldReuseRunner(runnerState, deviceId))
-    return runnerState;
-  if (runnerState)
-    await stopFastRunner(deviceId);
-  const authority = runnerAuthorityFromEnvironment(true);
-  const desired = resolveRunnerRequestedPort(port);
-  const projectPath = join8(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
-  if (!existsSync8(projectPath)) {
-    throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
-  }
-  const artifacts = await resolveIosRunnerArtifacts(getPluginVersion(), derivedDataPathForRunner(), void 0, opts.forceLocalBuild);
-  const derivedDataPath = artifacts.derivedDataPath;
-  if (artifacts.note)
-    pendingFastRunnerArtifactNote = artifacts.note;
-  const plan = resolveRunnerStartPlan({
-    projectPath,
-    scheme: "RnFastRunner",
-    deviceId,
-    derivedDataPath,
-    onlyTesting: "RnFastRunnerUITests/RnFastRunnerTests/testCommand",
-    hasBuiltTestProduct: hasBuiltTestProduct(derivedDataPath)
-  });
-  for (const step of plan.slice(0, -1)) {
-    await runXcodebuildToExit(step.args, BUILD_READY_TIMEOUT_MS);
-    if (!hasBuiltTestProduct(derivedDataPath)) {
-      throw new Error(`xcodebuild ${step.action} completed but left no .xctestrun under ${derivedDataPath}/Build/Products \u2014 unexpected DerivedData layout`);
-    }
-  }
-  const launch = plan[plan.length - 1];
-  const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve11, reject) => {
-    const child = spawn("xcodebuild", launch.args, {
-      env: {
-        ...process.env,
-        ...buildRunnerPortEnv(desired),
-        ...buildRunnerVersionEnv(getPluginVersion()),
-        ...buildRunnerQuiescenceEnv(process.env),
-        ...buildRunnerAuthorityEnv(authority),
-        ...buildRunnerTargetEnv(deviceId, bundleId),
-        ...runnerTestFaultEnv
-      },
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    runnerProcess = child;
-    runnerOutputTail = "";
-    lastRunnerCommand = null;
-    lastRunnerPostMortem = null;
-    const parser = createReadySignalParser();
-    let resolved = false;
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1e3}s`));
-    }, READY_TIMEOUT_MS);
-    const handleChunk = (chunk, stream) => {
-      appendRunnerOutput(stream, chunk);
-      if (resolved)
-        return;
-      const result = parser.feed(chunk);
-      if (!result)
-        return;
-      resolved = true;
-      clearTimeout(timer);
-      if ("error" in result) {
-        reject(new Error(`Fast runner failed to start: ${result.error}`));
-        return;
-      }
-      const state = {
-        schemaVersion: 1,
-        port: result.port,
-        pid: child.pid,
-        deviceId,
-        bundleId,
-        startedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        protocolVersion: RUNNER_PROTOCOL_VERSION,
-        ...getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {},
-        provenance: artifactProvenanceToState(artifacts.provenance),
-        ...result.quiescence !== void 0 ? { quiescence: result.quiescence } : {},
-        ...authority
-      };
-      const processBirth = readProcessBirth(child.pid);
-      if (!processBirth) {
-        child.kill("SIGTERM");
-        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
-        return;
-      }
-      state.processBirth = processBirth.token;
-      runnerState = state;
-      if (Object.keys(runnerTestFaultEnv).length > 0)
-        runnerTestFaultForwarded = true;
-      quiescenceAnnouncementPending = true;
-      try {
-        writeJsonStateFileAtomic(iosStatePath(deviceId), state);
-      } catch {
-      }
-      cleanupLegacyTmpState();
-      resolve11(state);
-    };
-    child.stdout.setEncoding("utf-8");
-    child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
-    child.stderr.setEncoding("utf-8");
-    child.stderr.on("data", (chunk) => handleChunk(chunk, "stderr"));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      if (runnerProcess === child) {
-        clearStateFile();
-      }
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
-    });
-    child.on("exit", (code, signal) => {
-      lastRunnerPostMortem = {
-        available: true,
-        provenance: "spawned",
-        lastCommand: lastRunnerCommand,
-        exitCode: code,
-        signal,
-        outputTail: runnerOutputTail
-      };
-      if (runnerProcess === child) {
-        clearStateFile();
-      }
-      clearTimeout(timer);
-      reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? "none"})`));
-    });
-  });
-}
-async function stopFastRunner(deviceId) {
-  adoptPersistedFastRunnerState(deviceId);
-  await reapStaleFastRunner();
-}
-function clearFastRunnerAfterVerifiedStop(binding) {
-  const expected = {
-    pid: Number(binding.pid),
-    processBirth: String(binding.processBirth ?? ""),
-    instanceId: String(binding.instanceId ?? ""),
-    deviceId: String(binding.deviceId ?? "")
-  };
-  if (!Number.isSafeInteger(expected.pid) || !expected.processBirth || !expected.instanceId || !expected.deviceId) {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete");
-  }
-  const path = iosStatePath(expected.deviceId);
-  const persisted = readJsonStateFile(path);
-  const identityMatches2 = (observed) => observed.pid === expected.pid && observed.processBirth === expected.processBirth && observed.instanceId === expected.instanceId && observed.deviceId === expected.deviceId;
-  if (runnerState && !identityMatches2(runnerState) || persisted && !identityMatches2(persisted)) {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup");
-  }
-  if (runnerProcess?.pid !== void 0 && runnerProcess.pid !== expected.pid) {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup");
-  }
-  runnerState = null;
-  runnerProcess = null;
-  lastKnownCapabilities = [];
-  if (persisted !== null)
-    deleteStateFile(path);
-}
-async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
-  const body = { command: "drag", x: x1, y: y1, x2, y2 };
-  if (durationMs != null)
-    body.durationMs = durationMs;
-  if (bundleId)
-    body.appBundleId = bundleId;
-  const resp = await postCommand(body);
-  return resp;
-}
-async function fastHealthCheck() {
-  if (!runnerState)
-    return false;
-  try {
-    const result = await defaultHttpProbe(runnerState.port, 2e3);
-    return result.ok && result.status === 200 && result.bodyOk === true;
-  } catch {
-    return false;
-  }
-}
-function defaultProcessAlive2(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function defaultHttpProbe(port, timeoutMs, capabilityOverride) {
-  const url = `http://127.0.0.1:${port}/health`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const capability = capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : void 0);
-    const res = await fetchImpl(url, {
-      signal: controller.signal,
-      headers: capability ? { authorization: `Bearer ${capability}` } : {}
-    });
-    if (!res.ok)
-      return { ok: false, status: res.status };
-    let bodyOk;
-    let protocolVersion;
-    let runnerVersion;
-    let capabilities;
-    let commands;
-    let instanceId;
-    let sessionId;
-    let claimEpoch;
-    let deviceId;
-    let appId;
-    try {
-      const body = await res.json();
-      bodyOk = body.ok === true;
-      if (typeof body.protocolVersion === "number")
-        protocolVersion = body.protocolVersion;
-      if (typeof body.runnerVersion === "string")
-        runnerVersion = body.runnerVersion;
-      if (Array.isArray(body.capabilities)) {
-        capabilities = body.capabilities.filter((c) => typeof c === "string");
-      }
-      if (Array.isArray(body.commands)) {
-        commands = body.commands.filter((c) => typeof c === "string");
-      }
-      if (typeof body.instanceId === "string")
-        instanceId = body.instanceId;
-      if (typeof body.sessionId === "string")
-        sessionId = body.sessionId;
-      if (typeof body.claimEpoch === "number")
-        claimEpoch = body.claimEpoch;
-      if (typeof body.deviceId === "string")
-        deviceId = body.deviceId;
-      if (typeof body.appId === "string")
-        appId = body.appId;
-    } catch {
-      bodyOk = false;
-    }
-    return {
-      ok: true,
-      status: res.status,
-      bodyOk,
-      ...protocolVersion !== void 0 ? { protocolVersion } : {},
-      ...runnerVersion !== void 0 ? { runnerVersion } : {},
-      ...capabilities !== void 0 ? { capabilities } : {},
-      ...commands !== void 0 ? { commands } : {},
-      ...instanceId !== void 0 ? { instanceId } : {},
-      ...sessionId !== void 0 ? { sessionId } : {},
-      ...claimEpoch !== void 0 ? { claimEpoch } : {},
-      ...deviceId !== void 0 ? { deviceId } : {},
-      ...appId !== void 0 ? { appId } : {}
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function probeFastRunnerAuthority(input) {
-  try {
-    const result = await defaultHttpProbe(input.port, 2e3, input.capability);
-    return result.ok && result.status === 200 && result.bodyOk === true && result.instanceId === input.instanceId && result.sessionId === input.sessionId && result.claimEpoch === input.claimEpoch && result.deviceId === input.deviceId && result.appId === input.appId;
-  } catch {
-    return false;
-  }
-}
-function clearStateFile() {
-  const path = runnerState ? iosStatePath(runnerState.deviceId) : null;
-  runnerState = null;
-  lastKnownCapabilities = [];
-  runnerProcess = null;
-  if (path)
-    deleteStateFile(path);
-}
-function clearStateFileIfMatches(expected) {
-  const identityMatches2 = (observed) => observed.pid === expected.pid && observed.deviceId === expected.deviceId && observed.processBirth === expected.processBirth;
-  const path = iosStatePath(expected.deviceId);
-  const persisted = readJsonStateFile(path);
-  let clearedCurrent = false;
-  if (runnerState && identityMatches2(runnerState)) {
-    runnerState = null;
-    clearedCurrent = true;
-  }
-  if (runnerProcess?.pid === expected.pid) {
-    runnerProcess = null;
-    clearedCurrent = true;
-  }
-  if (persisted && identityMatches2(persisted))
-    deleteStateFile(path);
-  if (clearedCurrent)
-    lastKnownCapabilities = [];
-}
-async function probeFastRunnerLivenessDetailed(deps = {}) {
-  const getState = deps.getState ?? (() => runnerState);
-  const processAlive = deps.processAlive ?? defaultProcessAlive2;
-  const httpProbe = deps.httpProbe ?? defaultHttpProbe;
-  const clearState = deps.clearState ?? clearStateFile;
-  const timeoutMs = deps.timeoutMs ?? 2e3;
-  const state = getState();
-  if (!state)
-    return { liveness: "dead" };
-  if (!processAlive(state.pid)) {
-    clearState();
-    return { liveness: "dead" };
-  }
-  try {
-    const res = await httpProbe(state.port, timeoutMs);
-    if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
-      lastKnownCapabilities = [];
-      return { liveness: "stale", staleReason: "health" };
-    }
-    if (state.sessionId !== void 0 && (res.instanceId !== state.instanceId || res.sessionId !== state.sessionId || res.claimEpoch !== state.claimEpoch || res.deviceId !== state.deviceId || res.appId !== state.bundleId)) {
-      lastKnownCapabilities = [];
-      return { liveness: "stale", staleReason: "authority-mismatch" };
-    }
-    const plugin = deps.pluginVersion !== void 0 ? deps.pluginVersion : getPluginVersion();
-    const compat = classifyRunnerCompatibility({
-      ...res.protocolVersion !== void 0 ? { protocolVersion: res.protocolVersion } : {},
-      ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {},
-      ...res.commands !== void 0 ? { commands: res.commands } : {}
-    }, plugin, REQUIRED_IOS_COMMANDS);
-    if (!compat.compatible) {
-      lastKnownCapabilities = [];
-      return {
-        liveness: "stale",
-        staleReason: compat.reason,
-        ...compat.missing !== void 0 ? { missingCommands: compat.missing } : {},
-        ...res.protocolVersion !== void 0 ? { runnerProtocolVersion: res.protocolVersion } : {},
-        ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {}
-      };
-    }
-    lastKnownCapabilities = res.capabilities ?? [];
-    noteStaleHittableArtifact(res.capabilities);
-    if (typeof res.protocolVersion === "number") {
-      state.protocolVersion = res.protocolVersion;
-    }
-    return {
-      liveness: "alive",
-      ...res.protocolVersion !== void 0 ? { runnerProtocolVersion: res.protocolVersion } : {},
-      ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {},
-      ...res.capabilities !== void 0 ? { capabilities: res.capabilities } : {}
-    };
-  } catch {
-    lastKnownCapabilities = [];
-    return { liveness: "stale", staleReason: "health" };
-  }
-}
-async function probeFastRunnerLiveness(deps = {}) {
-  return (await probeFastRunnerLivenessDetailed(deps)).liveness;
-}
-async function reapStaleFastRunner(deps = {}) {
-  const getState = deps.getState ?? (() => runnerState);
-  const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const clearState = deps.clearState ?? clearStateFileIfMatches;
-  const graceMs = deps.graceMs ?? 500;
-  const state = getState();
-  if (!state)
-    return;
-  const expectedBirth = typeof state.processBirth === "string" ? { pid: state.pid, token: state.processBirth } : null;
-  if (!expectedBirth) {
-    const observed = deps.probeProcessBirth ? deps.probeProcessBirth(state.pid) : deps.processAlive ? deps.processAlive(state.pid) ? { status: "present" } : { status: "absent" } : probeProcessBirth(state.pid);
-    if (observed.status === "absent") {
-      clearState(state);
-      return;
-    }
-    throw new Error("RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority");
-  }
-  const probeExpected = () => {
-    if (deps.probeProcessBirth) {
-      const observed2 = deps.probeProcessBirth(expectedBirth.pid);
-      if (observed2.status === "unknown")
-        return "unknown";
-      if (observed2.status === "absent")
-        return "gone";
-      return observed2.birth.token === expectedBirth.token ? "match" : "gone";
-    }
-    if (deps.matchesProcessBirth) {
-      return deps.matchesProcessBirth(expectedBirth) ? "match" : "gone";
-    }
-    const observed = probeProcessBirth(expectedBirth.pid);
-    if (observed.status === "unknown")
-      return "unknown";
-    if (observed.status === "absent")
-      return "gone";
-    return observed.birth.token === expectedBirth.token ? "match" : "gone";
-  };
-  const initial = probeExpected();
-  if (initial === "unknown") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven");
-  }
-  if (initial === "gone") {
-    clearState(state);
-    return;
-  }
-  const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve11) => spawnedChild.once("exit", () => resolve11())) : null;
-  try {
-    sendSignal(state.pid, "SIGTERM");
-  } catch {
-  }
-  await sleep6(graceMs);
-  const afterTerm = probeExpected();
-  if (afterTerm === "unknown") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
-  }
-  if (afterTerm === "gone") {
-    clearState(state);
-    return;
-  }
-  try {
-    sendSignal(state.pid, "SIGKILL");
-  } catch {
-  }
-  if (spawnedExit) {
-    await Promise.race([spawnedExit, sleep6(250)]);
-  } else {
-    await sleep6(50);
-  }
-  const afterKill = probeExpected();
-  if (afterKill !== "gone") {
-    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
-  }
-  clearState(state);
-}
-function _setFetchForTest(fn) {
-  fetchImpl = fn;
-}
-function _setHttpTimeoutForTest(ms) {
-  httpTimeoutOverrideMs = ms;
-}
-function commandTimeoutMs(command) {
-  if (httpTimeoutOverrideMs !== null)
-    return httpTimeoutOverrideMs;
-  return SLOW_RUNNER_COMMANDS.has(command) ? 35e3 : HTTP_TIMEOUT_MS;
-}
-async function sendCommandOnce(port, body, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const capability = runnerState?.port === port ? runnerState.capability : void 0;
-    if (!capability) {
-      throw new Error("RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable");
-    }
-    const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${capability}`
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-    const parsed = await resp.json();
-    if (typeof parsed.v === "number" && (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
-      throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
-    }
-    return parsed;
-  } catch (err) {
-    if (err?.name === "AbortError") {
-      throw new Error(`RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms \u2014 listener may be wedged`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function probeCommandStatus(port, commandId) {
-  try {
-    const resp = await sendCommandOnce(port, { command: "status", commandId }, STATUS_PROBE_TIMEOUT_MS);
-    return parseStatusProbeReply(resp, commandId);
-  } catch {
-    return null;
-  }
-}
-async function postCommandWithRecovery(body) {
-  if (runnerPoisoned && body.command !== "status") {
-    throw new Error("RUNNER_TIMEOUT: rn-fast-runner is poisoned after a non-cancellable main-thread timeout; command refused before dispatch while the runner is reaped");
-  }
-  const state = runnerState;
-  if (!state) {
-    throw new Error("rn-fast-runner not started \u2014 run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).");
-  }
-  const commandId = generateCommandId();
-  lastRunnerCommand = typeof body.command === "string" ? body.command : String(body.command);
-  const timeoutMs = commandTimeoutMs(body.command);
-  try {
-    return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!isAmbiguousTransportFailure(message))
-      throw err;
-    const decision = decideRecovery(await probeCommandStatus(state.port, commandId), body.command);
-    if (decision.action === "return-recovered") {
-      return {
-        resp: decision.response,
-        recovery: { commandId, outcome: decision.outcome }
-      };
-    }
-    if (decision.action === "resend-once") {
-      const resent = await sendCommandOnce(state.port, { ...body, commandId: generateCommandId() }, timeoutMs);
-      return { resp: resent, recovery: { commandId, outcome: "resent" } };
-    }
-    throw err;
-  }
-}
-async function postCommand(body) {
-  return (await postCommandWithRecovery(body)).resp;
-}
-async function containTypeTimeout(args, authorityBefore = captureFastRunnerCommandAuthority(), trigger = "main-thread-timeout") {
-  const runnerBefore = authorityBefore;
-  runnerPoisoned = true;
-  poisonHolders++;
-  let verification = { matches: false };
-  try {
-    if (args._verifyExactReadback && typeof args.text === "string") {
-      verification = await args._verifyExactReadback(args.text);
-    }
-  } catch {
-    verification = { matches: false };
-  }
-  let reapDisposition;
-  try {
-    if (runnerBefore && runnerState?.pid === runnerBefore.pid) {
-      poisonReap ??= reapStaleFastRunner();
-      await poisonReap;
-      reapDisposition = "reaped";
-    } else {
-      reapDisposition = runnerState ? "replacement-preserved" : "already-absent";
-    }
-  } finally {
-    poisonHolders--;
-    if (poisonHolders <= 0) {
-      poisonHolders = 0;
-      poisonReap = null;
-      runnerPoisoned = false;
-    }
-  }
-  const runnerTimeoutRecovery = {
-    trigger,
-    poisoned: true,
-    reaped: reapDisposition === "reaped",
-    reapDisposition,
-    verification: verification.matches ? "exact-readback" : "unverified",
-    runner: {
-      before: runnerBefore,
-      afterReapPid: runnerState?.pid ?? null,
-      stateCleared: runnerState === null,
-      nextMutationRequiresRespawn: runnerState === null
-    },
-    runnerPostMortem: getRunnerPostMortem(),
-    containmentOrder: ["poison", "independent-readback", "reap", "result"],
-    lateMutationContainment: reapDisposition === "reaped" ? "runner-process-reaped-before-next-mutation" : reapDisposition === "replacement-preserved" ? "replacement-preserved-no-signal-dispatched" : "triggering-runner-state-already-absent",
-    targetApp: {
-      wasRunningBeforeRecovery: "unverified",
-      pidPreserved: "unverified",
-      activateLaunchedApp: "unverified",
-      semantics: "runner host is lazily relaunched; target activation semantics are unchanged"
-    },
-    ...verification.actual !== void 0 ? { actual: verification.actual } : {}
-  };
-  if (verification.matches) {
-    return okResult({
-      typed: true,
-      text: args.text,
-      recovered: true,
-      verification: "exact-readback"
-    }, { meta: { runnerTimeoutRecovery } });
-  }
-  return failResult(trigger === "main-thread-timeout" ? "RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation." : "RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.", "RUNNER_TIMEOUT", { runnerTimeoutRecovery });
-}
-function hasRunnerTimeoutRecovery(result) {
-  try {
-    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
-    return envelope.meta?.runnerTimeoutRecovery !== void 0;
-  } catch {
-    return false;
-  }
-}
-async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
-  if (args.command !== "type" || result.isError || hasRunnerTimeoutRecovery(result))
-    return result;
-  const sameAuthority = authorityBefore !== null && runnerState?.pid === authorityBefore.pid && runnerState.port === authorityBefore.port && runnerState.deviceId === authorityBefore.deviceId;
-  if (sameAuthority) {
-    for (let attempt = 0; attempt < POST_SETTLE_HEALTH_ATTEMPTS; attempt += 1) {
-      const health = await probeFastRunnerLivenessDetailed();
-      if (health.liveness === "alive")
-        return result;
-      if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve11) => setTimeout(resolve11, POST_SETTLE_HEALTH_RETRY_MS));
-      }
-    }
-  }
-  return containTypeTimeout(args, authorityBefore, "post-settle-runner-authority-lost");
-}
-function sameRefIdentity(before, after) {
-  if (!before || !after)
-    return false;
-  if (before.identifier !== void 0 || after.identifier !== void 0) {
-    return before.identifier === after.identifier && before.type === after.type;
-  }
-  if (before.label !== void 0 || after.label !== void 0) {
-    return before.label === after.label && before.type === after.type;
-  }
-  return false;
-}
-function countIdentityMatches(before, nodes) {
-  let matches = 0;
-  for (const node of nodes) {
-    const candidate = {
-      type: node.type,
-      ...node.label !== void 0 ? { label: node.label } : {},
-      ...node.identifier !== void 0 ? { identifier: node.identifier } : {}
-    };
-    if (sameRefIdentity(before, candidate))
-      matches++;
-  }
-  return matches;
-}
-function mapRunnerNodesToFlat(nodes) {
-  const out = [];
-  let synthCounter = 0;
-  for (const n of nodes) {
-    if (!n.rect)
-      continue;
-    const refId = n.index !== void 0 ? `e${n.index}` : `e${synthCounter++}`;
-    const flat = {
-      ref: `@${refId}`,
-      type: n.type ?? "",
-      rect: n.rect
-    };
-    if (n.label !== void 0)
-      flat.label = n.label;
-    if (n.identifier !== void 0)
-      flat.identifier = n.identifier;
-    if (n.enabled !== void 0)
-      flat.enabled = n.enabled;
-    if (n.hittable !== void 0)
-      flat.hittable = n.hittable;
-    out.push(flat);
-  }
-  return out;
-}
-function staleAfterKeyboardDismissal(ref) {
-  return failResult(`Element at ref ${ref ?? "?"} could not be re-resolved by identity after the keyboard was dismissed \u2014 no tap was performed`, "STALE_REF", {
-    keyboardGuard: "auto_dismissed",
-    reResolved: false,
-    cachedMetadata: ref ? getCachedMetadata(ref) : null,
-    reResolution: "no-signature",
-    candidates: [],
-    hint: "The keyboard was dismissed successfully; the ref no longer identifies the same element. Call device_snapshot action=snapshot and retry with the new ref."
-  });
-}
-async function runIOS(args) {
-  if (args._staleRef) {
-    return failResult(`Element at ref ${args._staleRef} no longer hittable \u2014 UI re-rendered since snapshot`, "STALE_REF", {
-      cachedMetadata: getCachedMetadata(args._staleRef),
-      reResolution: "self-heal-disabled",
-      candidates: [],
-      hint: "Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref."
-    });
-  }
-  const body = { command: args.command };
-  if (args.bundleId)
-    body.appBundleId = args.bundleId;
-  if (args.x !== void 0)
-    body.x = args.x;
-  if (args.y !== void 0)
-    body.y = args.y;
-  if (args.x2 !== void 0)
-    body.x2 = args.x2;
-  if (args.y2 !== void 0)
-    body.y2 = args.y2;
-  if (args.text !== void 0)
-    body.text = args.text;
-  if (args.durationMs !== void 0)
-    body.durationMs = args.durationMs;
-  if (args.delayMs !== void 0)
-    body.delayMs = args.delayMs;
-  if (args.clearFirst !== void 0)
-    body.clearFirst = args.clearFirst;
-  if (args.direction !== void 0)
-    body.direction = args.direction;
-  if (args.scale !== void 0)
-    body.scale = args.scale;
-  if (args.interactiveOnly !== void 0)
-    body.interactiveOnly = args.interactiveOnly;
-  if (args.compact !== void 0)
-    body.compact = args.compact;
-  if (args.depth !== void 0)
-    body.depth = args.depth;
-  if (args.scope !== void 0)
-    body.scope = args.scope;
-  if (args.targetBounds !== void 0)
-    body.targetBounds = args.targetBounds;
-  if (args.snapshotGeneration !== void 0)
-    body.snapshotGeneration = args.snapshotGeneration;
-  if (args.keyboardStateAtSnapshot !== void 0)
-    body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
-  const mapRunnerDispatchError = (err) => {
-    const m = err instanceof Error ? err.message : String(err);
-    if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
-      return failResult(m, "RUNNER_PROTOCOL_MISMATCH");
-    }
-    if (m.startsWith("RUNNER_TIMEOUT") && runnerPoisoned) {
-      return failResult(m, "RUNNER_TIMEOUT", { poisoned: true, dispatched: false });
-    }
-    return null;
-  };
-  let keyboardRelayoutRecovered = false;
-  if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true && runnerState?.protocolVersion === 1) {
-    try {
-      const legacyDismiss = await postCommand({
-        command: "keyboardDismiss",
-        ...args.bundleId ? { appBundleId: args.bundleId } : {}
-      });
-      const data = legacyDismiss.data ?? {};
-      if (data.wasVisible && (!data.dismissed || data.visible)) {
-        return failResult("KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers: ["native-control", "native-swipe"], protocolVersion: 1 });
-      }
-      if (data.wasVisible && data.dismissed)
-        keyboardRelayoutRecovered = true;
-    } catch (err) {
-      const mapped = mapRunnerDispatchError(err);
-      if (mapped)
-        return mapped;
-      throw err;
-    }
-  }
-  const refreshFailure = { result: null };
-  const refreshTargetAfterKeyboard = async () => {
-    if (!args._targetRef)
-      return true;
-    const before = getCachedMetadata(args._targetRef);
-    let snapshot;
-    try {
-      snapshot = await postCommand({
-        command: "snapshot",
-        interactiveOnly: true,
-        ...args.bundleId ? { appBundleId: args.bundleId } : {}
-      });
-    } catch (err) {
-      refreshFailure.result = mapRunnerDispatchError(err);
-      if (refreshFailure.result)
-        return false;
-      throw err;
-    }
-    if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== "object")
-      return false;
-    const data = snapshot.data;
-    if (!Array.isArray(data.nodes))
-      return false;
-    const flat = mapRunnerNodesToFlat(data.nodes);
-    updateRefMapFromFlat(flat, {
-      ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {},
-      ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {}
-    });
-    if (!sameRefIdentity(before, getCachedMetadata(args._targetRef)))
-      return false;
-    if (!before || countIdentityMatches(before, flat) !== 1)
-      return false;
-    const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
-    if (!target)
-      return false;
-    body.x = Math.round(target.rect.x + target.rect.width / 2);
-    body.y = Math.round(target.rect.y + target.rect.height / 2);
-    body.targetBounds = target.rect;
-    body.snapshotGeneration = target.snapshotGeneration;
-    if (target.keyboardStateAtSnapshot !== null)
-      body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
-    return true;
-  };
-  if (keyboardRelayoutRecovered && !await refreshTargetAfterKeyboard()) {
-    return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
-  }
-  let resp;
-  let recovery;
-  try {
-    ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
-  } catch (err) {
-    const mapped = mapRunnerDispatchError(err);
-    if (mapped)
-      return mapped;
-    const m = err instanceof Error ? err.message : String(err);
-    if (args.command === "type" && m.startsWith("RUNNER_TIMEOUT")) {
-      return containTypeTimeout(args);
-    }
-    throw err;
-  }
-  if (!resp.ok && resp.error?.code === "KEYBOARD_RELAYOUT_REQUIRED") {
-    if (!await refreshTargetAfterKeyboard()) {
-      return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
-    }
-    ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
-    keyboardRelayoutRecovered = true;
-  }
-  const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
-  const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
-  if (!resp.ok) {
-    const message = resp.error?.message ?? "runner returned !ok with no error";
-    const code = resp.error?.code;
-    if (args.command === "type" && typeof message === "string" && message.includes("main thread execution timed out")) {
-      return containTypeTimeout(args);
-    }
-    const failExtras = recovery ? { transportRecovery: recovery } : void 0;
-    if (code) {
-      return failResult(message, code, failExtras);
-    }
-    return failExtras ? failResult(message, failExtras) : failResult(message);
-  }
-  if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
-    const data = resp.data;
-    if (Array.isArray(data.nodes)) {
-      const flat = mapRunnerNodesToFlat(data.nodes);
-      const outcome = updateRefMapFromFlat(flat, {
-        ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {},
-        ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {}
-      });
-      const snapshotVerdict = buildSnapshotVerdict("rn-fast-runner", flat.length, outcome);
-      return okResult({
-        nodes: flat,
-        ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {},
-        ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {}
-      }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
-    }
-    const fallbackMeta = { ...announce, ...recoveryMeta };
-    return okResult(resp.data, Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : void 0);
-  }
-  const finalMeta = {
-    ...announce,
-    ...recoveryMeta,
-    ...keyboardRelayoutRecovered ? { keyboardGuard: "auto_dismissed" } : {}
-  };
-  return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
-}
-var READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, poisonHolders, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS, POST_SETTLE_HEALTH_ATTEMPTS, POST_SETTLE_HEALTH_RETRY_MS;
-var init_rn_fast_runner_client = __esm({
-  "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
-    "use strict";
-    init_utils();
-    init_fast_runner_ref_map();
-    init_keyboard_guard();
-    init_secure_state_file();
-    init_protocol();
-    init_quiescence();
-    init_runner_artifacts();
-    init_runtime_paths();
-    init_transport_recovery();
-    init_process_birth();
-    READY_TIMEOUT_MS = resolveReadyTimeoutMs();
-    BUILD_READY_TIMEOUT_MS = 36e4;
-    HTTP_TIMEOUT_MS = 1e4;
-    FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
-    runnerProcess = null;
-    runnerState = null;
-    runnerPoisoned = false;
-    poisonReap = null;
-    poisonHolders = 0;
-    runnerOutputTail = "";
-    lastRunnerCommand = null;
-    lastRunnerPostMortem = null;
-    lastKnownCapabilities = [];
-    quiescenceAnnouncementPending = false;
-    QUIESCENCE_STATUSES = /* @__PURE__ */ new Set(["active", "disabled", "unavailable"]);
-    REBUILD_LOCK_DIR = join8(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
-    REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    REBUILD_BUDGET_FILE = join8(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
-    runnerRebuildBudget = {
-      alreadyRebuiltFor(pluginVersion) {
-        try {
-          const parsed = JSON.parse(readFileSync8(REBUILD_BUDGET_FILE, "utf8"));
-          return parsed.pluginVersion === pluginVersion;
-        } catch {
-          return false;
-        }
-      },
-      recordRebuild(pluginVersion) {
-        try {
-          mkdirSync6(join8(FAST_RUNNER_PROJECT, "build"), { recursive: true });
-          writeFileSync4(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: (/* @__PURE__ */ new Date()).toISOString() }));
-        } catch {
-        }
-      }
-    };
-    staleHittableWarned = false;
-    runnerTestFaultForwarded = false;
-    fetchImpl = globalThis.fetch;
-    httpTimeoutOverrideMs = null;
-    SLOW_RUNNER_COMMANDS = /* @__PURE__ */ new Set(["type", "snapshot", "screenshot"]);
-    STATUS_PROBE_TIMEOUT_MS = 2e3;
-    POST_SETTLE_HEALTH_ATTEMPTS = 2;
-    POST_SETTLE_HEALTH_RETRY_MS = 250;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
-import { execFile, spawn as spawn2 } from "node:child_process";
-import { createWriteStream as createWriteStream2, renameSync as renameSync2, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename, dirname as dirname6, join as join9 } from "node:path";
-import { promisify } from "node:util";
-function parseSimctlBootedAll(jsonText) {
-  let data;
-  try {
-    data = JSON.parse(jsonText);
-  } catch {
-    return [];
-  }
-  const runtimes = data?.devices;
-  if (!runtimes || typeof runtimes !== "object")
-    return [];
-  const udids = [];
-  for (const [runtime, list] of Object.entries(runtimes)) {
-    if (!runtime.includes("SimRuntime.iOS"))
-      continue;
-    if (!Array.isArray(list))
-      continue;
-    for (const device of list) {
-      if (device && device.state === "Booted" && typeof device.udid === "string" && device.udid.length > 0) {
-        udids.push(device.udid);
-      }
-    }
-  }
-  return udids;
-}
-async function defaultSimctlBootedJson() {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "-j", "devices", "booted"], {
-    timeout: 5e3,
-    maxBuffer: 1024 * 1024
-  });
-  return stdout;
-}
-async function resolveIosUdid(explicit, probe = defaultSimctlBootedJson) {
-  if (explicit)
-    return explicit;
-  try {
-    const all = parseSimctlBootedAll(await probe());
-    return all.length === 1 ? all[0] : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function parseAdbDevicesEmuAll(stdout) {
-  const ids = [];
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("List of devices"))
-      continue;
-    const match = trimmed.match(EMU_LINE);
-    if (match)
-      ids.push(match[1]);
-  }
-  return ids;
-}
-async function defaultAdbDevicesStdout() {
-  const { stdout } = await execFileAsync("adb", ["devices"], {
-    timeout: 5e3,
-    maxBuffer: 1024 * 1024
-  });
-  return stdout;
-}
-async function resolveAndroidEmu(probe = defaultAdbDevicesStdout) {
-  try {
-    const all = parseAdbDevicesEmuAll(await probe());
-    return all.length === 1 ? all[0] : null;
-  } catch {
-    return null;
-  }
-}
-async function resolveBootedIosUdid() {
-  return defaultIosResolver();
-}
-function simctlScreenshotType(path) {
-  return /\.png$/i.test(path) ? "png" : "jpeg";
-}
-function resolveCaptureOutcome(streamFinished, procCode) {
-  if (!streamFinished)
-    return "pending";
-  if (procCode === null)
-    return "pending";
-  return procCode === 0 ? "success" : "failure";
-}
-function rawTempPath(finalPath, uniq) {
-  return join9(dirname6(finalPath), `.${basename(finalPath)}.${uniq}.rawtmp`);
-}
-function nextCaptureSuffix() {
-  captureCounter += 1;
-  return `${process.pid}.${captureCounter}`;
-}
-async function tryRawScreenshot(platform, path, preferredDeviceId) {
-  const resolver = platform === "ios" ? iosResolver : androidResolver;
-  const capturer = platform === "ios" ? iosCapturer : androidCapturer;
-  const id = preferredDeviceId ?? await resolver();
-  if (!id)
-    return { ok: false, reason: "no-device" };
-  try {
-    const ok = await capturer(id, path);
-    return ok ? { ok: true, path } : { ok: false, reason: "capture-failed" };
-  } catch {
-    return { ok: false, reason: "capture-failed" };
-  }
-}
-var execFileAsync, EMU_LINE, defaultIosResolver, defaultAndroidResolver, defaultIosCapturer, captureCounter, defaultAndroidSpawn, androidSpawn, defaultAndroidCapturer, iosResolver, androidResolver, iosCapturer, androidCapturer;
-var init_device_screenshot_raw = __esm({
-  "packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js"() {
-    "use strict";
-    execFileAsync = promisify(execFile);
-    EMU_LINE = /^(emulator-\d+)\s+device\b/;
-    defaultIosResolver = async () => {
-      try {
-        const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "-j", "devices", "booted"], {
-          timeout: 5e3,
-          maxBuffer: 1024 * 1024
-        });
-        const all = parseSimctlBootedAll(stdout);
-        return all.length === 1 ? all[0] : null;
-      } catch {
-        return null;
-      }
-    };
-    defaultAndroidResolver = () => resolveAndroidEmu();
-    defaultIosCapturer = async (udid, path) => {
-      try {
-        await execFileAsync("xcrun", ["simctl", "io", udid, "screenshot", `--type=${simctlScreenshotType(path)}`, path], {
-          timeout: 15e3,
-          maxBuffer: 1024 * 1024
-        });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    captureCounter = 0;
-    defaultAndroidSpawn = (emuId) => spawn2("adb", ["-s", emuId, "exec-out", "screencap", "-p"], {
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve11) => {
-      let settled = false;
-      let streamFinished = false;
-      let procCode = null;
-      const proc = androidSpawn(emuId);
-      const tmp = rawTempPath(path, nextCaptureSuffix());
-      const out = createWriteStream2(tmp);
-      const cleanupTemp = () => {
-        try {
-          unlinkSync3(tmp);
-        } catch {
-        }
-      };
-      const timer = setTimeout(() => {
-        if (settled)
-          return;
-        proc.kill();
-        out.destroy();
-        cleanupTemp();
-        settle(false);
-      }, 15e3);
-      const settle = (ok) => {
-        if (settled)
-          return;
-        settled = true;
-        clearTimeout(timer);
-        resolve11(ok);
-      };
-      const maybeSettle = () => {
-        const outcome = resolveCaptureOutcome(streamFinished, procCode);
-        if (outcome === "pending")
-          return;
-        if (outcome === "failure") {
-          out.destroy();
-          cleanupTemp();
-          settle(false);
-          return;
-        }
-        try {
-          renameSync2(tmp, path);
-          settle(true);
-        } catch {
-          cleanupTemp();
-          settle(false);
-        }
-      };
-      proc.stdout.pipe(out);
-      out.on("finish", () => {
-        streamFinished = true;
-        maybeSettle();
-      });
-      out.on("error", () => {
-        proc.stdout.unpipe(out);
-        proc.kill();
-        cleanupTemp();
-        settle(false);
-      });
-      proc.on("error", () => {
-        out.destroy();
-        cleanupTemp();
-        settle(false);
-      });
-      proc.on("close", (code) => {
-        procCode = code;
-        maybeSettle();
-      });
-    });
-    iosResolver = defaultIosResolver;
-    androidResolver = defaultAndroidResolver;
-    iosCapturer = defaultIosCapturer;
-    androidCapturer = defaultAndroidCapturer;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/lifecycle/no-change-tracker.js
-function recordNoUiChange(targetKey) {
-  streak.push(targetKey);
-  return new Set(streak).size;
-}
-function recordUiChange() {
-  streak.length = 0;
-}
-var WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, streak;
-var init_no_change_tracker = __esm({
-  "packages/rn-dev-agent-core/dist/lifecycle/no-change-tracker.js"() {
-    "use strict";
-    WEDGED_DISTINCT_TARGETS = 3;
-    WEDGED_RUNTIME_HINT = `${WEDGED_DISTINCT_TARGETS} consecutive taps on distinct targets produced no UI change \u2014 the app runtime may be wedged (JS thread paused or touch events swallowed). Run cdp_status (iOS auto-recovers a paused JS thread), then cdp_restart with hardReset=true if it persists.`;
-    streak = [];
-  }
-});
-
 // node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
   "node_modules/yaml/dist/nodes/identity.js"(exports) {
@@ -12092,14 +8237,14 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync9, writeFileSync as writeFileSync5, existsSync as existsSync9, renameSync as renameSync3, readdirSync as readdirSync4, lstatSync as lstatSync4, mkdirSync as mkdirSync7 } from "node:fs";
-import { join as join10, dirname as dirname7 } from "node:path";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync4, renameSync, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3 } from "node:fs";
+import { join as join4, dirname as dirname2 } from "node:path";
 function isRnProject(dir) {
-  const pkgPath2 = join10(dir, "package.json");
-  if (!existsSync9(pkgPath2))
+  const pkgPath2 = join4(dir, "package.json");
+  if (!existsSync4(pkgPath2))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync9(pkgPath2, "utf-8"));
+    const pkg = JSON.parse(readFileSync3(pkgPath2, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -12111,7 +8256,7 @@ function scanForRnProject(rootDir, maxDepth) {
     return null;
   let entries;
   try {
-    entries = readdirSync4(rootDir);
+    entries = readdirSync(rootDir);
   } catch {
     return null;
   }
@@ -12120,9 +8265,9 @@ function scanForRnProject(rootDir, maxDepth) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join10(rootDir, name);
+    const full = join4(rootDir, name);
     try {
-      const stat2 = lstatSync4(full);
+      const stat2 = lstatSync2(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
         continue;
     } catch {
@@ -12146,7 +8291,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
     return;
   let entries;
   try {
-    entries = readdirSync4(rootDir);
+    entries = readdirSync(rootDir);
   } catch {
     return;
   }
@@ -12155,9 +8300,9 @@ function collectRnProjects(rootDir, maxDepth, out) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join10(rootDir, name);
+    const full = join4(rootDir, name);
     try {
-      const stat2 = lstatSync4(full);
+      const stat2 = lstatSync2(full);
       if (!(stat2.isDirectory() || stat2.isSymbolicLink()))
         continue;
     } catch {
@@ -12175,11 +8320,11 @@ function collectRnProjects(rootDir, maxDepth, out) {
   }
 }
 function readProjectBundleId(projectRoot) {
-  const appJsonPath = join10(projectRoot, "app.json");
-  if (!existsSync9(appJsonPath))
+  const appJsonPath = join4(projectRoot, "app.json");
+  if (!existsSync4(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync9(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync3(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -12213,7 +8358,7 @@ function findProjectRoot(opts = {}) {
         walkupHit = walkupHit ?? dir;
         break;
       }
-      const parent = join10(dir, "..");
+      const parent = join4(dir, "..");
       if (parent === dir)
         break;
       dir = parent;
@@ -12222,7 +8367,7 @@ function findProjectRoot(opts = {}) {
   if (!targetBundleId && walkupHit)
     return walkupHit;
   const cwd = process.cwd();
-  const parentOfCwd = join10(cwd, "..");
+  const parentOfCwd = join4(cwd, "..");
   if (targetBundleId) {
     const all = [];
     collectRnProjects(cwd, 0, all);
@@ -12248,7 +8393,7 @@ function findProjectRoot(opts = {}) {
 }
 function getProjectSlug(projectRoot) {
   try {
-    const pkg = JSON.parse(readFileSync9(join10(projectRoot, "package.json"), "utf-8"));
+    const pkg = JSON.parse(readFileSync3(join4(projectRoot, "package.json"), "utf-8"));
     if (pkg.name && typeof pkg.name === "string")
       return pkg.name;
   } catch {
@@ -12256,18 +8401,18 @@ function getProjectSlug(projectRoot) {
   return projectRoot.split("/").pop() ?? "unknown";
 }
 function getGraphPath(projectRoot) {
-  return join10(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
+  return join4(projectRoot, RN_AGENT_DIR, GRAPH_FILENAME);
 }
 function readGraph(projectRoot) {
   try {
     let filePath = getGraphPath(projectRoot);
-    if (!existsSync9(filePath)) {
-      const legacyPath = join10(projectRoot, LEGACY_GRAPH_FILENAME);
-      if (!existsSync9(legacyPath))
+    if (!existsSync4(filePath)) {
+      const legacyPath = join4(projectRoot, LEGACY_GRAPH_FILENAME);
+      if (!existsSync4(legacyPath))
         return null;
       filePath = legacyPath;
     }
-    const raw = (0, import_yaml.parse)(readFileSync9(filePath, "utf-8"));
+    const raw = (0, import_yaml.parse)(readFileSync3(filePath, "utf-8"));
     if (!raw || !raw.nav_graph)
       return null;
     hydrateStrikesFromGraph(raw.nav_graph, projectRoot);
@@ -12278,11 +8423,11 @@ function readGraph(projectRoot) {
 }
 function writeGraph(projectRoot, graph) {
   const filePath = getGraphPath(projectRoot);
-  mkdirSync7(dirname7(filePath), { recursive: true });
+  mkdirSync3(dirname2(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const yaml2 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
-  writeFileSync5(tmpPath, yaml2, "utf-8");
-  renameSync3(tmpPath, filePath);
+  writeFileSync2(tmpPath, yaml2, "utf-8");
+  renameSync(tmpPath, filePath);
   return filePath;
 }
 function buildScreen(raw, isActive) {
@@ -12541,6 +8686,3977 @@ var init_storage = __esm({
     RELIABILITY_FAILURE_DELTA = -15;
     strikeMap = /* @__PURE__ */ new Map();
     hydratedProjectKey = null;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { readlinkSync, realpathSync as realpathSync2 } from "node:fs";
+import { resolve as resolve2, sep } from "node:path";
+function parseLsofPid(stdout) {
+  for (const line of stdout.split("\n")) {
+    const n = parseInt(line.trim(), 10);
+    if (!isNaN(n) && n > 0)
+      return n;
+  }
+  return null;
+}
+function parseLsofCwd(stdout) {
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("n")) {
+      const path = line.slice(1).trim();
+      if (path)
+        return path;
+    }
+  }
+  return null;
+}
+function pidForPort(port, exec = defaultExec, platform = process.platform) {
+  try {
+    if (platform === "win32") {
+      const output = exec("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)`
+      ]);
+      const pid = Number.parseInt(output.trim(), 10);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
+    return parseLsofPid(exec("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"]));
+  } catch {
+    return null;
+  }
+}
+function parseWindowsMetroRoot(commandLine) {
+  const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
+  const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+  return explicit ?? null;
+}
+function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync) {
+  try {
+    if (platform === "linux") {
+      return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
+    }
+    if (platform === "darwin") {
+      const cwd = parseLsofCwd(exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
+      return cwd ? realpathOrResolve(cwd) : null;
+    }
+    if (platform === "win32") {
+      const commandLine = exec("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`
+      ]);
+      const root = parseWindowsMetroRoot(commandLine);
+      return root ? realpathOrResolve(root) : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function realpathOrResolve(p) {
+  try {
+    return realpathSync2(resolve2(p));
+  } catch {
+    return resolve2(p);
+  }
+}
+function cwdForPort(port, exec = defaultExec, platform = process.platform) {
+  const pid = pidForPort(port, exec, platform);
+  if (pid == null)
+    return null;
+  return cwdForProcess(pid, platform, exec);
+}
+function pathMatchesRoot(servingCwd, projectRoot) {
+  if (!servingCwd || !projectRoot)
+    return false;
+  const a = realpathOrResolve(servingCwd);
+  const b = realpathOrResolve(projectRoot);
+  if (a === b)
+    return true;
+  return a.startsWith(b + sep) || b.startsWith(a + sep);
+}
+function pathIsWithinRoot(candidate, root) {
+  if (!candidate || !root)
+    return false;
+  const canonicalCandidate = realpathOrResolve(candidate);
+  const canonicalRoot = realpathOrResolve(root);
+  return canonicalCandidate === canonicalRoot || canonicalCandidate.startsWith(canonicalRoot + sep);
+}
+function resolveBridgeProjectRoot() {
+  const root = findProjectRoot();
+  return root ? realpathOrResolve(root) : null;
+}
+var CWD_LSOF_TIMEOUT_MS, defaultExec;
+var init_metro_cwd = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
+    "use strict";
+    init_storage();
+    CWD_LSOF_TIMEOUT_MS = 800;
+    defaultExec = (cmd, args) => execFileSync3(cmd, args, {
+      timeout: CWD_LSOF_TIMEOUT_MS,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/authority-json.js
+function quoted(value) {
+  return intrinsicReflectApply(intrinsicJsonStringify, JSON, [value]);
+}
+function sortedOwnNames(value) {
+  const names = intrinsicReflectApply(intrinsicObjectGetOwnPropertyNames, IntrinsicObject, [
+    value
+  ]);
+  const enumerable = [];
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [value, name]);
+    if (descriptor?.enumerable)
+      enumerable.push(name);
+  }
+  return intrinsicReflectApply(intrinsicArraySort, enumerable, []);
+}
+function canonicalAuthorityJson(value) {
+  const active = new IntrinsicWeakSet();
+  const encode = (candidate) => {
+    if (candidate === null)
+      return "null";
+    if (typeof candidate === "string")
+      return quoted(candidate);
+    if (typeof candidate === "boolean")
+      return candidate ? "true" : "false";
+    if (typeof candidate === "number") {
+      return intrinsicNumberIsFinite(candidate) ? quoted(candidate) : "null";
+    }
+    if (typeof candidate !== "object") {
+      throw new TypeError("AUTHORITY_JSON_UNSUPPORTED_VALUE");
+    }
+    if (intrinsicReflectApply(intrinsicWeakSetHas, active, [candidate])) {
+      throw new TypeError("AUTHORITY_JSON_CYCLE");
+    }
+    intrinsicReflectApply(intrinsicWeakSetAdd, active, [candidate]);
+    try {
+      if (intrinsicArrayIsArray(candidate)) {
+        let serialized2 = "[";
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (index > 0)
+            serialized2 += ",";
+          const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [candidate, String(index)]);
+          if (!descriptor || !("value" in descriptor)) {
+            throw new TypeError("AUTHORITY_JSON_ACCESSOR");
+          }
+          serialized2 += encode(descriptor.value);
+        }
+        return `${serialized2}]`;
+      }
+      const prototype = intrinsicReflectApply(intrinsicObjectGetPrototypeOf, IntrinsicObject, [
+        candidate
+      ]);
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw new TypeError("AUTHORITY_JSON_UNSUPPORTED_OBJECT");
+      }
+      const names = sortedOwnNames(candidate);
+      let serialized = "{";
+      for (let index = 0; index < names.length; index += 1) {
+        if (index > 0)
+          serialized += ",";
+        const name = names[index];
+        const descriptor = intrinsicReflectApply(intrinsicObjectGetOwnPropertyDescriptor, IntrinsicObject, [candidate, name]);
+        if (!descriptor || !("value" in descriptor)) {
+          throw new TypeError("AUTHORITY_JSON_ACCESSOR");
+        }
+        serialized += `${quoted(name)}:${encode(descriptor.value)}`;
+      }
+      return `${serialized}}`;
+    } finally {
+      intrinsicReflectApply(intrinsicWeakSetDelete, active, [candidate]);
+    }
+  };
+  return encode(value);
+}
+var intrinsicJsonStringify, intrinsicObjectGetOwnPropertyDescriptor, intrinsicObjectGetOwnPropertyNames, intrinsicObjectGetPrototypeOf, intrinsicArrayIsArray, intrinsicArraySort, intrinsicNumberIsFinite, intrinsicReflectApply, IntrinsicObject, intrinsicObjectPrototype, IntrinsicWeakSet, intrinsicWeakSetAdd, intrinsicWeakSetDelete, intrinsicWeakSetHas;
+var init_authority_json = __esm({
+  "packages/rn-dev-agent-core/dist/session/authority-json.js"() {
+    "use strict";
+    intrinsicJsonStringify = JSON.stringify;
+    intrinsicObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+    intrinsicObjectGetOwnPropertyNames = Object.getOwnPropertyNames;
+    intrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
+    intrinsicArrayIsArray = Array.isArray;
+    intrinsicArraySort = Array.prototype.sort;
+    intrinsicNumberIsFinite = Number.isFinite;
+    intrinsicReflectApply = Reflect.apply;
+    IntrinsicObject = Object;
+    intrinsicObjectPrototype = Object.prototype;
+    IntrinsicWeakSet = WeakSet;
+    intrinsicWeakSetAdd = WeakSet.prototype.add;
+    intrinsicWeakSetDelete = WeakSet.prototype.delete;
+    intrinsicWeakSetHas = WeakSet.prototype.has;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
+import { spawnSync } from "node:child_process";
+import { createHash as createHash3 } from "node:crypto";
+import { closeSync as closeSync3, constants as constants2, existsSync as existsSync5, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync3, rmSync, statSync as statSync2, symlinkSync, writeSync as writeSync2 } from "node:fs";
+import { dirname as dirname3, resolve as resolve3 } from "node:path";
+function sha256(value) {
+  return createHash3("sha256").update(value).digest("hex");
+}
+function defaultRun2(command, args) {
+  const result = spawnSync(command, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 25e3
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? result.error?.message ?? ""
+  };
+}
+function field(details, name) {
+  const prefix = `${name}=`;
+  return details.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length).trim() ?? null;
+}
+function verifiedSandboxExecutable(dependencies) {
+  const exists = dependencies.exists ?? existsSync5;
+  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const stat2 = dependencies.stat ?? statSync2;
+  const readBytes = dependencies.readBytes ?? readFileSync4;
+  const run = dependencies.run ?? defaultRun2;
+  try {
+    if (!exists(DARWIN_SANDBOX_EXECUTABLE))
+      return null;
+    if (canonicalize(DARWIN_SANDBOX_EXECUTABLE) !== DARWIN_SANDBOX_EXECUTABLE)
+      return null;
+    const metadata = stat2(DARWIN_SANDBOX_EXECUTABLE);
+    if (!metadata.isFile() || metadata.uid !== 0 || (metadata.mode & 18) !== 0)
+      return null;
+    const verification = run(DARWIN_CODESIGN_EXECUTABLE, [
+      "--verify",
+      "--strict",
+      DARWIN_SANDBOX_EXECUTABLE
+    ]);
+    if (verification.status !== 0)
+      return null;
+    const details = run(DARWIN_CODESIGN_EXECUTABLE, [
+      "-dv",
+      "--verbose=4",
+      DARWIN_SANDBOX_EXECUTABLE
+    ]);
+    const authorities = details.stderr.split("\n").filter((line) => line.startsWith("Authority="));
+    const cdHash = field(details.stderr, "CDHash");
+    if (details.status !== 0 || field(details.stderr, "Identifier") !== "com.apple.sandbox-exec" || !/^\d+$/.test(field(details.stderr, "Platform identifier") ?? "") || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "") || !authorities.includes("Authority=Software Signing") || !authorities.includes("Authority=Apple Code Signing Certification Authority") || !authorities.includes("Authority=Apple Root CA")) {
+      return null;
+    }
+    return {
+      path: DARWIN_SANDBOX_EXECUTABLE,
+      sha256: sha256(readBytes(DARWIN_SANDBOX_EXECUTABLE)),
+      cdHash
+    };
+  } catch {
+    return null;
+  }
+}
+function signingIdentity(path, run) {
+  const verification = run(DARWIN_CODESIGN_EXECUTABLE, ["--verify", "--strict", path]);
+  if (verification.status !== 0)
+    return null;
+  const details = run(DARWIN_CODESIGN_EXECUTABLE, ["-dv", "--verbose=4", path]);
+  const identifier = field(details.stderr, "Identifier");
+  const cdHash = field(details.stderr, "CDHash");
+  if (details.status !== 0 || !identifier || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "")) {
+    return null;
+  }
+  return {
+    identifier,
+    cdHash,
+    authorities: details.stderr.split("\n").filter((line) => line.startsWith("Authority=")).map((line) => line.slice("Authority=".length)).sort()
+  };
+}
+function defaultRuntimeVersion(nodeExecutable, run) {
+  const result = run(nodeExecutable, ["--version"]);
+  if (result.status !== 0)
+    throw new Error("node version unavailable");
+  return result.stdout.trim();
+}
+function defaultRuntimeFiles(nodeExecutable, run) {
+  const result = run("/usr/bin/otool", ["-L", nodeExecutable]);
+  if (result.status !== 0)
+    throw new Error("node runtime dependencies unavailable");
+  return result.stdout.split("\n").slice(1).map((line) => line.trim().split(/\s+\(/, 1)[0]).filter((path) => path.startsWith("/"));
+}
+function defaultRuntimeCache(exists) {
+  const architecture = process.arch === "arm64" ? "arm64e" : process.arch;
+  return [
+    `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_${architecture}`,
+    `/System/Library/dyld/dyld_shared_cache_${architecture}`
+  ].find(exists) ?? null;
+}
+function attestRuntimeFile(path, dependencies) {
+  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const stat2 = dependencies.stat ?? statSync2;
+  const readBytes = dependencies.readBytes ?? readFileSync4;
+  const run = dependencies.run ?? defaultRun2;
+  const canonical = canonicalize(path);
+  if (!stat2(canonical).isFile())
+    throw new Error("runtime input is not a file");
+  return {
+    path: canonical,
+    sha256: sha256(readBytes(canonical)),
+    signingIdentity: signingIdentity(canonical, run)
+  };
+}
+function attestNodeRuntime(input, executableMappings, dependencies) {
+  const run = dependencies.run ?? defaultRun2;
+  const exists = dependencies.exists ?? existsSync5;
+  const runtimeVersion = dependencies.runtimeVersion?.(input.nodeExecutable) ?? defaultRuntimeVersion(input.nodeExecutable, run);
+  if (runtimeVersion !== input.nodeVersion)
+    return null;
+  try {
+    const executable = attestRuntimeFile(input.nodeExecutable, dependencies);
+    const linkedRuntimePaths = [
+      ...new Set(dependencies.runtimeFiles?.(executable.path) ?? defaultRuntimeFiles(executable.path, run))
+    ].sort();
+    if (linkedRuntimePaths.length === 0)
+      return null;
+    const missingRuntimePaths = linkedRuntimePaths.filter((path) => !exists(path));
+    if (missingRuntimePaths.some((path) => !path.startsWith("/System/Library/") && !path.startsWith("/usr/lib/"))) {
+      return null;
+    }
+    const runtimeCachePath = missingRuntimePaths.length > 0 ? dependencies.runtimeCache?.() ?? defaultRuntimeCache(exists) : null;
+    if (missingRuntimePaths.length > 0 && !runtimeCachePath)
+      return null;
+    const loadedRuntimeFiles = [executable.path, ...linkedRuntimePaths.filter(exists)].sort().map((path) => attestRuntimeFile(path, dependencies));
+    const mappings = [...new Set(executableMappings)].sort().map((path) => attestRuntimeFile(path, dependencies));
+    return {
+      version: 1,
+      executable,
+      runtimeVersion,
+      linkedRuntimePaths,
+      loadedRuntimeFiles,
+      sharedRuntimeCache: runtimeCachePath ? attestRuntimeFile(runtimeCachePath, dependencies) : null,
+      executableMappings: mappings
+    };
+  } catch {
+    return null;
+  }
+}
+function sandboxString(value) {
+  if (value.includes("\0"))
+    throw new Error("METRO_RUNTIME_ENFORCEMENT_PATH_INVALID");
+  return JSON.stringify(value);
+}
+function canonicalPath(path, canonicalize) {
+  try {
+    return canonicalize(path);
+  } catch {
+    return resolve3(path);
+  }
+}
+function pathFilters(paths) {
+  return paths.flatMap((path) => [
+    `    (literal ${sandboxString(path)})`,
+    `    (subpath ${sandboxString(path)})`
+  ]).join("\n");
+}
+function managedMetroSandboxProfile(input) {
+  const readRoots = [...new Set(input.readRoots)].sort();
+  const writeRoots = [...new Set(input.writeRoots)].sort();
+  const executablePaths = [...new Set(input.executablePaths)].sort();
+  const executableMapPaths = [...new Set(input.executableMapPaths)].sort();
+  const executableMapDenyRoots = [...new Set(input.executableMapDenyRoots)].sort();
+  const protectedRuntimeRoots = [...new Set(input.protectedRuntimeRoots)].sort();
+  const pathAncestors = [.../* @__PURE__ */ new Set([...readRoots, ...writeRoots])].sort();
+  return `(version 1)
+(deny default)
+(import "system.sb")
+(allow process-fork)
+(allow signal (target children))
+(deny network-outbound)
+(deny file-map-executable
+${pathFilters(executableMapDenyRoots)})
+(allow file-map-executable
+${executableMapPaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
+(allow process-exec
+${executablePaths.map((path) => `    (literal ${sandboxString(path)})`).join("\n")})
+(allow file-read* file-test-existence
+${pathFilters(readRoots)})
+(allow file-read-metadata file-test-existence
+${pathAncestors.map((path) => `    (path-ancestors ${sandboxString(path)})`).join("\n")})
+(allow file-write* file-test-existence
+${pathFilters(writeRoots)})
+${protectedRuntimeRoots.length > 0 ? `(deny file-write* file-test-existence
+${pathFilters(protectedRuntimeRoots)})` : ""}
+(allow network-bind
+    (local tcp ${sandboxString(`*:${input.port}`)}))
+(allow network-inbound
+    (local tcp ${sandboxString(`*:${input.port}`)}))
+`;
+}
+function prepareManagedMetroEnforcement(input, dependencies = {}) {
+  if (input.platform !== "darwin") {
+    return { status: "unsupported", reason: "host-enforcement-unavailable" };
+  }
+  const sandbox = verifiedSandboxExecutable(dependencies);
+  if (!sandbox) {
+    return { status: "unsupported", reason: "sandbox-executable-unverified" };
+  }
+  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
+  const appRoot = canonicalPath(input.appRoot, canonicalize);
+  const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
+  const nodeExecutable = canonicalPath(input.nodeExecutable, canonicalize);
+  const commandExecutable = canonicalPath(input.commandExecutable, canonicalize);
+  const commandArguments = [...input.commandArguments ?? []];
+  const commandExecutableMappings = (input.commandExecutableMappings ?? []).map((path) => canonicalPath(path, canonicalize));
+  const commandChainInputs = (input.commandChainInputs ?? []).map((path) => canonicalPath(path, canonicalize));
+  const protectedRuntimeRoots = (input.protectedRuntimeRoots ?? []).map((path) => canonicalPath(path, canonicalize));
+  const runtimeInputs = input.runtimeInputs.map((path) => canonicalPath(path, canonicalize));
+  const expoStateRoot = resolve3(appRoot, ".expo");
+  const readRoots = [
+    "/dev/fd",
+    sourceRoot,
+    appRoot,
+    runtimeRoot,
+    nodeExecutable,
+    commandExecutable,
+    ...commandExecutableMappings,
+    ...commandChainInputs,
+    ...runtimeInputs
+  ];
+  const executablePaths = [
+    nodeExecutable,
+    commandExecutable,
+    ...commandExecutableMappings,
+    "/usr/bin/env"
+  ];
+  const nodeRuntimeAttestation = attestNodeRuntime({
+    ...input,
+    nodeExecutable,
+    commandExecutable,
+    runtimeInputs
+  }, executablePaths, dependencies);
+  if (!nodeRuntimeAttestation) {
+    return { status: "unsupported", reason: "node-runtime-unverified" };
+  }
+  let commandChainAttestation;
+  try {
+    commandChainAttestation = [...new Set(commandChainInputs)].sort().map((path) => attestRuntimeFile(path, dependencies));
+  } catch {
+    return { status: "unsupported", reason: "node-runtime-unverified" };
+  }
+  const profile = managedMetroSandboxProfile({
+    readRoots,
+    writeRoots: [runtimeRoot, expoStateRoot],
+    executablePaths,
+    executableMapPaths: [
+      ...nodeRuntimeAttestation.loadedRuntimeFiles.map((entry) => entry.path),
+      ...nodeRuntimeAttestation.executableMappings.map((entry) => entry.path)
+    ],
+    executableMapDenyRoots: [sourceRoot, appRoot, ...runtimeInputs],
+    protectedRuntimeRoots,
+    port: input.port
+  });
+  const canaryId = sha256(`${input.instanceId}\0${input.port}`).slice(0, 32);
+  return {
+    status: "enforced",
+    kind: "darwin-seatbelt-v2",
+    sandboxExecutable: sandbox.path,
+    sandboxExecutableSha256: sandbox.sha256,
+    sandboxExecutableCdHash: sandbox.cdHash,
+    commandLaunchSha256: sha256(canonicalAuthorityJson({ executable: commandExecutable, arguments: commandArguments })),
+    resolvedCommandSha256: sha256(canonicalAuthorityJson({
+      executable: commandExecutable,
+      arguments: commandArguments
+    })),
+    profile,
+    profileSha256: sha256(profile),
+    canaryPath: `/private/tmp/rn-dev-agent-metro-${canaryId}.canary`,
+    descendantCanaryPath: resolve3(runtimeRoot, `descendant-${canaryId}.cjs`),
+    symlinkCanaryPath: resolve3(runtimeRoot, `enforcement-${canaryId}.canary`),
+    port: input.port,
+    unallocatedPort: 0,
+    nodeExecutable,
+    appRoot,
+    commandExecutable,
+    commandArguments,
+    preflightEnvironmentPath: resolve3(runtimeRoot, `preflight-environment-${canaryId}.json`),
+    nodeRuntimeAttestation,
+    commandChainAttestation
+  };
+}
+function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}) {
+  if (!receipt2 || typeof receipt2 !== "object")
+    return false;
+  const observed = receipt2;
+  const plan = prepareManagedMetroEnforcement(input, dependencies);
+  return plan.status === "enforced" && observed.version === 2 && observed.kind === plan.kind && observed.profileSha256 === plan.profileSha256 && observed.sandboxExecutableSha256 === plan.sandboxExecutableSha256 && observed.sandboxExecutableCdHash === plan.sandboxExecutableCdHash && observed.commandLaunchSha256 === plan.commandLaunchSha256 && observed.resolvedCommandSha256 === plan.resolvedCommandSha256 && observed.descendantCreationAllowed === true && observed.unauthorizedExecutableDenied === true && observed.unmanifestedReadDenied === true && observed.unmanifestedWriteDenied === true && observed.symlinkEscapeDenied === true && observed.unallocatedListenerDenied === true && observed.allocatedListenerAllowed === true && observed.networkOutboundDenied === true && observed.resolvedCommandAllowed === true && observed.commandCleanupConfirmed === true && observed.commandChainStable === true && canonicalAuthorityJson(observed.nodeRuntimeAttestation) === canonicalAuthorityJson(plan.nodeRuntimeAttestation) && canonicalAuthorityJson(observed.commandChainAttestation) === canonicalAuthorityJson(plan.commandChainAttestation);
+}
+var DARWIN_SANDBOX_EXECUTABLE, DARWIN_CODESIGN_EXECUTABLE, PREFLIGHT_SOURCE;
+var init_managed_metro_enforcement = __esm({
+  "packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js"() {
+    "use strict";
+    init_authority_json();
+    DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
+    DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
+    PREFLIGHT_SOURCE = String.raw`
+const { spawn, spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
+const { closeSync, constants, fstatSync, openSync, readFileSync, readSync, writeFileSync } = require('node:fs');
+const { createConnection, createServer } = require('node:net');
+const input = JSON.parse(process.argv[1]);
+const logicalArgumentPrefix = 'rn-dev-agent-logical-path:';
+const denied = (run) => {
+  try {
+    run();
+    return false;
+  } catch (error) {
+    return error && (error.code === 'EPERM' || error.code === 'EACCES');
+  }
+};
+const unauthorizedResult = spawnSync('/usr/bin/true', []);
+const unauthorizedExecutableDenied =
+  unauthorizedResult.status === null &&
+  unauthorizedResult.error &&
+  (unauthorizedResult.error.code === 'EPERM' || unauthorizedResult.error.code === 'EACCES');
+const unmanifestedReadDenied = denied(() => readFileSync(input.canaryPath));
+const unmanifestedWriteDenied = denied(() => writeFileSync(input.canaryPath, 'forged'));
+const symlinkEscapeDenied = denied(() => readFileSync(input.symlinkCanaryPath));
+const listen = (port) =>
+  new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', (error) => resolve({ ok: false, code: error.code }));
+    server.listen(port, '127.0.0.1', () =>
+      server.close((error) => resolve({ ok: !error, code: error && error.code })),
+    );
+  });
+const waitUntil = async (predicate, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+};
+const processGroupExists = (pid) => {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error && error.code !== 'ESRCH';
+  }
+};
+(async () => {
+  const commandSnapshots = [];
+  const boundPaths = new Map();
+  const argumentPaths = new Set(
+    input.commandArguments.map((argument) =>
+      argument.startsWith(logicalArgumentPrefix)
+        ? argument.slice(logicalArgumentPrefix.length)
+        : argument,
+    ),
+  );
+  for (const entry of input.commandChainAttestation) {
+    if (!argumentPaths.has(entry.path)) continue;
+    const descriptor = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const size = fstatSync(descriptor).size;
+    const contents = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const count = readSync(descriptor, contents, offset, size - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    closeSync(descriptor);
+    const snapshot = contents.subarray(0, offset);
+    if (createHash('sha256').update(snapshot).digest('hex') !== entry.sha256) {
+      throw new Error('command-chain identity mismatch');
+    }
+    boundPaths.set(entry.path, '/dev/fd/' + (10 + commandSnapshots.length));
+    commandSnapshots.push(snapshot);
+  }
+  const allocated = await listen(input.port);
+  if (!allocated.ok) throw new Error('allocated listener unavailable before command');
+  const commandEnvironment = JSON.parse(readFileSync(input.preflightEnvironmentPath, 'utf8'));
+  const stdio = ['ignore', 'ignore', 'ignore', 'ipc'];
+  while (stdio.length < 9) stdio.push('ignore');
+  stdio.push('pipe');
+  stdio.push(...commandSnapshots.map(() => 'pipe'));
+  const command = spawn(
+    input.commandExecutable,
+    input.commandArguments.map((argument) =>
+      argument.startsWith(logicalArgumentPrefix)
+        ? argument.slice(logicalArgumentPrefix.length)
+        : boundPaths.get(argument) ?? argument,
+    ),
+    {
+    cwd: input.appRoot,
+    detached: true,
+    env: commandEnvironment,
+    stdio,
+    },
+  );
+  for (let index = 0; index < commandSnapshots.length; index += 1) {
+    command.stdio[10 + index].end(commandSnapshots[index]);
+  }
+  command.stdio[9].resume();
+  command.once('error', () => {});
+  const resolvedCommandAllowed = await waitUntil(async () => {
+    const probe = await listen(input.port);
+    return !probe.ok && probe.code === 'EADDRINUSE';
+  }, 15000);
+  let commandCleanupConfirmed = false;
+  if (Number.isSafeInteger(command.pid)) {
+    try {
+      command.kill('SIGTERM');
+    } catch {}
+    try {
+      process.kill(-command.pid, 'SIGTERM');
+    } catch {}
+    await waitUntil(() => command.exitCode !== null, 2000);
+    commandCleanupConfirmed = !processGroupExists(command.pid);
+    if (!commandCleanupConfirmed) {
+      try {
+        command.kill('SIGKILL');
+      } catch {}
+      try {
+        process.kill(-command.pid, 'SIGKILL');
+      } catch {}
+      await waitUntil(() => command.exitCode !== null, 2000);
+      commandCleanupConfirmed = !processGroupExists(command.pid);
+    }
+  }
+  const released = await listen(input.port);
+  commandCleanupConfirmed = commandCleanupConfirmed && released.ok;
+  const commandChainStable = true;
+  const descendantCreationAllowed = resolvedCommandAllowed && commandCleanupConfirmed;
+  const unallocated = await listen(input.unallocatedPort);
+  const networkOutboundDenied = await new Promise((resolve) => {
+    const connection = createConnection(input.port, '127.0.0.1');
+    connection.once('connect', () => {
+      connection.destroy();
+      resolve(false);
+    });
+    connection.once('error', (error) =>
+      resolve(error.code === 'EPERM' || error.code === 'EACCES'),
+    );
+  });
+  const receipt = {
+    descendantCreationAllowed,
+    unauthorizedExecutableDenied: Boolean(unauthorizedExecutableDenied),
+    unmanifestedReadDenied,
+    unmanifestedWriteDenied,
+    symlinkEscapeDenied,
+    unallocatedListenerDenied:
+      !unallocated.ok && (unallocated.code === 'EPERM' || unallocated.code === 'EACCES'),
+    allocatedListenerAllowed: allocated.ok,
+    networkOutboundDenied,
+    resolvedCommandAllowed,
+    commandCleanupConfirmed,
+    commandChainStable,
+  };
+  process.stdout.write(JSON.stringify(receipt));
+  process.exit(Object.values(receipt).every(Boolean) ? 0 : 1);
+})().catch(() => process.exit(1));
+`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/source-identity.js
+import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { execFileSync as execFileSync4 } from "node:child_process";
+import { closeSync as closeSync4, existsSync as existsSync6, lstatSync as lstatSync3, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname4, isAbsolute, join as join5, relative, resolve as resolve4 } from "node:path";
+function digest(parts) {
+  const hash = createHash4("sha256");
+  for (const part of parts) {
+    hash.update(part);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+function readMetroEvidenceHead(socket, challenge) {
+  return execFileSync4(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
+    encoding: "utf8",
+    maxBuffer: 4096,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3
+  });
+}
+function updateFramed(hash, part) {
+  const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
+  hash.update(`${bytes.byteLength}:`);
+  hash.update(bytes);
+}
+function updateFramedFile(hash, path, size) {
+  hash.update(`${size}:`);
+  const descriptor = openSync4(path, "r");
+  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(size, 1)));
+  try {
+    let offset = 0;
+    while (offset < size) {
+      const bytesRead = readSync2(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
+      if (bytesRead === 0) {
+        throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: source file changed while hashing");
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync4(descriptor);
+  }
+}
+function fileDigest(path) {
+  const stat2 = lstatSync3(path);
+  if (!stat2.isFile() || stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
+  }
+  const hash = createHash4("sha256");
+  const descriptor = openSync4(path, "r");
+  const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(stat2.size, 1)));
+  try {
+    let offset = 0;
+    while (offset < stat2.size) {
+      const bytesRead = readSync2(descriptor, buffer, 0, Math.min(buffer.length, stat2.size - offset), offset);
+      if (bytesRead === 0) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync4(descriptor);
+  }
+  return hash.digest("hex");
+}
+function updateDependencyPath(hash, path, label, state) {
+  const pending2 = [{ path, label, depth: 0 }];
+  while (pending2.length > 0) {
+    const current = pending2.pop();
+    state.entries += 1;
+    if (state.entries > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency entry count exceeds the limit");
+    }
+    if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit");
+    }
+    const stat2 = lstatSync3(current.path);
+    updateFramed(hash, current.label);
+    updateFramed(hash, String(stat2.mode & 511));
+    if (stat2.isSymbolicLink()) {
+      const link = readlinkSync2(current.path);
+      const target = realpathSync4(current.path);
+      state.totalBytes += Buffer.byteLength(link);
+      if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
+      }
+      updateFramed(hash, "symlink");
+      updateFramed(hash, link);
+      updateFramed(hash, target);
+      pending2.push({
+        path: target,
+        label: `target:${target}`,
+        depth: current.depth + 1
+      });
+      continue;
+    }
+    if (stat2.isDirectory()) {
+      const canonical = realpathSync4(current.path);
+      if (state.visitedDirectories.has(canonical)) {
+        updateFramed(hash, "directory-reference");
+        updateFramed(hash, canonical);
+        continue;
+      }
+      state.visitedDirectories.add(canonical);
+      updateFramed(hash, "directory");
+      for (const entry of readdirSync2(current.path).sort().reverse()) {
+        pending2.push({
+          path: join5(current.path, entry),
+          label: `${current.label}/${entry}`,
+          depth: current.depth + 1
+        });
+      }
+      continue;
+    }
+    if (!stat2.isFile()) {
+      throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${current.label} is not a regular file, directory, or symlink`);
+    }
+    if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
+      throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
+    }
+    state.totalBytes += stat2.size;
+    if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
+    }
+    updateFramed(hash, "file");
+    updateFramedFile(hash, current.path, stat2.size);
+  }
+}
+function isContained(root, candidate) {
+  const child = relative(root, candidate);
+  return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(child);
+}
+function isExcludedRuntimePath(root, candidate) {
+  const entry = relative(root, candidate).split("\\").join("/");
+  return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded || entry.startsWith(`${excluded}/`) || entry.endsWith(`/${excluded}`) || entry.includes(`/${excluded}/`));
+}
+function assertFinalMetroIntegration(identity2) {
+  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join5(identity2.appRoot, entry)).filter(existsSync6);
+  if (candidates.length === 0)
+    return;
+  const source = readFileSync5(candidates[0], "utf8");
+  const start = source.indexOf(METRO_INTEGRATION_START);
+  const end = source.indexOf(METRO_INTEGRATION_END);
+  if (start < 0 || end < start || source.indexOf(METRO_INTEGRATION_START, start + METRO_INTEGRATION_START.length) >= 0 || source.indexOf(METRO_INTEGRATION_END, end + METRO_INTEGRATION_END.length) >= 0 || source.slice(start, end + METRO_INTEGRATION_END.length) !== METRO_INTEGRATION_BLOCK || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
+  }
+}
+function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntimeEnforcement) {
+  if (!authority)
+    return { paths: [], semantics: [] };
+  const raw = readFileSync5(join5(identity2.appRoot, METRO_RUNTIME_POLICY), "utf8");
+  const receipt2 = JSON.parse(raw);
+  const payload = {
+    version: receipt2.version,
+    runtimeEvidenceAuthority: receipt2.runtimeEvidenceAuthority,
+    sessionId: receipt2.sessionId,
+    metroInstanceId: receipt2.metroInstanceId,
+    contentRoot: receipt2.contentRoot,
+    appRoot: receipt2.appRoot,
+    runtimeEnforcement: receipt2.runtimeEnforcement,
+    runtimeEnforcementReceipt: receipt2.runtimeEnforcementReceipt,
+    runtimeManifest: receipt2.runtimeManifest,
+    runtimeInputs: receipt2.runtimeInputs,
+    violations: receipt2.violations
+  };
+  const expected = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
+  const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
+  const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.sourceExecutable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandProbeArguments) || runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandExecutableMappings) || runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandChainInputs) || runtimeManifest.commandChainInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.protectedRuntimeRoots) || runtimeManifest.protectedRuntimeRoots.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual(observed, expected)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
+  }
+  if (!pathIsWithinRoot(runtimeManifest.servingRoot, identity2.contentRoot)) {
+    throw new Error("STRICT_PROOF_SERVING_ROOT_MISMATCH: Metro serving root is outside the bound worktree");
+  }
+  const descendantAuthority = runtimeManifest.descendantAuthority;
+  if (descendantAuthority.version !== 1 || typeof descendantAuthority.rootNonce !== "string" || !/^[a-f0-9]{32}$/.test(descendantAuthority.rootNonce) || typeof descendantAuthority.rootIdentity !== "string" || !/^process:\d+$/.test(descendantAuthority.rootIdentity) || !Array.isArray(descendantAuthority.allowedCodeRoots) || descendantAuthority.allowedCodeRoots.length === 0 || descendantAuthority.allowedCodeRoots.some((entry) => typeof entry !== "string")) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant authority is invalid");
+  }
+  const allowedCodeRoots = descendantAuthority.allowedCodeRoots;
+  if (authority.evidenceAuthority === "managed-sandbox-v1" && (receipt2.runtimeEnforcement !== "os-enforced-v1" || !verifyRuntimeEnforcement({
+    platform: process.platform,
+    appRoot: identity2.appRoot,
+    sourceRoot: identity2.contentRoot,
+    runtimeRoot: dirname4(authority.evidencePath),
+    nodeExecutable: runtimeManifest.nodeExecutable,
+    nodeVersion: runtimeManifest.nodeVersion,
+    commandExecutable: runtimeManifest.executable,
+    commandArguments: runtimeManifest.args,
+    commandProbeArguments: runtimeManifest.commandProbeArguments,
+    commandExecutableMappings: runtimeManifest.commandExecutableMappings,
+    commandChainInputs: runtimeManifest.commandChainInputs,
+    protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
+    port: runtimeManifest.port,
+    instanceId: authority.metroInstanceId,
+    runtimeInputs: receipt2.runtimeInputs
+  }, receipt2.runtimeEnforcementReceipt))) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid");
+  }
+  if (authority.evidenceAuthority === "reported-v1" && (receipt2.runtimeEnforcement !== "unsupported" || receipt2.runtimeEnforcementReceipt !== null)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: sandbox tier is invalid");
+  }
+  if (receipt2.violations.length > 0) {
+    throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
+  }
+  const runtimeInputs = new Set(receipt2.runtimeInputs);
+  const runtimeLoadsPath = authority.evidencePath;
+  let runtimeLoadsRaw;
+  try {
+    const runtimeLoadsStat = lstatSync3(runtimeLoadsPath);
+    if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+      throw new Error("runtime load evidence is not a bounded regular file");
+    }
+    runtimeLoadsRaw = readFileSync5(runtimeLoadsPath, "utf8");
+  } catch (error2) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
+      cause: error2
+    });
+  }
+  const runtimeLoads = /* @__PURE__ */ new Map();
+  const descendantLaunches = /* @__PURE__ */ new Map();
+  const descendantAttestations = /* @__PURE__ */ new Map();
+  const descendantSemanticDigests = /* @__PURE__ */ new Set();
+  const pendingIpcCompletions = /* @__PURE__ */ new Set();
+  const completedIpcCompletions = /* @__PURE__ */ new Set();
+  const runtimeSemantics = /* @__PURE__ */ new Set();
+  const runtimeSemanticsByDigest = /* @__PURE__ */ new Map();
+  const orderedRuntimeSemantics = [];
+  const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
+  let runtimeEvidenceEntryCount = 0;
+  let evidenceSequence = 0;
+  let previousEvidenceSignature = null;
+  for (const rawLoad of runtimeLoadsRaw.split("\n").filter(Boolean)) {
+    let load;
+    try {
+      load = JSON.parse(rawLoad);
+    } catch (error2) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
+        cause: error2
+      });
+    }
+    const loadPayload = {
+      version: load.version,
+      runtimeEvidenceAuthority: load.runtimeEvidenceAuthority,
+      sessionId: load.sessionId,
+      metroInstanceId: load.metroInstanceId,
+      kind: load.kind,
+      value: load.value,
+      digest: load.digest,
+      sequence: load.sequence,
+      previousSignature: load.previousSignature
+    };
+    const expectedLoad = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(loadPayload)).digest();
+    const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
+    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual(observedLoad, expectedLoad)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+    }
+    evidenceSequence = load.sequence;
+    previousEvidenceSignature = load.signature;
+    runtimeEvidenceEntryCount += 1;
+    if (runtimeEvidenceEntryCount > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
+    }
+    const key = `${load.kind}\0${load.value}`;
+    runtimeEvidenceKeys.add(key);
+    if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
+    }
+    if (load.kind === "launch" || load.kind === "attestation") {
+      let execution;
+      try {
+        execution = JSON.parse(load.value);
+      } catch {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      if (execution.version !== 1 || typeof execution.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.nonce) || typeof execution.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.identity) || !execution.parent || typeof execution.parent.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.parent.identity) || typeof execution.parent.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.parent.nonce) || typeof execution.semantics !== "string" || !/^[a-f0-9]{64}$/.test(execution.semantics) || !execution.authority || execution.authority.sessionId !== authority.sessionId || execution.authority.metroInstanceId !== authority.metroInstanceId || execution.authority.contentRoot !== identity2.contentRoot || execution.authority.appRoot !== identity2.appRoot) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      const target = load.kind === "launch" ? descendantLaunches : descendantAttestations;
+      const priorExecution = target.get(load.value);
+      if (priorExecution && canonicalAuthorityJson(priorExecution) !== load.value) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      target.set(load.value, execution);
+      descendantSemanticDigests.add(execution.semantics);
+      continue;
+    }
+    if (load.kind === "semantics") {
+      if (load.value.length > 4096) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded");
+      }
+      runtimeSemantics.add(load.value);
+      runtimeSemanticsByDigest.set(createHash4("sha256").update(load.value).digest("hex"), load.value);
+      orderedRuntimeSemantics.push(load.value);
+      continue;
+    }
+    if (load.kind === "pending" || load.kind === "completion") {
+      if (!/^[a-f0-9]{32}$/.test(load.value)) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      (load.kind === "pending" ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
+      continue;
+    }
+    const prior = runtimeLoads.get(key);
+    if (prior && prior.digest !== load.digest) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed between executions");
+    }
+    runtimeLoads.set(key, {
+      kind: load.kind,
+      value: load.value,
+      digest: load.digest
+    });
+  }
+  if (evidenceSequence === 0 || previousEvidenceSignature === null) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");
+  }
+  const challenge = randomBytes(32).toString("hex");
+  let head;
+  try {
+    head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
+  } catch (error2) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is unavailable", {
+      cause: error2
+    });
+  }
+  const headPayload = {
+    version: head.version,
+    runtimeEvidenceAuthority: head.runtimeEvidenceAuthority,
+    sessionId: head.sessionId,
+    metroInstanceId: head.metroInstanceId,
+    challenge: head.challenge,
+    sequence: head.sequence,
+    journalSignature: head.journalSignature
+  };
+  const expectedHead = createHmac("sha256", authority.capability).update(canonicalAuthorityJson(headPayload)).digest();
+  const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
+  if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual(observedHead, expectedHead)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
+  }
+  for (const launch of descendantLaunches.keys()) {
+    if (!descendantAttestations.has(launch)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested");
+    }
+  }
+  for (const attestation of descendantAttestations.keys()) {
+    if (!descendantLaunches.has(attestation)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch");
+    }
+  }
+  for (const pending2 of pendingIpcCompletions) {
+    if (!completedIpcCompletions.has(pending2)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion is pending");
+    }
+  }
+  for (const completion of completedIpcCompletions) {
+    if (!pendingIpcCompletions.has(completion)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
+    }
+  }
+  const observedSemanticDigests = new Set(runtimeSemanticsByDigest.keys());
+  for (const semantics of descendantSemanticDigests) {
+    if (!observedSemanticDigests.has(semantics)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
+    }
+  }
+  const descendantsByNonce = /* @__PURE__ */ new Map();
+  for (const execution of descendantLaunches.values()) {
+    if (descendantsByNonce.has(execution.nonce)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant nonce was reused");
+    }
+    descendantsByNonce.set(execution.nonce, execution);
+  }
+  for (const execution of descendantLaunches.values()) {
+    let current = execution;
+    const visited = /* @__PURE__ */ new Set();
+    while (current.parent.nonce !== descendantAuthority.rootNonce) {
+      if (visited.has(current.nonce)) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant tree contains a cycle");
+      }
+      visited.add(current.nonce);
+      const parent = descendantsByNonce.get(current.parent.nonce);
+      if (!parent || parent.identity !== current.parent.identity) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant parent is outside the attested tree");
+      }
+      current = parent;
+    }
+    if (current.parent.identity !== descendantAuthority.rootIdentity) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant root identity does not match Metro");
+    }
+    const semanticsValue = runtimeSemanticsByDigest.get(execution.semantics);
+    if (!semanticsValue) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
+    }
+    let semantics;
+    try {
+      semantics = JSON.parse(semanticsValue);
+    } catch {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
+    }
+    const semanticAuthority = semantics.authority && typeof semantics.authority === "object" ? semantics.authority : null;
+    if (!["node", "sync", "fork", "worker"].includes(semantics.mode) || typeof semantics.entrypoint !== "string" || typeof semantics.entrypointDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.entrypointDigest) || !Array.isArray(semantics.execArgv) || semantics.execArgv.some((entry) => typeof entry !== "string") || typeof semantics.invocationDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.invocationDigest) || canonicalAuthorityJson(semantics.allowedCodeRoots) !== canonicalAuthorityJson(allowedCodeRoots) || !semanticAuthority || semanticAuthority.sessionId !== authority.sessionId || semanticAuthority.metroInstanceId !== authority.metroInstanceId || semanticAuthority.contentRoot !== identity2.contentRoot || semanticAuthority.appRoot !== identity2.appRoot || semanticAuthority.parentIdentity !== execution.parent.identity || semanticAuthority.parentNonce !== execution.parent.nonce) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
+    }
+    const entrypoint = realpathSync4(semantics.entrypoint);
+    if (!allowedCodeRoots.some((root) => isContained(realpathSync4(root), entrypoint))) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant entrypoint is outside allowed code roots");
+    }
+    const observedEntrypoint = runtimeLoads.get(`input\0${entrypoint}`);
+    if (!observedEntrypoint || observedEntrypoint.digest !== semantics.entrypointDigest) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant executable bytes are not attested");
+    }
+  }
+  for (const load of runtimeLoads.values()) {
+    if (load.kind === "violation") {
+      throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
+    }
+    const candidate = realpathSync4(load.value);
+    if (fileDigest(candidate) !== load.digest) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution");
+    }
+    runtimeInputs.add(candidate);
+  }
+  return {
+    paths: [...runtimeInputs].sort().flatMap((entry) => {
+      const candidate = realpathSync4(entry);
+      return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
+    }),
+    semantics: orderedRuntimeSemantics
+  };
+}
+function dependencyStoreRoots(identity2, git, pathExists) {
+  const entries = git(identity2.contentRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+    "--",
+    ...DEPENDENCY_STORE_PATHS
+  ]).split("\0").filter(Boolean);
+  for (const candidate of [
+    join5(identity2.contentRoot, "node_modules"),
+    join5(identity2.appRoot, "node_modules")
+  ]) {
+    if (pathExists(candidate))
+      entries.push(relative(identity2.contentRoot, candidate));
+  }
+  const pnpRoots = [];
+  let pnpRoot = identity2.appRoot;
+  while (true) {
+    pnpRoots.push(pnpRoot);
+    if (pnpRoot === identity2.contentRoot)
+      break;
+    const parent = dirname4(pnpRoot);
+    if (parent === pnpRoot || !isContained(identity2.contentRoot, parent))
+      break;
+    pnpRoot = parent;
+  }
+  const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => [".pnp.js", ".pnp.cjs", ".pnp.loader.mjs"].map((entry) => join5(root, entry)).filter(pathExists));
+  if (pnpLoaders.length > 0) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
+  }
+  let ancestor = dirname4(identity2.contentRoot);
+  while (true) {
+    if (pathExists(join5(ancestor, "node_modules"))) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
+    }
+    const parent = dirname4(ancestor);
+    if (parent === ancestor)
+      break;
+    ancestor = parent;
+  }
+  const roots = [...new Set(entries.map((entry) => resolve4(identity2.contentRoot, entry)))].sort();
+  for (const root of roots) {
+    assertContained(identity2.contentRoot, root, "STRICT_PROOF_DEPENDENCY_PATH_ESCAPE");
+  }
+  return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
+}
+function updateDependencyStores(hash, identity2, git, pathExists, runtimeInputs) {
+  const roots = dependencyStoreRoots(identity2, git, pathExists);
+  const state = {
+    entries: 0,
+    totalBytes: 0,
+    visitedDirectories: /* @__PURE__ */ new Set()
+  };
+  updateFramed(hash, "dependency-stores-v1");
+  for (const root of [.../* @__PURE__ */ new Set([...roots, ...runtimeInputs])].sort()) {
+    if (!pathExists(root))
+      continue;
+    updateDependencyPath(hash, root, relative(identity2.contentRoot, root), state);
+  }
+}
+function defaultGit(root, args) {
+  return execFileSync4("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5e3,
+    maxBuffer: 64 * 1024 * 1024
+  }).trim();
+}
+function isDefinitiveNonGitError(error2) {
+  if (!(error2 instanceof Error))
+    return false;
+  const stderr = "stderr" in error2 && typeof error2.stderr === "string" ? error2.stderr : "stderr" in error2 && Buffer.isBuffer(error2.stderr) ? error2.stderr.toString("utf8") : "";
+  return `${error2.message}
+${stderr}`.toLowerCase().includes("not a git repository");
+}
+function assertContained(root, candidate, code) {
+  const child = relative(root, candidate);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(child)) {
+    throw new Error(`${code}: path is outside the declared content root`);
+  }
+}
+function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
+  if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
+    throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
+  }
+  const contentRoot = canonicalize(resolve4(dependencies.declaredRoot));
+  assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
+  const manifestParts = [];
+  for (const entry of [...dependencies.declaredManifests].sort()) {
+    const manifest = canonicalize(resolve4(contentRoot, entry));
+    assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
+    manifestParts.push(relative(contentRoot, manifest), readFileSync5(manifest));
+  }
+  const manifestDigest = digest(manifestParts);
+  const appRelative = relative(contentRoot, appRoot) || ".";
+  return {
+    kind: "declared-root",
+    contentRoot,
+    appRoot,
+    sourceKey: digest(["declared-source", contentRoot, manifestDigest]),
+    worktreeKey: digest(["declared-root", contentRoot]),
+    appRootKey: digest(["declared-app", appRelative]),
+    manifestDigest,
+    declaredManifests: [...dependencies.declaredManifests]
+  };
+}
+function resolveSourceIdentity(inputRoot, dependencies = {}) {
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
+  const appRoot = canonicalize(resolve4(inputRoot));
+  const git = dependencies.git ?? defaultGit;
+  try {
+    const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
+    assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
+    const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
+    const commonDirectory = canonicalize(isAbsolute(commonRaw) ? commonRaw : join5(appRoot, commonRaw));
+    const head = git(appRoot, ["rev-parse", "HEAD"]);
+    const appRelative = relative(contentRoot, appRoot) || ".";
+    return {
+      kind: "git",
+      contentRoot,
+      appRoot,
+      sourceKey: digest(["git-source", commonDirectory]),
+      worktreeKey: digest(["git-worktree", contentRoot]),
+      appRootKey: digest(["git-app", appRelative]),
+      head
+    };
+  } catch (error2) {
+    if (error2 instanceof Error && (error2.message.startsWith("APP_ROOT_OUTSIDE_WORKTREE") || error2.message.startsWith("NON_GIT_"))) {
+      throw error2;
+    }
+    if (!isDefinitiveNonGitError(error2))
+      throw error2;
+    return resolveDeclaredIdentity(appRoot, dependencies, canonicalize);
+  }
+}
+function strictProofSourceIdentity(identity2, dependencies = {}) {
+  if (identity2.kind !== "git") {
+    throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
+  }
+  const git = dependencies.git ?? defaultGit;
+  const pathExists = dependencies.exists ?? existsSync6;
+  assertFinalMetroIntegration(identity2);
+  const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
+  const runtimeEnforcementVerifier = dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
+  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
+  const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
+  const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
+  const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
+  const ignored = git(identity2.contentRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "-z",
+    "--",
+    ...IGNORED_RUNTIME_INPUT_PATHS
+  ]).split("\0").filter(Boolean).sort();
+  const gitlinks = git(identity2.contentRoot, ["ls-files", "--stage", "-z"]).split("\0").flatMap((entry) => {
+    const match = /^160000 [0-9a-f]+ \d+\t(.+)$/i.exec(entry);
+    return match?.[1] ? [match[1]] : [];
+  });
+  for (const entry of gitlinks) {
+    const submodule = resolve4(identity2.contentRoot, entry);
+    assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
+    const status = git(submodule, [
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignore-submodules=none"
+    ]);
+    if (status) {
+      throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
+    }
+  }
+  const dirtyHash = createHash4("sha256");
+  updateFramed(dirtyHash, "git-dirty-v3");
+  updateFramed(dirtyHash, diff);
+  for (const semantics of runtimeInputs.semantics) {
+    updateFramed(dirtyHash, "runtime-semantics");
+    updateFramed(dirtyHash, semantics);
+  }
+  updateDependencyStores(dirtyHash, identity2, git, pathExists, runtimeInputs.paths);
+  const sourceEntries = [
+    ...untracked.map((entry) => ["untracked", entry]),
+    ...ignored.map((entry) => ["ignored-runtime", entry])
+  ];
+  if (sourceEntries.length > MAX_STRICT_PROOF_FILES) {
+    throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs");
+  }
+  let totalBytes = 0;
+  for (const [classification, entry] of sourceEntries) {
+    const file = resolve4(identity2.contentRoot, entry);
+    assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
+    const stat2 = lstatSync3(file);
+    updateFramed(dirtyHash, classification);
+    updateFramed(dirtyHash, entry);
+    if (stat2.isFile()) {
+      if (stat2.size > MAX_STRICT_PROOF_FILE_BYTES) {
+        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+      }
+      totalBytes += stat2.size;
+      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
+      }
+      updateFramed(dirtyHash, "file");
+      updateFramedFile(dirtyHash, file, stat2.size);
+      continue;
+    }
+    if (stat2.isSymbolicLink()) {
+      const target = realpathSync4(file);
+      assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
+      const link = readlinkSync2(file);
+      const targetStat = lstatSync3(target);
+      if (!targetStat.isFile()) {
+        throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
+      }
+      if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+      }
+      totalBytes += Buffer.byteLength(link) + targetStat.size;
+      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
+      }
+      updateFramed(dirtyHash, "symlink");
+      updateFramed(dirtyHash, link);
+      updateFramedFile(dirtyHash, target, targetStat.size);
+      continue;
+    }
+    throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
+  }
+  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
+  if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
+    throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
+  }
+  return {
+    kind: "git-strict-proof",
+    sourceKey: identity2.sourceKey,
+    worktreeKey: identity2.worktreeKey,
+    appRootKey: identity2.appRootKey,
+    head,
+    dirtyDigest: dirtyHash.digest("hex")
+  };
+}
+var MAX_STRICT_PROOF_FILES, MAX_STRICT_PROOF_FILE_BYTES, MAX_STRICT_PROOF_TOTAL_BYTES, MAX_STRICT_PROOF_DEPENDENCY_ENTRIES, MAX_STRICT_PROOF_DEPENDENCY_DEPTH, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES, STRICT_PROOF_READ_BUFFER_BYTES, DEPENDENCY_STORE_PATHS, EXCLUDED_RUNTIME_DIRECTORIES, IGNORED_RUNTIME_INPUT_PATHS, METRO_INTEGRATION_START, METRO_INTEGRATION_END, METRO_INTEGRATION_BLOCK, METRO_RUNTIME_POLICY, METRO_EVIDENCE_HEAD_CLIENT;
+var init_source_identity = __esm({
+  "packages/rn-dev-agent-core/dist/session/source-identity.js"() {
+    "use strict";
+    init_metro_cwd();
+    init_authority_json();
+    init_managed_metro_enforcement();
+    MAX_STRICT_PROOF_FILES = 4096;
+    MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+    MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
+    MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
+    MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
+    MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
+    MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
+    STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
+    DEPENDENCY_STORE_PATHS = [
+      ":(top,glob)**/node_modules/**",
+      ":(top,glob)**/.yarn/cache/**",
+      ":(top,glob)**/.yarn/unplugged/**"
+    ];
+    EXCLUDED_RUNTIME_DIRECTORIES = [
+      ".gradle",
+      ".expo",
+      ".cache",
+      "ios/Pods",
+      "ios/build",
+      "ios/DerivedData",
+      "android/build",
+      "android/app/build",
+      "android/app/.cxx"
+    ];
+    IGNORED_RUNTIME_INPUT_PATHS = [
+      ":(top,glob)**",
+      ":(top,exclude,glob)**/node_modules/**",
+      ":(top,exclude,glob)**/.yarn/cache/**",
+      ":(top,exclude,glob)**/.yarn/unplugged/**",
+      ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
+    ];
+    METRO_INTEGRATION_START = "// rn-dev-agent session integration: begin";
+    METRO_INTEGRATION_END = "// rn-dev-agent session integration: end";
+    METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
+module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
+${METRO_INTEGRATION_END}`;
+    METRO_RUNTIME_POLICY = ".rn-agent/integration/metro-runtime-policy.json";
+    METRO_EVIDENCE_HEAD_CLIENT = String.raw`
+const { createConnection } = require('node:net');
+const socket = createConnection(process.argv[1]);
+let response = '';
+socket.setEncoding('utf8');
+socket.setTimeout(1500);
+socket.once('connect', () => socket.write(process.argv[2] + '\n'));
+socket.on('data', (chunk) => {
+  response += chunk;
+  if (response.length > 4096) process.exit(2);
+});
+socket.once('end', () => process.stdout.write(response));
+socket.once('timeout', () => process.exit(3));
+socket.once('error', () => process.exit(4));
+`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js
+import { createHash as createHash5 } from "node:crypto";
+function normalizeNodeForHash(node) {
+  const q = (v) => Math.round(v / BOUNDS_QUANTUM_PX);
+  return JSON.stringify([
+    node.identifier ?? "",
+    node.type,
+    node.label ?? "",
+    q(node.rect.x),
+    q(node.rect.y),
+    q(node.rect.width),
+    q(node.rect.height),
+    node.enabled ?? null
+  ]);
+}
+function hashSnapshotNodes(nodes) {
+  const h = createHash5("sha256");
+  for (const node of nodes) {
+    h.update(normalizeNodeForHash(node));
+    h.update("\n");
+  }
+  return h.digest("hex");
+}
+var BOUNDS_QUANTUM_PX;
+var init_settle_hash = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/settle-hash.js"() {
+    "use strict";
+    BOUNDS_QUANTUM_PX = 4;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/fast-runner-ref-map.js
+function extentToRect(right, bottom) {
+  return right > 300 && bottom > 0 ? { x: 0, y: 0, width: right, height: bottom } : null;
+}
+function windowCap(entries) {
+  let right = 0;
+  let bottom = 0;
+  for (const e of entries) {
+    if (e.type === void 0 || !WINDOW_TYPES.has(e.type))
+      continue;
+    const { x, y, width, height } = e.rect;
+    if (width <= 0 || height <= 0)
+      continue;
+    right = Math.max(right, x + width);
+    bottom = Math.max(bottom, y + height);
+  }
+  return right > 300 && bottom > 0 ? { right, bottom } : null;
+}
+function resolveScreenRect(entries) {
+  const cap2 = windowCap(entries);
+  let allRight = 0;
+  let allBottom = 0;
+  let hitRight = 0;
+  let hitBottom = 0;
+  const usable = [];
+  for (const e of entries) {
+    const { x, y, width, height } = e.rect;
+    if (width <= 0 || height <= 0)
+      continue;
+    usable.push(e);
+    allRight = Math.max(allRight, x + width);
+    allBottom = Math.max(allBottom, y + height);
+    if (e.hittable === true) {
+      hitRight = Math.max(hitRight, x + width);
+      hitBottom = Math.max(hitBottom, y + height);
+    }
+  }
+  if (cap2 !== null) {
+    allRight = Math.min(allRight, cap2.right);
+    allBottom = Math.min(allBottom, cap2.bottom);
+    hitRight = Math.min(hitRight, cap2.right);
+    hitBottom = Math.min(hitBottom, cap2.bottom);
+  }
+  if (hitRight <= 0 || hitBottom <= 0)
+    return extentToRect(allRight, allBottom);
+  let right = hitRight;
+  let bottom = hitBottom;
+  for (let pass = 0; pass < 10; pass++) {
+    let grew = false;
+    for (const e of usable) {
+      const { x, y, width, height } = e.rect;
+      const intersects = x < right && y < bottom && x + width > 0 && y + height > 0;
+      if (!intersects)
+        continue;
+      if (x + width > right) {
+        right = x + width;
+        grew = true;
+      }
+      if (y + height > bottom) {
+        bottom = y + height;
+        grew = true;
+      }
+    }
+    if (!grew)
+      break;
+  }
+  if (cap2 !== null) {
+    right = Math.min(right, cap2.right);
+    bottom = Math.min(bottom, cap2.bottom);
+  }
+  return extentToRect(right, bottom) ?? extentToRect(allRight, allBottom);
+}
+function lookupRef(ref) {
+  const clean = ref.startsWith("@") ? ref.slice(1) : ref;
+  return refMap.get(clean) ?? null;
+}
+function refCenter(ref) {
+  const rect = lookupRef(ref);
+  if (!rect)
+    return null;
+  return {
+    x: Math.round(rect.x + rect.width / 2),
+    y: Math.round(rect.y + rect.height / 2)
+  };
+}
+function getScreenRect() {
+  return screenRect;
+}
+function getRefMapAge() {
+  return lastUpdated ? Date.now() - lastUpdated : Infinity;
+}
+function isRefMapFresh(maxAgeMs = MAX_REF_MAP_AGE_MS) {
+  return getRefMapAge() <= maxAgeMs;
+}
+function clearRefMap() {
+  refMap.clear();
+  metadataMap.clear();
+  screenRect = null;
+  lastUpdated = 0;
+  lastSnapshotHash = null;
+  snapshotGeneration = 0;
+  keyboardStateAtSnapshot = null;
+}
+function buildSnapshotVerdict(source, nodeCount, outcome) {
+  const reasons = [];
+  if (nodeCount === 0)
+    reasons.push("empty-capture");
+  return {
+    state: reasons.length > 0 ? "degraded" : "ok",
+    source,
+    nodeCount,
+    refMapUpdated: outcome.applied,
+    reasons
+  };
+}
+function updateRefMapFromFlat(nodes, freshness = {}) {
+  let validCount = 0;
+  for (const node of nodes) {
+    if (node.ref && node.rect)
+      validCount++;
+  }
+  if (validCount === 0 && refMap.size > 0) {
+    return { applied: false, reason: "empty-capture" };
+  }
+  refMap.clear();
+  screenRect = null;
+  snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
+  keyboardStateAtSnapshot = freshness.keyboardVisible ?? null;
+  const hashed = [];
+  const entries = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!node.ref || !node.rect)
+      continue;
+    const key = node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
+    refMap.set(key, node.rect);
+    const meta = {
+      type: node.type,
+      flatIndex: i,
+      nodeCount: nodes.length,
+      snapshotGeneration,
+      keyboardStateAtSnapshot
+    };
+    if (node.label !== void 0)
+      meta.label = node.label;
+    if (node.identifier !== void 0)
+      meta.identifier = node.identifier;
+    metadataMap.set(key, meta);
+    hashed.push(node);
+    entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
+  }
+  screenRect = resolveScreenRect(entries);
+  try {
+    lastSnapshotHash = hashSnapshotNodes(hashed);
+  } catch {
+    lastSnapshotHash = null;
+  }
+  lastUpdated = Date.now();
+  return { applied: true };
+}
+function getFreshRefTarget(ref, opts = {}) {
+  if (!isRefMapFresh())
+    return null;
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  const rect = refMap.get(key);
+  const record2 = metadataMap.get(key);
+  if (!rect || !record2 || record2.snapshotGeneration !== snapshotGeneration || record2.keyboardStateAtSnapshot === null && opts.allowUnknownKeyboardState !== true)
+    return null;
+  return {
+    rect,
+    snapshotGeneration: record2.snapshotGeneration,
+    keyboardStateAtSnapshot: record2.keyboardStateAtSnapshot
+  };
+}
+function getCachedMetadata(ref) {
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  const rec = metadataMap.get(key);
+  if (!rec)
+    return null;
+  const meta = { type: rec.type };
+  if (rec.label !== void 0)
+    meta.label = rec.label;
+  if (rec.identifier !== void 0)
+    meta.identifier = rec.identifier;
+  return meta;
+}
+function getCachedSignature(ref) {
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  const rec = metadataMap.get(key);
+  if (!rec)
+    return null;
+  const sig = {
+    type: rec.type,
+    flatIndex: rec.flatIndex,
+    nodeCount: rec.nodeCount
+  };
+  if (rec.label !== void 0)
+    sig.label = rec.label;
+  if (rec.identifier !== void 0)
+    sig.identifier = rec.identifier;
+  return sig;
+}
+function getLastSnapshotHash() {
+  return lastSnapshotHash;
+}
+function invalidateLastSnapshotHash() {
+  lastSnapshotHash = null;
+}
+function identityMatches(sig, node) {
+  return node.type === sig.type && node.label === sig.label && node.identifier === sig.identifier;
+}
+function refreshRef(sig, nodes) {
+  const matches = [];
+  for (let i = 0; i < nodes.length; i++) {
+    if (identityMatches(sig, nodes[i]))
+      matches.push({ node: nodes[i], index: i });
+  }
+  if (matches.length === 0)
+    return { kind: "absent" };
+  if (matches.length === 1)
+    return { kind: "unique", node: matches[0].node };
+  if (nodes.length === sig.nodeCount) {
+    const atSameIndex = matches.filter((m) => m.index === sig.flatIndex);
+    if (atSameIndex.length === 1)
+      return { kind: "unique", node: atSameIndex[0].node };
+  }
+  return { kind: "ambiguous", candidates: matches.map((m) => m.node) };
+}
+var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, snapshotGeneration, keyboardStateAtSnapshot, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
+var init_fast_runner_ref_map = __esm({
+  "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
+    "use strict";
+    init_settle_hash();
+    refMap = /* @__PURE__ */ new Map();
+    metadataMap = /* @__PURE__ */ new Map();
+    screenRect = null;
+    lastUpdated = 0;
+    lastSnapshotHash = null;
+    snapshotGeneration = 0;
+    keyboardStateAtSnapshot = null;
+    WINDOW_TYPES = /* @__PURE__ */ new Set(["Application", "Window"]);
+    MAX_REF_MAP_AGE_MS = 6e4;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/keyboard-guard.js
+function resolveKeyboardGuard(env) {
+  const raw = (env.RN_KEYBOARD_GUARD ?? "").trim().toLowerCase();
+  return !(raw === "0" || raw === "false");
+}
+function withKeyboardGuard(payload, verb, env) {
+  if (!GUARDED_VERBS.has(verb))
+    return payload;
+  return { ...payload, guardKeyboard: resolveKeyboardGuard(env) };
+}
+function surfaceKeyboardGuard(result) {
+  const text = result.content?.[0]?.text;
+  if (typeof text !== "string")
+    return result;
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return result;
+  }
+  if (envelope === null || typeof envelope !== "object")
+    return result;
+  const data = envelope.data;
+  const keyboardGuard = data?.keyboardGuard;
+  if (typeof keyboardGuard !== "string")
+    return result;
+  const meta = envelope.meta ?? {};
+  envelope.meta = { ...meta, keyboardGuard };
+  const keyboardGuardMs = data?.keyboardGuardMs;
+  if (typeof keyboardGuardMs === "number") {
+    const timings = meta.timings_ms ?? {};
+    envelope.meta = {
+      ...envelope.meta,
+      timings_ms: { ...timings, keyboardGuard: keyboardGuardMs }
+    };
+  }
+  return {
+    ...result,
+    content: [{ type: "text", text: JSON.stringify(envelope) }]
+  };
+}
+function isKeyboardOccludedRefusal(result) {
+  if (!result.isError)
+    return false;
+  const text = result.content?.[0]?.text;
+  if (typeof text !== "string")
+    return false;
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (envelope === null || typeof envelope !== "object")
+    return false;
+  const { code, error: error2 } = envelope;
+  if (code === "KEYBOARD_OCCLUDED" || code === "KEYBOARD_DISMISS_FAILED")
+    return true;
+  return typeof error2 === "string" && (error2.startsWith("KEYBOARD_OCCLUDED") || error2.startsWith("KEYBOARD_DISMISS_FAILED"));
+}
+function keyboardVisibility(result) {
+  const text = result?.content?.[0]?.text;
+  if (typeof text !== "string")
+    return null;
+  try {
+    const envelope = JSON.parse(text);
+    if (envelope.ok === false)
+      return null;
+    if (typeof envelope.data?.keyboardVisible === "boolean") {
+      return envelope.data.keyboardVisible;
+    }
+    return typeof envelope.data?.visible === "boolean" ? envelope.data.visible : null;
+  } catch {
+    return null;
+  }
+}
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms))) {
+  let last = "unknown";
+  for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
+    const visible = keyboardVisibility(await refreshSnapshot());
+    if (visible === false)
+      return "hidden";
+    if (visible === null)
+      return "unknown";
+    last = "visible";
+    if (attempt < KEYBOARD_POSTCHECK_ATTEMPTS - 1)
+      await sleep6(KEYBOARD_POSTCHECK_DELAY_MS);
+  }
+  return last;
+}
+function nativeDismissTiers(via) {
+  return via === "native-control" ? ["native-control"] : ["native-control", via];
+}
+function nativeTiersAttempted(native) {
+  if (!native.isError)
+    return ["native-control", "native-swipe"];
+  const text = native.content?.[0]?.text ?? "";
+  return text.includes("KEYBOARD_DISMISS_FAILED") ? ["native-control", "native-swipe"] : [];
+}
+async function dismissKeyboardWithParity(deps) {
+  const native = await deps.nativeDismiss();
+  if (!native.isError) {
+    let data = {};
+    try {
+      data = JSON.parse(native.content[0]?.text ?? "{}").data ?? {};
+    } catch {
+    }
+    if (data.wasVisible === false && data.visible !== true) {
+      return okResult({
+        dismissed: false,
+        keyboardGuard: "no_keyboard",
+        via: "no_keyboard",
+        attemptedTiers: []
+      });
+    }
+    if (data.dismissed === true && data.visible !== true) {
+      const via = typeof data.via === "string" ? data.via : "native-control";
+      const observed = data.visible === false ? "hidden" : await waitForKeyboardHidden(deps.refreshSnapshot);
+      if (observed !== "visible") {
+        return okResult({
+          dismissed: true,
+          keyboardGuard: "auto_dismissed",
+          via,
+          attemptedTiers: nativeDismissTiers(via),
+          visibilityProof: observed === "hidden" ? "observed-hidden" : "unavailable"
+        });
+      }
+    }
+  }
+  const attemptedTiers = nativeTiersAttempted(native);
+  if (deps.dismissViaJs) {
+    attemptedTiers.push("js");
+    try {
+      if (await deps.dismissViaJs()) {
+        const observed = await waitForKeyboardHidden(deps.refreshSnapshot);
+        if (observed !== "visible") {
+          return okResult({
+            dismissed: true,
+            keyboardGuard: "auto_dismissed",
+            via: "js",
+            attemptedTiers,
+            visibilityProof: observed === "hidden" ? "observed-hidden" : "unavailable"
+          });
+        }
+      }
+    } catch {
+    }
+  }
+  return failResult("KEYBOARD_DISMISS_FAILED: no dismissal tier proved the keyboard hidden; it was still visible or its state could not be established.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers });
+}
+async function healKeyboardOccludedTap(first, deps) {
+  if (!deps || !isKeyboardOccludedRefusal(first))
+    return first;
+  const t0 = Date.now();
+  let dismissed = false;
+  try {
+    dismissed = await deps.dismissViaJs();
+  } catch {
+    return first;
+  }
+  if (!dismissed)
+    return first;
+  try {
+    if (await waitForKeyboardHidden(deps.refreshSnapshot) === "visible")
+      return first;
+  } catch {
+    return first;
+  }
+  const retried = await deps.retryTap();
+  return tagKeyboardAutoHeal(retried, Date.now() - t0);
+}
+function tagKeyboardAutoHeal(result, healMs) {
+  const text = result.content?.[0]?.text;
+  if (typeof text !== "string")
+    return result;
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return result;
+  }
+  if (envelope === null || typeof envelope !== "object")
+    return result;
+  const meta = envelope.meta ?? {};
+  envelope.meta = {
+    ...meta,
+    // A retry that refused again keeps its own guard status; only a served
+    // tap is stamped as JS-dismissed.
+    ...result.isError ? {} : { keyboardGuard: "auto_dismissed", via: "js" },
+    keyboardAutoHeal: { dismissed: true, via: "js", healMs }
+  };
+  return {
+    ...result,
+    content: [{ type: "text", text: JSON.stringify(envelope) }]
+  };
+}
+var GUARDED_VERBS, KEYBOARD_POSTCHECK_ATTEMPTS, KEYBOARD_POSTCHECK_DELAY_MS;
+var init_keyboard_guard = __esm({
+  "packages/rn-dev-agent-core/dist/runners/keyboard-guard.js"() {
+    "use strict";
+    init_utils();
+    GUARDED_VERBS = /* @__PURE__ */ new Set(["tap", "press", "longPress"]);
+    KEYBOARD_POSTCHECK_ATTEMPTS = 5;
+    KEYBOARD_POSTCHECK_DELAY_MS = 100;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/util/secure-state-file.js
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync3, unlinkSync as unlinkSync2, mkdirSync as mkdirSync5, renameSync as renameSync2, lstatSync as lstatSync4 } from "node:fs";
+import { join as join6, dirname as dirname5 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+function getStateDir() {
+  if (process.env.XDG_STATE_HOME) {
+    return join6(process.env.XDG_STATE_HOME, "rn-dev-agent");
+  }
+  if (process.platform === "darwin") {
+    return join6(homedir2(), "Library", "Application Support", "rn-dev-agent");
+  }
+  return join6(homedir2(), ".rn-dev-agent");
+}
+function runnerStatePath(key) {
+  const safe = key.replace(/[^A-Za-z0-9._:-]/g, "_");
+  return join6(getStateDir(), "runner-state", `${safe}.json`);
+}
+function readJsonStateFile(path) {
+  try {
+    const stat2 = lstatSync4(path);
+    if (stat2.isSymbolicLink())
+      return null;
+    return JSON.parse(readFileSync6(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function writeJsonStateFileAtomic(path, value) {
+  mkdirSync5(dirname5(path), { recursive: true });
+  const tmpPath = `${path}.tmp.${process.pid}`;
+  writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
+  renameSync2(tmpPath, path);
+}
+function deleteStateFile(path) {
+  try {
+    unlinkSync2(path);
+  } catch {
+  }
+}
+function readLegacyTmpState(kind) {
+  return readJsonStateFile(LEGACY_TMP_STATE_FILES[kind]);
+}
+function cleanupLegacyTmpState() {
+  for (const p of Object.values(LEGACY_TMP_STATE_FILES))
+    deleteStateFile(p);
+}
+var LEGACY_TMP_STATE_FILES;
+var init_secure_state_file = __esm({
+  "packages/rn-dev-agent-core/dist/util/secure-state-file.js"() {
+    "use strict";
+    LEGACY_TMP_STATE_FILES = {
+      ios: "/tmp/rn-fast-runner-state.json",
+      android: "/tmp/rn-android-runner-state.json"
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/runtime-paths.js
+import { existsSync as existsSync7, statSync as statSync3 } from "node:fs";
+import { join as join7 } from "node:path";
+function compactUnique(paths) {
+  const out = [];
+  for (const path of paths) {
+    if (!path || out.includes(path))
+      continue;
+    out.push(path);
+  }
+  return out;
+}
+function isDirectory(path) {
+  try {
+    return statSync3(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
+  const runnerRoot = process.env.RN_DEV_AGENT_NATIVE_RUNNER_ROOT;
+  const repoRoot = process.env.RN_DEV_AGENT_ROOT;
+  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  return compactUnique([
+    runnerRoot ? join7(runnerRoot, runnerName) : void 0,
+    repoRoot ? join7(repoRoot, "packages", runnerName) : void 0,
+    repoRoot ? join7(repoRoot, "scripts", runnerName) : void 0,
+    codexPluginRoot ? join7(codexPluginRoot, "scripts", runnerName) : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, "..", runnerName) : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, "scripts", runnerName) : void 0,
+    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
+    join7(baseDir, "..", "..", "scripts", runnerName),
+    // Source checkout: packages/rn-dev-agent-core/dist/runners.
+    // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
+    join7(baseDir, "..", "..", "..", runnerName),
+    // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
+    join7(baseDir, "..", "..", "..", "..", "scripts", runnerName)
+  ]);
+}
+function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
+  const candidates = candidateNativeRunnerDirs(runnerName, baseDir);
+  return candidates.find(isDirectory) ?? candidates[0];
+}
+function candidateRunnerManifestFiles(baseDir = import.meta.dirname) {
+  const repoRoot = process.env.RN_DEV_AGENT_ROOT;
+  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  return compactUnique([
+    process.env.RN_DEV_AGENT_RUNNER_MANIFEST,
+    repoRoot ? join7(repoRoot, "runner-manifest.json") : void 0,
+    codexPluginRoot ? join7(codexPluginRoot, "runner-manifest.json") : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, "..", "..", "runner-manifest.json") : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, "runner-manifest.json") : void 0,
+    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
+    join7(baseDir, "..", "..", "runner-manifest.json"),
+    // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
+    join7(baseDir, "..", "..", "..", "..", "runner-manifest.json"),
+    // Legacy source checkout: scripts/cdp-bridge/dist/runners.
+    join7(baseDir, "..", "..", "..", "runner-manifest.json")
+  ]);
+}
+function candidatePluginManifestFiles(baseDir = import.meta.dirname) {
+  const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  return compactUnique([
+    process.env.RN_DEV_AGENT_PLUGIN_MANIFEST,
+    codexPluginRoot ? join7(codexPluginRoot, ".codex-plugin", "plugin.json") : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, ".claude-plugin", "plugin.json") : void 0,
+    claudePluginRoot ? join7(claudePluginRoot, "plugin.json") : void 0,
+    // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
+    join7(baseDir, "..", "..", ".codex-plugin", "plugin.json"),
+    // Migrated source checkout: packages/rn-dev-agent-core/dist/runners.
+    join7(baseDir, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
+    join7(baseDir, "..", "..", "..", "claude-plugin", "plugin.json"),
+    // Core package fallback. This is enough for artifact versioning in Codex.
+    join7(baseDir, "..", "package.json"),
+    join7(baseDir, "..", "..", "package.json")
+  ]);
+}
+function firstExistingFile(candidates) {
+  return candidates.find((path) => existsSync7(path)) ?? null;
+}
+var init_runtime_paths = __esm({
+  "packages/rn-dev-agent-core/dist/runners/runtime-paths.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/protocol.js
+import { readFileSync as readFileSync7 } from "node:fs";
+function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
+  if (health.protocolVersion === void 0)
+    return { compatible: false, reason: "legacy" };
+  if (health.protocolVersion < MIN_SUPPORTED_RUNNER_PROTOCOL) {
+    return { compatible: false, reason: "protocol-older" };
+  }
+  if (health.protocolVersion > RUNNER_PROTOCOL_VERSION) {
+    return { compatible: false, reason: "protocol-newer" };
+  }
+  if (pluginVersion !== null && health.runnerVersion !== void 0 && health.runnerVersion !== pluginVersion) {
+    return { compatible: false, reason: "version-skew" };
+  }
+  if (requiredCommands !== void 0) {
+    const advertised = new Set(health.commands ?? []);
+    const missing = requiredCommands.filter((c) => !advertised.has(c));
+    if (missing.length > 0) {
+      return { compatible: false, reason: "missing-commands", missing };
+    }
+  }
+  return { compatible: true };
+}
+function getPluginVersion() {
+  if (cachedPluginVersion !== void 0)
+    return cachedPluginVersion;
+  try {
+    const manifestPath = firstExistingFile(candidatePluginManifestFiles());
+    if (!manifestPath) {
+      cachedPluginVersion = null;
+      return cachedPluginVersion;
+    }
+    const parsed = JSON.parse(readFileSync7(manifestPath, "utf-8"));
+    cachedPluginVersion = typeof parsed.version === "string" ? parsed.version : null;
+  } catch {
+    cachedPluginVersion = null;
+  }
+  return cachedPluginVersion;
+}
+var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
+var init_protocol = __esm({
+  "packages/rn-dev-agent-core/dist/runners/protocol.js"() {
+    "use strict";
+    init_runtime_paths();
+    RUNNER_PROTOCOL_VERSION = 2;
+    MIN_SUPPORTED_RUNNER_PROTOCOL = 1;
+    REQUIRED_IOS_COMMANDS = [
+      "tap",
+      "type",
+      "drag",
+      "longPress",
+      "pinch",
+      "snapshot",
+      "screenshot",
+      "back",
+      "keyboardDismiss",
+      "status"
+    ];
+    REQUIRED_ANDROID_COMMANDS = [
+      "tap",
+      "type",
+      "drag",
+      "longPress",
+      "pinch",
+      "snapshot",
+      "screenshot",
+      "back",
+      "dismissKeyboard",
+      "status"
+    ];
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/quiescence.js
+function resolveQuiescenceBypass(env) {
+  const raw = (env.RN_QUIESCENCE_BYPASS ?? "").trim().toLowerCase();
+  return !(raw === "0" || raw === "false");
+}
+function buildRunnerQuiescenceEnv(env) {
+  const value = resolveQuiescenceBypass(env) ? "1" : "0";
+  return {
+    RN_QUIESCENCE_BYPASS: value,
+    TEST_RUNNER_RN_QUIESCENCE_BYPASS: value
+  };
+}
+var init_quiescence = __esm({
+  "packages/rn-dev-agent-core/dist/runners/quiescence.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
+import { execFileSync as execFileSync5 } from "node:child_process";
+import { createHash as createHash6 } from "node:crypto";
+import { existsSync as existsSync8, mkdirSync as mkdirSync6, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname6, join as join8 } from "node:path";
+function resolveArtifactDecision(input) {
+  if (input.envOverride)
+    return "build-local";
+  if (!input.hasManifestAssets)
+    return "build-local";
+  if (input.cacheValid)
+    return "cache";
+  return "download";
+}
+function assertNoTraversal(entryNames) {
+  for (const name of entryNames) {
+    const norm = name.replace(/\\/g, "/");
+    if (name.startsWith("/") || name.startsWith("\\") || /^[A-Za-z]:/.test(name) || norm.split("/").includes("..")) {
+      throw new Error(`unsafe zip entry (path traversal): ${name}`);
+    }
+  }
+}
+function verifyChecksums(expected, actualByName) {
+  const mismatched = [];
+  const missing = [];
+  for (const a of expected) {
+    const got = actualByName[a.name];
+    if (got === void 0)
+      missing.push(a.name);
+    else if (got !== a.sha256)
+      mismatched.push(a.name);
+  }
+  return { ok: mismatched.length === 0 && missing.length === 0, mismatched, missing };
+}
+function releaseAssetUrl(repo, version2, assetName) {
+  return `https://github.com/${repo}/releases/download/v${version2}/${assetName}`;
+}
+function cacheDirFor(home, platformOS, version2, platform) {
+  const root = platformOS === "darwin" ? join8(home, "Library", "Caches", "rn-dev-agent", "runners") : join8(home, ".cache", "rn-dev-agent", "runners");
+  return join8(root, version2, platform);
+}
+function formatArtifactSize(bytes) {
+  return `~${Math.max(1, Math.round(bytes / 1e6))} MB`;
+}
+function artifactProvenanceToState(p) {
+  return p === "build-local" ? "local" : "prebuilt";
+}
+async function acquireArtifact(platform, version2, deps, extractedOk) {
+  if (deps.env.RN_RUNNER_BUILD === "local")
+    return { provenance: "build-local" };
+  const manifest = deps.readManifest();
+  if (!version2 || !manifest || manifest.version !== version2)
+    return { provenance: "build-local" };
+  const assets = manifest.assets?.[platform] ?? [];
+  if (assets.length === 0)
+    return { provenance: "build-local" };
+  const cacheDir = deps.cacheDir(version2, platform);
+  const productsDir = join8(cacheDir, "products");
+  const actualByName = {};
+  let allZipsPresent = true;
+  for (const a of assets) {
+    const zp = join8(cacheDir, a.name);
+    if (deps.existsSync(zp)) {
+      try {
+        actualByName[a.name] = deps.sha256File(zp);
+      } catch {
+        allZipsPresent = false;
+      }
+    } else {
+      allZipsPresent = false;
+    }
+  }
+  const cacheValid = allZipsPresent && verifyChecksums(assets, actualByName).ok && extractedOk(productsDir);
+  const decision = resolveArtifactDecision({
+    envOverride: false,
+    hasManifestAssets: true,
+    cacheValid
+  });
+  if (decision === "cache")
+    return { provenance: "cache", productsDir };
+  try {
+    deps.mkdirp(cacheDir);
+    for (const a of assets) {
+      const zp = join8(cacheDir, a.name);
+      await deps.fetchToFile(releaseAssetUrl(RUNNER_REPO, version2, a.name), zp, {
+        timeoutMs: DOWNLOAD_TIMEOUT_MS,
+        maxBytes: a.bytes + DOWNLOAD_SIZE_SLACK_BYTES
+      });
+      const got = deps.sha256File(zp);
+      if (got !== a.sha256) {
+        throw new Error(`checksum mismatch for ${a.name} (expected ${a.sha256}, got ${got})`);
+      }
+      deps.unzip(zp, productsDir);
+    }
+    if (!extractedOk(productsDir)) {
+      throw new Error("prebuilt archive missing expected runner products after unzip");
+    }
+    const totalBytes = assets.reduce((sum, a) => sum + a.bytes, 0);
+    return {
+      provenance: "downloaded",
+      productsDir,
+      note: `downloaded prebuilt runner (${formatArtifactSize(totalBytes)})`
+    };
+  } catch (err) {
+    try {
+      deps.rm(productsDir);
+    } catch {
+    }
+    const msg3 = err instanceof Error ? err.message : String(err);
+    return {
+      provenance: "build-local",
+      note: `prebuilt runner unavailable (${msg3}); building locally`
+    };
+  }
+}
+function iosExtractedOk(deps) {
+  return (productsDir) => deps.listFiles(join8(productsDir, "Build", "Products")).some((f) => f.endsWith(".xctestrun"));
+}
+function androidExtractedOk(deps) {
+  return (productsDir) => deps.existsSync(join8(productsDir, ANDROID_APP_APK_NAME)) && deps.existsSync(join8(productsDir, ANDROID_TEST_APK_NAME));
+}
+async function resolveIosRunnerArtifacts(version2, localDerivedDataPath, deps = defaultArtifactDeps(), forceLocalBuild = false) {
+  if (forceLocalBuild) {
+    return { provenance: "build-local", derivedDataPath: localDerivedDataPath };
+  }
+  const r = await acquireArtifact("ios", version2, deps, iosExtractedOk(deps));
+  const derivedDataPath = r.provenance === "build-local" ? localDerivedDataPath : r.productsDir;
+  return { provenance: r.provenance, derivedDataPath, note: r.note };
+}
+async function resolveAndroidRunnerArtifacts(version2, local, deps = defaultArtifactDeps(), forceLocalBuild = false) {
+  if (forceLocalBuild) {
+    return { provenance: "build-local", appApk: local.appApk, testApk: local.testApk };
+  }
+  const r = await acquireArtifact("android", version2, deps, androidExtractedOk(deps));
+  if (r.provenance === "build-local") {
+    return { provenance: r.provenance, appApk: local.appApk, testApk: local.testApk, note: r.note };
+  }
+  return {
+    provenance: r.provenance,
+    appApk: join8(r.productsDir, ANDROID_APP_APK_NAME),
+    testApk: join8(r.productsDir, ANDROID_TEST_APK_NAME),
+    note: r.note
+  };
+}
+function readCommittedManifest() {
+  try {
+    const manifestPath = firstExistingFile(candidateRunnerManifestFiles());
+    if (!manifestPath)
+      return null;
+    const parsed = JSON.parse(readFileSync8(manifestPath, "utf-8"));
+    if (parsed && typeof parsed === "object" && parsed.assets)
+      return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+function sha256File(p) {
+  return createHash6("sha256").update(readFileSync8(p)).digest("hex");
+}
+async function fetchToFile(url, dest, opts) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal, redirect: "follow" });
+    if (!res.ok)
+      throw new Error(`HTTP ${res.status} fetching ${url}`);
+    if (!res.body)
+      throw new Error(`empty response body for ${url}`);
+    mkdirSync6(dirname6(dest), { recursive: true });
+    const reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      total += value.byteLength;
+      if (total > opts.maxBytes) {
+        throw new Error(`artifact exceeds size cap (${opts.maxBytes} bytes)`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    writeFileSync4(dest, Buffer.concat(chunks));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function unzipWithGuard(zipPath, destDir) {
+  const listing = execFileSync5("unzip", ["-Z1", zipPath], { encoding: "utf-8" });
+  const entries = listing.split("\n").map((s) => s.trim()).filter(Boolean);
+  assertNoTraversal(entries);
+  mkdirSync6(destDir, { recursive: true });
+  execFileSync5("unzip", ["-o", "-qq", zipPath, "-d", destDir], { stdio: "ignore" });
+}
+function defaultArtifactDeps() {
+  return {
+    env: process.env,
+    readManifest: readCommittedManifest,
+    cacheDir: (version2, platform) => cacheDirFor(homedir3(), process.platform, version2, platform),
+    existsSync: existsSync8,
+    sha256File,
+    listFiles: (dir) => {
+      try {
+        return readdirSync3(dir);
+      } catch {
+        return [];
+      }
+    },
+    fetchToFile,
+    unzip: unzipWithGuard,
+    mkdirp: (p) => {
+      mkdirSync6(p, { recursive: true });
+    },
+    rm: (p) => {
+      rmSync2(p, { recursive: true, force: true });
+    }
+  };
+}
+var RUNNER_REPO, ANDROID_APP_APK_NAME, ANDROID_TEST_APK_NAME, DOWNLOAD_TIMEOUT_MS, DOWNLOAD_SIZE_SLACK_BYTES;
+var init_runner_artifacts = __esm({
+  "packages/rn-dev-agent-core/dist/runners/runner-artifacts.js"() {
+    "use strict";
+    init_runtime_paths();
+    RUNNER_REPO = "Lykhoyda/rn-dev-agent";
+    ANDROID_APP_APK_NAME = "app-debug.apk";
+    ANDROID_TEST_APK_NAME = "app-debug-androidTest.apk";
+    DOWNLOAD_TIMEOUT_MS = 6e4;
+    DOWNLOAD_SIZE_SLACK_BYTES = 65536;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/transport-recovery.js
+import { randomUUID } from "node:crypto";
+function isMutatingCommand(command) {
+  return MUTATING_COMMANDS.has(String(command));
+}
+function generateCommandId() {
+  return `c-${randomUUID()}`;
+}
+function isAmbiguousTransportFailure(message) {
+  if (message.startsWith("RUNNER_PROTOCOL_MISMATCH"))
+    return false;
+  if (/not started/i.test(message))
+    return false;
+  return true;
+}
+function parseStatusProbeReply(resp, expectedCommandId) {
+  if (!resp || typeof resp !== "object")
+    return null;
+  const r = resp;
+  if (r.ok !== true || !r.data || typeof r.data !== "object")
+    return null;
+  const data = r.data;
+  if (data.commandId !== expectedCommandId)
+    return null;
+  if (typeof data.state !== "string" || !PROBE_STATES.has(data.state))
+    return null;
+  const reply = { state: data.state };
+  if (data.result !== void 0 && data.result !== null && typeof data.result === "object" && typeof data.result.ok === "boolean") {
+    reply.result = data.result;
+  }
+  return reply;
+}
+function decideRecovery(probe, command) {
+  if (!probe || probe.state === "unknown")
+    return { action: "rethrow" };
+  if (probe.result !== void 0) {
+    return {
+      action: "return-recovered",
+      response: probe.result,
+      outcome: probe.state === "failed" ? "recovered-error" : "recovered"
+    };
+  }
+  if (probe.state === "completed" && !isMutatingCommand(command)) {
+    return { action: "resend-once" };
+  }
+  return { action: "rethrow" };
+}
+var MUTATING_COMMANDS, PROBE_STATES;
+var init_transport_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/runners/transport-recovery.js"() {
+    "use strict";
+    MUTATING_COMMANDS = /* @__PURE__ */ new Set([
+      "tap",
+      "mouseClick",
+      "tapSeries",
+      "longPress",
+      "drag",
+      "dragSeries",
+      "remotePress",
+      "type",
+      "fill",
+      "press",
+      "swipe",
+      "scroll",
+      "back",
+      "backInApp",
+      "backSystem",
+      "home",
+      "pressHome",
+      "rotate",
+      "appSwitcher",
+      "keyboardDismiss",
+      "dismissKeyboard",
+      "keyboard",
+      "alert",
+      "pinch",
+      "activate",
+      "terminate",
+      "shutdown"
+    ]);
+    PROBE_STATES = /* @__PURE__ */ new Set(["completed", "failed", "unknown"]);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
+var rn_fast_runner_client_exports = {};
+__export(rn_fast_runner_client_exports, {
+  _resetCapabilitiesForTest: () => _resetCapabilitiesForTest,
+  _resetQuiescenceAnnouncementForTest: () => _resetQuiescenceAnnouncementForTest,
+  _resetStaleHittableWarnForTest: () => _resetStaleHittableWarnForTest,
+  _setFastRunnerStateForTest: () => _setFastRunnerStateForTest,
+  _setFetchForTest: () => _setFetchForTest,
+  _setHttpTimeoutForTest: () => _setHttpTimeoutForTest,
+  _setRunnerStateForTest: () => _setRunnerStateForTest,
+  acquireRunnerRebuildLock: () => acquireRunnerRebuildLock,
+  adoptPersistedFastRunnerState: () => adoptPersistedFastRunnerState,
+  buildRunnerAuthorityEnv: () => buildRunnerAuthorityEnv,
+  buildRunnerPortEnv: () => buildRunnerPortEnv,
+  buildRunnerTestFaultEnv: () => buildRunnerTestFaultEnv,
+  buildRunnerVersionEnv: () => buildRunnerVersionEnv,
+  captureFastRunnerCommandAuthority: () => captureFastRunnerCommandAuthority,
+  clearFastRunnerAfterVerifiedStop: () => clearFastRunnerAfterVerifiedStop,
+  consumePendingFastRunnerArtifactNote: () => consumePendingFastRunnerArtifactNote,
+  createReadySignalParser: () => createReadySignalParser,
+  derivedDataPathForRunner: () => derivedDataPathForRunner,
+  fastHealthCheck: () => fastHealthCheck,
+  fastSwipe: () => fastSwipe,
+  getFastRunnerCapabilities: () => getFastRunnerCapabilities,
+  getFastRunnerState: () => getFastRunnerState,
+  getRunnerPostMortem: () => getRunnerPostMortem,
+  hasBuiltTestProduct: () => hasBuiltTestProduct,
+  iosStatePath: () => iosStatePath,
+  isFastRunnerAvailable: () => isFastRunnerAvailable,
+  parseLegacyRunnerState: () => parseLegacyRunnerState,
+  parsePersistedRunnerState: () => parsePersistedRunnerState,
+  parseReadySignal: () => parseReadySignal,
+  probeFastRunnerAuthority: () => probeFastRunnerAuthority,
+  probeFastRunnerLiveness: () => probeFastRunnerLiveness,
+  probeFastRunnerLivenessDetailed: () => probeFastRunnerLivenessDetailed,
+  reapStaleFastRunner: () => reapStaleFastRunner,
+  releaseRunnerRebuildLock: () => releaseRunnerRebuildLock,
+  resolveReadyTimeoutMs: () => resolveReadyTimeoutMs,
+  resolveRunnerRequestedPort: () => resolveRunnerRequestedPort,
+  resolveRunnerStartPlan: () => resolveRunnerStartPlan,
+  runIOS: () => runIOS,
+  runnerRebuildBudget: () => runnerRebuildBudget,
+  shouldReuseRunner: () => shouldReuseRunner,
+  startFastRunner: () => startFastRunner,
+  stopFastRunner: () => stopFastRunner,
+  verifyTypeResultAfterSettle: () => verifyTypeResultAfterSettle
+});
+import { spawn } from "node:child_process";
+import { join as join9 } from "node:path";
+import { randomBytes as randomBytes2, randomUUID as randomUUID2 } from "node:crypto";
+import { existsSync as existsSync9, readdirSync as readdirSync4, mkdirSync as mkdirSync7, rmSync as rmSync3, statSync as statSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync5 } from "node:fs";
+function resolveReadyTimeoutMs() {
+  const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
+}
+function parseReadySignal(buf) {
+  const parser = createReadySignalParser();
+  return parser.feed(buf);
+}
+function createReadySignalParser() {
+  let pending2 = "";
+  let seenReady = false;
+  let quiescence;
+  return {
+    feed(chunk) {
+      pending2 += chunk;
+      let nl;
+      while ((nl = pending2.indexOf("\n")) !== -1) {
+        const line = pending2.slice(0, nl).replace(/\r$/, "");
+        pending2 = pending2.slice(nl + 1);
+        if (line.includes("RN_FAST_RUNNER_LISTENER_FAILED")) {
+          return { error: "RN_FAST_RUNNER_LISTENER_FAILED" };
+        }
+        if (line.includes("RN_FAST_RUNNER_PORT_NOT_SET")) {
+          return { error: "RN_FAST_RUNNER_PORT_NOT_SET" };
+        }
+        if (line.includes("RN_FAST_RUNNER_QUIESCENCE_BYPASS_ACTIVE")) {
+          quiescence = "active";
+        } else if (line.includes("RN_FAST_RUNNER_QUIESCENCE_BYPASS_DISABLED")) {
+          quiescence = "disabled";
+        } else if (line.includes("RN_FAST_RUNNER_QUIESCENCE_UNAVAILABLE")) {
+          quiescence = "unavailable";
+        }
+        if (!seenReady) {
+          if (line.includes("RN_FAST_RUNNER_LISTENER_READY")) {
+            seenReady = true;
+          }
+          continue;
+        }
+        const portMatch = line.match(/RN_FAST_RUNNER_PORT=(\d+)/);
+        if (portMatch) {
+          return {
+            ready: true,
+            port: Number(portMatch[1]),
+            ...quiescence !== void 0 ? { quiescence } : {}
+          };
+        }
+      }
+      return null;
+    }
+  };
+}
+function appendRunnerOutput(stream, chunk) {
+  runnerOutputTail = `${runnerOutputTail}${stream}: ${chunk}`.slice(-8e3);
+}
+function getRunnerPostMortem() {
+  return lastRunnerPostMortem ?? {
+    available: false,
+    provenance: runnerProcess ? "spawned" : "adopted"
+  };
+}
+function getFastRunnerCapabilities() {
+  return lastKnownCapabilities;
+}
+function _resetCapabilitiesForTest() {
+  lastKnownCapabilities = [];
+}
+function _setFastRunnerStateForTest(state) {
+  runnerState = state ? {
+    ...state,
+    capability: state.capability ?? "test-capability".repeat(3)
+  } : null;
+  runnerProcess = null;
+  lastRunnerPostMortem = null;
+}
+function _resetQuiescenceAnnouncementForTest(pending2) {
+  quiescenceAnnouncementPending = pending2;
+}
+function takeQuiescenceAnnouncement() {
+  if (!quiescenceAnnouncementPending)
+    return null;
+  quiescenceAnnouncementPending = false;
+  if (!runnerState?.quiescence || !QUIESCENCE_STATUSES.has(runnerState.quiescence))
+    return null;
+  return { quiescenceBypass: runnerState.quiescence };
+}
+function iosStatePath(deviceId) {
+  return runnerStatePath(`ios-${deviceId}`);
+}
+function parsePersistedRunnerState(raw, pidAlive = defaultProcessAlive2) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (s.schemaVersion !== 1)
+    return null;
+  if (typeof s.pid !== "number" || typeof s.port !== "number")
+    return null;
+  if (typeof s.deviceId !== "string" || typeof s.bundleId !== "string")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return s;
+}
+function parseLegacyRunnerState(raw, pidAlive = defaultProcessAlive2) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const s = raw;
+  if (typeof s.pid !== "number" || typeof s.port !== "number")
+    return null;
+  if (typeof s.deviceId !== "string")
+    return null;
+  if (!pidAlive(s.pid))
+    return null;
+  return {
+    schemaVersion: 1,
+    pid: s.pid,
+    port: s.port,
+    deviceId: s.deviceId,
+    bundleId: typeof s.bundleId === "string" ? s.bundleId : "",
+    startedAt: "",
+    protocolVersion: 0
+  };
+}
+function adoptPersistedFastRunnerState(deviceId) {
+  if (runnerState || !deviceId)
+    return;
+  const path = iosStatePath(deviceId);
+  const raw = readJsonStateFile(path);
+  if (raw !== null) {
+    const parsed = parsePersistedRunnerState(raw);
+    if (!parsed) {
+      deleteStateFile(path);
+      return;
+    }
+    runnerState = parsed;
+    quiescenceAnnouncementPending = true;
+    return;
+  }
+  const legacy = readLegacyTmpState("ios");
+  if (legacy === null)
+    return;
+  const parsedLegacy = parseLegacyRunnerState(legacy);
+  if (!parsedLegacy) {
+    cleanupLegacyTmpState();
+    return;
+  }
+  if (parsedLegacy.deviceId === deviceId) {
+    runnerState = parsedLegacy;
+    quiescenceAnnouncementPending = true;
+  }
+}
+function getFastRunnerState() {
+  return runnerState;
+}
+function captureFastRunnerCommandAuthority() {
+  if (!runnerState)
+    return null;
+  return {
+    pid: runnerState.pid,
+    port: runnerState.port,
+    deviceId: runnerState.deviceId,
+    statePath: iosStatePath(runnerState.deviceId),
+    provenance: runnerProcess?.pid === runnerState.pid ? "spawned" : "adopted"
+  };
+}
+function _setRunnerStateForTest(state) {
+  _setFastRunnerStateForTest(state);
+}
+function isFastRunnerAvailable() {
+  if (!runnerState)
+    return false;
+  try {
+    process.kill(runnerState.pid, 0);
+    return true;
+  } catch {
+  }
+  clearStateFile();
+  return false;
+}
+function resolveRunnerStartPlan(opts) {
+  const common = [
+    "-project",
+    opts.projectPath,
+    "-scheme",
+    opts.scheme,
+    "-destination",
+    `platform=iOS Simulator,id=${opts.deviceId}`,
+    "-derivedDataPath",
+    opts.derivedDataPath
+  ];
+  const launch = {
+    action: "test-without-building",
+    args: ["test-without-building", ...common, `-only-testing:${opts.onlyTesting}`]
+  };
+  if (opts.hasBuiltTestProduct)
+    return [launch];
+  return [{ action: "build-for-testing", args: ["build-for-testing", ...common] }, launch];
+}
+function hasBuiltTestProduct(derivedDataPath) {
+  try {
+    const productsDir = join9(derivedDataPath, "Build", "Products");
+    if (!existsSync9(productsDir))
+      return false;
+    return readdirSync4(productsDir).some((entry) => entry.endsWith(".xctestrun"));
+  } catch {
+    return false;
+  }
+}
+function derivedDataPathForRunner() {
+  return join9(FAST_RUNNER_PROJECT, "build", "DerivedData");
+}
+function acquireRunnerRebuildLock() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      mkdirSync7(REBUILD_LOCK_DIR, { recursive: false });
+      return true;
+    } catch (err) {
+      if (err.code !== "EEXIST")
+        return true;
+      try {
+        const age = Date.now() - statSync4(REBUILD_LOCK_DIR).mtimeMs;
+        if (age < REBUILD_LOCK_STALE_MS)
+          return false;
+        rmSync3(REBUILD_LOCK_DIR, { recursive: true, force: true });
+      } catch {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function releaseRunnerRebuildLock() {
+  try {
+    rmSync3(REBUILD_LOCK_DIR, { recursive: true, force: true });
+  } catch {
+  }
+}
+function consumePendingFastRunnerArtifactNote() {
+  const note = pendingFastRunnerArtifactNote;
+  pendingFastRunnerArtifactNote = void 0;
+  return note;
+}
+function _resetStaleHittableWarnForTest() {
+  staleHittableWarned = false;
+}
+function noteStaleHittableArtifact(capabilities) {
+  if (staleHittableWarned || (capabilities ?? []).includes("HONEST_HITTABLE"))
+    return;
+  if (pendingFastRunnerArtifactNote !== void 0)
+    return;
+  staleHittableWarned = true;
+  pendingFastRunnerArtifactNote = "runner artifact predates honest hittable (#395): snapshot hittable values are stale (always false) \u2014 delete packages/rn-fast-runner/build/DerivedData and reopen the device session to rebuild, or upgrade the plugin.";
+}
+function shouldReuseRunner(state, deviceId) {
+  const authority = runnerAuthorityFromEnvironment(false);
+  return state !== null && state.deviceId === deviceId && authority !== null && state.sessionId === authority.sessionId && state.claimEpoch === authority.claimEpoch && typeof state.capability === "string" && state.capability.length >= 32;
+}
+function runnerAuthorityFromEnvironment(required3) {
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+    if (!required3)
+      return null;
+    throw new Error("SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session");
+  }
+  return {
+    instanceId: randomUUID2(),
+    sessionId,
+    claimEpoch,
+    capability: randomBytes2(32).toString("base64url")
+  };
+}
+function buildRunnerAuthorityEnv(authority) {
+  const values = {
+    RN_RUNNER_INSTANCE_ID: authority.instanceId,
+    RN_RUNNER_SESSION_ID: authority.sessionId,
+    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+    RN_RUNNER_CAPABILITY: authority.capability
+  };
+  return Object.fromEntries(Object.entries(values).flatMap(([key, value]) => [
+    [key, value],
+    [`TEST_RUNNER_${key}`, value]
+  ]));
+}
+function buildRunnerTargetEnv(deviceId, appId) {
+  return {
+    RN_RUNNER_DEVICE_ID: deviceId,
+    TEST_RUNNER_RN_RUNNER_DEVICE_ID: deviceId,
+    RN_RUNNER_APP_ID: appId,
+    TEST_RUNNER_RN_RUNNER_APP_ID: appId
+  };
+}
+function buildRunnerVersionEnv(pluginVersion) {
+  if (pluginVersion === null)
+    return {};
+  return {
+    RN_PLUGIN_VERSION: pluginVersion,
+    TEST_RUNNER_RN_PLUGIN_VERSION: pluginVersion
+  };
+}
+function buildRunnerPortEnv(port) {
+  const value = String(port);
+  return {
+    RN_FAST_RUNNER_PORT: value,
+    TEST_RUNNER_RN_FAST_RUNNER_PORT: value
+  };
+}
+function buildRunnerTestFaultEnv(env) {
+  const value = env.TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT ?? env.RN_FAST_RUNNER_TEST_FAULT;
+  if (!value)
+    return {};
+  return {
+    RN_FAST_RUNNER_TEST_FAULT: value,
+    TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT: value
+  };
+}
+function runXcodebuildToExit(args, timeoutMs) {
+  return new Promise((resolve11, reject) => {
+    const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderrTail = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`xcodebuild ${args[0]} did not complete within ${timeoutMs / 1e3}s (cold build \u2014 first run compiles the runner)`));
+    }, timeoutMs);
+    child.stderr.setEncoding("utf-8");
+    child.stderr.on("data", (chunk) => {
+      stderrTail = (stderrTail + chunk).slice(-2e3);
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0)
+        resolve11();
+      else
+        reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
+    });
+  });
+}
+function resolveRunnerRequestedPort(explicitPort) {
+  return explicitPort ?? 0;
+}
+async function startFastRunner(deviceId, bundleId, port, opts = {}) {
+  adoptPersistedFastRunnerState(deviceId);
+  if (shouldReuseRunner(runnerState, deviceId))
+    return runnerState;
+  if (runnerState)
+    await stopFastRunner(deviceId);
+  const authority = runnerAuthorityFromEnvironment(true);
+  const desired = resolveRunnerRequestedPort(port);
+  const projectPath = join9(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
+  if (!existsSync9(projectPath)) {
+    throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
+  }
+  const artifacts = await resolveIosRunnerArtifacts(getPluginVersion(), derivedDataPathForRunner(), void 0, opts.forceLocalBuild);
+  const derivedDataPath = artifacts.derivedDataPath;
+  if (artifacts.note)
+    pendingFastRunnerArtifactNote = artifacts.note;
+  const plan = resolveRunnerStartPlan({
+    projectPath,
+    scheme: "RnFastRunner",
+    deviceId,
+    derivedDataPath,
+    onlyTesting: "RnFastRunnerUITests/RnFastRunnerTests/testCommand",
+    hasBuiltTestProduct: hasBuiltTestProduct(derivedDataPath)
+  });
+  for (const step of plan.slice(0, -1)) {
+    await runXcodebuildToExit(step.args, BUILD_READY_TIMEOUT_MS);
+    if (!hasBuiltTestProduct(derivedDataPath)) {
+      throw new Error(`xcodebuild ${step.action} completed but left no .xctestrun under ${derivedDataPath}/Build/Products \u2014 unexpected DerivedData layout`);
+    }
+  }
+  const launch = plan[plan.length - 1];
+  const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
+  return new Promise((resolve11, reject) => {
+    const child = spawn("xcodebuild", launch.args, {
+      env: {
+        ...process.env,
+        ...buildRunnerPortEnv(desired),
+        ...buildRunnerVersionEnv(getPluginVersion()),
+        ...buildRunnerQuiescenceEnv(process.env),
+        ...buildRunnerAuthorityEnv(authority),
+        ...buildRunnerTargetEnv(deviceId, bundleId),
+        ...runnerTestFaultEnv
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    runnerProcess = child;
+    runnerOutputTail = "";
+    lastRunnerCommand = null;
+    lastRunnerPostMortem = null;
+    const parser = createReadySignalParser();
+    let resolved = false;
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1e3}s`));
+    }, READY_TIMEOUT_MS);
+    const handleChunk = (chunk, stream) => {
+      appendRunnerOutput(stream, chunk);
+      if (resolved)
+        return;
+      const result = parser.feed(chunk);
+      if (!result)
+        return;
+      resolved = true;
+      clearTimeout(timer);
+      if ("error" in result) {
+        reject(new Error(`Fast runner failed to start: ${result.error}`));
+        return;
+      }
+      const state = {
+        schemaVersion: 1,
+        port: result.port,
+        pid: child.pid,
+        deviceId,
+        bundleId,
+        startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        protocolVersion: RUNNER_PROTOCOL_VERSION,
+        ...getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {},
+        provenance: artifactProvenanceToState(artifacts.provenance),
+        ...result.quiescence !== void 0 ? { quiescence: result.quiescence } : {},
+        ...authority
+      };
+      const processBirth = readProcessBirth(child.pid);
+      if (!processBirth) {
+        child.kill("SIGTERM");
+        reject(new Error("PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven"));
+        return;
+      }
+      state.processBirth = processBirth.token;
+      runnerState = state;
+      if (Object.keys(runnerTestFaultEnv).length > 0)
+        runnerTestFaultForwarded = true;
+      quiescenceAnnouncementPending = true;
+      try {
+        writeJsonStateFileAtomic(iosStatePath(deviceId), state);
+      } catch {
+      }
+      cleanupLegacyTmpState();
+      resolve11(state);
+    };
+    child.stdout.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
+    child.stderr.setEncoding("utf-8");
+    child.stderr.on("data", (chunk) => handleChunk(chunk, "stderr"));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      if (runnerProcess === child) {
+        clearStateFile();
+      }
+      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+    });
+    child.on("exit", (code, signal) => {
+      lastRunnerPostMortem = {
+        available: true,
+        provenance: "spawned",
+        lastCommand: lastRunnerCommand,
+        exitCode: code,
+        signal,
+        outputTail: runnerOutputTail
+      };
+      if (runnerProcess === child) {
+        clearStateFile();
+      }
+      clearTimeout(timer);
+      reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? "none"})`));
+    });
+  });
+}
+async function stopFastRunner(deviceId) {
+  adoptPersistedFastRunnerState(deviceId);
+  await reapStaleFastRunner();
+}
+function clearFastRunnerAfterVerifiedStop(binding) {
+  const expected = {
+    pid: Number(binding.pid),
+    processBirth: String(binding.processBirth ?? ""),
+    instanceId: String(binding.instanceId ?? ""),
+    deviceId: String(binding.deviceId ?? "")
+  };
+  if (!Number.isSafeInteger(expected.pid) || !expected.processBirth || !expected.instanceId || !expected.deviceId) {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete");
+  }
+  const path = iosStatePath(expected.deviceId);
+  const persisted = readJsonStateFile(path);
+  const identityMatches2 = (observed) => observed.pid === expected.pid && observed.processBirth === expected.processBirth && observed.instanceId === expected.instanceId && observed.deviceId === expected.deviceId;
+  if (runnerState && !identityMatches2(runnerState) || persisted && !identityMatches2(persisted)) {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup");
+  }
+  if (runnerProcess?.pid !== void 0 && runnerProcess.pid !== expected.pid) {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup");
+  }
+  runnerState = null;
+  runnerProcess = null;
+  lastKnownCapabilities = [];
+  if (persisted !== null)
+    deleteStateFile(path);
+}
+async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
+  const body = { command: "drag", x: x1, y: y1, x2, y2 };
+  if (durationMs != null)
+    body.durationMs = durationMs;
+  if (bundleId)
+    body.appBundleId = bundleId;
+  const resp = await postCommand(body);
+  return resp;
+}
+async function fastHealthCheck() {
+  if (!runnerState)
+    return false;
+  try {
+    const result = await defaultHttpProbe(runnerState.port, 2e3);
+    return result.ok && result.status === 200 && result.bodyOk === true;
+  } catch {
+    return false;
+  }
+}
+function defaultProcessAlive2(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function defaultHttpProbe(port, timeoutMs, capabilityOverride) {
+  const url = `http://127.0.0.1:${port}/health`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const capability = capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : void 0);
+    const res = await fetchImpl(url, {
+      signal: controller.signal,
+      headers: capability ? { authorization: `Bearer ${capability}` } : {}
+    });
+    if (!res.ok)
+      return { ok: false, status: res.status };
+    let bodyOk;
+    let protocolVersion;
+    let runnerVersion;
+    let capabilities;
+    let commands;
+    let instanceId;
+    let sessionId;
+    let claimEpoch;
+    let deviceId;
+    let appId;
+    try {
+      const body = await res.json();
+      bodyOk = body.ok === true;
+      if (typeof body.protocolVersion === "number")
+        protocolVersion = body.protocolVersion;
+      if (typeof body.runnerVersion === "string")
+        runnerVersion = body.runnerVersion;
+      if (Array.isArray(body.capabilities)) {
+        capabilities = body.capabilities.filter((c) => typeof c === "string");
+      }
+      if (Array.isArray(body.commands)) {
+        commands = body.commands.filter((c) => typeof c === "string");
+      }
+      if (typeof body.instanceId === "string")
+        instanceId = body.instanceId;
+      if (typeof body.sessionId === "string")
+        sessionId = body.sessionId;
+      if (typeof body.claimEpoch === "number")
+        claimEpoch = body.claimEpoch;
+      if (typeof body.deviceId === "string")
+        deviceId = body.deviceId;
+      if (typeof body.appId === "string")
+        appId = body.appId;
+    } catch {
+      bodyOk = false;
+    }
+    return {
+      ok: true,
+      status: res.status,
+      bodyOk,
+      ...protocolVersion !== void 0 ? { protocolVersion } : {},
+      ...runnerVersion !== void 0 ? { runnerVersion } : {},
+      ...capabilities !== void 0 ? { capabilities } : {},
+      ...commands !== void 0 ? { commands } : {},
+      ...instanceId !== void 0 ? { instanceId } : {},
+      ...sessionId !== void 0 ? { sessionId } : {},
+      ...claimEpoch !== void 0 ? { claimEpoch } : {},
+      ...deviceId !== void 0 ? { deviceId } : {},
+      ...appId !== void 0 ? { appId } : {}
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function probeFastRunnerAuthority(input) {
+  try {
+    const result = await defaultHttpProbe(input.port, 2e3, input.capability);
+    return result.ok && result.status === 200 && result.bodyOk === true && result.instanceId === input.instanceId && result.sessionId === input.sessionId && result.claimEpoch === input.claimEpoch && result.deviceId === input.deviceId && result.appId === input.appId;
+  } catch {
+    return false;
+  }
+}
+function clearStateFile() {
+  const path = runnerState ? iosStatePath(runnerState.deviceId) : null;
+  runnerState = null;
+  lastKnownCapabilities = [];
+  runnerProcess = null;
+  if (path)
+    deleteStateFile(path);
+}
+function clearStateFileIfMatches(expected) {
+  const identityMatches2 = (observed) => observed.pid === expected.pid && observed.deviceId === expected.deviceId && observed.processBirth === expected.processBirth;
+  const path = iosStatePath(expected.deviceId);
+  const persisted = readJsonStateFile(path);
+  let clearedCurrent = false;
+  if (runnerState && identityMatches2(runnerState)) {
+    runnerState = null;
+    clearedCurrent = true;
+  }
+  if (runnerProcess?.pid === expected.pid) {
+    runnerProcess = null;
+    clearedCurrent = true;
+  }
+  if (persisted && identityMatches2(persisted))
+    deleteStateFile(path);
+  if (clearedCurrent)
+    lastKnownCapabilities = [];
+}
+async function probeFastRunnerLivenessDetailed(deps = {}) {
+  const getState = deps.getState ?? (() => runnerState);
+  const processAlive = deps.processAlive ?? defaultProcessAlive2;
+  const httpProbe = deps.httpProbe ?? defaultHttpProbe;
+  const clearState = deps.clearState ?? clearStateFile;
+  const timeoutMs = deps.timeoutMs ?? 2e3;
+  const state = getState();
+  if (!state)
+    return { liveness: "dead" };
+  if (!processAlive(state.pid)) {
+    clearState();
+    return { liveness: "dead" };
+  }
+  try {
+    const res = await httpProbe(state.port, timeoutMs);
+    if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
+      lastKnownCapabilities = [];
+      return { liveness: "stale", staleReason: "health" };
+    }
+    if (state.sessionId !== void 0 && (res.instanceId !== state.instanceId || res.sessionId !== state.sessionId || res.claimEpoch !== state.claimEpoch || res.deviceId !== state.deviceId || res.appId !== state.bundleId)) {
+      lastKnownCapabilities = [];
+      return { liveness: "stale", staleReason: "authority-mismatch" };
+    }
+    const plugin = deps.pluginVersion !== void 0 ? deps.pluginVersion : getPluginVersion();
+    const compat = classifyRunnerCompatibility({
+      ...res.protocolVersion !== void 0 ? { protocolVersion: res.protocolVersion } : {},
+      ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {},
+      ...res.commands !== void 0 ? { commands: res.commands } : {}
+    }, plugin, REQUIRED_IOS_COMMANDS);
+    if (!compat.compatible) {
+      lastKnownCapabilities = [];
+      return {
+        liveness: "stale",
+        staleReason: compat.reason,
+        ...compat.missing !== void 0 ? { missingCommands: compat.missing } : {},
+        ...res.protocolVersion !== void 0 ? { runnerProtocolVersion: res.protocolVersion } : {},
+        ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {}
+      };
+    }
+    lastKnownCapabilities = res.capabilities ?? [];
+    noteStaleHittableArtifact(res.capabilities);
+    if (typeof res.protocolVersion === "number") {
+      state.protocolVersion = res.protocolVersion;
+    }
+    return {
+      liveness: "alive",
+      ...res.protocolVersion !== void 0 ? { runnerProtocolVersion: res.protocolVersion } : {},
+      ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {},
+      ...res.capabilities !== void 0 ? { capabilities: res.capabilities } : {}
+    };
+  } catch {
+    lastKnownCapabilities = [];
+    return { liveness: "stale", staleReason: "health" };
+  }
+}
+async function probeFastRunnerLiveness(deps = {}) {
+  return (await probeFastRunnerLivenessDetailed(deps)).liveness;
+}
+async function reapStaleFastRunner(deps = {}) {
+  const getState = deps.getState ?? (() => runnerState);
+  const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
+  const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const clearState = deps.clearState ?? clearStateFileIfMatches;
+  const graceMs = deps.graceMs ?? 500;
+  const state = getState();
+  if (!state)
+    return;
+  const expectedBirth = typeof state.processBirth === "string" ? { pid: state.pid, token: state.processBirth } : null;
+  if (!expectedBirth) {
+    const observed = deps.probeProcessBirth ? deps.probeProcessBirth(state.pid) : deps.processAlive ? deps.processAlive(state.pid) ? { status: "present" } : { status: "absent" } : probeProcessBirth(state.pid);
+    if (observed.status === "absent") {
+      clearState(state);
+      return;
+    }
+    throw new Error("RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority");
+  }
+  const probeExpected = () => {
+    if (deps.probeProcessBirth) {
+      const observed2 = deps.probeProcessBirth(expectedBirth.pid);
+      if (observed2.status === "unknown")
+        return "unknown";
+      if (observed2.status === "absent")
+        return "gone";
+      return observed2.birth.token === expectedBirth.token ? "match" : "gone";
+    }
+    if (deps.matchesProcessBirth) {
+      return deps.matchesProcessBirth(expectedBirth) ? "match" : "gone";
+    }
+    const observed = probeProcessBirth(expectedBirth.pid);
+    if (observed.status === "unknown")
+      return "unknown";
+    if (observed.status === "absent")
+      return "gone";
+    return observed.birth.token === expectedBirth.token ? "match" : "gone";
+  };
+  const initial = probeExpected();
+  if (initial === "unknown") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven");
+  }
+  if (initial === "gone") {
+    clearState(state);
+    return;
+  }
+  const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve11) => spawnedChild.once("exit", () => resolve11())) : null;
+  try {
+    sendSignal(state.pid, "SIGTERM");
+  } catch {
+  }
+  await sleep6(graceMs);
+  const afterTerm = probeExpected();
+  if (afterTerm === "unknown") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  }
+  if (afterTerm === "gone") {
+    clearState(state);
+    return;
+  }
+  try {
+    sendSignal(state.pid, "SIGKILL");
+  } catch {
+  }
+  if (spawnedExit) {
+    await Promise.race([spawnedExit, sleep6(250)]);
+  } else {
+    await sleep6(50);
+  }
+  const afterKill = probeExpected();
+  if (afterKill !== "gone") {
+    throw new Error("RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven");
+  }
+  clearState(state);
+}
+function _setFetchForTest(fn) {
+  fetchImpl = fn;
+}
+function _setHttpTimeoutForTest(ms) {
+  httpTimeoutOverrideMs = ms;
+}
+function commandTimeoutMs(command) {
+  if (httpTimeoutOverrideMs !== null)
+    return httpTimeoutOverrideMs;
+  return SLOW_RUNNER_COMMANDS.has(command) ? 35e3 : HTTP_TIMEOUT_MS;
+}
+async function sendCommandOnce(port, body, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const capability = runnerState?.port === port ? runnerState.capability : void 0;
+    if (!capability) {
+      throw new Error("RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable");
+    }
+    const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${capability}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    const parsed = await resp.json();
+    if (typeof parsed.v === "number" && (parsed.v < MIN_SUPPORTED_RUNNER_PROTOCOL || parsed.v > RUNNER_PROTOCOL_VERSION)) {
+      throw new Error(`RUNNER_PROTOCOL_MISMATCH: runner replied with wire protocol v${parsed.v}, bridge supports v${MIN_SUPPORTED_RUNNER_PROTOCOL}..${RUNNER_PROTOCOL_VERSION}`);
+    }
+    return parsed;
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms \u2014 listener may be wedged`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function probeCommandStatus(port, commandId) {
+  try {
+    const resp = await sendCommandOnce(port, { command: "status", commandId }, STATUS_PROBE_TIMEOUT_MS);
+    return parseStatusProbeReply(resp, commandId);
+  } catch {
+    return null;
+  }
+}
+async function postCommandWithRecovery(body) {
+  if (runnerPoisoned && body.command !== "status") {
+    throw new Error("RUNNER_TIMEOUT: rn-fast-runner is poisoned after a non-cancellable main-thread timeout; command refused before dispatch while the runner is reaped");
+  }
+  const state = runnerState;
+  if (!state) {
+    throw new Error("rn-fast-runner not started \u2014 run `device_snapshot action=open appId=<your.app.id> platform=ios` first (auto-spawns the runner).");
+  }
+  const commandId = generateCommandId();
+  lastRunnerCommand = typeof body.command === "string" ? body.command : String(body.command);
+  const timeoutMs = commandTimeoutMs(body.command);
+  try {
+    return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isAmbiguousTransportFailure(message))
+      throw err;
+    const decision = decideRecovery(await probeCommandStatus(state.port, commandId), body.command);
+    if (decision.action === "return-recovered") {
+      return {
+        resp: decision.response,
+        recovery: { commandId, outcome: decision.outcome }
+      };
+    }
+    if (decision.action === "resend-once") {
+      const resent = await sendCommandOnce(state.port, { ...body, commandId: generateCommandId() }, timeoutMs);
+      return { resp: resent, recovery: { commandId, outcome: "resent" } };
+    }
+    throw err;
+  }
+}
+async function postCommand(body) {
+  return (await postCommandWithRecovery(body)).resp;
+}
+async function containTypeTimeout(args, authorityBefore = captureFastRunnerCommandAuthority(), trigger = "main-thread-timeout") {
+  const runnerBefore = authorityBefore;
+  runnerPoisoned = true;
+  poisonHolders++;
+  let verification = { matches: false };
+  try {
+    if (args._verifyExactReadback && typeof args.text === "string") {
+      verification = await args._verifyExactReadback(args.text);
+    }
+  } catch {
+    verification = { matches: false };
+  }
+  let reapDisposition;
+  try {
+    if (runnerBefore && runnerState?.pid === runnerBefore.pid) {
+      poisonReap ??= reapStaleFastRunner();
+      await poisonReap;
+      reapDisposition = "reaped";
+    } else {
+      reapDisposition = runnerState ? "replacement-preserved" : "already-absent";
+    }
+  } finally {
+    poisonHolders--;
+    if (poisonHolders <= 0) {
+      poisonHolders = 0;
+      poisonReap = null;
+      runnerPoisoned = false;
+    }
+  }
+  const runnerTimeoutRecovery = {
+    trigger,
+    poisoned: true,
+    reaped: reapDisposition === "reaped",
+    reapDisposition,
+    verification: verification.matches ? "exact-readback" : "unverified",
+    runner: {
+      before: runnerBefore,
+      afterReapPid: runnerState?.pid ?? null,
+      stateCleared: runnerState === null,
+      nextMutationRequiresRespawn: runnerState === null
+    },
+    runnerPostMortem: getRunnerPostMortem(),
+    containmentOrder: ["poison", "independent-readback", "reap", "result"],
+    lateMutationContainment: reapDisposition === "reaped" ? "runner-process-reaped-before-next-mutation" : reapDisposition === "replacement-preserved" ? "replacement-preserved-no-signal-dispatched" : "triggering-runner-state-already-absent",
+    targetApp: {
+      wasRunningBeforeRecovery: "unverified",
+      pidPreserved: "unverified",
+      activateLaunchedApp: "unverified",
+      semantics: "runner host is lazily relaunched; target activation semantics are unchanged"
+    },
+    ...verification.actual !== void 0 ? { actual: verification.actual } : {}
+  };
+  if (verification.matches) {
+    return okResult({
+      typed: true,
+      text: args.text,
+      recovered: true,
+      verification: "exact-readback"
+    }, { meta: { runnerTimeoutRecovery } });
+  }
+  return failResult(trigger === "main-thread-timeout" ? "RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation." : "RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.", "RUNNER_TIMEOUT", { runnerTimeoutRecovery });
+}
+function hasRunnerTimeoutRecovery(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    return envelope.meta?.runnerTimeoutRecovery !== void 0;
+  } catch {
+    return false;
+  }
+}
+async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
+  if (args.command !== "type" || result.isError || hasRunnerTimeoutRecovery(result))
+    return result;
+  const sameAuthority = authorityBefore !== null && runnerState?.pid === authorityBefore.pid && runnerState.port === authorityBefore.port && runnerState.deviceId === authorityBefore.deviceId;
+  if (sameAuthority) {
+    for (let attempt = 0; attempt < POST_SETTLE_HEALTH_ATTEMPTS; attempt += 1) {
+      const health = await probeFastRunnerLivenessDetailed();
+      if (health.liveness === "alive")
+        return result;
+      if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
+        await new Promise((resolve11) => setTimeout(resolve11, POST_SETTLE_HEALTH_RETRY_MS));
+      }
+    }
+  }
+  return containTypeTimeout(args, authorityBefore, "post-settle-runner-authority-lost");
+}
+function sameRefIdentity(before, after) {
+  if (!before || !after)
+    return false;
+  if (before.identifier !== void 0 || after.identifier !== void 0) {
+    return before.identifier === after.identifier && before.type === after.type;
+  }
+  if (before.label !== void 0 || after.label !== void 0) {
+    return before.label === after.label && before.type === after.type;
+  }
+  return false;
+}
+function countIdentityMatches(before, nodes) {
+  let matches = 0;
+  for (const node of nodes) {
+    const candidate = {
+      type: node.type,
+      ...node.label !== void 0 ? { label: node.label } : {},
+      ...node.identifier !== void 0 ? { identifier: node.identifier } : {}
+    };
+    if (sameRefIdentity(before, candidate))
+      matches++;
+  }
+  return matches;
+}
+function mapRunnerNodesToFlat(nodes) {
+  const out = [];
+  let synthCounter = 0;
+  for (const n of nodes) {
+    if (!n.rect)
+      continue;
+    const refId = n.index !== void 0 ? `e${n.index}` : `e${synthCounter++}`;
+    const flat = {
+      ref: `@${refId}`,
+      type: n.type ?? "",
+      rect: n.rect
+    };
+    if (n.label !== void 0)
+      flat.label = n.label;
+    if (n.identifier !== void 0)
+      flat.identifier = n.identifier;
+    if (n.enabled !== void 0)
+      flat.enabled = n.enabled;
+    if (n.hittable !== void 0)
+      flat.hittable = n.hittable;
+    out.push(flat);
+  }
+  return out;
+}
+function staleAfterKeyboardDismissal(ref) {
+  return failResult(`Element at ref ${ref ?? "?"} could not be re-resolved by identity after the keyboard was dismissed \u2014 no tap was performed`, "STALE_REF", {
+    keyboardGuard: "auto_dismissed",
+    reResolved: false,
+    cachedMetadata: ref ? getCachedMetadata(ref) : null,
+    reResolution: "no-signature",
+    candidates: [],
+    hint: "The keyboard was dismissed successfully; the ref no longer identifies the same element. Call device_snapshot action=snapshot and retry with the new ref."
+  });
+}
+async function runIOS(args) {
+  if (args._staleRef) {
+    return failResult(`Element at ref ${args._staleRef} no longer hittable \u2014 UI re-rendered since snapshot`, "STALE_REF", {
+      cachedMetadata: getCachedMetadata(args._staleRef),
+      reResolution: "self-heal-disabled",
+      candidates: [],
+      hint: "Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref."
+    });
+  }
+  const body = { command: args.command };
+  if (args.bundleId)
+    body.appBundleId = args.bundleId;
+  if (args.x !== void 0)
+    body.x = args.x;
+  if (args.y !== void 0)
+    body.y = args.y;
+  if (args.x2 !== void 0)
+    body.x2 = args.x2;
+  if (args.y2 !== void 0)
+    body.y2 = args.y2;
+  if (args.text !== void 0)
+    body.text = args.text;
+  if (args.durationMs !== void 0)
+    body.durationMs = args.durationMs;
+  if (args.delayMs !== void 0)
+    body.delayMs = args.delayMs;
+  if (args.clearFirst !== void 0)
+    body.clearFirst = args.clearFirst;
+  if (args.direction !== void 0)
+    body.direction = args.direction;
+  if (args.scale !== void 0)
+    body.scale = args.scale;
+  if (args.interactiveOnly !== void 0)
+    body.interactiveOnly = args.interactiveOnly;
+  if (args.compact !== void 0)
+    body.compact = args.compact;
+  if (args.depth !== void 0)
+    body.depth = args.depth;
+  if (args.scope !== void 0)
+    body.scope = args.scope;
+  if (args.targetBounds !== void 0)
+    body.targetBounds = args.targetBounds;
+  if (args.snapshotGeneration !== void 0)
+    body.snapshotGeneration = args.snapshotGeneration;
+  if (args.keyboardStateAtSnapshot !== void 0)
+    body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+  const mapRunnerDispatchError = (err) => {
+    const m = err instanceof Error ? err.message : String(err);
+    if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
+      return failResult(m, "RUNNER_PROTOCOL_MISMATCH");
+    }
+    if (m.startsWith("RUNNER_TIMEOUT") && runnerPoisoned) {
+      return failResult(m, "RUNNER_TIMEOUT", { poisoned: true, dispatched: false });
+    }
+    return null;
+  };
+  let keyboardRelayoutRecovered = false;
+  if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true && runnerState?.protocolVersion === 1) {
+    try {
+      const legacyDismiss = await postCommand({
+        command: "keyboardDismiss",
+        ...args.bundleId ? { appBundleId: args.bundleId } : {}
+      });
+      const data = legacyDismiss.data ?? {};
+      if (data.wasVisible && (!data.dismissed || data.visible)) {
+        return failResult("KEYBOARD_DISMISS_FAILED: protocol-v1 runner could not dismiss the visible keyboard; no guarded tap was dispatched.", "KEYBOARD_DISMISS_FAILED", { attemptedTiers: ["native-control", "native-swipe"], protocolVersion: 1 });
+      }
+      if (data.wasVisible && data.dismissed)
+        keyboardRelayoutRecovered = true;
+    } catch (err) {
+      const mapped = mapRunnerDispatchError(err);
+      if (mapped)
+        return mapped;
+      throw err;
+    }
+  }
+  const refreshFailure = { result: null };
+  const refreshTargetAfterKeyboard = async () => {
+    if (!args._targetRef)
+      return true;
+    const before = getCachedMetadata(args._targetRef);
+    let snapshot;
+    try {
+      snapshot = await postCommand({
+        command: "snapshot",
+        interactiveOnly: true,
+        ...args.bundleId ? { appBundleId: args.bundleId } : {}
+      });
+    } catch (err) {
+      refreshFailure.result = mapRunnerDispatchError(err);
+      if (refreshFailure.result)
+        return false;
+      throw err;
+    }
+    if (!snapshot.ok || !snapshot.data || typeof snapshot.data !== "object")
+      return false;
+    const data = snapshot.data;
+    if (!Array.isArray(data.nodes))
+      return false;
+    const flat = mapRunnerNodesToFlat(data.nodes);
+    updateRefMapFromFlat(flat, {
+      ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {},
+      ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {}
+    });
+    if (!sameRefIdentity(before, getCachedMetadata(args._targetRef)))
+      return false;
+    if (!before || countIdentityMatches(before, flat) !== 1)
+      return false;
+    const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
+    if (!target)
+      return false;
+    body.x = Math.round(target.rect.x + target.rect.width / 2);
+    body.y = Math.round(target.rect.y + target.rect.height / 2);
+    body.targetBounds = target.rect;
+    body.snapshotGeneration = target.snapshotGeneration;
+    if (target.keyboardStateAtSnapshot !== null)
+      body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
+    return true;
+  };
+  if (keyboardRelayoutRecovered && !await refreshTargetAfterKeyboard()) {
+    return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
+  }
+  let resp;
+  let recovery;
+  try {
+    ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+  } catch (err) {
+    const mapped = mapRunnerDispatchError(err);
+    if (mapped)
+      return mapped;
+    const m = err instanceof Error ? err.message : String(err);
+    if (args.command === "type" && m.startsWith("RUNNER_TIMEOUT")) {
+      return containTypeTimeout(args);
+    }
+    throw err;
+  }
+  if (!resp.ok && resp.error?.code === "KEYBOARD_RELAYOUT_REQUIRED") {
+    if (!await refreshTargetAfterKeyboard()) {
+      return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
+    }
+    ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+    keyboardRelayoutRecovered = true;
+  }
+  const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
+  const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
+  if (!resp.ok) {
+    const message = resp.error?.message ?? "runner returned !ok with no error";
+    const code = resp.error?.code;
+    if (args.command === "type" && typeof message === "string" && message.includes("main thread execution timed out")) {
+      return containTypeTimeout(args);
+    }
+    const failExtras = recovery ? { transportRecovery: recovery } : void 0;
+    if (code) {
+      return failResult(message, code, failExtras);
+    }
+    return failExtras ? failResult(message, failExtras) : failResult(message);
+  }
+  if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
+    const data = resp.data;
+    if (Array.isArray(data.nodes)) {
+      const flat = mapRunnerNodesToFlat(data.nodes);
+      const outcome = updateRefMapFromFlat(flat, {
+        ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {},
+        ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {}
+      });
+      const snapshotVerdict = buildSnapshotVerdict("rn-fast-runner", flat.length, outcome);
+      return okResult({
+        nodes: flat,
+        ...typeof data.keyboardVisible === "boolean" ? { keyboardVisible: data.keyboardVisible } : {},
+        ...typeof data.snapshotGeneration === "number" ? { snapshotGeneration: data.snapshotGeneration } : {}
+      }, { meta: { ...announce, snapshotVerdict, ...recoveryMeta } });
+    }
+    const fallbackMeta = { ...announce, ...recoveryMeta };
+    return okResult(resp.data, Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : void 0);
+  }
+  const finalMeta = {
+    ...announce,
+    ...recoveryMeta,
+    ...keyboardRelayoutRecovered ? { keyboardGuard: "auto_dismissed" } : {}
+  };
+  return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
+}
+var READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, poisonHolders, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS, POST_SETTLE_HEALTH_ATTEMPTS, POST_SETTLE_HEALTH_RETRY_MS;
+var init_rn_fast_runner_client = __esm({
+  "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
+    "use strict";
+    init_utils();
+    init_fast_runner_ref_map();
+    init_keyboard_guard();
+    init_secure_state_file();
+    init_protocol();
+    init_quiescence();
+    init_runner_artifacts();
+    init_runtime_paths();
+    init_transport_recovery();
+    init_process_birth();
+    READY_TIMEOUT_MS = resolveReadyTimeoutMs();
+    BUILD_READY_TIMEOUT_MS = 36e4;
+    HTTP_TIMEOUT_MS = 1e4;
+    FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
+    runnerProcess = null;
+    runnerState = null;
+    runnerPoisoned = false;
+    poisonReap = null;
+    poisonHolders = 0;
+    runnerOutputTail = "";
+    lastRunnerCommand = null;
+    lastRunnerPostMortem = null;
+    lastKnownCapabilities = [];
+    quiescenceAnnouncementPending = false;
+    QUIESCENCE_STATUSES = /* @__PURE__ */ new Set(["active", "disabled", "unavailable"]);
+    REBUILD_LOCK_DIR = join9(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_STALE_MS = 15 * 6e4;
+    REBUILD_BUDGET_FILE = join9(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    runnerRebuildBudget = {
+      alreadyRebuiltFor(pluginVersion) {
+        try {
+          const parsed = JSON.parse(readFileSync9(REBUILD_BUDGET_FILE, "utf8"));
+          return parsed.pluginVersion === pluginVersion;
+        } catch {
+          return false;
+        }
+      },
+      recordRebuild(pluginVersion) {
+        try {
+          mkdirSync7(join9(FAST_RUNNER_PROJECT, "build"), { recursive: true });
+          writeFileSync5(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: (/* @__PURE__ */ new Date()).toISOString() }));
+        } catch {
+        }
+      }
+    };
+    staleHittableWarned = false;
+    runnerTestFaultForwarded = false;
+    fetchImpl = globalThis.fetch;
+    httpTimeoutOverrideMs = null;
+    SLOW_RUNNER_COMMANDS = /* @__PURE__ */ new Set(["type", "snapshot", "screenshot"]);
+    STATUS_PROBE_TIMEOUT_MS = 2e3;
+    POST_SETTLE_HEALTH_ATTEMPTS = 2;
+    POST_SETTLE_HEALTH_RETRY_MS = 250;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
+import { execFile, spawn as spawn2 } from "node:child_process";
+import { createWriteStream as createWriteStream2, renameSync as renameSync3, unlinkSync as unlinkSync3 } from "node:fs";
+import { basename, dirname as dirname7, join as join10 } from "node:path";
+import { promisify } from "node:util";
+function parseSimctlBootedAll(jsonText) {
+  let data;
+  try {
+    data = JSON.parse(jsonText);
+  } catch {
+    return [];
+  }
+  const runtimes = data?.devices;
+  if (!runtimes || typeof runtimes !== "object")
+    return [];
+  const udids = [];
+  for (const [runtime, list] of Object.entries(runtimes)) {
+    if (!runtime.includes("SimRuntime.iOS"))
+      continue;
+    if (!Array.isArray(list))
+      continue;
+    for (const device of list) {
+      if (device && device.state === "Booted" && typeof device.udid === "string" && device.udid.length > 0) {
+        udids.push(device.udid);
+      }
+    }
+  }
+  return udids;
+}
+async function defaultSimctlBootedJson() {
+  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "-j", "devices", "booted"], {
+    timeout: 5e3,
+    maxBuffer: 1024 * 1024
+  });
+  return stdout;
+}
+async function resolveIosUdid(explicit, probe = defaultSimctlBootedJson) {
+  if (explicit)
+    return explicit;
+  try {
+    const all = parseSimctlBootedAll(await probe());
+    return all.length === 1 ? all[0] : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function parseAdbDevicesEmuAll(stdout) {
+  const ids = [];
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("List of devices"))
+      continue;
+    const match = trimmed.match(EMU_LINE);
+    if (match)
+      ids.push(match[1]);
+  }
+  return ids;
+}
+async function defaultAdbDevicesStdout() {
+  const { stdout } = await execFileAsync("adb", ["devices"], {
+    timeout: 5e3,
+    maxBuffer: 1024 * 1024
+  });
+  return stdout;
+}
+async function resolveAndroidEmu(probe = defaultAdbDevicesStdout) {
+  try {
+    const all = parseAdbDevicesEmuAll(await probe());
+    return all.length === 1 ? all[0] : null;
+  } catch {
+    return null;
+  }
+}
+async function resolveBootedIosUdid() {
+  return defaultIosResolver();
+}
+function simctlScreenshotType(path) {
+  return /\.png$/i.test(path) ? "png" : "jpeg";
+}
+function resolveCaptureOutcome(streamFinished, procCode) {
+  if (!streamFinished)
+    return "pending";
+  if (procCode === null)
+    return "pending";
+  return procCode === 0 ? "success" : "failure";
+}
+function rawTempPath(finalPath, uniq) {
+  return join10(dirname7(finalPath), `.${basename(finalPath)}.${uniq}.rawtmp`);
+}
+function nextCaptureSuffix() {
+  captureCounter += 1;
+  return `${process.pid}.${captureCounter}`;
+}
+async function tryRawScreenshot(platform, path, preferredDeviceId) {
+  const resolver = platform === "ios" ? iosResolver : androidResolver;
+  const capturer = platform === "ios" ? iosCapturer : androidCapturer;
+  const id = preferredDeviceId ?? await resolver();
+  if (!id)
+    return { ok: false, reason: "no-device" };
+  try {
+    const ok = await capturer(id, path);
+    return ok ? { ok: true, path } : { ok: false, reason: "capture-failed" };
+  } catch {
+    return { ok: false, reason: "capture-failed" };
+  }
+}
+var execFileAsync, EMU_LINE, defaultIosResolver, defaultAndroidResolver, defaultIosCapturer, captureCounter, defaultAndroidSpawn, androidSpawn, defaultAndroidCapturer, iosResolver, androidResolver, iosCapturer, androidCapturer;
+var init_device_screenshot_raw = __esm({
+  "packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js"() {
+    "use strict";
+    execFileAsync = promisify(execFile);
+    EMU_LINE = /^(emulator-\d+)\s+device\b/;
+    defaultIosResolver = async () => {
+      try {
+        const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "-j", "devices", "booted"], {
+          timeout: 5e3,
+          maxBuffer: 1024 * 1024
+        });
+        const all = parseSimctlBootedAll(stdout);
+        return all.length === 1 ? all[0] : null;
+      } catch {
+        return null;
+      }
+    };
+    defaultAndroidResolver = () => resolveAndroidEmu();
+    defaultIosCapturer = async (udid, path) => {
+      try {
+        await execFileAsync("xcrun", ["simctl", "io", udid, "screenshot", `--type=${simctlScreenshotType(path)}`, path], {
+          timeout: 15e3,
+          maxBuffer: 1024 * 1024
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    captureCounter = 0;
+    defaultAndroidSpawn = (emuId) => spawn2("adb", ["-s", emuId, "exec-out", "screencap", "-p"], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    androidSpawn = defaultAndroidSpawn;
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve11) => {
+      let settled = false;
+      let streamFinished = false;
+      let procCode = null;
+      const proc = androidSpawn(emuId);
+      const tmp = rawTempPath(path, nextCaptureSuffix());
+      const out = createWriteStream2(tmp);
+      const cleanupTemp = () => {
+        try {
+          unlinkSync3(tmp);
+        } catch {
+        }
+      };
+      const timer = setTimeout(() => {
+        if (settled)
+          return;
+        proc.kill();
+        out.destroy();
+        cleanupTemp();
+        settle(false);
+      }, 15e3);
+      const settle = (ok) => {
+        if (settled)
+          return;
+        settled = true;
+        clearTimeout(timer);
+        resolve11(ok);
+      };
+      const maybeSettle = () => {
+        const outcome = resolveCaptureOutcome(streamFinished, procCode);
+        if (outcome === "pending")
+          return;
+        if (outcome === "failure") {
+          out.destroy();
+          cleanupTemp();
+          settle(false);
+          return;
+        }
+        try {
+          renameSync3(tmp, path);
+          settle(true);
+        } catch {
+          cleanupTemp();
+          settle(false);
+        }
+      };
+      proc.stdout.pipe(out);
+      out.on("finish", () => {
+        streamFinished = true;
+        maybeSettle();
+      });
+      out.on("error", () => {
+        proc.stdout.unpipe(out);
+        proc.kill();
+        cleanupTemp();
+        settle(false);
+      });
+      proc.on("error", () => {
+        out.destroy();
+        cleanupTemp();
+        settle(false);
+      });
+      proc.on("close", (code) => {
+        procCode = code;
+        maybeSettle();
+      });
+    });
+    iosResolver = defaultIosResolver;
+    androidResolver = defaultAndroidResolver;
+    iosCapturer = defaultIosCapturer;
+    androidCapturer = defaultAndroidCapturer;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/lifecycle/no-change-tracker.js
+function recordNoUiChange(targetKey) {
+  streak.push(targetKey);
+  return new Set(streak).size;
+}
+function recordUiChange() {
+  streak.length = 0;
+}
+var WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, streak;
+var init_no_change_tracker = __esm({
+  "packages/rn-dev-agent-core/dist/lifecycle/no-change-tracker.js"() {
+    "use strict";
+    WEDGED_DISTINCT_TARGETS = 3;
+    WEDGED_RUNTIME_HINT = `${WEDGED_DISTINCT_TARGETS} consecutive taps on distinct targets produced no UI change \u2014 the app runtime may be wedged (JS thread paused or touch events swallowed). Run cdp_status (iOS auto-recovers a paused JS thread), then cdp_restart with hardReset=true if it persists.`;
+    streak = [];
   }
 });
 
@@ -13839,8 +13955,8 @@ var init_platform_utils = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join13, dirname as dirname8, isAbsolute as isAbsolute2, sep } from "node:path";
-import { readFileSync as readFileSync11, realpathSync as realpathSync4 } from "node:fs";
+import { join as join13, dirname as dirname8, isAbsolute as isAbsolute2, sep as sep2 } from "node:path";
+import { readFileSync as readFileSync11, realpathSync as realpathSync5 } from "node:fs";
 function isValidBundleId(s) {
   if (typeof s !== "string")
     return false;
@@ -14002,7 +14118,7 @@ function resolveRunFlowTarget(file, opts) {
   if (!/\.ya?ml$/i.test(file)) {
     throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
   }
-  const realpath = opts.realpathFn ?? realpathSync4;
+  const realpath = opts.realpathFn ?? realpathSync5;
   let resolved;
   let rootReal;
   try {
@@ -14011,7 +14127,7 @@ function resolveRunFlowTarget(file, opts) {
   } catch (err) {
     throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
   }
-  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep)) {
+  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep2)) {
     throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
   }
   return resolved;
@@ -14391,7 +14507,7 @@ var init_maestro_error_parser = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync5 } from "node:child_process";
+import { execFileSync as execFileSync6 } from "node:child_process";
 import { existsSync as existsSync12, cpSync, rmSync as rmSync5, mkdirSync as mkdirSync8, readdirSync as readdirSync5, statSync as statSync5 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join15, basename as basename2 } from "node:path";
@@ -14405,7 +14521,7 @@ function defaultSnapshotApp(appPath) {
     rmSync5(dest, { recursive: true, force: true });
     mkdirSync8(destDir, { recursive: true });
     try {
-      execFileSync5("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+      execFileSync6("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
       cpSync(appPath, dest, { recursive: true });
     }
@@ -14451,7 +14567,7 @@ function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAp
 }
 function defaultGetAppContainer(bundleId) {
   try {
-    const out = execFileSync5("xcrun", ["simctl", "get_app_container", "booted", bundleId, "app"], {
+    const out = execFileSync6("xcrun", ["simctl", "get_app_container", "booted", bundleId, "app"], {
       encoding: "utf8",
       timeout: 5e3
     }).trim();
@@ -14470,7 +14586,7 @@ function defaultListSnapshots() {
 }
 function defaultReadBundleId(appPath, timeoutMs) {
   try {
-    const out = execFileSync5("plutil", ["-extract", "CFBundleIdentifier", "raw", join15(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+    const out = execFileSync6("plutil", ["-extract", "CFBundleIdentifier", "raw", join15(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
     return out.trim() || null;
   } catch {
     return null;
@@ -17153,8 +17269,8 @@ var init_tool_profiles = __esm({
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID3 } from "node:crypto";
-import { realpathSync as realpathSync5 } from "node:fs";
-import { isAbsolute as isAbsolute3, relative as relative2, resolve as resolve4 } from "node:path";
+import { realpathSync as realpathSync6 } from "node:fs";
+import { isAbsolute as isAbsolute3, relative as relative2, resolve as resolve5 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -17236,7 +17352,7 @@ function bindSourcePaths(status, args) {
   try {
     if (typeof status.source.appRoot !== "string")
       throw new Error("missing app root");
-    appRoot = realpathSync5(status.source.appRoot);
+    appRoot = realpathSync6(status.source.appRoot);
   } catch {
     throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "active session app root is unavailable");
   }
@@ -17249,7 +17365,7 @@ function bindSourcePaths(status, args) {
     }
     let candidate;
     try {
-      candidate = realpathSync5(isAbsolute3(supplied) ? supplied : resolve4(appRoot, supplied));
+      candidate = realpathSync6(isAbsolute3(supplied) ? supplied : resolve5(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
@@ -17265,7 +17381,8 @@ function bindSessionArguments(status, profile, args) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const install = status.bindings.install;
-  if (device && (profile.axes.includes("D") || profile.kind === "transition")) {
+  const replacingDeviceAuthority = args.action === "bind_device";
+  if (device && !replacingDeviceAuthority && (profile.axes.includes("D") || profile.kind === "transition")) {
     bindExactArgument(args, "platform", device.platform, "DEVICE_AUTHORITY_MISMATCH");
     bindExactArgument(args, "deviceId", device.deviceId, "DEVICE_AUTHORITY_MISMATCH");
     bindExactArgument(args, "appId", device.appId, "APP_INSTALL_IDENTITY_CHANGED");
@@ -18906,121 +19023,6 @@ var init_external_runner_detect = __esm({
     "use strict";
     SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
     RN_FAST_RUNNER_RE = /RnFastRunner/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
-import { execFileSync as execFileSync6 } from "node:child_process";
-import { readlinkSync as readlinkSync2, realpathSync as realpathSync6 } from "node:fs";
-import { resolve as resolve5, sep as sep2 } from "node:path";
-function parseLsofPid(stdout) {
-  for (const line of stdout.split("\n")) {
-    const n = parseInt(line.trim(), 10);
-    if (!isNaN(n) && n > 0)
-      return n;
-  }
-  return null;
-}
-function parseLsofCwd(stdout) {
-  for (const line of stdout.split("\n")) {
-    if (line.startsWith("n")) {
-      const path = line.slice(1).trim();
-      if (path)
-        return path;
-    }
-  }
-  return null;
-}
-function pidForPort(port, exec = defaultExec, platform = process.platform) {
-  try {
-    if (platform === "win32") {
-      const output = exec("powershell.exe", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)`
-      ]);
-      const pid = Number.parseInt(output.trim(), 10);
-      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
-    }
-    return parseLsofPid(exec("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"]));
-  } catch {
-    return null;
-  }
-}
-function parseWindowsMetroRoot(commandLine) {
-  const explicitRoot = /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(commandLine);
-  const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
-  return explicit ?? null;
-}
-function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync2) {
-  try {
-    if (platform === "linux") {
-      return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
-    }
-    if (platform === "darwin") {
-      const cwd = parseLsofCwd(exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
-      return cwd ? realpathOrResolve(cwd) : null;
-    }
-    if (platform === "win32") {
-      const commandLine = exec("powershell.exe", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`
-      ]);
-      const root = parseWindowsMetroRoot(commandLine);
-      return root ? realpathOrResolve(root) : null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-function realpathOrResolve(p) {
-  try {
-    return realpathSync6(resolve5(p));
-  } catch {
-    return resolve5(p);
-  }
-}
-function cwdForPort(port, exec = defaultExec, platform = process.platform) {
-  const pid = pidForPort(port, exec, platform);
-  if (pid == null)
-    return null;
-  return cwdForProcess(pid, platform, exec);
-}
-function pathMatchesRoot(servingCwd, projectRoot) {
-  if (!servingCwd || !projectRoot)
-    return false;
-  const a = realpathOrResolve(servingCwd);
-  const b = realpathOrResolve(projectRoot);
-  if (a === b)
-    return true;
-  return a.startsWith(b + sep2) || b.startsWith(a + sep2);
-}
-function pathIsWithinRoot(candidate, root) {
-  if (!candidate || !root)
-    return false;
-  const canonicalCandidate = realpathOrResolve(candidate);
-  const canonicalRoot = realpathOrResolve(root);
-  return canonicalCandidate === canonicalRoot || canonicalCandidate.startsWith(canonicalRoot + sep2);
-}
-function resolveBridgeProjectRoot() {
-  const root = findProjectRoot();
-  return root ? realpathOrResolve(root) : null;
-}
-var CWD_LSOF_TIMEOUT_MS, defaultExec;
-var init_metro_cwd = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
-    "use strict";
-    init_storage();
-    CWD_LSOF_TIMEOUT_MS = 800;
-    defaultExec = (cmd, args) => execFileSync6(cmd, args, {
-      timeout: CWD_LSOF_TIMEOUT_MS,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
   }
 });
 
@@ -23833,7 +23835,7 @@ function numericListener(output, emptyStatus) {
 function probeMetroListener(port, platform = process.platform, execute = execFileSync9) {
   try {
     if (platform === "win32") {
-      const output = execute("powershell.exe", [
+      const output = execute("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -23842,7 +23844,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
     }
     if (platform === "linux") {
-      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
+      const output = execute("/usr/bin/ss", ["-H", "-ltnp", `sport = :${port}`], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 2e3
@@ -23855,7 +23857,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
     }
     if (platform === "darwin") {
-      const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      const output = execute("/usr/sbin/lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 2e3
@@ -24026,7 +24028,7 @@ function managementProof(sessionId, authority, signerCapability) {
   })).digest("hex");
 }
 function verifyManagedMetroManagementProof(binding, input) {
-  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "broker-v2" && binding.runtimeEvidenceAuthority !== "reported-v1" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" && binding.runtimeEvidenceAuthority !== "reported-v1" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
   const expected = managementProof(input.sessionId, {
@@ -24060,7 +24062,7 @@ function legacyManagementProof(sessionId, authority, signerCapability) {
     authority.runtimeEvidenceSocket
   ].join("\0")).digest("hex");
 }
-function brokerV2ManagementProofV1(sessionId, authority, signerCapability) {
+function managedSandboxManagementProofV1(sessionId, authority, signerCapability) {
   return createHmac2("sha256", signerCapability).update(canonicalAuthorityJson({
     sessionId,
     ...authority
@@ -24149,7 +24151,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
-  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "broker-v2" || binding.runtimeEvidenceAuthority === "broker-v2" && binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" || binding.runtimeEvidenceAuthority === "managed-sandbox-v1" && binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
   const legacyAuthority = {
@@ -24179,7 +24181,7 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
       }, input.signerCapability)
     ] : []
   ] : [
-    brokerV2ManagementProofV1(input.sessionId, {
+    managedSandboxManagementProofV1(input.sessionId, {
       ...legacyAuthority,
       runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
       runtimeEvidenceProtocol: 2
@@ -24350,7 +24352,6 @@ const snapshotAttestedFiles = (entries, arguments_, firstDescriptor) => {
     if (typeof entry.path !== 'string' || typeof entry.sha256 !== 'string') {
       throw new Error('invalid command-chain attestation');
     }
-    if (!argumentPaths.has(entry.path)) continue;
     const descriptor = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const size = fstatSync(descriptor).size;
     const contents = Buffer.alloc(size);
@@ -24365,6 +24366,7 @@ const snapshotAttestedFiles = (entries, arguments_, firstDescriptor) => {
     if (createHash('sha256').update(snapshot).digest('hex') !== entry.sha256) {
       throw new Error('command-chain identity mismatch');
     }
+    if (!argumentPaths.has(entry.path)) continue;
     paths.set(entry.path, '/dev/fd/' + (firstDescriptor + snapshots.length));
     snapshots.push(snapshot);
   }
@@ -24422,7 +24424,7 @@ try {
 } catch {
   commandChainSnapshot = null;
 }
-let brokerEnforced =
+let managedSandbox =
   runtimeEnforcement.status === 'enforced' &&
   runtimeEnforcement.kind === 'darwin-seatbelt-v2' &&
   runtimeEnforcement.sandboxExecutable === '/usr/bin/sandbox-exec' &&
@@ -24455,7 +24457,7 @@ let brokerEnforced =
     canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation) &&
   canonicalAuthorityJson(enforcementReceipt.commandChainAttestation) ===
     canonicalAuthorityJson(runtimeEnforcement.commandChainAttestation);
-let runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
+let runtimeEvidenceAuthority = managedSandbox ? 'managed-sandbox-v1' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -24486,8 +24488,8 @@ function publishPolicy() {
     metroInstanceId,
     contentRoot,
     appRoot,
-    runtimeEnforcement: brokerEnforced ? 'os-enforced-v1' : 'unsupported',
-    runtimeEnforcementReceipt: brokerEnforced ? enforcementReceipt : null,
+    runtimeEnforcement: managedSandbox ? 'os-enforced-v1' : 'unsupported',
+    runtimeEnforcementReceipt: managedSandbox ? enforcementReceipt : null,
     runtimeManifest,
     runtimeInputs: runtimeManifest.runtimeInputs,
     violations: [...violations],
@@ -24578,17 +24580,17 @@ const environmentDigest = createHash('sha256')
   .update(canonicalAuthorityJson(childEnvironment))
   .digest('hex');
 if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
-if (runtimeEnforcement.status === 'enforced' && !brokerEnforced) process.exit(1);
+if (runtimeEnforcement.status === 'enforced' && !managedSandbox) process.exit(1);
 const sandboxExecutable = runtimeEnforcement.sandboxExecutable;
 const boundArgs = args.map((argument) =>
   argument.startsWith(logicalArgumentPrefix)
     ? argument.slice(logicalArgumentPrefix.length)
     : commandChainSnapshot?.paths.get(argument) ?? argument,
 );
-const sandboxArgs = brokerEnforced
+const sandboxArgs = managedSandbox
   ? ['-p', runtimeEnforcement.profile, executable, ...boundArgs]
   : boundArgs;
-child = spawn(brokerEnforced ? sandboxExecutable : executable, sandboxArgs, {
+child = spawn(managedSandbox ? sandboxExecutable : executable, sandboxArgs, {
   cwd: process.cwd(),
   env: childEnvironment,
   stdio: [
@@ -24610,13 +24612,13 @@ for (let index = 0; index < (commandChainSnapshot?.snapshots.length ?? 0); index
   child.stdio[10 + index].end(commandChainSnapshot.snapshots[index]);
 }
 if (
-  brokerEnforced &&
+  managedSandbox &&
   !waitForLiveNodeIdentity(
     child.pid,
     enforcementReceipt.nodeRuntimeAttestation?.executable?.signingIdentity,
   )
 ) {
-  brokerEnforced = false;
+  managedSandbox = false;
   runtimeEvidenceAuthority = 'reported-v1';
   appendViolation('Metro executable kernel identity did not match attestation');
   try {
@@ -24717,7 +24719,7 @@ evidence.on('data', (chunk) => {
           candidate = realpathSync(payload.value);
           digest = createHash('sha256').update(readFileSync(candidate)).digest('hex');
         } catch {
-          appendViolation('Metro runtime input could not be observed by the broker');
+          appendViolation('Metro runtime input could not be observed by the managed sandbox');
           continue;
         }
         const allowedRoots = [
@@ -24731,17 +24733,13 @@ evidence.on('data', (chunk) => {
             candidate.startsWith(root.endsWith('/') ? root : root + '/'),
         );
         if (!withinManifest || digest !== payload.digest) {
-          appendViolation('Metro runtime input is outside the broker manifest');
+          appendViolation('Metro runtime input is outside the managed sandbox manifest');
           continue;
         }
-        if (brokerEnforced) appendEvidence({ ...payload, value: candidate });
+        appendEvidence({ ...payload, value: candidate });
         continue;
       }
-      if (brokerEnforced) {
-        appendEvidence(payload);
-      } else {
-        appendViolation('Metro runtime execution is not independently broker-observed');
-      }
+      appendEvidence(payload);
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -59295,6 +59293,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     adoptionHandle: typeof recovery.adoptStale?.token === "string" ? recovery.adoptStale.token : void 0,
     adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
   } : void 0;
+  const metro = status.bindings.metro;
   return {
     available: true,
     ...options.includeSessionId ? { sessionId: status.sessionId } : {},
@@ -59306,6 +59305,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     deviceBound: Boolean(status.bindings.device),
     installBound: Boolean(status.bindings.install),
     metroBound: Boolean(status.bindings.metro),
+    sandbox: metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable",
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
     recorderBound: Boolean(status.bindings.recorder),
@@ -67761,7 +67761,8 @@ var init_proof_receipt = __esm({
         instanceId: external_exports.string().min(1),
         pid: external_exports.number().int().positive(),
         birthDigest: sha256Schema,
-        buildGeneration: external_exports.number().int().positive()
+        buildGeneration: external_exports.number().int().positive(),
+        sandbox: external_exports.enum(["managed-sandbox-v1", "unavailable"])
       }).strict(),
       bundle: external_exports.object({
         targetId: external_exports.string().min(1),
@@ -68418,6 +68419,7 @@ function writeProofReceiptAtomic(path, receipt2) {
 }
 function createProofCaptureHandler(deps) {
   let session = null;
+  const authorityFailureCode = (error2) => /^([A-Z][A-Z0-9_]+):/.exec(error2 instanceof Error ? error2.message : String(error2))?.[1] ?? "PROOF_AUTHORITY_UNAVAILABLE";
   const contextIsCurrent = (active) => {
     try {
       return validCaptureContext(active.context, deps.projectRoot());
@@ -68432,21 +68434,21 @@ function createProofCaptureHandler(deps) {
   };
   const currentAuthority = (active) => {
     try {
-      return deps.authority(active.context.runId);
-    } catch {
-      return null;
+      return { ok: true, value: deps.authority(active.context.runId) };
+    } catch (error2) {
+      return { ok: false, reason: authorityFailureCode(error2) };
     }
   };
   const authorityMatches = (active) => {
     const current = currentAuthority(active);
-    return current !== null && hashProofValue(current) === hashProofValue(active.authority);
+    return current.ok && hashProofValue(current.value) === hashProofValue(active.authority);
   };
   const refreshAuthority = (active) => {
     const current = currentAuthority(active);
-    if (!current)
-      return false;
-    active.authority = current;
-    return true;
+    if (!current.ok)
+      return current.reason;
+    active.authority = current.value;
+    return null;
   };
   const artifactPaths = (active) => [
     active.context.receiptPath,
@@ -68754,8 +68756,8 @@ function createProofCaptureHandler(deps) {
       let authority;
       try {
         authority = deps.authority(args.runId);
-      } catch {
-        return proofFailure(["PROOF_AUTHORITY_UNAVAILABLE"], "idle");
+      } catch (error2) {
+        return proofFailure([authorityFailureCode(error2)], "idle");
       }
       const startedAt = deps.now();
       session = {
@@ -68954,8 +68956,9 @@ function createProofCaptureHandler(deps) {
       ];
       if (reasons.length > 0)
         return rejectCapture(active, reasons);
-      if (!refreshAuthority(active)) {
-        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
+      const startAuthorityFailure = refreshAuthority(active);
+      if (startAuthorityFailure) {
+        return rejectCapture(active, [startAuthorityFailure]);
       }
       active.recordingStartedAt = deps.now();
       active.stage = "recording";
@@ -68982,8 +68985,9 @@ function createProofCaptureHandler(deps) {
       if (authorityChanged) {
         return rejectCapture(active, ["PROOF_AUTHORITY_CHANGED"]);
       }
-      if (!refreshAuthority(active)) {
-        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
+      const stopAuthorityFailure = refreshAuthority(active);
+      if (stopAuthorityFailure) {
+        return rejectCapture(active, [stopAuthorityFailure]);
       }
       const saved = shutdown2.stopData?.saved;
       if (!Array.isArray(saved))
@@ -69058,8 +69062,8 @@ function createProofCaptureHandler(deps) {
         if (hashProofValue(deps.authority(active.context.runId)) !== hashProofValue(active.authority)) {
           evidenceReasons.push("PROOF_AUTHORITY_CHANGED");
         }
-      } catch {
-        evidenceReasons.push("PROOF_AUTHORITY_UNAVAILABLE");
+      } catch (error2) {
+        evidenceReasons.push(authorityFailureCode(error2));
       }
       evidenceReasons.push(...git.ok ? gitReasons(active, git.value, "validation") : git.reasons);
       evidenceReasons.push(...ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons);
@@ -69144,10 +69148,10 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["EVIDENCE_REVIEW_TARGET_MISMATCH"], active.stage);
       }
       const acceptedAuthority = currentAuthority(active);
-      if (!acceptedAuthority) {
-        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
+      if (!acceptedAuthority.ok) {
+        return rejectCapture(active, [acceptedAuthority.reason]);
       }
-      if (hashProofValue(acceptedAuthority) !== hashProofValue(active.mechanicalReceipt.authority)) {
+      if (hashProofValue(acceptedAuthority.value) !== hashProofValue(active.mechanicalReceipt.authority)) {
         return rejectCapture(active, ["PROOF_AUTHORITY_CHANGED"]);
       }
       const { verdict: _mechanicalVerdict, ...acceptedEvidence } = active.mechanicalReceipt;
@@ -69155,7 +69159,7 @@ function createProofCaptureHandler(deps) {
       try {
         finalReceipt = finalProofReceiptSchema.parse({
           ...acceptedEvidence,
-          authority: acceptedAuthority,
+          authority: acceptedAuthority.value,
           evidenceReview: review,
           verdict: "accepted"
         });
@@ -69165,10 +69169,10 @@ function createProofCaptureHandler(deps) {
       if (!contextIsCurrent(active))
         return rejectPathDrift(active);
       const writeAuthority = currentAuthority(active);
-      if (!writeAuthority) {
-        return rejectCapture(active, ["PROOF_AUTHORITY_UNAVAILABLE"]);
+      if (!writeAuthority.ok) {
+        return rejectCapture(active, [writeAuthority.reason]);
       }
-      if (hashProofValue(writeAuthority) !== hashProofValue(finalReceipt.authority)) {
+      if (hashProofValue(writeAuthority.value) !== hashProofValue(finalReceipt.authority)) {
         return rejectCapture(active, ["PROOF_AUTHORITY_CHANGED"]);
       }
       try {
@@ -78569,7 +78573,7 @@ function createLocalAuthorityProbe(dependencies) {
       }
       const servingRoot = cwdForPort(port) ?? (metro.mode === "managed" && typeof metro.servingRoot === "string" ? metro.servingRoot : null);
       const expectedRoot = String(status.source.contentRoot ?? "");
-      if (!servingRoot || !pathMatchesRoot(servingRoot, expectedRoot)) {
+      if (!servingRoot || !pathIsWithinRoot(servingRoot, expectedRoot)) {
         throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "Metro serving root cannot be proven for this worktree");
       }
       return {
@@ -79042,7 +79046,7 @@ function proofAuthority(runId) {
     throw new Error("PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete");
   }
   if (metro.mode !== "managed") {
-    throw new Error("PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher");
+    throw new Error("STRICT_PROOF_UNMANAGED_METRO: strict proof requires Metro started by the managed launcher");
   }
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
   if (!secret?.signerCapability || !verifyManagedMetroManagementProof(metro, {
@@ -79088,7 +79092,8 @@ function proofAuthority(runId) {
       instanceId: String(metro.instanceId),
       pid: Number(metro.pid),
       birthDigest: hashProofValue(String(metro.birth)),
-      buildGeneration: Number(metro.buildGeneration)
+      buildGeneration: Number(metro.buildGeneration),
+      sandbox: metro.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable"
     },
     bundle: {
       targetId: String(bundle.targetId),

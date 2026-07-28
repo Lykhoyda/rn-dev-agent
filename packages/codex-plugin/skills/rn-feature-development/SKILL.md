@@ -426,10 +426,13 @@ checkout. The pipeline adds these deltas:
 
 **Strict factory routing**: when the run is unattended, the PR will auto-merge,
 or a machine receipt or merge-ready evidence is required, follow
-`$rn-dev-agent:proof-capture --strict`. Its command contract currently fails
-closed before recording because closed-world Metro runtime enforcement is
-unavailable. Do not substitute interactive artifacts or report merge-ready
-evidence.
+`$rn-dev-agent:proof-capture --strict`. Its command contract fails closed
+unless the proof controller verifies managed Metro ownership, the bound
+worktree serving root, a signed initial-bundle marker, exact device and install
+bindings, and the source and dirty digest. The optional Darwin managed-sandbox
+tier is reported in the receipt, not required for strict proof. Do not
+substitute interactive artifacts or report merge-ready evidence without its
+finalized accepted receipt.
 
 1. **The flow source is the architect's E2E Proof Flow table** from Phase 4 —
    execute it mechanically. Do NOT improvise, skip, or simplify steps; the

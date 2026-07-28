@@ -68,6 +68,7 @@ const acceptedReceipt = {
       pid: 43,
       birthDigest: hash,
       buildGeneration: 1,
+      sandbox: 'unavailable',
     },
     bundle: {
       targetId: 'target-1',

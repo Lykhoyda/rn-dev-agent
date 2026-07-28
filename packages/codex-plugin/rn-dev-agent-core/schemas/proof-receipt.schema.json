@@ -217,6 +217,13 @@
               "exclusiveMinimum": 0,
               "maximum": 65535,
               "type": "integer"
+            },
+            "sandbox": {
+              "enum": [
+                "managed-sandbox-v1",
+                "unavailable"
+              ],
+              "type": "string"
             }
           },
           "required": [
@@ -224,7 +231,8 @@
             "instanceId",
             "pid",
             "birthDigest",
-            "buildGeneration"
+            "buildGeneration",
+            "sandbox"
           ],
           "type": "object"
         },

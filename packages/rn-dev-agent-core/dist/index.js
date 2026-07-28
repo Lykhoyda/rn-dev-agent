@@ -1754,7 +1754,7 @@ function proofAuthority(runId) {
         throw new Error('PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete');
     }
     if (metro.mode !== 'managed') {
-        throw new Error('PROOF_AUTHORITY_MISMATCH: strict proof requires Metro started by the managed launcher');
+        throw new Error('STRICT_PROOF_UNMANAGED_METRO: strict proof requires Metro started by the managed launcher');
     }
     const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
@@ -1806,6 +1806,9 @@ function proofAuthority(runId) {
             pid: Number(metro.pid),
             birthDigest: hashProofValue(String(metro.birth)),
             buildGeneration: Number(metro.buildGeneration),
+            sandbox: metro.runtimeEvidenceAuthority === 'managed-sandbox-v1'
+                ? 'managed-sandbox-v1'
+                : 'unavailable',
         },
         bundle: {
             targetId: String(bundle.targetId),

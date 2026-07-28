@@ -10731,7 +10731,7 @@ function numericListener(output, emptyStatus) {
 function probeMetroListener(port, platform = process.platform, execute = execFileSync4) {
   try {
     if (platform === "win32") {
-      const output = execute("powershell.exe", [
+      const output = execute("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -10740,7 +10740,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
     }
     if (platform === "linux") {
-      const output = execute("ss", ["-H", "-ltnp", `sport = :${port}`], {
+      const output = execute("/usr/bin/ss", ["-H", "-ltnp", `sport = :${port}`], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 2e3
@@ -10753,7 +10753,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
     }
     if (platform === "darwin") {
-      const output = execute("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      const output = execute("/usr/sbin/lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 2e3
@@ -11587,7 +11587,6 @@ const snapshotAttestedFiles = (entries, arguments_, firstDescriptor) => {
     if (typeof entry.path !== 'string' || typeof entry.sha256 !== 'string') {
       throw new Error('invalid command-chain attestation');
     }
-    if (!argumentPaths.has(entry.path)) continue;
     const descriptor = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const size = fstatSync(descriptor).size;
     const contents = Buffer.alloc(size);
@@ -11602,6 +11601,7 @@ const snapshotAttestedFiles = (entries, arguments_, firstDescriptor) => {
     if (createHash('sha256').update(snapshot).digest('hex') !== entry.sha256) {
       throw new Error('command-chain identity mismatch');
     }
+    if (!argumentPaths.has(entry.path)) continue;
     paths.set(entry.path, '/dev/fd/' + (firstDescriptor + snapshots.length));
     snapshots.push(snapshot);
   }
@@ -11659,7 +11659,7 @@ try {
 } catch {
   commandChainSnapshot = null;
 }
-let brokerEnforced =
+let managedSandbox =
   runtimeEnforcement.status === 'enforced' &&
   runtimeEnforcement.kind === 'darwin-seatbelt-v2' &&
   runtimeEnforcement.sandboxExecutable === '/usr/bin/sandbox-exec' &&
@@ -11692,7 +11692,7 @@ let brokerEnforced =
     canonicalAuthorityJson(runtimeEnforcement.nodeRuntimeAttestation) &&
   canonicalAuthorityJson(enforcementReceipt.commandChainAttestation) ===
     canonicalAuthorityJson(runtimeEnforcement.commandChainAttestation);
-let runtimeEvidenceAuthority = brokerEnforced ? 'broker-v2' : 'reported-v1';
+let runtimeEvidenceAuthority = managedSandbox ? 'managed-sandbox-v1' : 'reported-v1';
 const evidenceDescriptor = 9;
 const journalDescriptor = openSync(evidencePath, 'w', 0o600);
 let sequence = 0;
@@ -11723,8 +11723,8 @@ function publishPolicy() {
     metroInstanceId,
     contentRoot,
     appRoot,
-    runtimeEnforcement: brokerEnforced ? 'os-enforced-v1' : 'unsupported',
-    runtimeEnforcementReceipt: brokerEnforced ? enforcementReceipt : null,
+    runtimeEnforcement: managedSandbox ? 'os-enforced-v1' : 'unsupported',
+    runtimeEnforcementReceipt: managedSandbox ? enforcementReceipt : null,
     runtimeManifest,
     runtimeInputs: runtimeManifest.runtimeInputs,
     violations: [...violations],
@@ -11815,17 +11815,17 @@ const environmentDigest = createHash('sha256')
   .update(canonicalAuthorityJson(childEnvironment))
   .digest('hex');
 if (environmentDigest !== runtimeManifest.environmentDigest) process.exit(1);
-if (runtimeEnforcement.status === 'enforced' && !brokerEnforced) process.exit(1);
+if (runtimeEnforcement.status === 'enforced' && !managedSandbox) process.exit(1);
 const sandboxExecutable = runtimeEnforcement.sandboxExecutable;
 const boundArgs = args.map((argument) =>
   argument.startsWith(logicalArgumentPrefix)
     ? argument.slice(logicalArgumentPrefix.length)
     : commandChainSnapshot?.paths.get(argument) ?? argument,
 );
-const sandboxArgs = brokerEnforced
+const sandboxArgs = managedSandbox
   ? ['-p', runtimeEnforcement.profile, executable, ...boundArgs]
   : boundArgs;
-child = spawn(brokerEnforced ? sandboxExecutable : executable, sandboxArgs, {
+child = spawn(managedSandbox ? sandboxExecutable : executable, sandboxArgs, {
   cwd: process.cwd(),
   env: childEnvironment,
   stdio: [
@@ -11847,13 +11847,13 @@ for (let index = 0; index < (commandChainSnapshot?.snapshots.length ?? 0); index
   child.stdio[10 + index].end(commandChainSnapshot.snapshots[index]);
 }
 if (
-  brokerEnforced &&
+  managedSandbox &&
   !waitForLiveNodeIdentity(
     child.pid,
     enforcementReceipt.nodeRuntimeAttestation?.executable?.signingIdentity,
   )
 ) {
-  brokerEnforced = false;
+  managedSandbox = false;
   runtimeEvidenceAuthority = 'reported-v1';
   appendViolation('Metro executable kernel identity did not match attestation');
   try {
@@ -11954,7 +11954,7 @@ evidence.on('data', (chunk) => {
           candidate = realpathSync(payload.value);
           digest = createHash('sha256').update(readFileSync(candidate)).digest('hex');
         } catch {
-          appendViolation('Metro runtime input could not be observed by the broker');
+          appendViolation('Metro runtime input could not be observed by the managed sandbox');
           continue;
         }
         const allowedRoots = [
@@ -11968,17 +11968,13 @@ evidence.on('data', (chunk) => {
             candidate.startsWith(root.endsWith('/') ? root : root + '/'),
         );
         if (!withinManifest || digest !== payload.digest) {
-          appendViolation('Metro runtime input is outside the broker manifest');
+          appendViolation('Metro runtime input is outside the managed sandbox manifest');
           continue;
         }
-        if (brokerEnforced) appendEvidence({ ...payload, value: candidate });
+        appendEvidence({ ...payload, value: candidate });
         continue;
       }
-      if (brokerEnforced) {
-        appendEvidence(payload);
-      } else {
-        appendViolation('Metro runtime execution is not independently broker-observed');
-      }
+      appendEvidence(payload);
     } catch {
       appendViolation('Metro runtime evidence record is invalid');
     }
@@ -12239,7 +12235,7 @@ function verifyManagedMetroRuntimeAdmission(path, capability, expected) {
     }
     delete observedDescendantAuthority.rootIdentity;
     delete expectedDescendantAuthority.rootIdentity;
-    return computedBytes.length === signatureBytes.length && timingSafeEqual3(computedBytes, signatureBytes) && payload.runtimeEvidenceAuthority === "broker-v2" && payload.runtimeEnforcement === "os-enforced-v1" && payload.sessionId === expected.sessionId && payload.metroInstanceId === expected.metroInstanceId && payload.contentRoot === expected.contentRoot && payload.appRoot === expected.appRoot && Array.isArray(payload.violations) && payload.violations.length === 0 && canonicalAuthorityJson(observedManifest) === canonicalAuthorityJson(expectedManifest) && canonicalAuthorityJson(payload.runtimeEnforcementReceipt) === canonicalAuthorityJson(expected.enforcementReceipt);
+    return computedBytes.length === signatureBytes.length && timingSafeEqual3(computedBytes, signatureBytes) && payload.runtimeEvidenceAuthority === "managed-sandbox-v1" && payload.runtimeEnforcement === "os-enforced-v1" && payload.sessionId === expected.sessionId && payload.metroInstanceId === expected.metroInstanceId && payload.contentRoot === expected.contentRoot && payload.appRoot === expected.appRoot && Array.isArray(payload.violations) && payload.violations.length === 0 && canonicalAuthorityJson(observedManifest) === canonicalAuthorityJson(expectedManifest) && canonicalAuthorityJson(payload.runtimeEnforcementReceipt) === canonicalAuthorityJson(expected.enforcementReceipt);
   } catch {
     return false;
   }
@@ -12257,7 +12253,7 @@ function legacyManagementProof(sessionId, authority, signerCapability) {
     authority.runtimeEvidenceSocket
   ].join("\0")).digest("hex");
 }
-function brokerV2ManagementProofV1(sessionId, authority, signerCapability) {
+function managedSandboxManagementProofV1(sessionId, authority, signerCapability) {
   return createHmac3("sha256", signerCapability).update(canonicalAuthorityJson({
     sessionId,
     ...authority
@@ -12397,13 +12393,14 @@ async function startManagedMetro(input, dependencies = {}) {
     ...metroConfigInputs,
     ...resolvedDependencyRoots
   ].filter((value, index, entries) => entries.indexOf(value) === index);
+  const commandChainInputs = [...launchCommand.chainInputs, authorityPreload].filter((value, index, entries) => entries.indexOf(value) === index);
   const runtimeManifest = {
     version: 1,
     executable: canonicalRuntimeInput(launchCommand.executable),
     sourceExecutable: canonicalRuntimeInput(launchCommand.sourceExecutable),
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings.map(canonicalRuntimeInput),
-    commandChainInputs: launchCommand.chainInputs.map(canonicalRuntimeInput),
+    commandChainInputs: commandChainInputs.map(canonicalRuntimeInput),
     protectedRuntimeRoots: launchCommand.protectedRuntimeRoots.map(canonicalRuntimeInput),
     nodeExecutable: canonicalRuntimeInput(launchCommand.nodeExecutable),
     nodeVersion: process.version,
@@ -12438,7 +12435,7 @@ async function startManagedMetro(input, dependencies = {}) {
     commandArguments: metroArgs,
     commandProbeArguments: launchCommand.probeArgs,
     commandExecutableMappings: launchCommand.executableMappings,
-    commandChainInputs: launchCommand.chainInputs,
+    commandChainInputs,
     protectedRuntimeRoots: launchCommand.protectedRuntimeRoots,
     port: input.port,
     instanceId,
@@ -12458,8 +12455,8 @@ async function startManagedMetro(input, dependencies = {}) {
       };
     }
   }
-  const runtimeEvidenceAuthority = runtimeEnforcement.status === "enforced" ? "broker-v2" : "reported-v1";
-  const requiresBrokerAdmission = runtimeEnforcement.status === "enforced";
+  const runtimeEvidenceAuthority = runtimeEnforcement.status === "enforced" ? "managed-sandbox-v1" : "reported-v1";
+  const requiresSandboxAdmission = runtimeEnforcement.status === "enforced";
   const enforcementReceiptForAdmission = runtimeEnforcement.status === "enforced" && "receipt" in runtimeEnforcement ? runtimeEnforcement.receipt : null;
   const log = openSync3(join3(input.runtimeRoot, "metro.log"), "a", 384);
   const child = (dependencies.spawnProcess ?? spawn)(launchCommand.nodeExecutable, ["-e", METRO_LAUNCHER_SOURCE], {
@@ -12522,7 +12519,7 @@ async function startManagedMetro(input, dependencies = {}) {
         listenerIdentity = { pid, birth: listenerBirth.birth.token };
       }
       try {
-        if (requiresBrokerAdmission && (!enforcementReceiptForAdmission || !(dependencies.verifyRuntimeAdmission ?? verifyManagedMetroRuntimeAdmission)(runtimePolicyPath, runtimePolicyCapability, {
+        if (requiresSandboxAdmission && (!enforcementReceiptForAdmission || !(dependencies.verifyRuntimeAdmission ?? verifyManagedMetroRuntimeAdmission)(runtimePolicyPath, runtimePolicyCapability, {
           sessionId: input.sessionId,
           metroInstanceId: instanceId,
           contentRoot: resolve3(input.sourceRoot),
@@ -12530,7 +12527,7 @@ async function startManagedMetro(input, dependencies = {}) {
           runtimeManifest,
           enforcementReceipt: enforcementReceiptForAdmission
         }))) {
-          throw new Error("METRO_RUNTIME_ADMISSION_UNAVAILABLE: launcher did not admit broker-v2");
+          throw new Error("METRO_RUNTIME_ADMISSION_UNAVAILABLE: launcher did not admit managed sandbox");
         }
         const binding = await capture({
           port: input.port,
@@ -12655,7 +12652,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   }
 }
 async function stopManagedMetro(binding, input, dependencies = {}) {
-  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "broker-v2" || binding.runtimeEvidenceAuthority === "broker-v2" && binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+  if (binding?.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || binding.runtimeEvidenceAuthority !== void 0 && binding.runtimeEvidenceAuthority !== "reported-v1" && binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" || binding.runtimeEvidenceAuthority === "managed-sandbox-v1" && binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
     return false;
   }
   const legacyAuthority = {
@@ -12685,7 +12682,7 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
       }, input.signerCapability)
     ] : []
   ] : [
-    brokerV2ManagementProofV1(input.sessionId, {
+    managedSandboxManagementProofV1(input.sessionId, {
       ...legacyAuthority,
       runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
       runtimeEvidenceProtocol: 2
@@ -12747,6 +12744,7 @@ function inspectSessionOwner(owner, dependencies = {}) {
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
+init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { closeSync as closeSync4, existsSync as existsSync4, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync6 } from "node:fs";
@@ -14734,6 +14732,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     adoptionHandle: typeof recovery.adoptStale?.token === "string" ? recovery.adoptStale.token : void 0,
     adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
   } : void 0;
+  const metro = status.bindings.metro;
   return {
     available: true,
     ...options.includeSessionId ? { sessionId: status.sessionId } : {},
@@ -14745,6 +14744,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     deviceBound: Boolean(status.bindings.device),
     installBound: Boolean(status.bindings.install),
     metroBound: Boolean(status.bindings.metro),
+    sandbox: metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable",
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
     recorderBound: Boolean(status.bindings.recorder),

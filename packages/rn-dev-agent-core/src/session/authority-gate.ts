@@ -239,7 +239,12 @@ function bindSessionArguments(
   const device = status.bindings.device as Record<string, unknown> | undefined;
   const metro = status.bindings.metro as Record<string, unknown> | undefined;
   const install = status.bindings.install as Record<string, unknown> | undefined;
-  if (device && (profile.axes.includes('D') || profile.kind === 'transition')) {
+  const replacingDeviceAuthority = args.action === 'bind_device';
+  if (
+    device &&
+    !replacingDeviceAuthority &&
+    (profile.axes.includes('D') || profile.kind === 'transition')
+  ) {
     bindExactArgument(args, 'platform', device.platform, 'DEVICE_AUTHORITY_MISMATCH');
     bindExactArgument(args, 'deviceId', device.deviceId, 'DEVICE_AUTHORITY_MISMATCH');
     bindExactArgument(args, 'appId', device.appId, 'APP_INSTALL_IDENTITY_CHANGED');

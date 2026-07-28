@@ -6,8 +6,9 @@ sidebar:
 ---
 
 Use the interactive workflow for video, screenshots, and a PR body. Strict
-machine proof runs through the proof controller and requires an independently
-attested `broker-v2` managed Metro runtime.
+machine proof runs through the proof controller and requires managed Metro
+ownership, bound-worktree serving-root containment, a signed initial-bundle
+marker, exact device and install bindings, and the source and dirty digest.
 
 ## Usage
 
@@ -26,13 +27,15 @@ attested `broker-v2` managed Metro runtime.
 
 ## Strict Mode
 
-`--strict` first loads the controller contract. On Darwin, a verified
-Apple-platform sandbox and a passing closed-world preflight can establish
-`broker-v2`; unsupported hosts, invalid receipts, and runtime violations fail
-closed with `STRICT_PROOF_UNVERIFIED_METRO_POLICY`. Do not substitute
-interactive artifacts when a machine receipt or merge-ready evidence is
-required. See [Parallel session authority](/rn-dev-agent/session-authority/)
-for the runtime-enforcement contract.
+`--strict` first loads the controller contract. Darwin receipts carry
+`sandbox: 'managed-sandbox-v1'` when the Apple-signed absolute-path Seatbelt
+sandbox and command-chain change detection are available. Other hosts carry
+`sandbox: 'unavailable'`; sandbox availability is not a strict-proof
+precondition. Provenance mismatches fail with their specific refusal code. Do
+not substitute interactive artifacts when a machine receipt or merge-ready
+evidence is required. See
+[Parallel session authority](/rn-dev-agent/session-authority/) for the managed
+provenance contract.
 
 ## Interactive Artifacts
 
