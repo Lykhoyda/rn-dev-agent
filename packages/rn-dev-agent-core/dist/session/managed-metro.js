@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { captureMetroBinding, metroListenerPid, probeMetroListener, } from './metro-binding.js';
+import { captureMetroBinding, metroListenerPid, probeMetroListener, resolveTrustedSystemExecutable, } from './metro-binding.js';
 import { probeProcessBirth, readProcessBirth, } from './process-birth.js';
 import { canonicalAuthorityJson } from './authority-json.js';
 import { prepareManagedMetroEnforcement, runManagedMetroEnforcementPreflight, } from './managed-metro-enforcement.js';
@@ -625,16 +625,19 @@ export function hasUnsupportedNodeOption(value) {
     }
     return false;
 }
-function parentPid(pid) {
+export function managedMetroParentPid(pid, platform = process.platform, execute = execFileSync, executableDependencies = {}) {
+    const executable = resolveTrustedSystemExecutable(platform === 'win32' ? 'powershell' : 'ps', platform, executableDependencies);
+    if (!executable)
+        return null;
     try {
-        const output = process.platform === 'win32'
-            ? execFileSync('powershell.exe', [
+        const output = platform === 'win32'
+            ? execute(executable, [
                 '-NoProfile',
                 '-NonInteractive',
                 '-Command',
                 `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`,
             ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 })
-            : execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
+            : execute(executable, ['-p', String(pid), '-o', 'ppid='], {
                 encoding: 'utf8',
                 stdio: ['ignore', 'pipe', 'ignore'],
                 timeout: 2_000,
@@ -653,7 +656,7 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
         if (current === launcherPid)
             return true;
         visited.add(current);
-        current = parentPid(current);
+        current = managedMetroParentPid(current);
     }
     return false;
 }
@@ -1218,10 +1221,13 @@ export async function startManagedMetro(input, dependencies = {}) {
     }
     throw new Error(`METRO_START_UNAVAILABLE: allocated Metro did not become authoritative${lastError instanceof Error ? ` (${lastError.message})` : ''}`);
 }
-function signalProcessTree(input) {
-    if (process.platform === 'win32') {
+export function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync, executableDependencies = {}) {
+    if (platform === 'win32') {
+        const executable = resolveTrustedSystemExecutable('taskkill', platform, executableDependencies);
+        if (!executable)
+            throw new Error('METRO_CLEANUP_EXECUTABLE_UNAVAILABLE');
         const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
-        execFileSync('taskkill.exe', ['/PID', String(pid), '/T'], {
+        execute(executable, ['/PID', String(pid), '/T'], {
             stdio: 'ignore',
             timeout: 2_000,
         });
@@ -1229,6 +1235,7 @@ function signalProcessTree(input) {
     }
     process.kill(-input.launcherPid, input.signal);
 }
+const signalProcessTree = signalManagedMetroProcessTree;
 function removeManagedMetroEvidenceSocket(path) {
     if (process.platform === 'win32')
         return;

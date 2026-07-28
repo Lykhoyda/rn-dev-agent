@@ -4,6 +4,7 @@ import {
   captureMetroBinding,
   probeMetroListener,
   resolveMetroListenerExecutable,
+  resolveTrustedSystemExecutable,
 } from '../../../dist/session/metro-binding.js';
 
 test('listener probes select an existing trusted absolute executable', () => {
@@ -29,6 +30,19 @@ test('listener probes select an existing trusted absolute executable', () => {
       exists: (path) => path === '/usr/sbin/ss',
     }),
     '/usr/sbin/ss',
+  );
+  assert.equal(
+    resolveTrustedSystemExecutable('taskkill', 'win32', {
+      environment: { SystemRoot: 'D:\\Windows' },
+      exists: (path) => path === 'D:\\Windows\\System32\\taskkill.exe',
+    }),
+    'D:\\Windows\\System32\\taskkill.exe',
+  );
+  assert.equal(
+    resolveTrustedSystemExecutable('ps', 'linux', {
+      exists: (path) => path === '/bin/ps',
+    }),
+    '/bin/ps',
   );
 });
 

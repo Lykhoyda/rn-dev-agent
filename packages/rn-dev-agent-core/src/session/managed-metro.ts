@@ -15,9 +15,11 @@ import {
   captureMetroBinding,
   metroListenerPid,
   probeMetroListener,
+  resolveTrustedSystemExecutable,
   type MetroBinding,
   type MetroListenerExecutableDependencies,
   type MetroListenerProbe,
+  type TrustedSystemExecutableDependencies,
 } from './metro-binding.js';
 import {
   probeProcessBirth,
@@ -710,12 +712,23 @@ export function hasUnsupportedNodeOption(value: string): boolean {
   return false;
 }
 
-function parentPid(pid: number): number | null {
+export function managedMetroParentPid(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+  execute: typeof execFileSync = execFileSync,
+  executableDependencies: TrustedSystemExecutableDependencies = {},
+): number | null {
+  const executable = resolveTrustedSystemExecutable(
+    platform === 'win32' ? 'powershell' : 'ps',
+    platform,
+    executableDependencies,
+  );
+  if (!executable) return null;
   try {
     const output =
-      process.platform === 'win32'
-        ? execFileSync(
-            'powershell.exe',
+      platform === 'win32'
+        ? execute(
+            executable,
             [
               '-NoProfile',
               '-NonInteractive',
@@ -724,7 +737,7 @@ function parentPid(pid: number): number | null {
             ],
             { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 },
           )
-        : execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], {
+        : execute(executable, ['-p', String(pid), '-o', 'ppid='], {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 2_000,
@@ -742,7 +755,7 @@ function listenerOwnedByLauncher(listenerPid: number, launcherPid: number): bool
   while (current && !visited.has(current)) {
     if (current === launcherPid) return true;
     visited.add(current);
-    current = parentPid(current);
+    current = managedMetroParentPid(current);
   }
   return false;
 }
@@ -1470,10 +1483,21 @@ export async function startManagedMetro(
   );
 }
 
-function signalProcessTree(input: ManagedMetroSignal): void {
-  if (process.platform === 'win32') {
+export function signalManagedMetroProcessTree(
+  input: ManagedMetroSignal,
+  platform: NodeJS.Platform = process.platform,
+  execute: typeof execFileSync = execFileSync,
+  executableDependencies: TrustedSystemExecutableDependencies = {},
+): void {
+  if (platform === 'win32') {
+    const executable = resolveTrustedSystemExecutable(
+      'taskkill',
+      platform,
+      executableDependencies,
+    );
+    if (!executable) throw new Error('METRO_CLEANUP_EXECUTABLE_UNAVAILABLE');
     const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
-    execFileSync('taskkill.exe', ['/PID', String(pid), '/T'], {
+    execute(executable, ['/PID', String(pid), '/T'], {
       stdio: 'ignore',
       timeout: 2_000,
     });
@@ -1481,6 +1505,8 @@ function signalProcessTree(input: ManagedMetroSignal): void {
   }
   process.kill(-input.launcherPid, input.signal);
 }
+
+const signalProcessTree = signalManagedMetroProcessTree;
 
 function removeManagedMetroEvidenceSocket(path: string): void {
   if (process.platform === 'win32') return;

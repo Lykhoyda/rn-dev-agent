@@ -3,28 +3,59 @@ import { existsSync } from 'node:fs';
 import { win32 } from 'node:path';
 import { cwdForProcess, pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import { readProcessBirth } from './process-birth.js';
-export function resolveMetroListenerExecutable(platform, dependencies = {}) {
-    const exists = dependencies.exists ?? existsSync;
-    const environment = dependencies.environment ?? process.env;
-    let candidates;
-    if (platform === 'win32') {
-        const roots = [environment.SystemRoot, environment.SYSTEMROOT, environment.windir]
+function trustedWindowsRoots(environment) {
+    return [
+        ...new Set([
+            environment.SystemRoot,
+            environment.SYSTEMROOT,
+            environment.windir,
+            environment.WINDIR,
+        ]
             .filter((root) => typeof root === 'string' &&
             /^[a-z]:\\/i.test(root) &&
             win32.basename(win32.normalize(root)).toLowerCase() === 'windows')
-            .map((root) => win32.normalize(root));
-        candidates = [...new Set([...roots, 'C:\\Windows'])].map((root) => win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+            .map((root) => win32.normalize(root))
+            .concat('C:\\Windows')),
+    ];
+}
+export function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
+    const exists = dependencies.exists ?? existsSync;
+    const environment = dependencies.environment ?? process.env;
+    let candidates;
+    if (platform === 'win32' && executable === 'powershell') {
+        candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
     }
-    else if (platform === 'linux') {
+    else if (platform === 'win32' && executable === 'taskkill') {
+        candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, 'System32', 'taskkill.exe'));
+    }
+    else if (platform === 'linux' && executable === 'ss') {
         candidates = ['/usr/bin/ss', '/usr/sbin/ss', '/bin/ss', '/sbin/ss'];
     }
-    else if (platform === 'darwin') {
+    else if (platform === 'linux' && executable === 'ps') {
+        candidates = ['/usr/bin/ps', '/bin/ps'];
+    }
+    else if (platform === 'darwin' && executable === 'lsof') {
         candidates = ['/usr/sbin/lsof'];
+    }
+    else if (platform === 'darwin' && executable === 'ps') {
+        candidates = ['/bin/ps', '/usr/bin/ps'];
     }
     else {
         return null;
     }
     return candidates.find(exists) ?? null;
+}
+export function resolveMetroListenerExecutable(platform, dependencies = {}) {
+    const executable = platform === 'win32'
+        ? 'powershell'
+        : platform === 'linux'
+            ? 'ss'
+            : platform === 'darwin'
+                ? 'lsof'
+                : null;
+    return executable
+        ? resolveTrustedSystemExecutable(executable, platform, dependencies)
+        : null;
 }
 function numericListener(output, emptyStatus) {
     const value = String(output).trim();

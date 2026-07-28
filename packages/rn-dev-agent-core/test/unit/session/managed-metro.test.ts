@@ -8,8 +8,10 @@ import {
   hasUnsupportedNodeOption,
   managedMetroChildEnvironment,
   managedMetroListenerPid,
+  managedMetroParentPid,
   probeManagedMetroListener,
   resolveManagedMetroCommand,
+  signalManagedMetroProcessTree,
   startManagedMetro,
   stopManagedMetro,
   verifyManagedMetroManagementProof,
@@ -19,6 +21,57 @@ const listenerExecutableDependencies = {
   exists: () => true,
   environment: { SystemRoot: 'C:\\Windows' },
 };
+
+test('managed Metro ancestry and cleanup use trusted absolute executables', () => {
+  const executions: Array<{ executable: string; args: string[] }> = [];
+  const execute = ((executable: string, args: string[]) => {
+    executions.push({ executable, args });
+    return executable.endsWith('powershell.exe') ? '41' : '';
+  }) as typeof execFileSync;
+  const executableDependencies = {
+    environment: { SystemRoot: 'D:\\Windows' },
+    exists: (path: string) =>
+      path === 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' ||
+      path === 'D:\\Windows\\System32\\taskkill.exe',
+  };
+
+  assert.equal(managedMetroParentPid(42, 'win32', execute, executableDependencies), 41);
+  signalManagedMetroProcessTree(
+    { launcherPid: 42, listenerPid: 43, launcherPresent: true, signal: 'SIGTERM' },
+    'win32',
+    execute,
+    executableDependencies,
+  );
+  assert.deepEqual(
+    executions.map(({ executable }) => executable),
+    [
+      'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'D:\\Windows\\System32\\taskkill.exe',
+    ],
+  );
+});
+
+test('managed Metro ancestry and cleanup fail closed without trusted executables', () => {
+  let executed = false;
+  const execute = (() => {
+    executed = true;
+    return '';
+  }) as typeof execFileSync;
+  const executableDependencies = { exists: () => false };
+
+  assert.equal(managedMetroParentPid(42, 'linux', execute, executableDependencies), null);
+  assert.throws(
+    () =>
+      signalManagedMetroProcessTree(
+        { launcherPid: 42, listenerPid: 43, launcherPresent: true, signal: 'SIGTERM' },
+        'win32',
+        execute,
+        executableDependencies,
+      ),
+    /METRO_CLEANUP_EXECUTABLE_UNAVAILABLE/,
+  );
+  assert.equal(executed, false);
+});
 
 test('shipping artifacts omit retired runtime-authority claims', () => {
   for (const retiredClaim of [

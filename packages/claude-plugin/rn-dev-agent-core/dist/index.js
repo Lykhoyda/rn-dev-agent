@@ -62675,21 +62675,40 @@ init_process_birth();
 import { execFileSync as execFileSync7 } from "node:child_process";
 import { existsSync as existsSync26 } from "node:fs";
 import { win32 } from "node:path";
-function resolveMetroListenerExecutable(platform, dependencies = {}) {
+function trustedWindowsRoots(environment) {
+  return [
+    ...new Set([
+      environment.SystemRoot,
+      environment.SYSTEMROOT,
+      environment.windir,
+      environment.WINDIR
+    ].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root)).concat("C:\\Windows"))
+  ];
+}
+function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync26;
   const environment = dependencies.environment ?? process.env;
   let candidates;
-  if (platform === "win32") {
-    const roots = [environment.SystemRoot, environment.SYSTEMROOT, environment.windir].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root));
-    candidates = [.../* @__PURE__ */ new Set([...roots, "C:\\Windows"])].map((root) => win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
-  } else if (platform === "linux") {
+  if (platform === "win32" && executable === "powershell") {
+    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
+  } else if (platform === "win32" && executable === "taskkill") {
+    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "taskkill.exe"));
+  } else if (platform === "linux" && executable === "ss") {
     candidates = ["/usr/bin/ss", "/usr/sbin/ss", "/bin/ss", "/sbin/ss"];
-  } else if (platform === "darwin") {
+  } else if (platform === "linux" && executable === "ps") {
+    candidates = ["/usr/bin/ps", "/bin/ps"];
+  } else if (platform === "darwin" && executable === "lsof") {
     candidates = ["/usr/sbin/lsof"];
+  } else if (platform === "darwin" && executable === "ps") {
+    candidates = ["/bin/ps", "/usr/bin/ps"];
   } else {
     return null;
   }
   return candidates.find(exists) ?? null;
+}
+function resolveMetroListenerExecutable(platform, dependencies = {}) {
+  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
+  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
 }
 function numericListener(output, emptyStatus) {
   const value = String(output).trim();
@@ -64026,10 +64045,13 @@ function managedSandboxManagementProofV1(sessionId, authority, signerCapability)
     ...authority
   })).digest("hex");
 }
-function signalProcessTree(input) {
-  if (process.platform === "win32") {
+function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync8, executableDependencies = {}) {
+  if (platform === "win32") {
+    const executable = resolveTrustedSystemExecutable("taskkill", platform, executableDependencies);
+    if (!executable)
+      throw new Error("METRO_CLEANUP_EXECUTABLE_UNAVAILABLE");
     const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
-    execFileSync8("taskkill.exe", ["/PID", String(pid), "/T"], {
+    execute(executable, ["/PID", String(pid), "/T"], {
       stdio: "ignore",
       timeout: 2e3
     });
@@ -64037,6 +64059,7 @@ function signalProcessTree(input) {
   }
   process.kill(-input.launcherPid, input.signal);
 }
+var signalProcessTree = signalManagedMetroProcessTree;
 function removeManagedMetroEvidenceSocket(path) {
   if (process.platform === "win32")
     return;
