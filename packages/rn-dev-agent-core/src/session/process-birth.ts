@@ -14,6 +14,10 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  resolveTrustedSystemExecutable,
+  type TrustedSystemExecutableDependencies,
+} from '../util/trusted-system-executable.js';
 
 export interface ProcessBirth {
   pid: number;
@@ -28,6 +32,7 @@ export type ProcessBirthProbe =
 
 interface ProcessBirthDependencies {
   platform?: NodeJS.Platform;
+  executableDependencies?: TrustedSystemExecutableDependencies;
   read?: (path: string) => string;
   readBinary?: (path: string) => Buffer;
   readDescriptor?: (fd: number) => Buffer;
@@ -328,10 +333,16 @@ export function probeProcessBirth(
     }
 
     if (platform === 'win32') {
+      const powershell = resolveTrustedSystemExecutable(
+        'powershell',
+        platform,
+        dependencies.executableDependencies,
+      );
+      if (!powershell) return { status: 'unknown' };
       const script =
         `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
         `if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
-      const started = run('powershell.exe', [
+      const started = run(powershell, [
         '-NoProfile',
         '-NonInteractive',
         '-Command',

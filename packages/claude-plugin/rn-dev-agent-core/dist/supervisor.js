@@ -633,10 +633,52 @@ var init_supervisor_core = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/util/trusted-system-executable.js
+import { existsSync as existsSync3 } from "node:fs";
+import { win32 } from "node:path";
+function trustedWindowsRoots(environment) {
+  return [
+    ...new Set([
+      environment.SystemRoot,
+      environment.SYSTEMROOT,
+      environment.windir,
+      environment.WINDIR
+    ].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root)).concat("C:\\Windows"))
+  ];
+}
+function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
+  const exists = dependencies.exists ?? existsSync3;
+  const environment = dependencies.environment ?? process.env;
+  let candidates;
+  if (platform === "win32" && executable === "powershell") {
+    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
+  } else if (platform === "win32" && executable === "taskkill") {
+    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "taskkill.exe"));
+  } else if (platform === "linux" && executable === "ss") {
+    candidates = ["/usr/bin/ss", "/usr/sbin/ss", "/bin/ss", "/sbin/ss"];
+  } else if (platform === "linux" && executable === "lsof") {
+    candidates = ["/usr/bin/lsof", "/usr/sbin/lsof", "/bin/lsof", "/sbin/lsof"];
+  } else if (platform === "linux" && executable === "ps") {
+    candidates = ["/usr/bin/ps", "/bin/ps"];
+  } else if (platform === "darwin" && executable === "lsof") {
+    candidates = ["/usr/sbin/lsof"];
+  } else if (platform === "darwin" && executable === "ps") {
+    candidates = ["/bin/ps", "/usr/bin/ps"];
+  } else {
+    return null;
+  }
+  return candidates.find(exists) ?? null;
+}
+var init_trusted_system_executable = __esm({
+  "packages/rn-dev-agent-core/dist/util/trusted-system-executable.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync as closeSync2, constants, existsSync as existsSync3, fstatSync, lstatSync, openSync as openSync2, readFileSync as readFileSync2, readSync, realpathSync } from "node:fs";
+import { closeSync as closeSync2, constants, existsSync as existsSync4, fstatSync, lstatSync, openSync as openSync2, readFileSync as readFileSync2, readSync, realpathSync } from "node:fs";
 import { dirname, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -672,7 +714,7 @@ function darwinProcessBirthHelperPath() {
     join3(moduleDirectory, "..", "native", "darwin-process-birth")
   ];
   for (const candidate of candidates) {
-    if (existsSync3(candidate))
+    if (existsSync4(candidate))
       return candidate;
   }
   return candidates[0];
@@ -791,8 +833,11 @@ function probeProcessBirth(pid, dependencies = {}) {
       };
     }
     if (platform === "win32") {
+      const powershell = resolveTrustedSystemExecutable("powershell", platform, dependencies.executableDependencies);
+      if (!powershell)
+        return { status: "unknown" };
       const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
-      const started = run("powershell.exe", [
+      const started = run(powershell, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -816,6 +861,7 @@ var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
+    init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
       sourceSha256: "99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a",
       recipeSha256: "4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3",
@@ -8237,11 +8283,11 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync4, renameSync, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3 } from "node:fs";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync5, renameSync, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3 } from "node:fs";
 import { join as join4, dirname as dirname2 } from "node:path";
 function isRnProject(dir) {
   const pkgPath2 = join4(dir, "package.json");
-  if (!existsSync4(pkgPath2))
+  if (!existsSync5(pkgPath2))
     return false;
   try {
     const pkg = JSON.parse(readFileSync3(pkgPath2, "utf-8"));
@@ -8321,7 +8367,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
 }
 function readProjectBundleId(projectRoot) {
   const appJsonPath = join4(projectRoot, "app.json");
-  if (!existsSync4(appJsonPath))
+  if (!existsSync5(appJsonPath))
     return null;
   try {
     const raw = JSON.parse(readFileSync3(appJsonPath, "utf-8"));
@@ -8406,9 +8452,9 @@ function getGraphPath(projectRoot) {
 function readGraph(projectRoot) {
   try {
     let filePath = getGraphPath(projectRoot);
-    if (!existsSync4(filePath)) {
+    if (!existsSync5(filePath)) {
       const legacyPath = join4(projectRoot, LEGACY_GRAPH_FILENAME);
-      if (!existsSync4(legacyPath))
+      if (!existsSync5(legacyPath))
         return null;
       filePath = legacyPath;
     }
@@ -8711,10 +8757,13 @@ function parseLsofCwd(stdout) {
   }
   return null;
 }
-function pidForPort(port, exec = defaultExec, platform = process.platform) {
+function pidForPort(port, exec = defaultExec, platform = process.platform, executableDependencies = {}) {
   try {
     if (platform === "win32") {
-      const output = exec("powershell.exe", [
+      const powershell = resolveTrustedSystemExecutable("powershell", platform, executableDependencies);
+      if (!powershell)
+        return null;
+      const output = exec(powershell, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -8723,7 +8772,8 @@ function pidForPort(port, exec = defaultExec, platform = process.platform) {
       const pid = Number.parseInt(output.trim(), 10);
       return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
     }
-    return parseLsofPid(exec("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"]));
+    const lsof = resolveTrustedSystemExecutable("lsof", platform, executableDependencies);
+    return lsof ? parseLsofPid(exec(lsof, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"])) : null;
   } catch {
     return null;
   }
@@ -8733,17 +8783,23 @@ function parseWindowsMetroRoot(commandLine) {
   const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
   return explicit ?? null;
 }
-function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync) {
+function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync, executableDependencies = {}) {
   try {
     if (platform === "linux") {
       return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
     }
     if (platform === "darwin") {
-      const cwd = parseLsofCwd(exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
+      const lsof = resolveTrustedSystemExecutable("lsof", platform, executableDependencies);
+      if (!lsof)
+        return null;
+      const cwd = parseLsofCwd(exec(lsof, ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
       return cwd ? realpathOrResolve(cwd) : null;
     }
     if (platform === "win32") {
-      const commandLine = exec("powershell.exe", [
+      const powershell = resolveTrustedSystemExecutable("powershell", platform, executableDependencies);
+      if (!powershell)
+        return null;
+      const commandLine = exec(powershell, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -8764,11 +8820,11 @@ function realpathOrResolve(p) {
     return resolve2(p);
   }
 }
-function cwdForPort(port, exec = defaultExec, platform = process.platform) {
-  const pid = pidForPort(port, exec, platform);
+function cwdForPort(port, exec = defaultExec, platform = process.platform, executableDependencies = {}) {
+  const pid = pidForPort(port, exec, platform, executableDependencies);
   if (pid == null)
     return null;
-  return cwdForProcess(pid, platform, exec);
+  return cwdForProcess(pid, platform, exec, readlinkSync, executableDependencies);
 }
 function pathMatchesRoot(servingCwd, projectRoot) {
   if (!servingCwd || !projectRoot)
@@ -8795,6 +8851,7 @@ var init_metro_cwd = __esm({
   "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
     "use strict";
     init_storage();
+    init_trusted_system_executable();
     CWD_LSOF_TIMEOUT_MS = 800;
     defaultExec = (cmd, args) => execFileSync3(cmd, args, {
       timeout: CWD_LSOF_TIMEOUT_MS,
@@ -8903,7 +8960,7 @@ var init_authority_json = __esm({
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants2, existsSync as existsSync5, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync3, rmSync, statSync as statSync2, symlinkSync, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync3, constants as constants2, existsSync as existsSync6, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync3, rmSync, statSync as statSync2, symlinkSync, writeSync as writeSync2 } from "node:fs";
 import { dirname as dirname3, resolve as resolve3 } from "node:path";
 function sha256(value) {
   return createHash3("sha256").update(value).digest("hex");
@@ -8925,7 +8982,7 @@ function field(details, name) {
   return details.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length).trim() ?? null;
 }
 function verifiedSandboxExecutable(dependencies) {
-  const exists = dependencies.exists ?? existsSync5;
+  const exists = dependencies.exists ?? existsSync6;
   const canonicalize = dependencies.canonicalize ?? realpathSync3;
   const stat2 = dependencies.stat ?? statSync2;
   const readBytes = dependencies.readBytes ?? readFileSync4;
@@ -9015,7 +9072,7 @@ function attestRuntimeFile(path, dependencies) {
 }
 function attestNodeRuntime(input, executableMappings, dependencies) {
   const run = dependencies.run ?? defaultRun2;
-  const exists = dependencies.exists ?? existsSync5;
+  const exists = dependencies.exists ?? existsSync6;
   const runtimeVersion = dependencies.runtimeVersion?.(input.nodeExecutable) ?? defaultRuntimeVersion(input.nodeExecutable, run);
   if (runtimeVersion !== input.nodeVersion)
     return null;
@@ -9372,7 +9429,7 @@ const processGroupExists = (pid) => {
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { closeSync as closeSync4, existsSync as existsSync6, lstatSync as lstatSync3, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync4 } from "node:fs";
+import { closeSync as closeSync4, existsSync as existsSync7, lstatSync as lstatSync3, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync4 } from "node:fs";
 import { dirname as dirname4, isAbsolute, join as join5, relative, resolve as resolve4 } from "node:path";
 function digest(parts) {
   const hash = createHash4("sha256");
@@ -9508,7 +9565,7 @@ function isExcludedRuntimePath(root, candidate) {
   return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded || entry.startsWith(`${excluded}/`) || entry.endsWith(`/${excluded}`) || entry.includes(`/${excluded}/`));
 }
 function assertFinalMetroIntegration(identity2) {
-  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join5(identity2.appRoot, entry)).filter(existsSync6);
+  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join5(identity2.appRoot, entry)).filter(existsSync7);
   if (candidates.length === 0)
     return;
   const source = readFileSync5(candidates[0], "utf8");
@@ -9943,7 +10000,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
   }
   const git = dependencies.git ?? defaultGit;
-  const pathExists = dependencies.exists ?? existsSync6;
+  const pathExists = dependencies.exists ?? existsSync7;
   assertFinalMetroIntegration(identity2);
   const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
   const runtimeEnforcementVerifier = dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
@@ -10649,7 +10706,7 @@ var init_secure_state_file = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync7, statSync as statSync3 } from "node:fs";
+import { existsSync as existsSync8, statSync as statSync3 } from "node:fs";
 import { join as join7 } from "node:path";
 function compactUnique(paths) {
   const out = [];
@@ -10731,7 +10788,7 @@ function candidatePluginManifestFiles(baseDir = import.meta.dirname) {
   ]);
 }
 function firstExistingFile(candidates) {
-  return candidates.find((path) => existsSync7(path)) ?? null;
+  return candidates.find((path) => existsSync8(path)) ?? null;
 }
 var init_runtime_paths = __esm({
   "packages/rn-dev-agent-core/dist/runners/runtime-paths.js"() {
@@ -10833,7 +10890,7 @@ var init_quiescence = __esm({
 // packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
 import { execFileSync as execFileSync5 } from "node:child_process";
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync8, mkdirSync as mkdirSync6, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync9, mkdirSync as mkdirSync6, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { dirname as dirname6, join as join8 } from "node:path";
 function resolveArtifactDecision(input) {
@@ -11031,7 +11088,7 @@ function defaultArtifactDeps() {
     env: process.env,
     readManifest: readCommittedManifest,
     cacheDir: (version2, platform) => cacheDirFor(homedir3(), process.platform, version2, platform),
-    existsSync: existsSync8,
+    existsSync: existsSync9,
     sha256File,
     listFiles: (dir) => {
       try {
@@ -11197,7 +11254,7 @@ __export(rn_fast_runner_client_exports, {
 import { spawn } from "node:child_process";
 import { join as join9 } from "node:path";
 import { randomBytes as randomBytes2, randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync9, readdirSync as readdirSync4, mkdirSync as mkdirSync7, rmSync as rmSync3, statSync as statSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync10, readdirSync as readdirSync4, mkdirSync as mkdirSync7, rmSync as rmSync3, statSync as statSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync5 } from "node:fs";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -11398,7 +11455,7 @@ function resolveRunnerStartPlan(opts) {
 function hasBuiltTestProduct(derivedDataPath) {
   try {
     const productsDir = join9(derivedDataPath, "Build", "Products");
-    if (!existsSync9(productsDir))
+    if (!existsSync10(productsDir))
       return false;
     return readdirSync4(productsDir).some((entry) => entry.endsWith(".xctestrun"));
   } catch {
@@ -11550,7 +11607,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   const authority = runnerAuthorityFromEnvironment(true);
   const desired = resolveRunnerRequestedPort(port);
   const projectPath = join9(FAST_RUNNER_PROJECT, "RnFastRunner", "RnFastRunner.xcodeproj");
-  if (!existsSync9(projectPath)) {
+  if (!existsSync10(projectPath)) {
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
   }
   const artifacts = await resolveIosRunnerArtifacts(getPluginVersion(), derivedDataPathForRunner(), void 0, opts.forceLocalBuild);
@@ -12661,12 +12718,12 @@ var init_no_change_tracker = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync10, readFileSync as readFileSync10 } from "node:fs";
+import { existsSync as existsSync11, readFileSync as readFileSync10 } from "node:fs";
 import { join as join11 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
     const p = join11(projectRoot, filename);
-    if (!existsSync10(p))
+    if (!existsSync11(p))
       continue;
     try {
       const raw = JSON.parse(readFileSync10(p, "utf-8"));
@@ -12694,7 +12751,7 @@ function readExpoSlug() {
     return null;
   for (const filename of ["app.json", "app.config.json"]) {
     const p = join11(projectRoot, filename);
-    if (!existsSync10(p))
+    if (!existsSync11(p))
       continue;
     try {
       const raw = JSON.parse(readFileSync10(p, "utf-8"));
@@ -12710,7 +12767,7 @@ function readRnAgentConfig(projectRoot) {
   if (!root)
     return null;
   const p = join11(root, ".rn-agent", "config.json");
-  if (!existsSync10(p))
+  if (!existsSync11(p))
     return null;
   try {
     return JSON.parse(readFileSync10(p, "utf-8"));
@@ -14291,7 +14348,7 @@ var init_maestro_validator = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync11 } from "node:fs";
+import { existsSync as existsSync12 } from "node:fs";
 import { join as join14 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 function defaultWhichAdb() {
@@ -14310,7 +14367,7 @@ function defaultWhichMaestro() {
 }
 function defaultMaestroRunnerPath() {
   const path = join14(homedir4(), ".maestro-runner", "bin", "maestro-runner");
-  return existsSync11(path) ? path : null;
+  return existsSync12(path) ? path : null;
 }
 function shouldWarnFallback(reason) {
   if (warnedFallbackReasons.has(reason))
@@ -14508,7 +14565,7 @@ var init_maestro_error_parser = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 import { execFileSync as execFileSync6 } from "node:child_process";
-import { existsSync as existsSync12, cpSync, rmSync as rmSync5, mkdirSync as mkdirSync8, readdirSync as readdirSync5, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync13, cpSync, rmSync as rmSync5, mkdirSync as mkdirSync8, readdirSync as readdirSync5, statSync as statSync5 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join15, basename as basename2 } from "node:path";
 function flowUsesClearState(flowText) {
@@ -14531,7 +14588,7 @@ function defaultSnapshotApp(appPath) {
   }
 }
 function resolveIosAppFile(bundleId, deps = {}) {
-  const exists = deps.exists ?? existsSync12;
+  const exists = deps.exists ?? existsSync13;
   const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
   const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
   const fromContainer = getAppContainer(bundleId);
@@ -15149,7 +15206,7 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync13, readFileSync as readFileSync13, rmSync as rmSync6 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync13, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { join as join16 } from "node:path";
 function idsFrom(value, keys) {
@@ -15176,7 +15233,7 @@ function containerDeviceIdsFrom(value) {
 }
 function reportDeviceIds(reportDir) {
   const reportPath = join16(reportDir, "report.json");
-  if (!existsSync13(reportPath))
+  if (!existsSync14(reportPath))
     return { ids: [], strength: "none" };
   try {
     const report = JSON.parse(readFileSync13(reportPath, "utf8"));
@@ -15217,7 +15274,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     reportDeviceIdStrength: report.strength
   };
   const logPath = join16(reportDir, "maestro-runner.log");
-  if (!existsSync13(logPath))
+  if (!existsSync14(logPath))
     return evidence;
   try {
     evidence.output = `${output}
@@ -18180,7 +18237,7 @@ var init_authority_gate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb3 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
-import { existsSync as existsSync14, readFileSync as readFileSync14, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync14, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { join as join17, dirname as dirname10 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -18333,7 +18390,7 @@ function createMaestroRunHandler(deps = {}) {
     if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
-      if (!existsSync14(args.flowPath)) {
+      if (!existsSync15(args.flowPath)) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
@@ -18588,7 +18645,7 @@ var init_maestro_run = __esm({
 // packages/rn-dev-agent-core/dist/maestro-invoke.js
 import { execFile as execFileCb4 } from "node:child_process";
 import { promisify as promisify5 } from "node:util";
-import { existsSync as existsSync15, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync16, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join18 } from "node:path";
 import { homedir as homedir5, tmpdir as tmpdir6 } from "node:os";
 function yamlEscape(s) {
@@ -18596,7 +18653,7 @@ function yamlEscape(s) {
 }
 function getMaestroRunnerPath() {
   const path = join18(homedir5(), ".maestro-runner", "bin", "maestro-runner");
-  return existsSync15(path) ? path : null;
+  return existsSync16(path) ? path : null;
 }
 async function runMaestroInline(yaml2, opts) {
   const dispatch = chooseMaestroDispatch({ platform: opts.platform });
@@ -19460,7 +19517,7 @@ var init_discovery = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
 import { execFileSync as execFileSync8 } from "node:child_process";
-import { existsSync as existsSync16, readFileSync as readFileSync15, unlinkSync as unlinkSync5 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync15, unlinkSync as unlinkSync5 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { join as join19 } from "node:path";
 function selectInstalledLegacyApps(installed) {
@@ -19535,7 +19592,7 @@ function defaultDeps() {
         return null;
       }
     },
-    fileExists: (path) => existsSync16(path),
+    fileExists: (path) => existsSync17(path),
     removeFile: (path) => unlinkSync5(path),
     delay: (ms) => new Promise((resolve11) => setTimeout(resolve11, ms)),
     listApps: (udid) => execFileSync8("xcrun", ["simctl", "listapps", udid], {
@@ -20023,7 +20080,7 @@ var init_recover_detached = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync17, mkdirSync as mkdirSync10, openSync as openSync5, writeSync as writeSync3, closeSync as closeSync5, readFileSync as readFileSync16, unlinkSync as unlinkSync6, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync18, mkdirSync as mkdirSync10, openSync as openSync5, writeSync as writeSync3, closeSync as closeSync5, readFileSync as readFileSync16, unlinkSync as unlinkSync6, writeFileSync as writeFileSync8 } from "node:fs";
 import { tmpdir as tmpdir7, userInfo as userInfo2 } from "node:os";
 import { join as join20 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -20136,7 +20193,7 @@ var init_device_lock = __esm({
         this.acquired = false;
       }
       create() {
-        if (!existsSync17(this.tmpDir))
+        if (!existsSync18(this.tmpDir))
           mkdirSync10(this.tmpDir, { recursive: true });
         const fd = openSync5(this.lockPath, "wx");
         try {
@@ -22434,7 +22491,7 @@ __export(rn_android_runner_client_exports, {
 });
 import { spawn as spawn3, execFile as execFile13 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
-import { existsSync as existsSync18, rmSync as rmSync7, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync19, rmSync as rmSync7, writeFileSync as writeFileSync9 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
 import { randomBytes as randomBytes4, randomUUID as randomUUID4 } from "node:crypto";
 import { join as join21 } from "node:path";
@@ -22640,7 +22697,7 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
     pendingUpgradeNote = artifacts.note;
   const action = resolveAndroidInstallAction({
     instrumentationRegistered: !opts.forceReinstall && isInstrumentationRegistered(pmOut, INSTRUMENTATION),
-    apksExist: existsSync18(artifacts.appApk) && existsSync18(artifacts.testApk)
+    apksExist: existsSync19(artifacts.appApk) && existsSync19(artifacts.testApk)
   });
   if (action === "reuse")
     return provenance;
@@ -23096,7 +23153,7 @@ function androidRetryCleanupContext(state, error2) {
   return state ?? (error2.deviceId ? { deviceId: error2.deviceId } : null);
 }
 function androidRunnerApksExist() {
-  return RUNNER_APK_PATHS.every((p) => existsSync18(p));
+  return RUNNER_APK_PATHS.every((p) => existsSync19(p));
 }
 function _androidRunnerApkPathsForTest() {
   return RUNNER_APK_PATHS;
@@ -23668,7 +23725,7 @@ __export(release_android_slot_exports, {
 });
 import { execFile as execFileCb12 } from "node:child_process";
 import { promisify as promisify15 } from "node:util";
-import { existsSync as existsSync19, readFileSync as readFileSync17, unlinkSync as unlinkSync7 } from "node:fs";
+import { existsSync as existsSync20, readFileSync as readFileSync17, unlinkSync as unlinkSync7 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join22 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
@@ -23703,7 +23760,7 @@ function defaultDeps3() {
     },
     protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
     kill: (pid, sig) => process.kill(pid, sig),
-    fileExists: (p) => existsSync19(p),
+    fileExists: (p) => existsSync20(p),
     removeFile: (p) => unlinkSync7(p),
     delay: (ms) => new Promise((resolve11) => setTimeout(resolve11, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
@@ -23820,39 +23877,6 @@ var init_release_android_slot = __esm({
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
 import { execFileSync as execFileSync9 } from "node:child_process";
-import { existsSync as existsSync20 } from "node:fs";
-import { win32 } from "node:path";
-function trustedWindowsRoots(environment) {
-  return [
-    ...new Set([
-      environment.SystemRoot,
-      environment.SYSTEMROOT,
-      environment.windir,
-      environment.WINDIR
-    ].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root)).concat("C:\\Windows"))
-  ];
-}
-function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync20;
-  const environment = dependencies.environment ?? process.env;
-  let candidates;
-  if (platform === "win32" && executable === "powershell") {
-    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
-  } else if (platform === "win32" && executable === "taskkill") {
-    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "taskkill.exe"));
-  } else if (platform === "linux" && executable === "ss") {
-    candidates = ["/usr/bin/ss", "/usr/sbin/ss", "/bin/ss", "/sbin/ss"];
-  } else if (platform === "linux" && executable === "ps") {
-    candidates = ["/usr/bin/ps", "/bin/ps"];
-  } else if (platform === "darwin" && executable === "lsof") {
-    candidates = ["/usr/sbin/lsof"];
-  } else if (platform === "darwin" && executable === "ps") {
-    candidates = ["/bin/ps", "/usr/bin/ps"];
-  } else {
-    return null;
-  }
-  return candidates.find(exists) ?? null;
-}
 function resolveMetroListenerExecutable(platform, dependencies = {}) {
   const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
   return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
@@ -23961,7 +23985,9 @@ var init_metro_binding = __esm({
   "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
     "use strict";
     init_metro_cwd();
+    init_trusted_system_executable();
     init_process_birth();
+    init_trusted_system_executable();
   }
 });
 
@@ -24259,6 +24285,7 @@ var init_managed_metro = __esm({
   "packages/rn-dev-agent-core/dist/session/managed-metro.js"() {
     "use strict";
     init_metro_binding();
+    init_trusted_system_executable();
     init_process_birth();
     init_authority_json();
     init_managed_metro_enforcement();

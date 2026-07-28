@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveTrustedSystemExecutable, } from '../util/trusted-system-executable.js';
 const DARWIN_HELPER_MANIFEST = {
     sourceSha256: '99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a',
     recipeSha256: '4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3',
@@ -242,9 +243,12 @@ export function probeProcessBirth(pid, dependencies = {}) {
             };
         }
         if (platform === 'win32') {
+            const powershell = resolveTrustedSystemExecutable('powershell', platform, dependencies.executableDependencies);
+            if (!powershell)
+                return { status: 'unknown' };
             const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
                 `if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
-            const started = run('powershell.exe', [
+            const started = run(powershell, [
                 '-NoProfile',
                 '-NonInteractive',
                 '-Command',

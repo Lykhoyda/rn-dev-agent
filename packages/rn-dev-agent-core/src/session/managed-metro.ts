@@ -15,12 +15,14 @@ import {
   captureMetroBinding,
   metroListenerPid,
   probeMetroListener,
-  resolveTrustedSystemExecutable,
   type MetroBinding,
   type MetroListenerExecutableDependencies,
   type MetroListenerProbe,
-  type TrustedSystemExecutableDependencies,
 } from './metro-binding.js';
+import {
+  resolveTrustedSystemExecutable,
+  type TrustedSystemExecutableDependencies,
+} from '../util/trusted-system-executable.js';
 import {
   probeProcessBirth,
   readProcessBirth,

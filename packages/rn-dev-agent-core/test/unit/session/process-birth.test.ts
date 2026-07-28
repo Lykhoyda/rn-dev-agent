@@ -183,6 +183,40 @@ test('Linux process identity handles process names containing spaces', () => {
   assert.match(birth?.token ?? '', /^[a-f0-9]{64}$/);
 });
 
+test('Windows process identity uses a trusted absolute PowerShell executable', () => {
+  const powershell = 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  const commands: string[] = [];
+  const birth = probeProcessBirth(456, {
+    platform: 'win32',
+    executableDependencies: {
+      environment: { SystemRoot: 'D:\\Windows' },
+      exists: (path) => path === powershell,
+    },
+    run: (command) => {
+      commands.push(command);
+      return '638892576000000000\n';
+    },
+  });
+
+  assert.equal(birth.status, 'present');
+  assert.deepEqual(commands, [powershell]);
+});
+
+test('Windows process identity fails closed without trusted PowerShell', () => {
+  let executed = false;
+  const birth = probeProcessBirth(456, {
+    platform: 'win32',
+    executableDependencies: { exists: () => false },
+    run: () => {
+      executed = true;
+      return '638892576000000000\n';
+    },
+  });
+
+  assert.deepEqual(birth, { status: 'unknown' });
+  assert.equal(executed, false);
+});
+
 test('unreadable process birth fails conservative', () => {
   const birth = readProcessBirth(789, {
     platform: 'darwin',

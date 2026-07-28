@@ -7381,6 +7381,48 @@ var init_storage = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/util/trusted-system-executable.js
+import { existsSync } from "node:fs";
+import { win32 } from "node:path";
+function trustedWindowsRoots(environment) {
+  return [
+    ...new Set([
+      environment.SystemRoot,
+      environment.SYSTEMROOT,
+      environment.windir,
+      environment.WINDIR
+    ].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root)).concat("C:\\Windows"))
+  ];
+}
+function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
+  const exists = dependencies.exists ?? existsSync;
+  const environment = dependencies.environment ?? process.env;
+  let candidates;
+  if (platform === "win32" && executable === "powershell") {
+    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
+  } else if (platform === "win32" && executable === "taskkill") {
+    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "taskkill.exe"));
+  } else if (platform === "linux" && executable === "ss") {
+    candidates = ["/usr/bin/ss", "/usr/sbin/ss", "/bin/ss", "/sbin/ss"];
+  } else if (platform === "linux" && executable === "lsof") {
+    candidates = ["/usr/bin/lsof", "/usr/sbin/lsof", "/bin/lsof", "/sbin/lsof"];
+  } else if (platform === "linux" && executable === "ps") {
+    candidates = ["/usr/bin/ps", "/bin/ps"];
+  } else if (platform === "darwin" && executable === "lsof") {
+    candidates = ["/usr/sbin/lsof"];
+  } else if (platform === "darwin" && executable === "ps") {
+    candidates = ["/bin/ps", "/usr/bin/ps"];
+  } else {
+    return null;
+  }
+  return candidates.find(exists) ?? null;
+}
+var init_trusted_system_executable = __esm({
+  "packages/rn-dev-agent-core/dist/util/trusted-system-executable.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { readlinkSync as readlinkSync2, realpathSync as realpathSync2 } from "node:fs";
@@ -7400,17 +7442,23 @@ function parseWindowsMetroRoot(commandLine) {
   const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
   return explicit ?? null;
 }
-function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync2) {
+function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync2, executableDependencies = {}) {
   try {
     if (platform === "linux") {
       return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
     }
     if (platform === "darwin") {
-      const cwd = parseLsofCwd(exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
+      const lsof = resolveTrustedSystemExecutable("lsof", platform, executableDependencies);
+      if (!lsof)
+        return null;
+      const cwd = parseLsofCwd(exec(lsof, ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]));
       return cwd ? realpathOrResolve(cwd) : null;
     }
     if (platform === "win32") {
-      const commandLine = exec("powershell.exe", [
+      const powershell = resolveTrustedSystemExecutable("powershell", platform, executableDependencies);
+      if (!powershell)
+        return null;
+      const commandLine = exec(powershell, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -7443,6 +7491,7 @@ var init_metro_cwd = __esm({
   "packages/rn-dev-agent-core/dist/cdp/metro-cwd.js"() {
     "use strict";
     init_storage();
+    init_trusted_system_executable();
     CWD_LSOF_TIMEOUT_MS = 800;
     defaultExec = (cmd, args) => execFileSync2(cmd, args, {
       timeout: CWD_LSOF_TIMEOUT_MS,
@@ -7455,7 +7504,7 @@ var init_metro_cwd = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync as lstatSync2, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3 } from "node:fs";
+import { closeSync, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync2, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3 } from "node:fs";
 import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -7491,7 +7540,7 @@ function darwinProcessBirthHelperPath() {
     join2(moduleDirectory, "..", "native", "darwin-process-birth")
   ];
   for (const candidate of candidates) {
-    if (existsSync(candidate))
+    if (existsSync2(candidate))
       return candidate;
   }
   return candidates[0];
@@ -7610,8 +7659,11 @@ function probeProcessBirth(pid, dependencies = {}) {
       };
     }
     if (platform === "win32") {
+      const powershell = resolveTrustedSystemExecutable("powershell", platform, dependencies.executableDependencies);
+      if (!powershell)
+        return { status: "unknown" };
       const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'ABSENT' } else { $p.StartTime.ToUniversalTime().Ticks }`;
-      const started = run("powershell.exe", [
+      const started = run(powershell, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -7635,6 +7687,7 @@ var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
+    init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
       sourceSha256: "99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a",
       recipeSha256: "4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3",
@@ -10714,41 +10767,10 @@ function createMetroAuthorityModule(marker) {
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
 init_metro_cwd();
+init_trusted_system_executable();
 init_process_birth();
+init_trusted_system_executable();
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { existsSync as existsSync2 } from "node:fs";
-import { win32 } from "node:path";
-function trustedWindowsRoots(environment) {
-  return [
-    ...new Set([
-      environment.SystemRoot,
-      environment.SYSTEMROOT,
-      environment.windir,
-      environment.WINDIR
-    ].filter((root) => typeof root === "string" && /^[a-z]:\\/i.test(root) && win32.basename(win32.normalize(root)).toLowerCase() === "windows").map((root) => win32.normalize(root)).concat("C:\\Windows"))
-  ];
-}
-function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync2;
-  const environment = dependencies.environment ?? process.env;
-  let candidates;
-  if (platform === "win32" && executable === "powershell") {
-    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
-  } else if (platform === "win32" && executable === "taskkill") {
-    candidates = trustedWindowsRoots(environment).map((root) => win32.join(root, "System32", "taskkill.exe"));
-  } else if (platform === "linux" && executable === "ss") {
-    candidates = ["/usr/bin/ss", "/usr/sbin/ss", "/bin/ss", "/sbin/ss"];
-  } else if (platform === "linux" && executable === "ps") {
-    candidates = ["/usr/bin/ps", "/bin/ps"];
-  } else if (platform === "darwin" && executable === "lsof") {
-    candidates = ["/usr/sbin/lsof"];
-  } else if (platform === "darwin" && executable === "ps") {
-    candidates = ["/bin/ps", "/usr/bin/ps"];
-  } else {
-    return null;
-  }
-  return candidates.find(exists) ?? null;
-}
 function resolveMetroListenerExecutable(platform, dependencies = {}) {
   const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
   return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
@@ -10859,6 +10881,7 @@ import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { closeSync as closeSync3, existsSync as existsSync4, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
+init_trusted_system_executable();
 init_process_birth();
 
 // packages/rn-dev-agent-core/dist/session/authority-json.js

@@ -38,7 +38,10 @@ test('cwdForPort: composes pid→cwd via injected exec', () => {
     if (args.includes('-ti')) return '777\n';
     return 'p777\nfcwd\nn/repo/worktreeA\n';
   };
-  assert.equal(cwdForPort(8081, exec, 'darwin'), '/repo/worktreeA');
+  assert.equal(
+    cwdForPort(8081, exec, 'darwin', { exists: (path) => path === '/usr/sbin/lsof' }),
+    '/repo/worktreeA',
+  );
 });
 
 test('cwdForPort: re-resolves PID and CWD every call so PID reuse cannot retain a stale root', () => {
@@ -53,8 +56,9 @@ test('cwdForPort: re-resolves PID and CWD every call so PID reuse cannot retain 
     cwdCalls++;
     return 'p777\nfcwd\nn/repo/worktreeA\n';
   };
-  cwdForPort(8081, exec, 'darwin');
-  cwdForPort(8081, exec, 'darwin');
+  const executableDependencies = { exists: (path) => path === '/usr/sbin/lsof' };
+  cwdForPort(8081, exec, 'darwin', executableDependencies);
+  cwdForPort(8081, exec, 'darwin', executableDependencies);
   assert.equal(pidCalls, 2);
   assert.equal(cwdCalls, 2);
 });
@@ -70,10 +74,25 @@ test('cwdForProcess: resolves Linux process cwd through procfs', () => {
 });
 
 test('cwdForProcess: accepts an explicit Windows Metro project root', () => {
+  const powershell = 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  let command = '';
   assert.equal(
-    cwdForProcess(777, 'win32', () => 'node metro.js start --projectRoot "C:\\repo\\worktreeA"'),
+    cwdForProcess(
+      777,
+      'win32',
+      (executable) => {
+        command = executable;
+        return 'node metro.js start --projectRoot "C:\\repo\\worktreeA"';
+      },
+      undefined,
+      {
+        environment: { SystemRoot: 'D:\\Windows' },
+        exists: (path) => path === powershell,
+      },
+    ),
     resolve('C:\\repo\\worktreeA'),
   );
+  assert.equal(command, powershell);
 });
 
 test('cwdForProcess: rejects a Windows Metro root inferred only from dependency layout', () => {
@@ -81,7 +100,10 @@ test('cwdForProcess: rejects a Windows Metro root inferred only from dependency 
     '"C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\worktreeA\\node_modules\\expo\\bin\\cli" start';
   assert.equal(parseWindowsMetroRoot(commandLine), null);
   assert.equal(
-    cwdForProcess(777, 'win32', () => commandLine),
+    cwdForProcess(777, 'win32', () => commandLine, undefined, {
+      exists: (path) =>
+        path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    }),
     null,
   );
 });
@@ -94,7 +116,13 @@ test('cwdForPort: resolves Windows listener ownership before proving the Metro r
     return 'node metro.js start --projectRoot "C:\\repo\\worktreeA"';
   };
 
-  assert.equal(cwdForPort(8081, exec, 'win32'), resolve('C:\\repo\\worktreeA'));
+  assert.equal(
+    cwdForPort(8081, exec, 'win32', {
+      exists: (path) =>
+        path === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    }),
+    resolve('C:\\repo\\worktreeA'),
+  );
   assert.equal(
     calls.some((call) => call.includes('Get-NetTCPConnection')),
     true,
