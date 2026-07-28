@@ -304,9 +304,12 @@ function isWithinAllowedCodeRoot(candidate) {
     );
   });
 }
-function sanitizedNativeAddonPath(candidate) {
+function sanitizedNativeAddonBasename(candidate) {
   const value = typeof candidate === 'string' ? candidate : '';
-  return 'outside:' + path.basename(value || 'unknown.node');
+  return path.basename(value || 'unknown.node');
+}
+function sanitizedNativeAddonPath(candidate) {
+  return 'outside:' + sanitizedNativeAddonBasename(candidate);
 }
 function writeRuntimeLoad(line, loadsPath) {
   if (runtimeLoadsDescriptor === undefined) {
@@ -2177,7 +2180,7 @@ function reportNativeAddonCompletion(prepared, outcome, digest) {
     persistLoaderObservation('stability', prepared.resolved, digest);
   } else {
     recordLoaderViolation(
-      'METRO_NATIVE_ADDON_LOAD_FAILED: ' + sanitizedNativeAddonPath(prepared.resolved),
+      'METRO_NATIVE_ADDON_LOAD_FAILED: ' + sanitizedNativeAddonBasename(prepared.resolved),
     );
   }
 }

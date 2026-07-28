@@ -1534,7 +1534,7 @@ test('Metro preload attests ESM native addons within managed code roots', () => 
       observations.some(
         (entry) =>
           entry.kind === 'violation' &&
-          entry.value === 'METRO_NATIVE_ADDON_LOAD_FAILED: outside:fixture.node',
+          entry.value === 'METRO_NATIVE_ADDON_LOAD_FAILED: fixture.node',
       ),
       true,
     );
@@ -1619,7 +1619,7 @@ test('Metro preload records a terminal failure when a native addon loader throws
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8'),
-      /METRO_NATIVE_ADDON_LOAD_FAILED: outside:fixture\.node/,
+      /METRO_NATIVE_ADDON_LOAD_FAILED: fixture\.node/,
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
