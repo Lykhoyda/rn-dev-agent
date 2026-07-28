@@ -261,16 +261,17 @@ export function createSessionHandler(
             `exact ${platform} device ${deviceId} does not exist or is unavailable`,
           );
         }
-        const currentDevice = status.bindings.device as Record<string, unknown> | undefined;
+        const currentInstall = status.bindings.install as Record<string, unknown> | undefined;
         if (
           !input.buildReceipt &&
-          status.bindings.install &&
-          currentDevice?.platform &&
-          currentDevice.platform !== platform
+          currentInstall &&
+          (currentInstall.platform !== platform ||
+            currentInstall.deviceId !== deviceId ||
+            currentInstall.appId !== appId)
         ) {
           throw new SessionAuthorityError(
             'DEVICE_RECEIPT_INCOMPATIBLE',
-            `cannot replace ${String(currentDevice.platform)} device authority with ${platform} while its install receipt is bound`,
+            'cannot replace exact-device authority while an incompatible install receipt is bound',
           );
         }
         if (!input.buildReceipt) {

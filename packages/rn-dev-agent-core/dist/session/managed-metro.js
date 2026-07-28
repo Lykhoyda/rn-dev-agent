@@ -10,7 +10,7 @@ import { prepareManagedMetroEnforcement, runManagedMetroEnforcementPreflight, } 
 const METRO_LAUNCHER_SOURCE = String.raw `
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');
-const { chmodSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { chmodSync, closeSync, constants, fstatSync, fsyncSync, openSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -118,7 +118,8 @@ const appRoot = process.env.RN_DEV_AGENT_METRO_APP_ROOT;
 const childEnvironmentSource = process.env.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT;
 const runtimeManifestSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_MANIFEST;
 const runtimeEnforcementSource = process.env.RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT;
-if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource || !runtimeEnforcementSource) {
+const nativeAddonStagingRoot = process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_STAGING_ROOT;
+if (!executable || !evidencePath || !evidenceSocket || !policyPath || !capability || !sessionId || !metroInstanceId || !childNodeOptions || !contentRoot || !appRoot || !childEnvironmentSource || !runtimeManifestSource || !runtimeEnforcementSource || !nativeAddonStagingRoot) {
   process.exit(1);
 }
 const runtimeManifest = JSON.parse(runtimeManifestSource);
@@ -302,6 +303,69 @@ function appendViolation(value) {
     digest: null,
   });
 }
+function publishNativeAddonAcknowledgment(requestId, acknowledgment) {
+  writeFileSync(
+    nativeAddonStagingRoot + '/' + requestId + '.json',
+    canonicalAuthorityJson({ version: 1, requestId, ...acknowledgment }),
+    { encoding: 'utf8', flag: 'wx', mode: 0o400 },
+  );
+}
+function handleNativeAddonRequest(payload) {
+  let request;
+  try {
+    request = JSON.parse(payload.value);
+    if (
+      !request ||
+      !/^[a-f0-9]{32}$/.test(request.requestId || '') ||
+      typeof request.path !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(request.digest || '')
+    ) {
+      throw new Error('invalid request');
+    }
+    const candidate = realpathSync(request.path);
+    const allowedRoots = runtimeManifest.nativeAddonRoots;
+    if (
+      !Array.isArray(allowedRoots) ||
+      !allowedRoots.some(
+        (root) =>
+          typeof root === 'string' &&
+          (candidate === root || candidate.startsWith(root.endsWith('/') ? root : root + '/')),
+      )
+    ) {
+      throw new Error('outside roots');
+    }
+    const bytes = readFileSync(candidate);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (digest !== request.digest) throw new Error('digest changed');
+    const stagedPath = nativeAddonStagingRoot + '/' + request.requestId + '.node';
+    writeFileSync(stagedPath, bytes, { flag: 'wx', mode: 0o400 });
+    appendEvidence({
+      version: 1,
+      sessionId,
+      metroInstanceId,
+      kind: 'input',
+      value: candidate,
+      digest,
+    });
+    fsyncSync(journalDescriptor);
+    publishNativeAddonAcknowledgment(request.requestId, {
+      accepted: true,
+      digest,
+      stagedPath,
+    });
+  } catch {
+    appendViolation('RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: launcher refused staged bytes');
+    if (request && /^[a-f0-9]{32}$/.test(request.requestId || '')) {
+      try {
+        publishNativeAddonAcknowledgment(request.requestId, {
+          accepted: false,
+          digest: typeof request.digest === 'string' ? request.digest : null,
+          stagedPath: null,
+        });
+      } catch {}
+    }
+  }
+}
 if (process.platform !== 'win32') rmSync(evidenceSocket, { force: true });
 const headConnections = new Set();
 const pendingHeads = new Map();
@@ -480,6 +544,7 @@ evidence.on('data', (chunk) => {
           'pending',
           'completion',
           'barrier',
+          'native-addon-request',
         ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input'
@@ -487,6 +552,10 @@ evidence.on('data', (chunk) => {
           : payload.digest !== null)
       ) {
         throw new Error('invalid evidence');
+      }
+      if (payload.kind === 'native-addon-request') {
+        handleNativeAddonRequest(payload);
+        continue;
       }
       if (payload.kind === 'barrier') {
         const connection = pendingHeads.get(payload.value);
@@ -1047,6 +1116,7 @@ export async function startManagedMetro(input, dependencies = {}) {
     }
     const authorityPreload = join(input.appRoot, '.rn-agent', 'integration', 'rn-session-metro.cjs');
     const runtimeEvidencePath = join(input.runtimeRoot, 'metro-runtime-evidence.jsonl');
+    const nativeAddonStagingRoot = join(input.runtimeRoot, 'native-addons');
     const runtimePolicyPath = join(input.appRoot, '.rn-agent', 'integration', 'metro-runtime-policy.json');
     const runtimeEvidenceEndpointId = createHmac('sha256', input.signerCapability)
         .update(`metro-runtime-evidence\0${instanceId}`)
@@ -1078,6 +1148,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         metroTemporaryRoot,
         metroCacheRoot,
         join(input.appRoot, '.expo'),
+        nativeAddonStagingRoot,
     ]) {
         if (!exists(path))
             mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -1109,6 +1180,7 @@ export async function startManagedMetro(input, dependencies = {}) {
         RN_DEV_AGENT_METRO_APP_ROOT: canonicalRuntimeInput(input.appRoot),
         RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS: canonicalAuthorityJson(allowedCodeRoots),
         RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE: authorityRootNonce,
+        RN_DEV_AGENT_METRO_NATIVE_ADDON_STAGING_ROOT: nativeAddonStagingRoot,
     };
     const packageInputs = [canonicalRuntimeInput(join(input.appRoot, 'package.json'))];
     const metroConfigInputs = ['metro.config.js', 'metro.config.cjs']
@@ -1168,8 +1240,8 @@ export async function startManagedMetro(input, dependencies = {}) {
         commandProbeArguments: launchCommand.probeArgs,
         commandExecutableMappings: launchCommand.executableMappings,
         commandChainInputs,
-        protectedRuntimeRoots: launchCommand.protectedRuntimeRoots,
-        nativeAddonRoots: allowedCodeRoots,
+        protectedRuntimeRoots: [...launchCommand.protectedRuntimeRoots, nativeAddonStagingRoot],
+        nativeAddonRoots: [...allowedCodeRoots, nativeAddonStagingRoot],
         port: input.port,
         instanceId,
         runtimeInputs,

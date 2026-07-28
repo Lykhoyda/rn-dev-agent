@@ -113,12 +113,13 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!deviceExists) {
                     throw new SessionAuthorityError('DEVICE_NOT_FOUND', `exact ${platform} device ${deviceId} does not exist or is unavailable`);
                 }
-                const currentDevice = status.bindings.device;
+                const currentInstall = status.bindings.install;
                 if (!input.buildReceipt &&
-                    status.bindings.install &&
-                    currentDevice?.platform &&
-                    currentDevice.platform !== platform) {
-                    throw new SessionAuthorityError('DEVICE_RECEIPT_INCOMPATIBLE', `cannot replace ${String(currentDevice.platform)} device authority with ${platform} while its install receipt is bound`);
+                    currentInstall &&
+                    (currentInstall.platform !== platform ||
+                        currentInstall.deviceId !== deviceId ||
+                        currentInstall.appId !== appId)) {
+                    throw new SessionAuthorityError('DEVICE_RECEIPT_INCOMPATIBLE', 'cannot replace exact-device authority while an incompatible install receipt is bound');
                 }
                 if (!input.buildReceipt) {
                     registry.replaceDeviceAuthority(session, {

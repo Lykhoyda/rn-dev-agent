@@ -2069,13 +2069,119 @@ function digestRuntimeFile(file) {
     const hash = createHash('sha256');
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let bytesRead;
-    while ((bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null)) > 0) {
+    let position = 0;
+    while ((bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, position)) > 0) {
       hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
     }
     return hash.digest('hex');
   } finally {
     fs.closeSync(descriptor);
   }
+}
+function waitForNativeAddonAcknowledgment(requestId, digest) {
+  const refusal = (message) => {
+    const error = new Error('METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    return error;
+  };
+  const stagingRoot = process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_STAGING_ROOT;
+  if (!usesExternalEvidenceOwner) return null;
+  if (!stagingRoot || !/^[a-f0-9]{32}$/.test(requestId)) {
+    throw refusal('launcher acknowledgment channel is unavailable');
+  }
+  const acknowledgmentPath = path.join(stagingRoot, requestId + '.json');
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      const acknowledgment = JSON.parse(fs.readFileSync(acknowledgmentPath, 'utf8'));
+      if (
+        acknowledgment.version !== 1 ||
+        acknowledgment.requestId !== requestId ||
+        acknowledgment.digest !== digest ||
+        acknowledgment.accepted !== true ||
+        typeof acknowledgment.stagedPath !== 'string'
+      ) {
+        throw refusal('launcher rejected the requested bytes');
+      }
+      return acknowledgment.stagedPath;
+    } catch (error) {
+      if (error && error.code !== 'ENOENT') throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  throw refusal('launcher acknowledgment timed out');
+}
+function prepareNativeAddonLoad(file) {
+  const resolved = fs.realpathSync(file);
+  if (!fs.statSync(resolved).isFile() || !isWithinAllowedCodeRoot(resolved)) {
+    const error = new Error(
+      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
+    );
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  const bytes = fs.readFileSync(resolved);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  let loadPath = resolved;
+  let descriptor;
+  if (usesExternalEvidenceOwner) {
+    const requestId = randomBytes(16).toString('hex');
+    persistLoaderObservation(
+      'native-addon-request',
+      canonicalAuthorityJson({ requestId, path: resolved, digest }),
+    );
+    loadPath = waitForNativeAddonAcknowledgment(requestId, digest);
+    descriptor = fs.openSync(loadPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } else {
+    persistLoaderObservation('input', resolved, digest);
+    const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
+    if (!loadsPath || process.platform === 'win32') {
+      throw new Error('native addon byte staging is unavailable');
+    }
+    const stagedPath = path.join(
+      path.dirname(loadsPath),
+      '.native-addon-' + randomBytes(16).toString('hex') + '.node',
+    );
+    const stagedDescriptor = fs.openSync(
+      stagedPath,
+      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR,
+      0o400,
+    );
+    try {
+      let offset = 0;
+      while (offset < bytes.length) {
+        offset += fs.writeSync(stagedDescriptor, bytes, offset, bytes.length - offset, offset);
+      }
+      fs.fsyncSync(stagedDescriptor);
+      fs.unlinkSync(stagedPath);
+      descriptor = stagedDescriptor;
+    } catch (error) {
+      fs.closeSync(stagedDescriptor);
+      try {
+        fs.unlinkSync(stagedPath);
+      } catch {}
+      throw error;
+    }
+  }
+  try {
+    if (digestRuntimeFile('/dev/fd/' + descriptor) !== digest) {
+      const error = new Error(
+        'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: staged bytes changed after acknowledgment',
+      );
+      error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+      throw error;
+    }
+  } catch (error) {
+    fs.closeSync(descriptor);
+    throw error;
+  }
+  if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
+    privateMapSet(observedLoaderDigests, resolved, digest);
+    privateSetAdd(accumulatedRuntimeInputs, resolved);
+    loaderEpoch += 1;
+  }
+  return { descriptor, resolved, loadPath: '/dev/fd/' + descriptor };
 }
 function recordRuntimeFileInput(file) {
   const resolved = fs.realpathSync(file);
@@ -2097,23 +2203,32 @@ function recordRuntimeFileInput(file) {
 }
 const originalDlopen = process.dlopen;
 const attestNativeAddonLoad = function(module, file) {
-  let resolved;
+  let prepared;
   try {
-    resolved = recordRuntimeFileInput(path.resolve(String(file)));
+    prepared = prepareNativeAddonLoad(path.resolve(String(file)));
   } catch (caught) {
     const sanitizedPath = sanitizedNativeAddonPath(file);
     const message =
-      caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
+      caught &&
+      (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
+        caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
         ? caught.message
         : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedPath;
     recordLoaderViolation(message);
     const error = new Error(message);
-    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    error.code =
+      caught && caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE'
+        ? caught.code
+        : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
     throw error;
   }
   const args = privateArraySlice(arguments);
-  args[1] = resolved;
-  return intrinsicReflectApply(originalDlopen, process, args);
+  args[1] = prepared.loadPath;
+  try {
+    return intrinsicReflectApply(originalDlopen, process, args);
+  } finally {
+    fs.closeSync(prepared.descriptor);
+  }
 };
 Object.defineProperty(process, 'dlopen', {
   configurable: false,

@@ -780,6 +780,48 @@ test('cross-platform rebind refuses to discard an incompatible install receipt',
   assert.equal(JSON.parse(result.content[0].text).code, 'DEVICE_RECEIPT_INCOMPATIBLE');
 });
 
+for (const incompatibleBinding of [
+  { platform: 'ios' as const, deviceId: 'SIM-2', appId: 'dev.example' },
+  { platform: 'ios' as const, deviceId: 'SIM-1', appId: 'dev.other' },
+]) {
+  test('exact-device rebind refuses to discard an incompatible install tuple', async () => {
+    let replaced = false;
+    const status = {
+      sessionId: 'session-a',
+      bindings: {
+        device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+        install: {
+          platform: 'ios',
+          deviceId: 'SIM-1',
+          appId: 'dev.example',
+          artifactDigest: 'ios-build',
+        },
+      },
+    };
+    const handler = createSessionHandler(
+      {
+        status: () => ({ available: true, ...status }),
+        requireOperational: () => ({
+          registry: {
+            getSessionStatus: () => status,
+            replaceDeviceAuthority: () => {
+              replaced = true;
+            },
+          },
+          session: { sessionId: 'session-a', claimEpoch: 1 },
+        }),
+      } as never,
+      { deviceExists: () => true } as never,
+    );
+
+    const result = await handler({ action: 'bind_device', ...incompatibleBinding });
+
+    assert.equal(result.isError, true);
+    assert.equal(replaced, false);
+    assert.equal(JSON.parse(result.content[0].text).code, 'DEVICE_RECEIPT_INCOMPATIBLE');
+  });
+}
+
 test('public Metro binding rejects managed mode without process management proof', async () => {
   let captured = false;
   const status = {
