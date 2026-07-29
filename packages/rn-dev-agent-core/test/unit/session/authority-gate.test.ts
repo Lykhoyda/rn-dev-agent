@@ -563,6 +563,33 @@ test('native profiles never request a live bundle probe', async () => {
   );
 });
 
+test('native reads fail closed before dispatch when app origin is not proven', async () => {
+  const { runtime } = fixture();
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'A') {
+        throw new SessionAuthorityError(
+          'METRO_ORIGIN_MISMATCH',
+          'the claimed device is not attached to this Metro',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('device_screenshot', async () => {
+    dispatched = true;
+    return okResult({ path: '/tmp/foreign-device.png' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(dispatched, false);
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'METRO_ORIGIN_MISMATCH');
+  assert.equal(envelope.data, undefined);
+});
+
 test('run-action claims bundle authority only when its CDP path is used', async () => {
   const native = fixture();
   native.status.bindings.bundle.targetId = 'target-a';
