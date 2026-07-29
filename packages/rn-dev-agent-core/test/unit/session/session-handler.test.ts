@@ -1236,6 +1236,7 @@ test('session stop_metro closes the live listener but preserves restoration owne
   const updates: Array<Record<string, unknown>> = [];
   const status = {
     sessionId: 'session-a',
+    authorityVersion: 7,
     state: 'device_bound',
     source: { kind: 'git' },
     bindings: {
@@ -1279,6 +1280,7 @@ test('session stop_metro closes the live listener but preserves restoration owne
   );
 
   const result = await handler({ action: 'stop_metro' });
+  const envelope = JSON.parse(result.content[0]!.text);
 
   assert.equal(result.isError, undefined, result.content[0]!.text);
   assert.equal(listener.listening, false);
@@ -1288,6 +1290,9 @@ test('session stop_metro closes the live listener but preserves restoration owne
   assert.deepEqual(updates[0]?.releaseResources, [
     { type: 'target', key: `${address.port}:target-a` },
   ]);
+  assert.equal(updates[0]?.expectedAuthorityVersion, 7);
+  assert.match(envelope.data.nextAction, /Retry the managed Metro\/build command/);
+  assert.match(envelope.data.alternativeAction, /restore package integration/);
 });
 
 test('session stop_metro is idempotent when managed Metro is already absent', async () => {
@@ -1326,11 +1331,12 @@ test('session stop_metro releases an absent external Metro without signaling it'
   const updates: Array<Record<string, unknown>> = [];
   const status = {
     sessionId: 'session-a',
+    authorityVersion: 8,
     state: 'device_bound',
     source: { kind: 'git' },
     bindings: {
       metroPort: 8341,
-      metro: { mode: 'external', port: 8341 },
+      metro: { mode: 'external', port: 8341, pid: 4321, birth: 'birth-4321' },
       bundle: { targetId: 'target-a' },
     } as Record<string, unknown>,
     claims: [],
@@ -1354,6 +1360,7 @@ test('session stop_metro releases an absent external Metro without signaling it'
     } as never,
     {
       probeListener: () => ({ status: 'absent' }),
+      probeProcessBirth: () => ({ status: 'absent' }),
       stopManagedMetro: async () => {
         signaled = true;
         return true;
@@ -1383,9 +1390,13 @@ test('session stop_metro retains a live external Metro with owner recovery', asy
   let mutated = false;
   const status = {
     sessionId: 'session-a',
+    authorityVersion: 9,
     state: 'device_bound',
     source: { kind: 'git' },
-    bindings: { metroPort: 8341, metro: { mode: 'external', port: 8341 } },
+    bindings: {
+      metroPort: 8341,
+      metro: { mode: 'external', port: 8341, pid: 4321, birth: 'birth-4321' },
+    },
     claims: [],
   };
   const handler = createSessionHandler(
@@ -1403,13 +1414,17 @@ test('session stop_metro retains a live external Metro with owner recovery', asy
     } as never,
     {
       probeListener: () => ({ status: 'listening', pid: 4321 }),
+      probeProcessBirth: () => ({
+        status: 'present',
+        birth: { pid: 4321, source: 'linux-proc', token: 'birth-4321' },
+      }),
     },
   );
 
   const result = await handler({ action: 'stop_metro', confirmed: true });
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0]!.text, /stop it through its owning process/);
+  assert.match(result.content[0]!.text, /stop the exact owning process/);
   assert.match(result.content[0]!.text, /retry rn_session stop_metro/);
   assert.equal(mutated, false);
   assert.ok(status.bindings.metro);
@@ -1418,12 +1433,21 @@ test('session stop_metro retains a live external Metro with owner recovery', asy
 test('session stop_metro releases unverifiable cleanup only after listener absence', async () => {
   const status = {
     sessionId: 'session-a',
+    authorityVersion: 10,
     state: 'device_bound',
     source: { kind: 'git' },
     bindings: {
       metroPort: 8341,
       metro: null,
-      metroCleanup: { mode: 'managed', port: 8341 },
+      metroCleanup: {
+        mode: 'managed',
+        port: 8341,
+        pid: 4321,
+        birth: 'birth-4321',
+        launcherPid: 4320,
+        launcherBirth: 'birth-4320',
+        runtimeEvidenceSocket: '/tmp/rn-dev-agent-00000000000000000000000000000000.sock',
+      },
       metroTerminal: { code: 'METRO_MANAGEMENT_PROOF_INVALID' },
     } as Record<string, unknown>,
     claims: [],
@@ -1444,6 +1468,8 @@ test('session stop_metro releases unverifiable cleanup only after listener absen
     {
       getSignerCapability: () => 'signer',
       probeListener: () => ({ status: 'absent' }),
+      probeProcessBirth: () => ({ status: 'absent' }),
+      evidenceSocketExists: () => false,
       stopManagedMetro: async () => false,
     },
   );
@@ -1676,6 +1702,46 @@ test('session stop_metro retries registry commit after process cleanup succeeds'
   assert.equal(recovered.isError, undefined, recovered.content[0]!.text);
   assert.equal(status.bindings.metro, null);
   assert.equal(commitAttempts, 2);
+});
+
+test('session stop_metro cannot clear authority replaced during cleanup', async () => {
+  const originalMetro = { mode: 'managed', port: 8341, instanceId: 'metro-a' };
+  const replacementMetro = { mode: 'managed', port: 8341, instanceId: 'metro-b' };
+  const status = {
+    sessionId: 'session-a',
+    authorityVersion: 11,
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: { metroPort: 8341, metro: originalMetro } as Record<string, unknown>,
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session: unknown, update: { expectedAuthorityVersion?: number }) => {
+            assert.equal(update.expectedAuthorityVersion, 11);
+            status.authorityVersion = 12;
+            status.bindings.metro = replacementMetro;
+            throw new Error('AUTHORITY_LOST_DURING_OPERATION: authority version changed');
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: async () => true,
+    },
+  );
+
+  const result = await handler({ action: 'stop_metro' });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /authority version changed/);
+  assert.equal(status.bindings.metro, replacementMetro);
 });
 
 test('session release tears down its runner and Observe server before Metro and claims', async () => {

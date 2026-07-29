@@ -19,6 +19,7 @@ import {
   signalManagedMetroProcessTree,
   startManagedMetro,
   stopManagedMetro,
+  stopManagedMetroWithEvidence,
   verifyManagedMetroManagementProof,
 } from '../../../dist/session/managed-metro.js';
 
@@ -1095,6 +1096,83 @@ test('managed Metro refuses cleanup when process absence is unknown', async () =
   );
 
   assert.equal(result, false);
+});
+
+test('managed Metro cleanup evidence retains live processes and sockets', async (t) => {
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => ({
+        pid: 101,
+        exitCode: null,
+        kill: () => true,
+        unref: () => {},
+      }),
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'birth-202',
+        servingRoot: '/app',
+      }),
+    },
+  );
+
+  await t.test('live launcher blocks release after listener absence', async () => {
+    const result = await stopManagedMetroWithEvidence(
+      binding,
+      { sessionId: 'session-a', signerCapability: 'signer' },
+      {
+        exists: () => false,
+        probeBirth: (pid) =>
+          pid === binding.launcherPid
+            ? {
+                status: 'present',
+                birth: { pid, source: 'linux-proc', token: binding.launcherBirth },
+              }
+            : { status: 'absent' },
+        probeListener: () => ({ status: 'absent' }),
+        signalTree: () => {
+          throw new Error('signal refused');
+        },
+      },
+    );
+
+    assert.equal(result.stopped, false);
+    assert.equal(result.evidence.complete, false);
+    assert.equal(result.evidence.launcher, 'present');
+  });
+
+  await t.test('retained evidence socket blocks release', async () => {
+    const result = await stopManagedMetroWithEvidence(
+      binding,
+      { sessionId: 'session-a', signerCapability: 'signer' },
+      {
+        exists: () => true,
+        probeBirth: () => ({ status: 'absent' }),
+        probeListener: () => ({ status: 'absent' }),
+        removeEvidenceSocket: () => {
+          throw new Error('socket removal refused');
+        },
+      },
+    );
+
+    assert.equal(result.stopped, false);
+    assert.equal(result.evidence.complete, false);
+    assert.equal(result.evidence.evidenceSocket, 'present');
+  });
 });
 
 test('managed Metro stops an exact listener after transient post-signal uncertainty', async () => {

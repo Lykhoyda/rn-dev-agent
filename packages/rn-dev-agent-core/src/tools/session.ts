@@ -26,10 +26,13 @@ import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
+  inspectManagedMetroCleanupEvidence,
   inspectManagedMetroLifecycle,
-  probeManagedMetroListener,
   stopManagedMetro,
+  stopManagedMetroWithEvidence,
   type ManagedMetroBinding,
+  type ManagedMetroCleanupEvidence,
+  type ManagedMetroCleanupResult,
   type ManagedMetroLifecycleInspection,
   type ManagedMetroListenerProbe,
 } from '../session/managed-metro.js';
@@ -104,6 +107,8 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   probeListener?: (port: number) => ManagedMetroListenerProbe;
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
   stopManagedMetro?: typeof stopManagedMetro;
+  stopManagedMetroWithEvidence?: typeof stopManagedMetroWithEvidence;
+  evidenceSocketExists?: (path: string) => boolean;
   resetArbiter?: (reason: string) => {
     clearedOps: number;
     hadFlow: boolean;
@@ -204,6 +209,12 @@ function required(value: string | number | undefined, name: string): string | nu
     );
   }
   return value;
+}
+
+function describeMetroCleanupEvidence(evidence: ManagedMetroCleanupEvidence): string {
+  const port =
+    evidence.port.status === 'listening' ? `listening:${evidence.port.pid}` : evidence.port.status;
+  return `launcher=${evidence.launcher}, listener=${evidence.listener}, port=${port}, evidenceSocket=${evidence.evidenceSocket}`;
 }
 
 export function reconcileManagedMetroStatus(
@@ -522,53 +533,83 @@ export function createSessionHandler(
             session: projectPublicAuthorityStatus(runtime.status()),
           });
         }
+        const metroPort = Number(status.bindings.metroPort);
+        if (!Number.isSafeInteger(metroPort) || metro.port !== metroPort) {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'Metro cleanup binding does not match the exact allocated session port',
+          );
+        }
         const signerCapability = dependencies.getSignerCapability?.();
-        const stopped =
-          metro.mode === 'managed' && signerCapability
-            ? await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+        const evidenceDependencies = {
+          ...(dependencies.evidenceSocketExists
+            ? { exists: dependencies.evidenceSocketExists }
+            : {}),
+          ...(dependencies.probeProcessBirth ? { probeBirth: dependencies.probeProcessBirth } : {}),
+          ...(dependencies.probeListener ? { probeListener: dependencies.probeListener } : {}),
+        };
+        let cleanup: ManagedMetroCleanupResult;
+        if (metro.mode === 'managed' && signerCapability) {
+          if (dependencies.stopManagedMetroWithEvidence) {
+            cleanup = await dependencies.stopManagedMetroWithEvidence(
+              metro,
+              {
                 sessionId: session.sessionId,
                 signerCapability,
-              })
-            : false;
-        if (!stopped) {
-          const metroPort = Number(status.bindings.metroPort);
-          if (!Number.isSafeInteger(metroPort)) {
-            throw new SessionAuthorityError(
-              'METRO_AUTHORITY_MISMATCH',
-              'Metro binding lacks an allocated port for safe non-signaling release',
+              },
+              evidenceDependencies,
+            );
+          } else if (dependencies.stopManagedMetro) {
+            const stopped = await dependencies.stopManagedMetro(metro, {
+              sessionId: session.sessionId,
+              signerCapability,
+            });
+            const evidence = stopped
+              ? {
+                  complete: true,
+                  launcher: 'absent' as const,
+                  listener: 'absent' as const,
+                  port: { status: 'absent' as const },
+                  evidenceSocket: 'absent' as const,
+                }
+              : inspectManagedMetroCleanupEvidence(
+                  metro as Record<string, unknown>,
+                  evidenceDependencies,
+                );
+            cleanup = { authenticated: stopped, stopped, evidence };
+          } else {
+            cleanup = await stopManagedMetroWithEvidence(
+              metro,
+              {
+                sessionId: session.sessionId,
+                signerCapability,
+              },
+              evidenceDependencies,
             );
           }
-          let listener: ManagedMetroListenerProbe;
-          try {
-            listener = (dependencies.probeListener ?? probeManagedMetroListener)(metroPort);
-          } catch {
-            listener = { status: 'unknown' };
-          }
-          if (listener.status !== 'absent') {
-            const ownership =
-              metro.mode === 'external'
-                ? 'externally managed Metro'
-                : 'Metro without authenticated managed process authority';
-            const observation =
-              listener.status === 'listening'
-                ? `still owns allocated port ${metroPort} with process ${listener.pid}`
-                : `listener absence on allocated port ${metroPort} could not be verified`;
-            throw new SessionAuthorityError(
-              'METRO_AUTHORITY_MISMATCH',
-              `${ownership} ${observation}; stop it through its owning process, then retry rn_session stop_metro`,
-            );
-          }
-          if (input.confirmed !== true) {
-            throw new SessionAuthorityError(
-              'SESSION_AUTHORITY_REQUIRED',
-              'non-signaling Metro authority release requires confirmed=true after listener absence is verified',
-            );
-          }
+        } else {
+          const evidence = inspectManagedMetroCleanupEvidence(
+            metro as Record<string, unknown>,
+            evidenceDependencies,
+          );
+          cleanup = { authenticated: false, stopped: false, evidence };
+        }
+        if (!cleanup.evidence.complete) {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            `Metro cleanup is unresolved (${describeMetroCleanupEvidence(cleanup.evidence)}); stop the exact owning process and remove its evidence socket, then retry rn_session stop_metro`,
+          );
+        }
+        if (!cleanup.authenticated && input.confirmed !== true) {
+          throw new SessionAuthorityError(
+            'SESSION_AUTHORITY_REQUIRED',
+            'non-signaling Metro authority release requires confirmed=true after exact process, listener, and socket absence is verified',
+          );
         }
         const priorTargetId = (status.bindings.bundle as { targetId?: unknown } | null | undefined)
           ?.targetId;
-        const metroPort = Number(status.bindings.metroPort);
         registry.updateBindings(session, {
+          expectedAuthorityVersion: status.authorityVersion,
           state: status.bindings.install
             ? 'device_bound'
             : status.bindings.device
@@ -586,12 +627,13 @@ export function createSessionHandler(
               : [],
         });
         return okResult({
-          stopped,
-          alreadyStopped: !stopped,
-          bindingReleased: !stopped,
+          stopped: cleanup.stopped,
+          alreadyStopped: !cleanup.stopped,
+          bindingReleased: !cleanup.authenticated,
           session: projectPublicAuthorityStatus(runtime.status()),
-          nextAction:
-            'Restore package integration with confirmed=true, then release the exact session.',
+          nextAction: 'Retry the managed Metro/build command for the literal Expo native build.',
+          alternativeAction:
+            'To tear down instead, restore package integration with confirmed=true, then release the exact session.',
         });
       }
 

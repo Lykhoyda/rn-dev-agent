@@ -2267,6 +2267,74 @@ function exactProcessState(
   return probe.birth.token === expected.birth ? 'present' : 'stopped';
 }
 
+export type ManagedMetroCleanupPresence = 'absent' | 'present' | 'unknown' | 'not-applicable';
+
+export interface ManagedMetroCleanupEvidence {
+  complete: boolean;
+  launcher: ManagedMetroCleanupPresence;
+  listener: ManagedMetroCleanupPresence;
+  port: ManagedMetroListenerProbe;
+  evidenceSocket: ManagedMetroCleanupPresence;
+}
+
+export interface ManagedMetroCleanupResult {
+  authenticated: boolean;
+  stopped: boolean;
+  evidence: ManagedMetroCleanupEvidence;
+}
+
+function cleanupProcessPresence(
+  pid: unknown,
+  birth: unknown,
+  probeBirth: (pid: number) => ProcessBirthProbe,
+): ManagedMetroCleanupPresence {
+  if (typeof pid !== 'number' || typeof birth !== 'string') return 'unknown';
+  const state = exactProcessState({ pid, birth }, probeBirth(pid));
+  return state === 'stopped' ? 'absent' : state;
+}
+
+function cleanupSocketPresence(
+  path: unknown,
+  exists: (path: string) => boolean,
+): ManagedMetroCleanupPresence {
+  if (typeof path !== 'string') return 'unknown';
+  try {
+    return exists(path) ? 'present' : 'absent';
+  } catch {
+    return 'unknown';
+  }
+}
+
+export function inspectManagedMetroCleanupEvidence(
+  binding: Record<string, unknown>,
+  dependencies: Pick<ManagedMetroDependencies, 'exists' | 'probeBirth' | 'probeListener'> = {},
+): ManagedMetroCleanupEvidence {
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
+  const managed = binding.mode === 'managed';
+  const launcher = managed
+    ? cleanupProcessPresence(binding.launcherPid, binding.launcherBirth, probeBirth)
+    : 'not-applicable';
+  const listener = cleanupProcessPresence(binding.pid, binding.birth, probeBirth);
+  let port: ManagedMetroListenerProbe = { status: 'unknown' };
+  if (typeof binding.port === 'number') {
+    try {
+      port = probeListener(binding.port);
+    } catch {}
+  }
+  const evidenceSocket = managed
+    ? cleanupSocketPresence(binding.runtimeEvidenceSocket, dependencies.exists ?? existsSync)
+    : 'not-applicable';
+  const complete =
+    launcher !== 'present' &&
+    launcher !== 'unknown' &&
+    listener === 'absent' &&
+    port.status === 'absent' &&
+    evidenceSocket !== 'present' &&
+    evidenceSocket !== 'unknown';
+  return { complete, launcher, listener, port, evidenceSocket };
+}
+
 async function stopManagedMetroProcesses(
   input: {
     port: number;
@@ -2472,4 +2540,40 @@ export async function stopManagedMetro(
   );
   if (!stopped) return false;
   return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+}
+
+export async function stopManagedMetroWithEvidence(
+  binding: Partial<ManagedMetroBinding> | null | undefined,
+  input: { sessionId: string; signerCapability: string },
+  dependencies: Pick<
+    ManagedMetroDependencies,
+    'exists' | 'probeBirth' | 'probeListener' | 'removeEvidenceSocket' | 'signalTree' | 'wait'
+  > = {},
+): Promise<ManagedMetroCleanupResult> {
+  const proofAuthenticated =
+    binding !== null &&
+    binding !== undefined &&
+    verifyManagedMetroManagementProof(binding as Record<string, unknown>, input);
+  const stopped = await stopManagedMetro(binding, input, dependencies);
+  const authenticated = proofAuthenticated || stopped;
+  let evidence = inspectManagedMetroCleanupEvidence(
+    (binding ?? {}) as Record<string, unknown>,
+    dependencies,
+  );
+  if (
+    authenticated &&
+    evidence.launcher === 'absent' &&
+    evidence.listener === 'absent' &&
+    evidence.port.status === 'absent' &&
+    evidence.evidenceSocket === 'present' &&
+    typeof binding?.runtimeEvidenceSocket === 'string'
+  ) {
+    removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+    evidence = inspectManagedMetroCleanupEvidence(binding as Record<string, unknown>, dependencies);
+  }
+  return {
+    authenticated,
+    stopped: stopped && evidence.complete,
+    evidence,
+  };
 }

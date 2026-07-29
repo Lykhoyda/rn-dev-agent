@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
-import { inspectManagedMetroLifecycle, probeManagedMetroListener, stopManagedMetro, } from '../session/managed-metro.js';
+import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, stopManagedMetro, stopManagedMetroWithEvidence, } from '../session/managed-metro.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
@@ -66,6 +66,10 @@ function required(value, name) {
         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `${name} is required for this session transition`);
     }
     return value;
+}
+function describeMetroCleanupEvidence(evidence) {
+    const port = evidence.port.status === 'listening' ? `listening:${evidence.port.pid}` : evidence.port.status;
+    return `launcher=${evidence.launcher}, listener=${evidence.listener}, port=${port}, evidenceSocket=${evidence.evidenceSocket}`;
 }
 export function reconcileManagedMetroStatus(runtime, dependencies = {}) {
     const authority = runtime.status();
@@ -319,42 +323,63 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         session: projectPublicAuthorityStatus(runtime.status()),
                     });
                 }
+                const metroPort = Number(status.bindings.metroPort);
+                if (!Number.isSafeInteger(metroPort) || metro.port !== metroPort) {
+                    throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'Metro cleanup binding does not match the exact allocated session port');
+                }
                 const signerCapability = dependencies.getSignerCapability?.();
-                const stopped = metro.mode === 'managed' && signerCapability
-                    ? await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
-                        sessionId: session.sessionId,
-                        signerCapability,
-                    })
-                    : false;
-                if (!stopped) {
-                    const metroPort = Number(status.bindings.metroPort);
-                    if (!Number.isSafeInteger(metroPort)) {
-                        throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'Metro binding lacks an allocated port for safe non-signaling release');
+                const evidenceDependencies = {
+                    ...(dependencies.evidenceSocketExists
+                        ? { exists: dependencies.evidenceSocketExists }
+                        : {}),
+                    ...(dependencies.probeProcessBirth ? { probeBirth: dependencies.probeProcessBirth } : {}),
+                    ...(dependencies.probeListener ? { probeListener: dependencies.probeListener } : {}),
+                };
+                let cleanup;
+                if (metro.mode === 'managed' && signerCapability) {
+                    if (dependencies.stopManagedMetroWithEvidence) {
+                        cleanup = await dependencies.stopManagedMetroWithEvidence(metro, {
+                            sessionId: session.sessionId,
+                            signerCapability,
+                        }, evidenceDependencies);
                     }
-                    let listener;
-                    try {
-                        listener = (dependencies.probeListener ?? probeManagedMetroListener)(metroPort);
+                    else if (dependencies.stopManagedMetro) {
+                        const stopped = await dependencies.stopManagedMetro(metro, {
+                            sessionId: session.sessionId,
+                            signerCapability,
+                        });
+                        const evidence = stopped
+                            ? {
+                                complete: true,
+                                launcher: 'absent',
+                                listener: 'absent',
+                                port: { status: 'absent' },
+                                evidenceSocket: 'absent',
+                            }
+                            : inspectManagedMetroCleanupEvidence(metro, evidenceDependencies);
+                        cleanup = { authenticated: stopped, stopped, evidence };
                     }
-                    catch {
-                        listener = { status: 'unknown' };
+                    else {
+                        cleanup = await stopManagedMetroWithEvidence(metro, {
+                            sessionId: session.sessionId,
+                            signerCapability,
+                        }, evidenceDependencies);
                     }
-                    if (listener.status !== 'absent') {
-                        const ownership = metro.mode === 'external'
-                            ? 'externally managed Metro'
-                            : 'Metro without authenticated managed process authority';
-                        const observation = listener.status === 'listening'
-                            ? `still owns allocated port ${metroPort} with process ${listener.pid}`
-                            : `listener absence on allocated port ${metroPort} could not be verified`;
-                        throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', `${ownership} ${observation}; stop it through its owning process, then retry rn_session stop_metro`);
-                    }
-                    if (input.confirmed !== true) {
-                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'non-signaling Metro authority release requires confirmed=true after listener absence is verified');
-                    }
+                }
+                else {
+                    const evidence = inspectManagedMetroCleanupEvidence(metro, evidenceDependencies);
+                    cleanup = { authenticated: false, stopped: false, evidence };
+                }
+                if (!cleanup.evidence.complete) {
+                    throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', `Metro cleanup is unresolved (${describeMetroCleanupEvidence(cleanup.evidence)}); stop the exact owning process and remove its evidence socket, then retry rn_session stop_metro`);
+                }
+                if (!cleanup.authenticated && input.confirmed !== true) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'non-signaling Metro authority release requires confirmed=true after exact process, listener, and socket absence is verified');
                 }
                 const priorTargetId = status.bindings.bundle
                     ?.targetId;
-                const metroPort = Number(status.bindings.metroPort);
                 registry.updateBindings(session, {
+                    expectedAuthorityVersion: status.authorityVersion,
                     state: status.bindings.install
                         ? 'device_bound'
                         : status.bindings.device
@@ -371,11 +396,12 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         : [],
                 });
                 return okResult({
-                    stopped,
-                    alreadyStopped: !stopped,
-                    bindingReleased: !stopped,
+                    stopped: cleanup.stopped,
+                    alreadyStopped: !cleanup.stopped,
+                    bindingReleased: !cleanup.authenticated,
                     session: projectPublicAuthorityStatus(runtime.status()),
-                    nextAction: 'Restore package integration with confirmed=true, then release the exact session.',
+                    nextAction: 'Retry the managed Metro/build command for the literal Expo native build.',
+                    alternativeAction: 'To tear down instead, restore package integration with confirmed=true, then release the exact session.',
                 });
             }
             if (input.action === 'preview_integration' ||

@@ -1882,6 +1882,48 @@ function exactProcessState(expected, probe) {
         return 'stopped';
     return probe.birth.token === expected.birth ? 'present' : 'stopped';
 }
+function cleanupProcessPresence(pid, birth, probeBirth) {
+    if (typeof pid !== 'number' || typeof birth !== 'string')
+        return 'unknown';
+    const state = exactProcessState({ pid, birth }, probeBirth(pid));
+    return state === 'stopped' ? 'absent' : state;
+}
+function cleanupSocketPresence(path, exists) {
+    if (typeof path !== 'string')
+        return 'unknown';
+    try {
+        return exists(path) ? 'present' : 'absent';
+    }
+    catch {
+        return 'unknown';
+    }
+}
+export function inspectManagedMetroCleanupEvidence(binding, dependencies = {}) {
+    const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+    const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
+    const managed = binding.mode === 'managed';
+    const launcher = managed
+        ? cleanupProcessPresence(binding.launcherPid, binding.launcherBirth, probeBirth)
+        : 'not-applicable';
+    const listener = cleanupProcessPresence(binding.pid, binding.birth, probeBirth);
+    let port = { status: 'unknown' };
+    if (typeof binding.port === 'number') {
+        try {
+            port = probeListener(binding.port);
+        }
+        catch { }
+    }
+    const evidenceSocket = managed
+        ? cleanupSocketPresence(binding.runtimeEvidenceSocket, dependencies.exists ?? existsSync)
+        : 'not-applicable';
+    const complete = launcher !== 'present' &&
+        launcher !== 'unknown' &&
+        listener === 'absent' &&
+        port.status === 'absent' &&
+        evidenceSocket !== 'present' &&
+        evidenceSocket !== 'unknown';
+    return { complete, launcher, listener, port, evidenceSocket };
+}
 async function stopManagedMetroProcesses(input, dependencies) {
     const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
     const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
@@ -2036,4 +2078,26 @@ export async function stopManagedMetro(binding, input, dependencies = {}) {
     if (!stopped)
         return false;
     return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+}
+export async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
+    const proofAuthenticated = binding !== null &&
+        binding !== undefined &&
+        verifyManagedMetroManagementProof(binding, input);
+    const stopped = await stopManagedMetro(binding, input, dependencies);
+    const authenticated = proofAuthenticated || stopped;
+    let evidence = inspectManagedMetroCleanupEvidence((binding ?? {}), dependencies);
+    if (authenticated &&
+        evidence.launcher === 'absent' &&
+        evidence.listener === 'absent' &&
+        evidence.port.status === 'absent' &&
+        evidence.evidenceSocket === 'present' &&
+        typeof binding?.runtimeEvidenceSocket === 'string') {
+        removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
+        evidence = inspectManagedMetroCleanupEvidence(binding, dependencies);
+    }
+    return {
+        authenticated,
+        stopped: stopped && evidence.complete,
+        evidence,
+    };
 }
