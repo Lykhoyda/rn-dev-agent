@@ -1012,7 +1012,7 @@ test('Metro seals native process handles and IPC read callbacks', () => {
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     writeFileSync(
       childEntry,
-      "process.once('message', () => process.send({ acknowledged: true }, (error) => { if (error) process.exit(11); process.disconnect(); }));",
+      "process.once('message', () => process.send({ acknowledged: true }, (error) => { if (error) process.exit(11); })); process.once('disconnect', () => process.exit(0));",
     );
     writeFileSync(
       probeEntry,
@@ -1338,10 +1338,6 @@ test('Metro seals native process handles and IPC read callbacks', () => {
               message.acknowledged ? resolve() : reject(new Error('message changed'));
             });
           });
-          const exited = new Promise((resolve, reject) => {
-            child.once('error', reject);
-            child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('child failed')));
-          });
           const mapMethods = {
             delete: Map.prototype.delete,
             get: Map.prototype.get,
@@ -1386,7 +1382,13 @@ test('Metro seals native process handles and IPC read callbacks', () => {
               error ? reject(error) : resolve();
             });
           });
-          await Promise.all([acknowledged, completed, exited]);
+          await Promise.all([acknowledged, completed]);
+          const exited = new Promise((resolve, reject) => {
+            child.once('error', reject);
+            child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('child failed')));
+          });
+          child.disconnect();
+          await exited;
         })().catch((error) => {
           console.error(error);
           process.exit(1);
@@ -2560,6 +2562,7 @@ test('bound CAS retains cleanup after a late integration-directory switch', () =
   const agentPath = join(root, '.rn-agent');
   const integrationPath = join(agentPath, 'integration');
   const external = join(externalRoot, 'integration');
+  const readyPath = join(externalRoot, 'ready');
   const markerPath = join(integrationPath, 'authority-marker.js');
   mkdirSync(integrationPath, { recursive: true });
   writeFileSync(markerPath, 'before\n', { mode: 0o600 });
@@ -2570,17 +2573,23 @@ test('bound CAS retains cleanup after a late integration-directory switch', () =
       process.execPath,
       [
         '-e',
-        `const fs=require('node:fs');setTimeout(()=>{fs.renameSync(${JSON.stringify(
+        `const fs=require('node:fs');const integration=${JSON.stringify(
           integrationPath,
-        )},${JSON.stringify(external)});fs.symlinkSync(${JSON.stringify(external)},${JSON.stringify(
-          integrationPath,
-        )},'dir');fs.unlinkSync(${JSON.stringify(
-          integrationPath,
-        )});fs.renameSync(${JSON.stringify(external)},${JSON.stringify(integrationPath)})},100)`,
+        )};const external=${JSON.stringify(
+          external,
+        )};const lock=integration+'/.rn-bound-transaction.lock';const waitState=new Int32Array(new SharedArrayBuffer(4));let lockObserved=false;fs.writeFileSync(${JSON.stringify(
+          readyPath,
+        )},'ready');const deadline=Date.now()+5000;while(Date.now()<deadline){if(fs.existsSync(lock)){lockObserved=true}else if(lockObserved){fs.renameSync(integration,external);fs.symlinkSync(external,integration,'dir');fs.unlinkSync(integration);fs.renameSync(external,integration);process.exit(0)}Atomics.wait(waitState,0,0,1)}process.exit(2)`,
       ],
       { stdio: 'ignore' },
     );
     switcher.unref();
+    const waitState = new Int32Array(new SharedArrayBuffer(4));
+    const readyDeadline = Date.now() + 5_000;
+    while (!existsSync(readyPath) && Date.now() < readyDeadline) {
+      Atomics.wait(waitState, 0, 0, 10);
+    }
+    assert.equal(existsSync(readyPath), true);
     const result = casBoundDirectoryFiles(
       integration,
       [
@@ -3098,7 +3107,7 @@ test('bound CAS replaces a blocked cleanup worker before returning', () => {
       {
         cleanupRecoveryDelayMs: 5_000,
         failCleanupAfterCommit: true,
-        recoveryTimeoutMs: 100,
+        recoveryTimeoutMs: 1_000,
       },
     );
     assert.equal(result.cleanupPending, false);
