@@ -2796,7 +2796,7 @@ function parseSupportedScript(script, platform) {
         command,
         session: {
             platform,
-            deviceId: 'preview-device',
+            deviceId: platform === 'android' ? 'emulator-5554' : 'preview-device',
             metroPort: 8081,
             sessionId: 'preview-session',
         },
@@ -2936,7 +2936,28 @@ function removeValue(flag, value) {
     command.splice(index, 2);
   }
 }
-
+function managedMetroProxyUrl(binding) {
+  if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
+  if (/^emulator-\\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
+  if (typeof binding.devClientUrl !== 'string') {
+    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL\n');
+    process.exit(2);
+  }
+  try {
+    const encodedMetroUrl = new URL(binding.devClientUrl).searchParams.get('url');
+    if (!encodedMetroUrl) throw new Error('missing url parameter');
+    const metroUrl = new URL(encodedMetroUrl);
+    if (!['http:', 'https:'].includes(metroUrl.protocol) || Number(metroUrl.port) !== binding.metroPort) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro\n');
+      process.exit(2);
+    }
+    return metroUrl.origin;
+  } catch {
+    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint\n');
+    process.exit(2);
+  }
+}
+let expoProxyUrl = null;
 if (session) {
   if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
     process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete\n');
@@ -2953,6 +2974,7 @@ if (session) {
     ensureValue('--device', session.deviceId);
     removeValue('--port', String(session.metroPort));
     ensureFlag('--no-bundler');
+    expoProxyUrl = managedMetroProxyUrl(session);
   } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
     ensureValue('--udid', session.deviceId);
     ensureValue('--port', String(session.metroPort));
@@ -2974,6 +2996,7 @@ const child = spawnSync(command[0], command.slice(1), {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
     RCT_METRO_PORT: String(session.metroPort),
     RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
   } : process.env,
   stdio: 'inherit',
 });

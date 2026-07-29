@@ -7,6 +7,7 @@ import { captureInstalledArtifact } from './session/install-authority.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
 import {
+  refreshManagedMetroBuildGeneration,
   startManagedMetro,
   stopManagedMetro,
   type ManagedMetroBinding,
@@ -365,9 +366,7 @@ async function main(): Promise<void> {
             devClientUrl?: unknown;
           }
         | undefined;
-      const metro = status.bindings.metro as
-        | { instanceId?: unknown; buildGeneration?: unknown }
-        | undefined;
+      const metro = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
       if (
         (platform !== 'ios' && platform !== 'android') ||
         device?.platform !== platform ||
@@ -391,6 +390,14 @@ async function main(): Promise<void> {
           ),
         ) + 1;
       const buildToken = randomUUID();
+      const buildMetro =
+        metro.mode === 'managed'
+          ? refreshManagedMetroBuildGeneration(metro as ManagedMetroBinding, {
+              sessionId: status.sessionId,
+              buildGeneration,
+              signerCapability,
+            })
+          : { ...metro, buildGeneration };
       const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
       const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
       const releaseResources: Array<{ type: string; key: string }> = [];
@@ -459,7 +466,7 @@ async function main(): Promise<void> {
           currentOperation = status.registry.replaceBindingsDuringOperation(operation, {
             releaseResources,
             bindings: {
-              metro: { ...metro, buildGeneration },
+              metro: buildMetro,
               pendingBuild: { buildToken, platform, buildGeneration },
               bundle: null,
               runner: null,
@@ -480,6 +487,7 @@ async function main(): Promise<void> {
           metroPort: Number(status.bindings.metroPort),
           sessionId: status.sessionId,
           buildToken,
+          ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
         })}\n`,
       );
       return;

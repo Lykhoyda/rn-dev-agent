@@ -1178,6 +1178,209 @@ test('session release stops its managed Metro before releasing claims', async ()
   assert.deepEqual(calls, ['stop-metro', 'release']);
 });
 
+test('session stop_metro closes the live listener but preserves restoration ownership', async (t) => {
+  const listener = createServer((socket) => socket.end());
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        if (listener.listening) listener.close(() => resolve());
+        else resolve();
+      }),
+  );
+  const address = listener.address();
+  assert.ok(address && typeof address !== 'string');
+  const updates: Array<Record<string, unknown>> = [];
+  const status = {
+    sessionId: 'session-a',
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: {
+      metroPort: address.port,
+      metro: { mode: 'managed', port: address.port },
+      bundle: { targetId: 'target-a' },
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: 'session-a',
+        manifestSha256: 'a'.repeat(64),
+      },
+    } as Record<string, unknown>,
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session: unknown, update: Record<string, unknown>) => {
+            updates.push(update);
+            status.state = String(update.state);
+            status.bindings = {
+              ...status.bindings,
+              ...(update.bindings as Record<string, unknown>),
+            };
+          },
+          releaseSession: () => assert.fail('stop_metro must retain the session owner'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: async () => {
+        await new Promise<void>((resolve) => listener.close(() => resolve()));
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'stop_metro' });
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.equal(listener.listening, false);
+  assert.equal(status.bindings.metro, null);
+  assert.equal(status.bindings.bundle, null);
+  assert.ok(status.bindings.packageIntegration);
+  assert.deepEqual(updates[0]?.releaseResources, [
+    { type: 'target', key: `${address.port}:target-a` },
+  ]);
+});
+
+test('session stop_metro is idempotent when managed Metro is already absent', async () => {
+  let released = false;
+  const status = {
+    sessionId: 'session-a',
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: { metroPort: 8341, metro: null, packageIntegration: { version: 1 } },
+    claims: [],
+  };
+  const handler = createSessionHandler({
+    status: () => ({ available: true, ...status }),
+    requireOperational: () => ({
+      registry: {
+        getSessionStatus: () => status,
+        releaseSession: () => {
+          released = true;
+        },
+      },
+      session: { sessionId: 'session-a', claimEpoch: 1 },
+    }),
+  } as never);
+
+  const result = await handler({ action: 'stop_metro' });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.equal(envelope.data.alreadyStopped, true);
+  assert.equal(released, false);
+});
+
+test('session stop_metro retains the recovery owner on process mismatch', async (t) => {
+  const listener = createServer((socket) => socket.end());
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        if (listener.listening) listener.close(() => resolve());
+        else resolve();
+      }),
+  );
+  const address = listener.address();
+  assert.ok(address && typeof address !== 'string');
+  let mutated = false;
+  const status = {
+    sessionId: 'session-a',
+    source: { kind: 'git' },
+    bindings: { metro: { mode: 'managed', port: address.port } },
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => {
+            mutated = true;
+          },
+          releaseSession: () => {
+            mutated = true;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: async () => false,
+    },
+  );
+
+  const result = await handler({ action: 'stop_metro' });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /METRO_AUTHORITY_MISMATCH/);
+  assert.equal(listener.listening, true);
+  assert.equal(mutated, false);
+});
+
+test('session stop_metro retries registry commit after process cleanup succeeds', async () => {
+  let processPresent = true;
+  let commitAttempts = 0;
+  const status = {
+    sessionId: 'session-a',
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: { metroPort: 8341, metro: { mode: 'managed', port: 8341 } } as Record<
+      string,
+      unknown
+    >,
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
+            commitAttempts += 1;
+            if (commitAttempts === 1) throw new Error('registry commit interrupted');
+            status.bindings = { ...status.bindings, ...update.bindings };
+          },
+          releaseSession: () => assert.fail('stop_metro must not release the owner'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: async () => {
+        processPresent = false;
+        return true;
+      },
+    },
+  );
+
+  const interrupted = await handler({ action: 'stop_metro' });
+  assert.equal(interrupted.isError, true);
+  assert.equal(processPresent, false);
+  assert.ok(status.bindings.metro);
+
+  const recovered = await handler({ action: 'stop_metro' });
+  assert.equal(recovered.isError, undefined, recovered.content[0]!.text);
+  assert.equal(status.bindings.metro, null);
+  assert.equal(commitAttempts, 2);
+});
+
 test('session release tears down its runner and Observe server before Metro and claims', async () => {
   const calls: string[] = [];
   const status = {
@@ -1507,6 +1710,85 @@ test('handoff recipient restores donor-installed integration with transferred au
     assert.equal(readFileSync(metroPath, 'utf8'), originalMetro);
     assert.equal(status.bindings.packageIntegration, null);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('transferred owner can stop Metro, restore integration, and release in order', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cleanup-lifecycle-'));
+  const listener = createServer((socket) => socket.end());
+  try {
+    const packagePath = join(root, 'package.json');
+    const originalPackage = {
+      scripts: { ios: 'expo run:ios', android: 'expo run:android' },
+    };
+    writeFileSync(packagePath, `${JSON.stringify(originalPackage)}\n`);
+    const metroPath = join(root, 'metro.config.js');
+    const originalMetro = 'module.exports = {};\n';
+    writeFileSync(metroPath, originalMetro);
+    await new Promise<void>((resolve, reject) => {
+      listener.once('error', reject);
+      listener.listen(0, '127.0.0.1', resolve);
+    });
+    const address = listener.address();
+    assert.ok(address && typeof address !== 'string');
+    const status = {
+      sessionId: 'recipient',
+      state: 'device_bound',
+      source: { kind: 'git', appRoot: root },
+      bindings: {} as Record<string, unknown>,
+      claims: [],
+    };
+    let released = false;
+    const registry = {
+      getSessionStatus: () => status,
+      updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
+        status.bindings = { ...status.bindings, ...update.bindings };
+      },
+      releaseSession: () => {
+        released = true;
+      },
+    };
+    const handler = createSessionHandler(
+      {
+        status: () => ({ available: true, ...status }),
+        requireOperational: () => ({
+          registry,
+          session: { sessionId: 'recipient', claimEpoch: 2 },
+        }),
+      } as never,
+      {
+        getSignerCapability: () => 'recipient-signer',
+        stopManagedMetro: async () => {
+          await new Promise<void>((resolve) => listener.close(() => resolve()));
+          return true;
+        },
+      },
+    );
+
+    const applied = await handler({ action: 'apply_integration', confirmed: true });
+    assert.equal(applied.isError, undefined);
+    status.bindings.metroPort = address.port;
+    status.bindings.metro = { mode: 'managed', port: address.port };
+
+    const stopped = await handler({ action: 'stop_metro' });
+    assert.equal(stopped.isError, undefined);
+    assert.equal(listener.listening, false);
+    assert.ok(status.bindings.packageIntegration);
+
+    const restored = await handler({ action: 'restore_integration', confirmed: true });
+    assert.equal(restored.isError, undefined);
+    assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), originalPackage);
+    assert.equal(readFileSync(metroPath, 'utf8'), originalMetro);
+    assert.equal(status.bindings.packageIntegration, null);
+
+    const release = await handler({ action: 'release' });
+    assert.equal(release.isError, undefined);
+    assert.equal(released, true);
+  } finally {
+    if (listener.listening) {
+      await new Promise<void>((resolve) => listener.close(() => resolve()));
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });

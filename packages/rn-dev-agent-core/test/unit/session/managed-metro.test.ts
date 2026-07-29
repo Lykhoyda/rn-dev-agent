@@ -13,6 +13,7 @@ import {
   managedMetroListenerPid,
   managedMetroParentPid,
   probeManagedMetroListener,
+  refreshManagedMetroBuildGeneration,
   resolveManagedMetroCommand,
   signalManagedMetroProcessTree,
   startManagedMetro,
@@ -830,6 +831,66 @@ test('managed Metro proof authenticates every cleanup authority field', async ()
   }
 });
 
+test('managed Metro build-generation rotation preserves authenticated shutdown authority', async () => {
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => ({
+        pid: 101,
+        exitCode: null,
+        kill: () => true,
+        unref: () => {},
+      }),
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'birth-202',
+        servingRoot: '/app',
+      }),
+    },
+  );
+
+  const refreshed = refreshManagedMetroBuildGeneration(binding, {
+    sessionId: 'session-a',
+    buildGeneration: 2,
+    signerCapability: 'signer',
+  });
+
+  assert.equal(refreshed.buildGeneration, 2);
+  assert.notEqual(refreshed.managementProof, binding.managementProof);
+  assert.equal(
+    verifyManagedMetroManagementProof(refreshed, {
+      sessionId: 'session-a',
+      signerCapability: 'signer',
+    }),
+    true,
+  );
+  assert.equal(
+    await stopManagedMetro(
+      refreshed,
+      { sessionId: 'session-a', signerCapability: 'signer' },
+      {
+        probeBirth: () => ({ status: 'absent' }),
+        probeListener: () => ({ status: 'absent' }),
+      },
+    ),
+    true,
+  );
+});
+
 test('managed Metro accepts authenticated cleanup when processes and port are already absent', async () => {
   const binding = await startManagedMetro(
     {
@@ -923,7 +984,7 @@ test('managed Metro refuses cleanup when process absence is unknown', async () =
   assert.equal(result, false);
 });
 
-test('managed Metro stops an exact listener after its launcher already exited', async () => {
+test('managed Metro stops an exact listener after transient post-signal uncertainty', async () => {
   const binding = await startManagedMetro(
     {
       appRoot: '/app',
@@ -955,6 +1016,7 @@ test('managed Metro stops an exact listener after its launcher already exited', 
     },
   );
   let listenerPresent = true;
+  let uncertainAfterSignal = true;
   const signals: Array<{
     launcherPid: number;
     launcherPresent: boolean;
@@ -972,12 +1034,19 @@ test('managed Metro stops an exact listener after its launcher already exited', 
           birth: { pid, source: 'linux-proc', token: 'birth-202' },
         };
       },
-      probeListener: () =>
-        listenerPresent ? { status: 'listening', pid: 202 } : { status: 'absent' },
+      probeListener: () => {
+        if (listenerPresent) return { status: 'listening', pid: 202 };
+        if (uncertainAfterSignal) {
+          uncertainAfterSignal = false;
+          return { status: 'unknown' };
+        }
+        return { status: 'absent' };
+      },
       signalTree: ({ launcherPid, launcherPresent, listenerPid }) => {
         signals.push({ launcherPid, launcherPresent, listenerPid });
         listenerPresent = false;
       },
+      wait: async () => {},
     },
   );
 

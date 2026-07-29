@@ -27,7 +27,7 @@ test('plugin-absent path passes any original command through unchanged', () => {
   });
 });
 
-test('Expo iOS receives exact device and Metro pinning', () => {
+test('Expo iOS launches through its exact managed Metro proxy without starting a bundler', () => {
   const plan = createBuildLaunchPlan({
     platform: 'ios',
     command: ['npx', 'expo', 'run:ios', '--configuration', 'Debug'],
@@ -48,10 +48,11 @@ test('Expo iOS receives exact device and Metro pinning', () => {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8341',
     RCT_METRO_PORT: '8341',
     RN_DEV_AGENT_SESSION_ID: 'session-ios',
+    EXPO_PACKAGER_PROXY_URL: 'http://127.0.0.1:8341',
   });
 });
 
-test('Expo Android receives exact device and Metro pinning', () => {
+test('Expo Android emulator launches through its exact host Metro proxy', () => {
   const plan = createBuildLaunchPlan({
     platform: 'android',
     command: ['expo', 'run:android'],
@@ -69,22 +70,23 @@ test('Expo Android receives exact device and Metro pinning', () => {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8342',
     RCT_METRO_PORT: '8342',
     RN_DEV_AGENT_SESSION_ID: 'session-android',
+    EXPO_PACKAGER_PROXY_URL: 'http://10.0.2.2:8342',
   });
 });
 
-test('Expo removes a matching CLI port and refuses a conflicting one', () => {
+test('Expo removes a matching port, retains no-bundler, and refuses a conflicting port', () => {
   const matching = createBuildLaunchPlan({
     platform: 'ios',
-    command: ['expo', 'run:ios', '--port', '8341'],
+    command: ['expo', 'run:ios', '--port', '8341', '--no-bundler'],
     session: iosSession,
   });
 
   assert.deepEqual(matching.command, [
     'expo',
     'run:ios',
+    '--no-bundler',
     '--device',
     iosSession.deviceId,
-    '--no-bundler',
   ]);
   assert.throws(
     () =>
@@ -95,6 +97,30 @@ test('Expo removes a matching CLI port and refuses a conflicting one', () => {
       }),
     /SESSION_BUILD_IDENTITY_CONFLICT/,
   );
+});
+
+test('Expo Android physical device requires an explicit exact Dev Client endpoint', () => {
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'android',
+        command: ['expo', 'run:android'],
+        session: { ...androidSession, deviceId: 'physical-serial' },
+      }),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
+  );
+
+  const plan = createBuildLaunchPlan({
+    platform: 'android',
+    command: ['expo', 'run:android'],
+    session: {
+      ...androidSession,
+      deviceId: 'physical-serial',
+      devClientUrl: 'example://expo-development-client/?url=http%3A%2F%2F192.0.2.10%3A8342',
+    },
+  });
+
+  assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://192.0.2.10:8342');
 });
 
 test('bare React Native iOS uses UDID and external managed Metro', () => {

@@ -64553,6 +64553,7 @@ function signalManagedMetroProcessTree(input, platform = process.platform, execu
   process.kill(-input.launcherPid, input.signal);
 }
 var signalProcessTree = signalManagedMetroProcessTree;
+var MANAGED_METRO_STOP_TIMEOUT_MS = 5e3;
 function removeManagedMetroEvidenceSocket(path) {
   if (process.platform === "win32")
     return;
@@ -64607,17 +64608,17 @@ async function stopManagedMetroProcesses(input, dependencies) {
   } catch {
     return false;
   }
-  const deadline = Date.now() + 2e3;
+  const deadline = Date.now() + MANAGED_METRO_STOP_TIMEOUT_MS;
   while (true) {
     const current = inspect();
-    if (current.launcher === "unknown" || current.listener === "unknown" || current.port.status === "unknown") {
-      return false;
-    }
-    if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
-      return true;
-    }
-    if (current.port.status === "listening" && input.listener && (current.port.pid !== input.listener.pid || current.listener !== "present")) {
-      return false;
+    const uncertain = current.launcher === "unknown" || current.listener === "unknown" || current.port.status === "unknown";
+    if (!uncertain) {
+      if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
+        return true;
+      }
+      if (current.port.status === "listening" && input.listener && (current.port.pid !== input.listener.pid || current.listener !== "present")) {
+        return false;
+      }
     }
     if (Date.now() >= deadline)
       return false;
@@ -72686,6 +72687,30 @@ function removeValue(command, flag, value) {
     command.splice(index, 2);
   }
 }
+function managedMetroProxyUrl(session) {
+  if (session.platform === "ios") {
+    return `http://127.0.0.1:${session.metroPort}`;
+  }
+  if (/^emulator-\d+$/.test(session.deviceId)) {
+    return `http://10.0.2.2:${session.metroPort}`;
+  }
+  if (!session.devClientUrl) {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL");
+  }
+  let metroUrl;
+  try {
+    const encodedMetroUrl = new URL(session.devClientUrl).searchParams.get("url");
+    if (!encodedMetroUrl)
+      throw new Error("missing url parameter");
+    metroUrl = new URL(encodedMetroUrl);
+  } catch {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint");
+  }
+  if (!["http:", "https:"].includes(metroUrl.protocol) || Number(metroUrl.port) !== session.metroPort) {
+    throw new Error("SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro");
+  }
+  return metroUrl.origin;
+}
 function commandKind(command) {
   const offset = command[0] === "npx" ? 1 : 0;
   const executable = command[offset];
@@ -72723,14 +72748,16 @@ function createBuildLaunchPlan(input) {
     ensureValue(command, "--port", String(input.session.metroPort));
     ensureFlag(command, "--no-packager");
   }
+  const env = {
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
+    RCT_METRO_PORT: String(input.session.metroPort),
+    RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
+    ...kind === "expo" ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}
+  };
   return {
     mode: "session",
     command,
-    env: {
-      ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
-      RCT_METRO_PORT: String(input.session.metroPort),
-      RN_DEV_AGENT_SESSION_ID: input.session.sessionId
-    }
+    env
   };
 }
 
@@ -75529,7 +75556,7 @@ function parseSupportedScript(script, platform) {
     command,
     session: {
       platform,
-      deviceId: "preview-device",
+      deviceId: platform === "android" ? "emulator-5554" : "preview-device",
       metroPort: 8081,
       sessionId: "preview-session"
     }
@@ -75666,7 +75693,28 @@ function removeValue(flag, value) {
     command.splice(index, 2);
   }
 }
-
+function managedMetroProxyUrl(binding) {
+  if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
+  if (/^emulator-\\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
+  if (typeof binding.devClientUrl !== 'string') {
+    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL\n');
+    process.exit(2);
+  }
+  try {
+    const encodedMetroUrl = new URL(binding.devClientUrl).searchParams.get('url');
+    if (!encodedMetroUrl) throw new Error('missing url parameter');
+    const metroUrl = new URL(encodedMetroUrl);
+    if (!['http:', 'https:'].includes(metroUrl.protocol) || Number(metroUrl.port) !== binding.metroPort) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro\n');
+      process.exit(2);
+    }
+    return metroUrl.origin;
+  } catch {
+    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint\n');
+    process.exit(2);
+  }
+}
+let expoProxyUrl = null;
 if (session) {
   if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
     process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete\n');
@@ -75683,6 +75731,7 @@ if (session) {
     ensureValue('--device', session.deviceId);
     removeValue('--port', String(session.metroPort));
     ensureFlag('--no-bundler');
+    expoProxyUrl = managedMetroProxyUrl(session);
   } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
     ensureValue('--udid', session.deviceId);
     ensureValue('--port', String(session.metroPort));
@@ -75704,6 +75753,7 @@ const child = spawnSync(command[0], command.slice(1), {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
     RCT_METRO_PORT: String(session.metroPort),
     RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
   } : process.env,
   stdio: 'inherit',
 });
@@ -76354,6 +76404,47 @@ function createSessionHandler(runtime, dependencies = {}) {
         return okResult({
           cancelled: true,
           session: projectPublicAuthorityStatus(runtime.status())
+        });
+      }
+      if (input.action === "stop_metro") {
+        const status2 = registry2.getSessionStatus(session.sessionId);
+        if (!status2) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before managed Metro cleanup");
+        }
+        const metro2 = status2.bindings.metro;
+        if (!metro2) {
+          return okResult({
+            stopped: true,
+            alreadyStopped: true,
+            session: projectPublicAuthorityStatus(runtime.status())
+          });
+        }
+        if (metro2.mode !== "managed") {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stop_metro cannot terminate an externally managed Metro");
+        }
+        const signerCapability = dependencies.getSignerCapability?.();
+        if (!signerCapability) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro cleanup requires the session signer capability");
+        }
+        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro2, {
+          sessionId: session.sessionId,
+          signerCapability
+        });
+        if (!stopped) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+        }
+        const priorTargetId = status2.bindings.bundle?.targetId;
+        const metroPort = Number(status2.bindings.metroPort);
+        registry2.updateBindings(session, {
+          state: status2.bindings.install ? "device_bound" : status2.bindings.device ? "device_claimed" : "source_bound",
+          bindings: { metro: null, bundle: null },
+          releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
+        });
+        return okResult({
+          stopped: true,
+          alreadyStopped: false,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          nextAction: "Restore package integration with confirmed=true, then release the exact session."
         });
       }
       if (input.action === "preview_integration" || input.action === "apply_integration" || input.action === "restore_integration") {
@@ -78453,7 +78544,7 @@ async function disconnectBoundSession() {
   }
   return disconnected;
 }
-trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, recovery, and release actions are fail-closed.", {
+trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, recovery, managed Metro cleanup, and release actions are fail-closed.", {
   action: external_exports.enum([
     "status",
     "bind_device",
@@ -78467,6 +78558,7 @@ trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent author
     "preview_integration",
     "apply_integration",
     "restore_integration",
+    "stop_metro",
     "release"
   ]),
   platform: external_exports.enum(["ios", "android"]).optional(),

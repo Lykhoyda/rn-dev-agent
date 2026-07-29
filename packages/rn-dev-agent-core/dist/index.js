@@ -743,7 +743,7 @@ async function disconnectBoundSession() {
     }
     return disconnected;
 }
-trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, recovery, and release actions are fail-closed.', {
+trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, recovery, managed Metro cleanup, and release actions are fail-closed.', {
     action: z.enum([
         'status',
         'bind_device',
@@ -757,6 +757,7 @@ trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent author
         'preview_integration',
         'apply_integration',
         'restore_integration',
+        'stop_metro',
         'release',
     ]),
     platform: z.enum(['ios', 'android']).optional(),

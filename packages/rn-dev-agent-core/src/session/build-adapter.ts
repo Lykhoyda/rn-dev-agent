@@ -3,6 +3,7 @@ export interface SessionBuildBinding {
   deviceId: string;
   metroPort: number;
   sessionId: string;
+  devClientUrl?: string;
 }
 
 interface BuildLaunchPlan {
@@ -33,6 +34,40 @@ function removeValue(command: string[], flag: string, value: string): void {
     if (command[index + 1] !== value) conflict(flag);
     command.splice(index, 2);
   }
+}
+
+function managedMetroProxyUrl(session: SessionBuildBinding): string {
+  if (session.platform === 'ios') {
+    return `http://127.0.0.1:${session.metroPort}`;
+  }
+  if (/^emulator-\d+$/.test(session.deviceId)) {
+    return `http://10.0.2.2:${session.metroPort}`;
+  }
+  if (!session.devClientUrl) {
+    throw new Error(
+      'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL',
+    );
+  }
+
+  let metroUrl: URL;
+  try {
+    const encodedMetroUrl = new URL(session.devClientUrl).searchParams.get('url');
+    if (!encodedMetroUrl) throw new Error('missing url parameter');
+    metroUrl = new URL(encodedMetroUrl);
+  } catch {
+    throw new Error(
+      'DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint',
+    );
+  }
+  if (
+    !['http:', 'https:'].includes(metroUrl.protocol) ||
+    Number(metroUrl.port) !== session.metroPort
+  ) {
+    throw new Error(
+      'SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro',
+    );
+  }
+  return metroUrl.origin;
 }
 
 function commandKind(command: readonly string[]): 'expo' | 'bare-ios' | 'bare-android' | null {
@@ -77,13 +112,16 @@ export function createBuildLaunchPlan(input: {
     ensureFlag(command, '--no-packager');
   }
 
+  const env = {
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
+    RCT_METRO_PORT: String(input.session.metroPort),
+    RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
+    ...(kind === 'expo' ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}),
+  };
+
   return {
     mode: 'session',
     command,
-    env: {
-      ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
-      RCT_METRO_PORT: String(input.session.metroPort),
-      RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
-    },
+    env,
   };
 }

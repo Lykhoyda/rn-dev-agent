@@ -33,10 +33,12 @@ Use `rn_session` for staged transitions:
 2. `preview_integration` shows the reversible `package.json` and Metro-config edits.
 3. `apply_integration` applies them only with `confirmed: true`.
 4. `bind_device` claims one exact platform, UUID/serial, and app ID. It refuses a nonexistent or unavailable device (`DEVICE_NOT_FOUND`), a device claimed by another live session (`DEVICE_CLAIM_CONFLICT`), and rebinding across an incompatible installed-artifact receipt (`DEVICE_RECEIPT_INCOMPATIBLE`).
-5. Literal `pnpm ios` or `pnpm android` starts or validates package-local Metro on the allocated port, injects the exact device and port, and records the installed artifact receipt.
+5. Literal `pnpm ios` or `pnpm android` starts or validates package-local Metro on the allocated port, injects the exact device and native-client port, routes Expo Dev Client launch through that managed endpoint even when an ambient default-port Metro exists, and records the installed artifact receipt.
 6. `pin_dev_client` launches the exact Expo URL or bare RN app and accepts only the target carrying the signed initial-bundle marker.
 7. `prepare_handoff` / `accept_handoff` transfer ownership explicitly, but never adopt a live runner, Observe server, or managed Metro. Acceptance durably records and proves each source-resource shutdown before completing; interrupted cleanup remains resumable by the current fenced recovery worker, including after a worker respawn, or by a later conservatively authorized stale adoption.
-8. `release` proves the authority-bound runner, Observe server, and managed Metro stopped before releasing claims. Managed Metro cleanup uses its HMAC-authenticated management proof plus exact launcher, listener, and port identities; any unproven cleanup leaves the session claimed.
+8. After an integrated build, `stop_metro` proves the exact managed launcher, listener, port, and evidence endpoint stopped, then clears Metro and bundle authority while retaining the session and integration owner.
+9. `restore_integration` with `confirmed: true` restores the package scripts and Metro config only after runtime authority is absent.
+10. `release` proves any remaining authority-bound runner, Observe server, and managed Metro stopped before releasing claims. Any unproven cleanup leaves the session claimed, so interrupted `stop_metro` → `restore_integration` → `release` sequences remain retryable.
 
 Status includes the exact opaque session ID so local workflows can remain pinned after handoff without exposing capabilities or device identities.
 

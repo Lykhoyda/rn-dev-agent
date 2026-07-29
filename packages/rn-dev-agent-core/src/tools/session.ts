@@ -51,6 +51,7 @@ export interface SessionToolInput {
     | 'preview_integration'
     | 'apply_integration'
     | 'restore_integration'
+    | 'stop_metro'
     | 'release';
   platform?: 'ios' | 'android';
   deviceId?: string;
@@ -429,6 +430,69 @@ export function createSessionHandler(
         return okResult({
           cancelled: true,
           session: projectPublicAuthorityStatus(runtime.status()),
+        });
+      }
+
+      if (input.action === 'stop_metro') {
+        const status = registry.getSessionStatus(session.sessionId);
+        if (!status) {
+          throw new SessionAuthorityError(
+            'SESSION_AUTHORITY_REQUIRED',
+            'session disappeared before managed Metro cleanup',
+          );
+        }
+        const metro = status.bindings.metro as Partial<ManagedMetroBinding> | null | undefined;
+        if (!metro) {
+          return okResult({
+            stopped: true,
+            alreadyStopped: true,
+            session: projectPublicAuthorityStatus(runtime.status()),
+          });
+        }
+        if (metro.mode !== 'managed') {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'stop_metro cannot terminate an externally managed Metro',
+          );
+        }
+        const signerCapability = dependencies.getSignerCapability?.();
+        if (!signerCapability) {
+          throw new SessionAuthorityError(
+            'SESSION_AUTHORITY_REQUIRED',
+            'managed Metro cleanup requires the session signer capability',
+          );
+        }
+        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+          sessionId: session.sessionId,
+          signerCapability,
+        });
+        if (!stopped) {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'managed Metro could not be stopped with exact process authority',
+          );
+        }
+        const priorTargetId = (status.bindings.bundle as { targetId?: unknown } | null | undefined)
+          ?.targetId;
+        const metroPort = Number(status.bindings.metroPort);
+        registry.updateBindings(session, {
+          state: status.bindings.install
+            ? 'device_bound'
+            : status.bindings.device
+              ? 'device_claimed'
+              : 'source_bound',
+          bindings: { metro: null, bundle: null },
+          releaseResources:
+            typeof priorTargetId === 'string' && Number.isSafeInteger(metroPort)
+              ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
+              : [],
+        });
+        return okResult({
+          stopped: true,
+          alreadyStopped: false,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          nextAction:
+            'Restore package integration with confirmed=true, then release the exact session.',
         });
       }
 

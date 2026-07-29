@@ -14,9 +14,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { createServer } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { applyPackageIntegration } from '../../dist/session/package-integration.js';
 import { stopManagedMetro } from '../../dist/session/managed-metro.js';
@@ -24,6 +24,7 @@ import { stopManagedMetro } from '../../dist/session/managed-metro.js';
 const requireFromTest = createRequire(import.meta.url);
 const managedMetroModuleUrl = new URL('../../dist/session/managed-metro.js', import.meta.url).href;
 const expoBundlerPropsPath = requireFromTest.resolve('@expo/cli/build/src/run/resolveBundlerProps');
+const expoUrlCreatorPath = requireFromTest.resolve('@expo/cli/build/src/start/server/UrlCreator');
 const supportedDarwinArchitecture = process.arch === 'arm64' || process.arch === 'x64';
 
 function resolveOxfmtAddonPath(): string {
@@ -51,8 +52,21 @@ async function availablePort(): Promise<number> {
   });
 }
 
+async function portIsReachable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    const finish = (reachable: boolean) => {
+      socket.end();
+      resolve(reachable);
+    };
+    socket.setTimeout(1_000, () => finish(false));
+    socket.once('error', () => finish(false));
+    socket.once('connect', () => finish(true));
+  });
+}
+
 test(
-  'literal pnpm ios passes installed Expo parsing and retains managed NativeWind evidence',
+  'literal pnpm ios reuses managed Metro while a foreign default-port Metro remains present',
   { skip: process.platform !== 'darwin' || !supportedDarwinArchitecture, timeout: 45_000 },
   async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-metro-pnpm-nativewind-')));
@@ -73,6 +87,21 @@ test(
     const bindingPath = join(runtimeRoot, 'binding.json');
     const buildResultPath = join(runtimeRoot, 'build-result.json');
     const sessionCliPath = join(root, 'rn-session-fixture.cjs');
+    let defaultMetroConnections = 0;
+    const defaultMetro = createServer((socket) => {
+      defaultMetroConnections += 1;
+      socket.on('error', () => {});
+      socket.end('HTTP/1.1 200 OK\r\nContent-Length: 23\r\n\r\npackager-status:running');
+    });
+    const ownsDefaultMetro = await new Promise<boolean>((resolve, reject) => {
+      defaultMetro.once('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EADDRINUSE') resolve(false);
+        else reject(error);
+      });
+      defaultMetro.listen(8081, '127.0.0.1', () => resolve(true));
+    });
+    assert.equal(await portIsReachable(8081), true);
+    const defaultConnectionsBeforeBuild = defaultMetroConnections;
     const port = await availablePort();
     const signerCapability = 'integration-signer';
 
@@ -137,6 +166,7 @@ if (args[0] === 'start') {
   require('nativewind');
   const port = Number(args[args.indexOf('--port') + 1]);
   net.createServer((socket) => {
+    socket.on('error', () => {});
     socket.end('HTTP/1.1 200 OK\\r\\nContent-Length: 23\\r\\n\\r\\npackager-status:running');
   }).listen(port, '127.0.0.1');
   setInterval(() => {}, 1 << 30);
@@ -146,7 +176,7 @@ if (args[0] === 'start') {
     bundler: !args.includes('--no-bundler'),
     ...(portIndex >= 0 ? { port: Number(args[portIndex + 1]) } : {})
   };
-  require(${JSON.stringify(expoBundlerPropsPath)}).resolveBundlerPropsAsync(process.cwd(), options).then(() => {
+  require(${JSON.stringify(expoBundlerPropsPath)}).resolveBundlerPropsAsync(process.cwd(), options).then((resolved) => {
   const evidence = fs.readFileSync(path.join(process.env.FIXTURE_RUNTIME_ROOT, 'metro-runtime-evidence.jsonl'), 'utf8')
     .trim()
     .split('\\n')
@@ -159,7 +189,18 @@ if (args[0] === 'start') {
     entry.digest === digest &&
     /^[a-f0-9]{64}$/.test(entry.signature || '')
   );
-  if (args.includes('--port') || !args.includes('--no-bundler') || !observed('input') || !observed('stability')) process.exit(7);
+  if (portIndex >= 0 || !args.includes('--no-bundler') || !observed('input') || !observed('stability')) process.exit(7);
+  const { UrlCreator } = require(${JSON.stringify(expoUrlCreatorPath)});
+  const launchUrl = new UrlCreator(
+    { scheme: 'fixture' },
+    { port: resolved.port },
+    { address: '127.0.0.1' }
+  ).constructDevClientUrl();
+  const managedUrl = new URL(new URL(launchUrl).searchParams.get('url'));
+  if (resolved.shouldStartBundler || managedUrl.port !== process.env.RCT_METRO_PORT) {
+    process.stderr.write('EXPO_REUSE_MISMATCH:' + JSON.stringify({ resolved, launchUrl }) + '\\n');
+    process.exit(14);
+  }
   if (process.env.ORG_GRADLE_PROJECT_reactNativeDevServerPort !== process.env.RCT_METRO_PORT) process.exit(13);
   const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.env.RCT_METRO_PORT) });
   socket.setTimeout(2000, () => process.exit(8));
@@ -168,7 +209,10 @@ if (args[0] === 'start') {
     socket.destroy();
     fs.writeFileSync(process.env.FIXTURE_BUILD_RESULT, JSON.stringify({
       enteredNativeBuildInstall: true,
-      port: process.env.RCT_METRO_PORT
+      port: process.env.RCT_METRO_PORT,
+      expoResolvedPort: resolved.port,
+      expoLaunchPort: Number(managedUrl.port),
+      expoStartedBundler: resolved.shouldStartBundler
     }));
   });
   }).catch((error) => {
@@ -202,6 +246,13 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
       process.stderr.write('live Metro binding is required\\n');
       process.exit(1);
     }
+    const { refreshManagedMetroBuildGeneration } = await import(metroModule);
+    const binding = JSON.parse(fs.readFileSync(bindingPath, 'utf8'));
+    fs.writeFileSync(bindingPath, JSON.stringify(refreshManagedMetroBuildGeneration(binding, {
+      sessionId: 'fixture-session',
+      buildGeneration: 2,
+      signerCapability: ${JSON.stringify(signerCapability)}
+    })));
     process.stdout.write(JSON.stringify({
       platform: 'ios',
       deviceId: 'fixture-device',
@@ -232,7 +283,28 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
     if (!await stopManagedMetro(binding, {
       sessionId: 'fixture-session',
       signerCapability: ${JSON.stringify(signerCapability)}
-    })) process.exit(11);
+    })) {
+      const { probeManagedMetroListener } = await import(metroModule);
+      const alive = (pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      process.stderr.write('FIXTURE_METRO_STOP_REFUSED:' + JSON.stringify({
+        port: binding.port,
+        launcherPid: binding.launcherPid,
+        launcherAlive: alive(binding.launcherPid),
+        listenerPid: binding.pid,
+        listenerAlive: alive(binding.pid),
+        listenerProbe: probeManagedMetroListener(binding.port),
+        runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
+        socketExists: fs.existsSync(binding.runtimeEvidenceSocket)
+      }) + '\\n');
+      process.exit(11);
+    }
     process.stdout.write('{"receipt":true}\\n');
     return;
   }
@@ -251,6 +323,7 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
         timeout: 40_000,
         env: {
           ...process.env,
+          PATH: `${dirname(process.execPath)}:${process.env.PATH}`,
           FIXTURE_ADDON_PATH: addonPath,
           FIXTURE_BINDING_PATH: bindingPath,
           FIXTURE_BUILD_RESULT: buildResultPath,
@@ -263,8 +336,16 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
       assert.deepEqual(JSON.parse(readFileSync(buildResultPath, 'utf8')), {
         enteredNativeBuildInstall: true,
         port: String(port),
+        expoResolvedPort: 8081,
+        expoLaunchPort: port,
+        expoStartedBundler: false,
       });
+      assert.equal(await portIsReachable(8081), true);
+      if (ownsDefaultMetro) {
+        assert.equal(defaultMetroConnections, defaultConnectionsBeforeBuild + 1);
+      }
       const binding = JSON.parse(readFileSync(bindingPath, 'utf8')) as Record<string, unknown>;
+      assert.equal(binding.buildGeneration, 2);
       assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
       assert.equal(binding.runtimeEvidenceProtocol, 2);
       const evidence = readFileSync(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), 'utf8')
@@ -295,6 +376,9 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
             signerCapability,
           });
         } catch {}
+      }
+      if (ownsDefaultMetro && defaultMetro.listening) {
+        await new Promise<void>((resolve) => defaultMetro.close(() => resolve()));
       }
       rmSync(root, { force: true, recursive: true });
     }

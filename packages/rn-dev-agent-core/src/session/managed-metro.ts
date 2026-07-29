@@ -1350,6 +1350,26 @@ export function verifyManagedMetroManagementProof(
   );
 }
 
+export function refreshManagedMetroBuildGeneration(
+  binding: ManagedMetroBinding,
+  input: { sessionId: string; buildGeneration: number; signerCapability: string },
+): ManagedMetroBinding {
+  if (
+    !Number.isSafeInteger(input.buildGeneration) ||
+    input.buildGeneration < binding.buildGeneration ||
+    !verifyManagedMetroManagementProof(binding as unknown as Record<string, unknown>, input)
+  ) {
+    throw new Error(
+      'METRO_AUTHORITY_MISMATCH: managed Metro build generation cannot rotate from unverified authority',
+    );
+  }
+  const refreshed = { ...binding, buildGeneration: input.buildGeneration };
+  return {
+    ...refreshed,
+    managementProof: managementProof(input.sessionId, refreshed, input.signerCapability),
+  };
+}
+
 function legacyManagementProof(
   sessionId: string,
   authority: Omit<
@@ -2052,6 +2072,7 @@ export function signalManagedMetroProcessTree(
 }
 
 const signalProcessTree = signalManagedMetroProcessTree;
+const MANAGED_METRO_STOP_TIMEOUT_MS = 5_000;
 
 function removeManagedMetroEvidenceSocket(path: string): void {
   if (process.platform === 'win32') return;
@@ -2141,29 +2162,28 @@ async function stopManagedMetroProcesses(
   } catch {
     return false;
   }
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + MANAGED_METRO_STOP_TIMEOUT_MS;
   while (true) {
     const current = inspect();
-    if (
+    const uncertain =
       current.launcher === 'unknown' ||
       current.listener === 'unknown' ||
-      current.port.status === 'unknown'
-    ) {
-      return false;
-    }
-    if (
-      current.launcher === 'stopped' &&
-      current.listener === 'stopped' &&
-      current.port.status === 'absent'
-    ) {
-      return true;
-    }
-    if (
-      current.port.status === 'listening' &&
-      input.listener &&
-      (current.port.pid !== input.listener.pid || current.listener !== 'present')
-    ) {
-      return false;
+      current.port.status === 'unknown';
+    if (!uncertain) {
+      if (
+        current.launcher === 'stopped' &&
+        current.listener === 'stopped' &&
+        current.port.status === 'absent'
+      ) {
+        return true;
+      }
+      if (
+        current.port.status === 'listening' &&
+        input.listener &&
+        (current.port.pid !== input.listener.pid || current.listener !== 'present')
+      ) {
+        return false;
+      }
     }
     if (Date.now() >= deadline) return false;
     await wait(25);

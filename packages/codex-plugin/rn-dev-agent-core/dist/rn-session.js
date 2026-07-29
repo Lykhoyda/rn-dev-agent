@@ -12773,6 +12773,38 @@ function verifyManagedMetroRuntimeAdmission(path, capability, expected) {
     return false;
   }
 }
+function verifyManagedMetroManagementProof(binding, input) {
+  if (binding.mode !== "managed" || typeof binding.port !== "number" || typeof binding.pid !== "number" || typeof binding.birth !== "string" || typeof binding.launcherPid !== "number" || typeof binding.launcherBirth !== "string" || typeof binding.instanceId !== "string" || typeof binding.runtimeEvidencePath !== "string" || typeof binding.runtimeEvidenceSocket !== "string" || typeof binding.servingRoot !== "string" || !Number.isSafeInteger(binding.buildGeneration) || binding.buildGeneration < 0 || binding.runtimeEvidenceAuthority !== "managed-sandbox-v1" && binding.runtimeEvidenceAuthority !== "reported-v1" || binding.runtimeEvidenceProtocol !== 2 || typeof binding.managementProof !== "string") {
+    return false;
+  }
+  const expected = managementProof(input.sessionId, {
+    port: binding.port,
+    pid: binding.pid,
+    birth: binding.birth,
+    launcherPid: binding.launcherPid,
+    launcherBirth: binding.launcherBirth,
+    instanceId: binding.instanceId,
+    runtimeEvidencePath: binding.runtimeEvidencePath,
+    runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
+    runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority,
+    runtimeEvidenceProtocol: binding.runtimeEvidenceProtocol,
+    servingRoot: binding.servingRoot,
+    buildGeneration: binding.buildGeneration
+  }, input.signerCapability);
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const observedBuffer = Buffer.from(binding.managementProof, "hex");
+  return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+}
+function refreshManagedMetroBuildGeneration(binding, input) {
+  if (!Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < binding.buildGeneration || !verifyManagedMetroManagementProof(binding, input)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: managed Metro build generation cannot rotate from unverified authority");
+  }
+  const refreshed = { ...binding, buildGeneration: input.buildGeneration };
+  return {
+    ...refreshed,
+    managementProof: managementProof(input.sessionId, refreshed, input.signerCapability)
+  };
+}
 function legacyManagementProof(sessionId, authority, signerCapability) {
   return createHmac3("sha256", signerCapability).update([
     sessionId,
@@ -13273,6 +13305,7 @@ function signalManagedMetroProcessTree(input, platform = process.platform, execu
   process.kill(-input.launcherPid, input.signal);
 }
 var signalProcessTree = signalManagedMetroProcessTree;
+var MANAGED_METRO_STOP_TIMEOUT_MS = 5e3;
 function removeManagedMetroEvidenceSocket(path) {
   if (process.platform === "win32")
     return;
@@ -13327,17 +13360,17 @@ async function stopManagedMetroProcesses(input, dependencies) {
   } catch {
     return false;
   }
-  const deadline = Date.now() + 2e3;
+  const deadline = Date.now() + MANAGED_METRO_STOP_TIMEOUT_MS;
   while (true) {
     const current = inspect();
-    if (current.launcher === "unknown" || current.listener === "unknown" || current.port.status === "unknown") {
-      return false;
-    }
-    if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
-      return true;
-    }
-    if (current.port.status === "listening" && input.listener && (current.port.pid !== input.listener.pid || current.listener !== "present")) {
-      return false;
+    const uncertain = current.launcher === "unknown" || current.listener === "unknown" || current.port.status === "unknown";
+    if (!uncertain) {
+      if (current.launcher === "stopped" && current.listener === "stopped" && current.port.status === "absent") {
+        return true;
+      }
+      if (current.port.status === "listening" && input.listener && (current.port.pid !== input.listener.pid || current.listener !== "present")) {
+        return false;
+      }
     }
     if (Date.now() >= deadline)
       return false;
@@ -15995,6 +16028,11 @@ async function main() {
       const signerCapability = readSigner(status);
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
       const buildToken = randomUUID3();
+      const buildMetro = metro.mode === "managed" ? refreshManagedMetroBuildGeneration(metro, {
+        sessionId: status.sessionId,
+        buildGeneration,
+        signerCapability
+      }) : { ...metro, buildGeneration };
       const runner = status.bindings.runner;
       const recorder = status.bindings.recorder;
       const releaseResources = [];
@@ -16035,7 +16073,7 @@ async function main() {
           currentOperation = status.registry.replaceBindingsDuringOperation(operation, {
             releaseResources,
             bindings: {
-              metro: { ...metro, buildGeneration },
+              metro: buildMetro,
               pendingBuild: { buildToken, platform, buildGeneration },
               bundle: null,
               runner: null,
@@ -16054,7 +16092,8 @@ async function main() {
         appId: device.appId,
         metroPort: Number(status.bindings.metroPort),
         sessionId: status.sessionId,
-        buildToken
+        buildToken,
+        ...typeof device.devClientUrl === "string" ? { devClientUrl: device.devClientUrl } : {}
       })}
 `);
       return;

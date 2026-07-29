@@ -1163,6 +1163,18 @@ export function verifyManagedMetroManagementProof(binding, input) {
     return (expectedBuffer.length === observedBuffer.length &&
         timingSafeEqual(expectedBuffer, observedBuffer));
 }
+export function refreshManagedMetroBuildGeneration(binding, input) {
+    if (!Number.isSafeInteger(input.buildGeneration) ||
+        input.buildGeneration < binding.buildGeneration ||
+        !verifyManagedMetroManagementProof(binding, input)) {
+        throw new Error('METRO_AUTHORITY_MISMATCH: managed Metro build generation cannot rotate from unverified authority');
+    }
+    const refreshed = { ...binding, buildGeneration: input.buildGeneration };
+    return {
+        ...refreshed,
+        managementProof: managementProof(input.sessionId, refreshed, input.signerCapability),
+    };
+}
 function legacyManagementProof(sessionId, authority, signerCapability) {
     return createHmac('sha256', signerCapability)
         .update([
@@ -1736,6 +1748,7 @@ export function signalManagedMetroProcessTree(input, platform = process.platform
     process.kill(-input.launcherPid, input.signal);
 }
 const signalProcessTree = signalManagedMetroProcessTree;
+const MANAGED_METRO_STOP_TIMEOUT_MS = 5_000;
 function removeManagedMetroEvidenceSocket(path) {
     if (process.platform === 'win32')
         return;
@@ -1801,23 +1814,23 @@ async function stopManagedMetroProcesses(input, dependencies) {
     catch {
         return false;
     }
-    const deadline = Date.now() + 2_000;
+    const deadline = Date.now() + MANAGED_METRO_STOP_TIMEOUT_MS;
     while (true) {
         const current = inspect();
-        if (current.launcher === 'unknown' ||
+        const uncertain = current.launcher === 'unknown' ||
             current.listener === 'unknown' ||
-            current.port.status === 'unknown') {
-            return false;
-        }
-        if (current.launcher === 'stopped' &&
-            current.listener === 'stopped' &&
-            current.port.status === 'absent') {
-            return true;
-        }
-        if (current.port.status === 'listening' &&
-            input.listener &&
-            (current.port.pid !== input.listener.pid || current.listener !== 'present')) {
-            return false;
+            current.port.status === 'unknown';
+        if (!uncertain) {
+            if (current.launcher === 'stopped' &&
+                current.listener === 'stopped' &&
+                current.port.status === 'absent') {
+                return true;
+            }
+            if (current.port.status === 'listening' &&
+                input.listener &&
+                (current.port.pid !== input.listener.pid || current.listener !== 'present')) {
+                return false;
+            }
         }
         if (Date.now() >= deadline)
             return false;
