@@ -237,6 +237,7 @@ test(
     const bindingPath = join(runtimeRoot, 'binding.json');
     const completionPath = join(runtimeRoot, 'completion.json');
     const requestLogPath = join(runtimeRoot, 'metro-requests.jsonl');
+    const productRequestLogPath = join(runtimeRoot, 'product-requests.jsonl');
     const sessionCliPath = join(root, 'rn-session-installed-expo.cjs');
     const simulatorName = `RNDA-installed-expo-${process.pid}-${Date.now()}`;
     const signerCapability = randomBytes(32).toString('base64url');
@@ -244,6 +245,30 @@ test(
     const instanceId = 'installed-expo-metro';
     const appId = 'com.rndevagent.testapp';
     const evidencePath = process.env.RN_DEV_AGENT_INSTALLED_EXPO_EVIDENCE_PATH?.trim();
+    const diagnosticsDir = process.env.RN_DEV_AGENT_INSTALLED_EXPO_DIAGNOSTICS_DIR?.trim();
+    const preserveDiagnostic = (name: string, contents: string): void => {
+      if (!diagnosticsDir) return;
+      try {
+        mkdirSync(diagnosticsDir, { recursive: true });
+        writeFileSync(join(diagnosticsDir, name), contents);
+      } catch {}
+    };
+    const preserveAppProcesses = (label: string): void => {
+      if (!diagnosticsDir) return;
+      try {
+        const processes = spawnSync('/bin/ps', ['-axww', '-o', 'pid,ppid,lstart,command'], {
+          encoding: 'utf8',
+          maxBuffer: 32 * 1024 * 1024,
+        });
+        preserveDiagnostic(
+          `processes-${label}.txt`,
+          (processes.stdout ?? '')
+            .split('\n')
+            .filter((line) => /rndevagent|CoreSimulator|expo/i.test(line) && !line.includes('/bin/ps'))
+            .join('\n'),
+        );
+      } catch {}
+    };
     const port = await availablePort();
     const foreignMetro = await bindForeignDefaultMetro();
     let foreignPid: number | undefined;
@@ -267,6 +292,51 @@ test(
       writeFileSync(
         join(root, 'metro.config.js'),
         `const fs = require('node:fs');
+const http = require('node:http');
+const productRequestLogPath = ${JSON.stringify(productRequestLogPath)};
+const originalServerEmit = http.Server.prototype.emit;
+http.Server.prototype.emit = function (event, ...args) {
+  if (event === 'request') {
+    try {
+      const [request, response] = args;
+      const record = (phase, responseBytes) => {
+        fs.appendFileSync(productRequestLogPath, JSON.stringify({
+          at: new Date().toISOString(),
+          phase,
+          method: request.method,
+          url: request.url,
+          status: response.statusCode,
+          responseBytes,
+          accept: request.headers && request.headers.accept,
+          expoPlatform: request.headers && request.headers['expo-platform'],
+          userAgent: request.headers && request.headers['user-agent'],
+        }) + '\\n');
+      };
+      let responseBytes = 0;
+      const measure = (chunk, encoding) => {
+        if (!chunk) return;
+        responseBytes += Buffer.isBuffer(chunk)
+          ? chunk.length
+          : Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined);
+      };
+      const write = response.write.bind(response);
+      const end = response.end.bind(response);
+      let started = false;
+      response.write = (chunk, encoding, callback) => {
+        if (!started) { started = true; record('start', 0); }
+        measure(chunk, encoding);
+        return write(chunk, encoding, callback);
+      };
+      response.end = (chunk, encoding, callback) => {
+        if (!started) { started = true; record('start', 0); }
+        measure(chunk, encoding);
+        return end(chunk, encoding, callback);
+      };
+      response.once('finish', () => { try { record('finish', responseBytes); } catch {} });
+    } catch {}
+  }
+  return originalServerEmit.call(this, event, ...args);
+};
 const { getDefaultConfig } = require('expo/metro-config');
 const { withNativeWind } = require('nativewind/metro');
 const config = withNativeWind(getDefaultConfig(__dirname), { input: './global.css' });
@@ -474,6 +544,9 @@ async function writeMarker(buildGeneration) {
         maxBuffer: 64 * 1024 * 1024,
         env: buildEnvironment,
       });
+      preserveDiagnostic('native-command-stdout.txt', nativeCommand.stdout ?? '');
+      preserveDiagnostic('native-command-stderr.txt', nativeCommand.stderr ?? '');
+      preserveAppProcesses('after-native-command');
       assert.equal(nativeCommand.status, 0, `${nativeCommand.stdout}\n${nativeCommand.stderr}`);
       const nativeOutput = `${nativeCommand.stdout}\n${nativeCommand.stderr}`;
       assert.match(
@@ -524,8 +597,8 @@ async function writeMarker(buildGeneration) {
 
       const productRequests = await waitFor(
         () => {
-          if (!existsSync(requestLogPath)) return null;
-          const requests = readFileSync(requestLogPath, 'utf8')
+          if (!existsSync(productRequestLogPath)) return null;
+          const requests = readFileSync(productRequestLogPath, 'utf8')
             .trim()
             .split('\n')
             .filter(Boolean)
@@ -533,11 +606,13 @@ async function writeMarker(buildGeneration) {
               (line) =>
                 JSON.parse(line) as {
                   method: string;
+                  phase: string;
                   responseBytes: number;
                   status: number;
                   url: string;
                 },
-            );
+            )
+            .filter((request) => request.phase === 'finish');
           const headIndex = requests.findIndex(
             (request) => request.method === 'HEAD' && request.url === '/' && request.status === 200,
           );
@@ -806,6 +881,35 @@ async function writeMarker(buildGeneration) {
       assert.equal(metroListenerPid(8081), foreignPid);
       assert.equal(readProcessBirth(foreignPid)?.token, foreignBirth.token);
     } finally {
+      if (diagnosticsDir) {
+        preserveAppProcesses('teardown');
+        try {
+          mkdirSync(diagnosticsDir, { recursive: true });
+          if (existsSync(runtimeRoot)) {
+            cpSync(runtimeRoot, join(diagnosticsDir, 'runtime'), { recursive: true });
+          }
+        } catch {}
+        if (simulatorId) {
+          const deviceLog = spawnSync(
+            'xcrun',
+            [
+              'simctl',
+              'spawn',
+              simulatorId,
+              'log',
+              'show',
+              '--style',
+              'compact',
+              '--last',
+              '15m',
+              '--predicate',
+              'processImagePath CONTAINS[c] "rndevagent" OR subsystem CONTAINS[c] "expo"',
+            ],
+            { encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024 },
+          );
+          preserveDiagnostic('device-log.txt', `${deviceLog.stdout ?? ''}\n${deviceLog.stderr ?? ''}`);
+        }
+      }
       await client?.disconnect().catch(() => {});
       if (runnerStarted && simulatorId) {
         await stopFastRunner(simulatorId).catch(() => {});
@@ -824,8 +928,24 @@ async function writeMarker(buildGeneration) {
         } catch {}
       }
       if (simulatorId) {
-        spawnSync('xcrun', ['simctl', 'shutdown', simulatorId], { encoding: 'utf8' });
-        spawnSync('xcrun', ['simctl', 'delete', simulatorId], { encoding: 'utf8' });
+        const shutdown = spawnSync('xcrun', ['simctl', 'shutdown', simulatorId], {
+          encoding: 'utf8',
+        });
+        const deletion = spawnSync('xcrun', ['simctl', 'delete', simulatorId], {
+          encoding: 'utf8',
+        });
+        preserveDiagnostic(
+          'cleanup-outcomes.json',
+          `${JSON.stringify(
+            {
+              deletion: { status: deletion.status, stderr: deletion.stderr },
+              shutdown: { status: shutdown.status, stderr: shutdown.stderr },
+              simulatorId,
+            },
+            null,
+            2,
+          )}\n`,
+        );
       }
       if (foreignPid && foreignBirth) {
         assert.equal(metroListenerPid(8081), foreignPid);

@@ -693,6 +693,7 @@ let activeChildSpawnAuthorization;
 function authenticatedMessage(context, value) {
   const snapshot = snapshotInvocation(value);
   context.sequence += 1;
+  if (context.observeExchange) context.observeExchange();
   persistLoaderObservation(
     'semantics',
     canonicalAuthorityJson({
@@ -1156,12 +1157,12 @@ function authenticatedChildStdio(stdio, mode, silent, input) {
         : stdio === 'ignore'
           ? ['ignore', 'ignore', 'ignore']
           : mode === 'fork' && !silent
-            ? ['ignore', 'inherit', 'inherit']
-            : [mode === 'sync' ? 'pipe' : 'ignore', 'pipe', 'pipe'];
+            ? ['pipe', 'inherit', 'inherit']
+            : ['pipe', 'pipe', 'pipe'];
   if (mode === 'sync') {
     if (normalized[0] !== 'pipe' && normalized[0] !== 'ignore') throw descendantError();
     if (input !== undefined && normalized[0] !== 'pipe') throw descendantError();
-  } else if (normalized[0] !== 'ignore') {
+  } else if (normalized[0] !== 'ignore' && normalized[0] !== 'pipe') {
     throw descendantError();
   }
   if (hasEvidenceDescriptor) {
@@ -1181,6 +1182,48 @@ function descendantError() {
   const error = new Error('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION');
   error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
   return error;
+}
+const CHILD_EXCHANGE_STALL_CODE = 'MANAGED_TRANSFORM_CHANNEL_STALLED';
+const intrinsicProcessKill = process.kill;
+function childExchangeStallBound() {
+  const configured = Number(process.env.RN_DEV_AGENT_METRO_CHILD_STALL_MS);
+  if (Number.isInteger(configured) && configured > 0) return configured;
+  return 120_000;
+}
+function watchFirstChildExchange(child, context, nonce) {
+  let settled = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+  };
+  const stalled = (reason) => {
+    if (settled) return;
+    settle();
+    const detail = canonicalAuthorityJson({
+      code: CHILD_EXCHANGE_STALL_CODE,
+      pid: typeof child.pid === 'number' ? child.pid : null,
+      reason,
+      recipient: nonce,
+    });
+    persistLoaderObservation('violation', detail);
+    try {
+      fs.writeSync(2, CHILD_EXCHANGE_STALL_CODE + ': ' + detail + '\\n');
+    } catch {}
+    if (reason === 'timeout' && typeof child.pid === 'number') {
+      try {
+        intrinsicReflectApply(intrinsicProcessKill, process, [child.pid, 'SIGKILL']);
+      } catch {}
+    }
+  };
+  const timer = setTimeout(() => stalled('timeout'), childExchangeStallBound());
+  if (typeof timer.unref === 'function') timer.unref();
+  context.observeExchange = settle;
+  child.once?.('message', settle);
+  child.once?.('exit', () => {
+    if (settled) return;
+    stalled('exit-before-first-exchange');
+  });
 }
 if (typeof process.execve === 'function') {
   Object.defineProperty(process, 'execve', {
@@ -1867,6 +1910,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
         }
         fenceNativeChannel(channel.handle, messageContext);
         child[channel.symbol] = nativeHandleFacade(channel.handle, 'onread');
+        watchFirstChildExchange(child, messageContext, nonce);
       }
       return child;
     },

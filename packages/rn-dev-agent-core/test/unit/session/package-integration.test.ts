@@ -3895,3 +3895,112 @@ test('copied adapter accepts build identity only from the package-local session 
     rmSync(root, { force: true, recursive: true });
   }
 });
+
+test('authenticated descendants receive an open stdin instead of an EOF stream', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-child-stdin-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const childEntry = join(root, 'stdin-child.cjs');
+    // Tailwind's watcher (used by NativeWind) exits on stdin 'end'; a /dev/null stdin ends
+    // immediately and silently strands every caller awaiting the child's first message.
+    writeFileSync(
+      childEntry,
+      "process.stdin.on('end', () => { if (process.send) process.send({ stdin: 'ended' }); process.exit(0); }); process.stdin.resume(); setTimeout(() => { if (process.send) process.send({ stdin: 'open' }); process.exit(0); }, 1500);",
+    );
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { stdio: 'pipe', execArgv: ['--no-warnings'] }); if (child.stdin === null) { console.error('child stdin was not a pipe'); process.exit(3); } const observed = await new Promise((resolve, reject) => { child.once('error', reject); child.once('message', resolve); child.once('exit', () => reject(new Error('child exited without a message'))); }); if (observed.stdin !== 'open') { console.error('child stdin ended: ' + JSON.stringify(observed)); process.exit(4); } })().catch((error) => { console.error(error); process.exit(1); });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('a first authenticated child exchange that never completes fails typed instead of hanging', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-child-stall-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const childEntry = join(root, 'stalled-child.cjs');
+    writeFileSync(childEntry, 'setInterval(() => {}, 1000);\n');
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    environment.RN_DEV_AGENT_METRO_CHILD_STALL_MS = '1500';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'] }); const exit = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); setTimeout(() => reject(new Error('stalled child was never reaped')), 30000); }); if (exit.signal !== 'SIGKILL') { console.error('unexpected stalled child exit ' + JSON.stringify(exit)); process.exit(3); } })().catch((error) => { console.error(error); process.exit(1); });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /MANAGED_TRANSFORM_CHANNEL_STALLED/);
+    const violations = readFileSync(runtimeLoads, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { kind: string; value: string })
+      .filter((entry) => entry.kind === 'violation');
+    assert.ok(
+      violations.some((entry) => entry.value.includes('MANAGED_TRANSFORM_CHANNEL_STALLED')),
+      'the stalled first exchange was not journaled',
+    );
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
