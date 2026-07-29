@@ -1263,10 +1263,11 @@ export function createAuthorityGate(
           const optionalPostflightAxes = managedTargetAbsent
             ? []
             : optionalBefore.map(({ axis }) => axis);
+          const runnerAuthorityReleased = managedRunnerParked || containedRunner !== null;
           const postflightAxes = [
             ...(profile.postflightAxes ?? profile.axes),
             ...optionalPostflightAxes,
-          ].filter((axis) => !(containedRunner && axis === 'R'));
+          ].filter((axis) => !(runnerAuthorityReleased && axis === 'R'));
           const after = await Promise.all(
             postflightAxes.map((axis) =>
               dependencies.probe({
@@ -1295,7 +1296,7 @@ export function createAuthorityGate(
               }
             : effectiveProfile;
           const runnerAwareReceiptProfile =
-            managedRunnerParked || containedRunner !== null
+            runnerAuthorityReleased
               ? {
                   ...receiptBaseProfile,
                   axes: receiptBaseProfile.axes.filter((axis) => axis !== 'R'),
