@@ -64,12 +64,15 @@ const { registerHooks } = moduleApi;
 const { fileURLToPath } = require('node:url');
 const { deserialize, serialize } = require('node:v8');
 const workerThreads = require('node:worker_threads');
+const IntrinsicArrayBuffer = ArrayBuffer;
 const IntrinsicObject = Object;
 const IntrinsicMap = Map;
 const IntrinsicProxy = Proxy;
 const IntrinsicSet = Set;
+const IntrinsicSharedArrayBuffer = SharedArrayBuffer;
 const IntrinsicWeakMap = WeakMap;
 const IntrinsicWeakSet = WeakSet;
+const intrinsicArrayBufferIsView = ArrayBuffer.isView;
 const intrinsicArrayIsArray = Array.isArray;
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicNumberIsFinite = Number.isFinite;
@@ -666,17 +669,22 @@ function snapshotInvocation(value) {
   } catch {
     throw descendantError();
   }
-  if (bytes.byteLength > 1024 * 1024) throw descendantError();
   const cloned = deserialize(bytes);
   const pending = [cloned];
   const seen = new IntrinsicWeakSet();
   while (pending.length > 0) {
     const candidate = pending.pop();
-    if (candidate instanceof SharedArrayBuffer) throw descendantError();
+    if (candidate instanceof IntrinsicSharedArrayBuffer) throw descendantError();
     if (!candidate || typeof candidate !== 'object' || privateWeakSetHas(seen, candidate)) {
       continue;
     }
     privateWeakSetAdd(seen, candidate);
+    if (
+      candidate instanceof IntrinsicArrayBuffer ||
+      intrinsicReflectApply(intrinsicArrayBufferIsView, IntrinsicArrayBuffer, [candidate])
+    ) {
+      continue;
+    }
     if (candidate instanceof IntrinsicMap) {
       privateMapForEach(candidate, (entry, key) =>
         privateArrayPush(pending, key, entry)
@@ -687,7 +695,10 @@ function snapshotInvocation(value) {
       privateSetForEach(candidate, (entry) => privateArrayPush(pending, entry));
       continue;
     }
-    privateArrayPush(pending, ...privateObjectValues(candidate));
+    const values = privateObjectValues(candidate);
+    for (let index = 0; index < values.length; index += 1) {
+      privateArrayPush(pending, values[index]);
+    }
   }
   return {
     digest: createHash('sha256').update(bytes).digest('hex'),

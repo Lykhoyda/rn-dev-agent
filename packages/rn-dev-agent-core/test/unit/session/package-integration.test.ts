@@ -773,6 +773,134 @@ test('Metro descendant semantics bind arguments and Worker inputs', () => {
   }
 });
 
+test('Metro authenticates large Worker messages without expanding binary payloads', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-large-worker-message-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    const workerEntry = join(root, 'worker.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    writeFileSync(
+      workerEntry,
+      `const { createHash } = require('node:crypto');
+const { MessagePort, parentPort } = require('node:worker_threads');
+let received = 0;
+parentPort.on('message', (message) => {
+  received += 1;
+  const bytes =
+    message.kind === 'object'
+      ? Buffer.from(JSON.stringify(message.payload))
+      : Buffer.from(message.payload.buffer, message.payload.byteOffset, message.payload.byteLength);
+  MessagePort.prototype.postMessage.call(parentPort, {
+    digest: createHash('sha256').update(bytes).digest('hex'),
+    kind: message.kind,
+    length: message.kind === 'object' ? message.payload.values.length : bytes.byteLength,
+    received,
+  });
+  if (received === 3) parentPort.close();
+});
+`,
+    );
+    const environment = metroPolicyEnvironment(adapterPath);
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `(async () => {
+          const compose = require(${JSON.stringify(adapterPath)});
+          compose({});
+          const { Worker } = require('node:worker_threads');
+          const worker = new Worker(${JSON.stringify(workerEntry)}, { execArgv: ['--no-warnings'] });
+          const messages = [
+            { kind: 'buffer-256k', payload: Buffer.alloc(256 * 1024, 0xa5) },
+            { kind: 'buffer-5m', payload: Buffer.alloc(5 * 1024 * 1024, 0x5a) },
+            {
+              kind: 'object',
+              payload: {
+                label: 'ordinary',
+                values: Array.from({ length: 150000 }, (_, index) => index & 255),
+              },
+            },
+          ];
+          const responses = [];
+          worker.on('message', (message) => responses.push(message));
+          const exited = new Promise((resolve, reject) => {
+            worker.once('error', reject);
+            worker.once('exit', (code) =>
+              code === 0 ? resolve() : reject(new Error('Worker exited with ' + code))
+            );
+          });
+          for (const message of messages) Worker.prototype.postMessage.call(worker, message);
+          await exited;
+          process.stdout.write(JSON.stringify(responses));
+        })().catch((error) => {
+          process.stderr.write(String(error && error.stack || error) + '\\n');
+          process.exit(1);
+        });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const ordinaryPayload = {
+      label: 'ordinary',
+      values: Array.from({ length: 150000 }, (_, index) => index & 255),
+    };
+    assert.deepEqual(JSON.parse(result.stdout), [
+      {
+        digest: createHash('sha256')
+          .update(Buffer.alloc(256 * 1024, 0xa5))
+          .digest('hex'),
+        kind: 'buffer-256k',
+        length: 256 * 1024,
+        received: 1,
+      },
+      {
+        digest: createHash('sha256')
+          .update(Buffer.alloc(5 * 1024 * 1024, 0x5a))
+          .digest('hex'),
+        kind: 'buffer-5m',
+        length: 5 * 1024 * 1024,
+        received: 2,
+      },
+      {
+        digest: createHash('sha256')
+          .update(Buffer.from(JSON.stringify(ordinaryPayload)))
+          .digest('hex'),
+        kind: 'object',
+        length: ordinaryPayload.values.length,
+        received: 3,
+      },
+    ]);
+    const semantics = readFileSync(join(integration, 'metro-runtime-loads.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.kind === 'semantics')
+      .map((entry) => JSON.parse(entry.value))
+      .filter((entry) => entry.mode === 'worker-message');
+    assert.equal(semantics.length, 6);
+    const recipientSemantics = Map.groupBy(semantics, (entry) => entry.recipient);
+    assert.equal(recipientSemantics.size, 2);
+    assert.ok(
+      [...recipientSemantics.values()].every(
+        (entries) => entries.map((entry) => entry.sequence).join(',') === '1,2,3',
+      ),
+    );
+    assert.ok(semantics.every((entry) => /^[a-f0-9]{64}$/.test(entry.invocationDigest)));
+    assert.equal(new Set(semantics.map((entry) => entry.invocationDigest)).size, 6);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro fences underlying descendant constructors and native IPC controls', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-underlying-boundaries-'));
   let evidenceDescriptor: number | undefined;
