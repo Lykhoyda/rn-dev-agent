@@ -264,7 +264,9 @@ test(
           `processes-${label}.txt`,
           (processes.stdout ?? '')
             .split('\n')
-            .filter((line) => /rndevagent|CoreSimulator|expo/i.test(line) && !line.includes('/bin/ps'))
+            .filter(
+              (line) => /rndevagent|CoreSimulator|expo/i.test(line) && !line.includes('/bin/ps'),
+            )
             .join('\n'),
         );
       } catch {}
@@ -907,7 +909,10 @@ async function writeMarker(buildGeneration) {
             ],
             { encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024 },
           );
-          preserveDiagnostic('device-log.txt', `${deviceLog.stdout ?? ''}\n${deviceLog.stderr ?? ''}`);
+          preserveDiagnostic(
+            'device-log.txt',
+            `${deviceLog.stdout ?? ''}\n${deviceLog.stderr ?? ''}`,
+          );
         }
       }
       await client?.disconnect().catch(() => {});

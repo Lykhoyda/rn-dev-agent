@@ -1,13 +1,24 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { buildSignedMetroMarker, createMetroAuthorityModule } from '../../dist/session/metro-authority.js';
+import {
+  buildSignedMetroMarker,
+  createMetroAuthorityModule,
+} from '../../dist/session/metro-authority.js';
 import {
   startManagedMetro,
   stopManagedMetro,
