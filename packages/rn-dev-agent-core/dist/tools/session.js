@@ -342,7 +342,9 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration manifest is unavailable for restoration');
                     }
                     assertPackageIntegrationInactive(status.bindings, input.action);
-                    const manifestSha256 = createHash('sha256').update(manifestSource ?? '').digest('hex');
+                    const manifestSha256 = createHash('sha256')
+                        .update(manifestSource ?? '')
+                        .digest('hex');
                     if (integrationBinding?.version !== 1 ||
                         typeof integrationBinding.installedBySessionId !== 'string' ||
                         integrationBinding.manifestSha256 !== manifestSha256) {
@@ -416,8 +418,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     if (!installedManifest) {
                         throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable');
                     }
-                    if (createHash('sha256').update(installedManifest).digest('hex') !==
-                        expectedManifestSha256) {
+                    if (createHash('sha256').update(installedManifest).digest('hex') !== expectedManifestSha256) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'applied integration manifest no longer matches its durable installation authority');
                     }
                     registry.updateBindings(session, {
