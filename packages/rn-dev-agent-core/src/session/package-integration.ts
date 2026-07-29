@@ -47,6 +47,12 @@ export interface PackageIntegrationManifest {
   metroConfig?: string;
 }
 
+export function serializePackageIntegrationManifest(
+  manifest: PackageIntegrationManifest,
+): string {
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
 export function renderMetroIntegrationAdapter(): string {
   return `'use strict';
 const fs = require('node:fs');
@@ -3404,7 +3410,7 @@ export function applyPackageIntegration(
     }> = [
       {
         snapshot: generated[0]!,
-        contents: Buffer.from(`${JSON.stringify(preview.manifest, null, 2)}\n`),
+        contents: Buffer.from(serializePackageIntegrationManifest(preview.manifest)),
         mode: 0o600,
       },
       { snapshot: generated[1]!, contents: Buffer.from(renderProjectAdapter()), mode: 0o755 },

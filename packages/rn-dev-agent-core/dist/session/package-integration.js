@@ -14,6 +14,9 @@ const SENTINELS = {
     ios: `node ${ADAPTER} ios`,
     android: `node ${ADAPTER} android`,
 };
+export function serializePackageIntegrationManifest(manifest) {
+    return `${JSON.stringify(manifest, null, 2)}\n`;
+}
 export function renderMetroIntegrationAdapter() {
     return `'use strict';
 const fs = require('node:fs');
@@ -3252,7 +3255,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
         const outputs = [
             {
                 snapshot: generated[0],
-                contents: Buffer.from(`${JSON.stringify(preview.manifest, null, 2)}\n`),
+                contents: Buffer.from(serializePackageIntegrationManifest(preview.manifest)),
                 mode: 0o600,
             },
             { snapshot: generated[1], contents: Buffer.from(renderProjectAdapter()), mode: 0o755 },

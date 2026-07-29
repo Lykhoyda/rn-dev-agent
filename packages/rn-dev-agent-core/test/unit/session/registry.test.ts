@@ -1200,8 +1200,30 @@ test('managed Metro handoff reservation follows an authenticated replacement sup
     replacementCapability,
   );
 
-  const reservation = registry.getSessionStatus(owner.sessionId)?.bindings
-    .managedMetroHandoffReservation;
+  assert.equal(
+    registry.getSessionStatus(owner.sessionId)?.bindings.managedMetroHandoffReservation
+      .targetSessionId,
+    priorTarget.sessionId,
+  );
+  assert.throws(
+    () =>
+      registry.reserveManagedMetroHandoffCleanup(replacement, {
+        handoffId: handoff.handoffId,
+        token: 'forged-handoff-token',
+        targetInstance: 'replacement-worker',
+      }),
+    /handoff capability is invalid/,
+  );
+  assert.equal(
+    registry.getSessionStatus(owner.sessionId)?.bindings.managedMetroHandoffReservation
+      .targetSessionId,
+    priorTarget.sessionId,
+  );
+  const reservation = registry.reserveManagedMetroHandoffCleanup(replacement, {
+    ...handoff,
+    targetInstance: 'replacement-worker',
+  });
+  assert.ok(reservation);
   assert.equal(reservation.targetSessionId, replacement.sessionId);
   assert.equal(reservation.targetClaimEpoch, replacement.claimEpoch);
   assert.equal(reservation.targetInstance, 'replacement-worker');

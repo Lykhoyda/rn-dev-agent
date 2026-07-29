@@ -3,7 +3,7 @@ import { failResult, okResult } from '../utils.js';
 import { verifyBuildReceipt } from '../session/build-receipt.js';
 import { captureInstallGeneration, } from '../session/install-authority.js';
 import { captureMetroBinding } from '../session/metro-binding.js';
-import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, readPackageIntegrationInputs, restorePackageIntegrationFiles, } from '../session/package-integration.js';
+import { applyPackageIntegration, previewMetroIntegration, previewPackageIntegration, readPackageIntegrationInputs, restorePackageIntegrationFiles, serializePackageIntegrationManifest, } from '../session/package-integration.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -312,11 +312,15 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
                 const packageJson = JSON.parse(integrationInputs.packageJson);
                 const integrationBinding = status.bindings.packageIntegration;
+                const installationManifestSource = integrationBinding?.installation?.phase === 'started' &&
+                    typeof integrationBinding.installation.manifestSource === 'string'
+                    ? integrationBinding.installation.manifestSource
+                    : undefined;
                 const restorationManifestSource = integrationBinding?.restoration?.phase === 'started' &&
                     typeof integrationBinding.restoration.manifestSource === 'string'
                     ? integrationBinding.restoration.manifestSource
                     : undefined;
-                const manifestSource = integrationInputs.manifest ?? restorationManifestSource;
+                const manifestSource = integrationInputs.manifest ?? restorationManifestSource ?? installationManifestSource;
                 let existing;
                 try {
                     existing =
@@ -380,25 +384,61 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'apply_integration requires confirmed=true after reviewing preview_integration');
                 }
                 assertPackageIntegrationInactive(status.bindings, input.action);
-                applyPackageIntegration({ appRoot, sessionCli });
+                if (integrationBinding && !installationManifestSource) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration is already owned by an active session lifecycle');
+                }
+                preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
+                const expectedManifestSource = installationManifestSource ?? serializePackageIntegrationManifest(preview.manifest);
+                const expectedManifestSha256 = createHash('sha256')
+                    .update(expectedManifestSource)
+                    .digest('hex');
+                if (installationManifestSource &&
+                    (integrationBinding?.version !== 1 ||
+                        integrationBinding.installedBySessionId !== session.sessionId ||
+                        integrationBinding.manifestSha256 !== expectedManifestSha256)) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration installation requires the original session manifest authority binding');
+                }
+                if (!installationManifestSource) {
+                    registry.updateBindings(session, {
+                        bindings: {
+                            packageIntegration: {
+                                version: 1,
+                                installedBySessionId: session.sessionId,
+                                manifestSha256: expectedManifestSha256,
+                                installation: { phase: 'started', manifestSource: expectedManifestSource },
+                            },
+                        },
+                    });
+                }
                 try {
+                    applyPackageIntegration({ appRoot, sessionCli });
                     const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
                     if (!installedManifest) {
                         throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable');
+                    }
+                    if (createHash('sha256').update(installedManifest).digest('hex') !==
+                        expectedManifestSha256) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'applied integration manifest no longer matches its durable installation authority');
                     }
                     registry.updateBindings(session, {
                         bindings: {
                             packageIntegration: {
                                 version: 1,
                                 installedBySessionId: session.sessionId,
-                                manifestSha256: createHash('sha256').update(installedManifest).digest('hex'),
+                                manifestSha256: expectedManifestSha256,
                             },
                         },
                     });
                 }
                 catch (error) {
                     try {
-                        restorePackageIntegrationFiles({ appRoot });
+                        restorePackageIntegrationFiles({
+                            appRoot,
+                            manifestSource: expectedManifestSource,
+                        });
+                        registry.updateBindings(session, {
+                            bindings: { packageIntegration: null },
+                        });
                     }
                     catch (rollbackError) {
                         throw new AggregateError([error, rollbackError]);

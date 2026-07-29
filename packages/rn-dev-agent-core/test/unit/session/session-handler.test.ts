@@ -1933,6 +1933,79 @@ test('integration application rejects active runtime authority', async () => {
   }
 });
 
+test('integration application resumes from its durable installation phase', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-resume-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const packageBefore = {
+      scripts: { ios: 'expo run:ios', android: 'expo run:android' },
+    };
+    const metroPath = join(root, 'metro.config.js');
+    const metroBefore = 'module.exports = {};\n';
+    writeFileSync(packagePath, `${JSON.stringify(packageBefore)}\n`);
+    writeFileSync(metroPath, metroBefore);
+    const status = {
+      sessionId: 'session-a',
+      source: { appRoot: root },
+      bindings: {} as Record<string, unknown>,
+    };
+    let interruptAfterPhase = true;
+    const registry = {
+      getSessionStatus: () => status,
+      updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
+        status.bindings = { ...status.bindings, ...update.bindings };
+        const packageIntegration = update.bindings.packageIntegration as
+          | { installation?: { phase?: string } }
+          | undefined;
+        if (packageIntegration?.installation?.phase === 'started' && interruptAfterPhase) {
+          interruptAfterPhase = false;
+          throw new Error('installation interrupted after authority commit');
+        }
+      },
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry,
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    });
+
+    const interrupted = await handler({ action: 'apply_integration', confirmed: true });
+
+    assert.equal(interrupted.isError, true);
+    assert.match(interrupted.content[0].text, /installation interrupted after authority commit/);
+    assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), packageBefore);
+    assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
+    assert.equal(
+      (
+        status.bindings.packageIntegration as {
+          installation?: { phase?: string };
+        }
+      ).installation?.phase,
+      'started',
+    );
+
+    const resumed = await handler({ action: 'apply_integration', confirmed: true });
+
+    assert.equal(resumed.isError, undefined);
+    assert.equal(
+      (
+        status.bindings.packageIntegration as {
+          installation?: { phase?: string };
+        }
+      ).installation,
+      undefined,
+    );
+    assert.equal(
+      existsSync(join(root, '.rn-agent', 'integration', 'rn-session-integration.json')),
+      true,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('integration application rolls back files when its authority binding fails', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-binding-failure-'));
   try {

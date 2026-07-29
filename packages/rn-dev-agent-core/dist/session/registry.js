@@ -311,50 +311,15 @@ export class SessionRegistry {
                     reservation.metro.sourceSessionId !== handoff.session_id) {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro handoff reservation no longer matches the recovery worker fence');
                 }
-                if (reservation.targetSessionId === session.sessionId &&
-                    reservation.targetClaimEpoch === session.claimEpoch) {
-                    if (reservation.targetInstance !== row.worker_instance ||
-                        handoff.target_instance !== row.worker_instance) {
-                        throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro handoff reservation no longer matches the recovery worker fence');
-                    }
-                    return [{ handoff, donorBindings, reservation, priorTarget: null }];
-                }
-                if (adoptionRequired?.sessionId !== handoff.session_id ||
-                    adoptionRequired.claimEpoch !== handoff.donor_claim_epoch) {
+                if (reservation.targetSessionId !== session.sessionId ||
+                    reservation.targetClaimEpoch !== session.claimEpoch) {
                     return [];
                 }
-                const priorTarget = asSession(this.#database
-                    .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
-                      claim_epoch, supervisor_pid, supervisor_birth
-               FROM sessions WHERE session_id = ?`)
-                    .get(reservation.targetSessionId));
-                if (!priorTarget ||
-                    priorTarget.source_key !== row.source_key ||
-                    priorTarget.worktree_key !== row.worktree_key ||
-                    priorTarget.app_root_key !== row.app_root_key ||
-                    reservation.targetInstance !== handoff.target_instance) {
-                    return [];
+                if (reservation.targetInstance !== row.worker_instance ||
+                    handoff.target_instance !== row.worker_instance) {
+                    throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro handoff reservation no longer matches the recovery worker fence');
                 }
-                const priorTargetTerminal = (priorTarget.state === 'released' || priorTarget.state === 'stale') &&
-                    priorTarget.claim_epoch === reservation.targetClaimEpoch + 1;
-                let priorTargetDead = false;
-                if (priorTarget.state === 'blocked' &&
-                    priorTarget.claim_epoch === reservation.targetClaimEpoch) {
-                    try {
-                        priorTargetDead =
-                            this.#ownerStatus({
-                                sessionId: priorTarget.session_id,
-                                pid: priorTarget.supervisor_pid,
-                                token: priorTarget.supervisor_birth,
-                            }) === 'mismatch';
-                    }
-                    catch {
-                        priorTargetDead = false;
-                    }
-                }
-                if (!priorTargetTerminal && !priorTargetDead)
-                    return [];
-                return [{ handoff, donorBindings, reservation, priorTarget }];
+                return [{ handoff, donorBindings, reservation }];
             });
             if (rotations.length > 1) {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'multiple managed Metro handoffs target the same recovery session');
@@ -384,9 +349,6 @@ export class SessionRegistry {
                 }), now, rotation.handoff.session_id, rotation.handoff.donor_claim_epoch);
                 if (donorChanged.changes !== 1) {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro donor authority changed during recovery worker rotation');
-                }
-                if (rotation.priorTarget?.state === 'blocked') {
-                    this.#fenceSession(rotation.priorTarget.session_id, now);
                 }
             }
             const expiresMs = now + 5 * 60_000;
@@ -1031,43 +993,9 @@ export class SessionRegistry {
         });
     }
     validateHandoffInto(target, input) {
-        const targetRow = this.#requireRecoverableSession(target);
-        if (targetRow.state !== 'blocked') {
-            throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'handoff acceptance is not available during cleanup');
-        }
-        if (targetRow.worker_instance !== input.targetInstance) {
-            throw new SessionAuthorityError('HANDOFF_TARGET_MISMATCH', 'handoff target is not the current fenced worker instance');
-        }
-        const handoff = this.#database
-            .prepare(`SELECT session_id, claim_epoch, target_instance, token_hash, expires_ms, consumed_ms
-         FROM handoffs WHERE handoff_id = ?`)
-            .get(input.handoffId);
-        if (!handoff) {
-            throw new SessionAuthorityError('HANDOFF_NOT_FOUND', 'handoff does not exist');
-        }
-        if (handoff.consumed_ms !== null) {
-            throw new SessionAuthorityError('HANDOFF_ALREADY_CONSUMED', 'handoff is already terminal');
-        }
-        if (handoff.expires_ms < this.#now()) {
-            throw new SessionAuthorityError('HANDOFF_EXPIRED', 'handoff capability expired');
-        }
-        if (handoff.target_instance !== input.targetInstance) {
-            throw new SessionAuthorityError('HANDOFF_TARGET_MISMATCH', 'handoff target instance does not match');
-        }
-        const expected = Buffer.from(handoff.token_hash, 'hex');
-        const actual = createHash('sha256').update(input.token).digest();
-        if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-            throw new SessionAuthorityError('HANDOFF_TOKEN_INVALID', 'handoff capability is invalid');
-        }
-        const prior = this.getSessionStatus(handoff.session_id);
-        if (!prior ||
-            prior.state !== 'handoff' ||
-            prior.claimEpoch !== handoff.claim_epoch ||
-            prior.sourceKey !== targetRow.source_key ||
-            prior.worktreeKey !== targetRow.worktree_key ||
-            prior.appRootKey !== targetRow.app_root_key) {
-            throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'handoff no longer matches the exact source owner');
-        }
+        this.#transaction(() => {
+            this.#requireHandoffIntoContext(target, input, false);
+        });
     }
     acceptHandoff(input) {
         const now = this.#now();
@@ -2091,9 +2019,6 @@ export class SessionRegistry {
         if (handoff.consumed_ms !== null) {
             throw new SessionAuthorityError('HANDOFF_ALREADY_CONSUMED', 'handoff was already accepted');
         }
-        if (handoff.target_instance !== input.targetInstance) {
-            throw new SessionAuthorityError('HANDOFF_TARGET_MISMATCH', 'handoff target instance does not match');
-        }
         const expected = Buffer.from(handoff.token_hash, 'hex');
         const actual = createHash('sha256').update(input.token).digest();
         if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
@@ -2112,16 +2037,91 @@ export class SessionRegistry {
             prior.app_root_key !== targetRow.app_root_key) {
             throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'handoff source does not match the target session');
         }
-        const bindings = JSON.parse(prior.bindings_json);
-        const reservation = managedMetroHandoffReservation(bindings);
-        const exactReservation = reservation?.handoffId === handoff.handoff_id &&
+        let bindings = JSON.parse(prior.bindings_json);
+        let reservation = managedMetroHandoffReservation(bindings);
+        let exactReservation = reservation?.handoffId === handoff.handoff_id &&
             reservation.sourceClaimEpoch === handoff.claim_epoch &&
             reservation.targetSessionId === target.sessionId &&
             reservation.targetClaimEpoch === target.claimEpoch &&
             reservation.targetInstance === input.targetInstance &&
             reservation.metro?.sourceSessionId === prior.session_id;
-        if (reservation && !exactReservation) {
-            throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro cleanup reservation belongs to a different handoff recipient');
+        if (handoff.target_instance !== input.targetInstance || (reservation && !exactReservation)) {
+            const targetBindings = JSON.parse(targetRow.bindings_json);
+            const adoptionRequired = targetBindings.adoptionRequired;
+            const priorTarget = reservation
+                ? asSession(this.#database
+                    .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                        claim_epoch, supervisor_pid, supervisor_birth
+                 FROM sessions WHERE session_id = ?`)
+                    .get(reservation.targetSessionId))
+                : null;
+            const priorTargetTerminal = priorTarget !== null &&
+                (priorTarget.state === 'released' || priorTarget.state === 'stale') &&
+                priorTarget.claim_epoch === reservation.targetClaimEpoch + 1;
+            let priorTargetDead = false;
+            if (priorTarget?.state === 'blocked' &&
+                priorTarget.claim_epoch === reservation?.targetClaimEpoch) {
+                try {
+                    priorTargetDead =
+                        this.#ownerStatus({
+                            sessionId: priorTarget.session_id,
+                            pid: priorTarget.supervisor_pid,
+                            token: priorTarget.supervisor_birth,
+                        }) === 'mismatch';
+                }
+                catch {
+                    priorTargetDead = false;
+                }
+            }
+            if (!reservation ||
+                reservation.handoffId !== handoff.handoff_id ||
+                reservation.sourceClaimEpoch !== handoff.claim_epoch ||
+                reservation.metro.sourceSessionId !== prior.session_id ||
+                reservation.targetInstance !== handoff.target_instance ||
+                adoptionRequired?.sessionId !== prior.session_id ||
+                adoptionRequired.claimEpoch !== prior.claim_epoch ||
+                !priorTarget ||
+                priorTarget.source_key !== targetRow.source_key ||
+                priorTarget.worktree_key !== targetRow.worktree_key ||
+                priorTarget.app_root_key !== targetRow.app_root_key ||
+                (!priorTargetTerminal && !priorTargetDead)) {
+                throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro cleanup reservation belongs to a different handoff recipient');
+            }
+            if (handoff.expires_ms < this.#now() &&
+                !allowExactReservationAfterExpiry) {
+                throw new SessionAuthorityError('HANDOFF_EXPIRED', 'handoff capability expired');
+            }
+            const rotatedReservation = {
+                ...reservation,
+                targetSessionId: target.sessionId,
+                targetClaimEpoch: target.claimEpoch,
+                targetInstance: input.targetInstance,
+            };
+            const handoffChanged = this.#database
+                .prepare(`UPDATE handoffs SET target_instance = ?
+           WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`)
+                .run(input.targetInstance, handoff.handoff_id, reservation.targetInstance);
+            if (handoffChanged.changes !== 1) {
+                throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro handoff target changed during recipient rotation');
+            }
+            bindings = {
+                ...bindings,
+                managedMetroHandoffReservation: rotatedReservation,
+            };
+            const donorChanged = this.#database
+                .prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`)
+                .run(JSON.stringify(bindings), this.#now(), prior.session_id, prior.claim_epoch);
+            if (donorChanged.changes !== 1) {
+                throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro donor authority changed during recipient rotation');
+            }
+            if (priorTarget.state === 'blocked') {
+                this.#fenceSession(priorTarget.session_id, this.#now());
+            }
+            handoff.target_instance = input.targetInstance;
+            reservation = rotatedReservation;
+            exactReservation = true;
         }
         if (handoff.expires_ms < this.#now() &&
             !(allowExactReservationAfterExpiry && exactReservation)) {
