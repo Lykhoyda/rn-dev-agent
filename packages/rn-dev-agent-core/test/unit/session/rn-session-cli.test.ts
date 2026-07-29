@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
 import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
@@ -132,6 +135,111 @@ test('package-local CLI status persists lost managed Metro reconciliation', () =
   }
 });
 
+test('package-local CLI clears authenticated retained cleanup before replacement startup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-metro-cleanup-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    execFileSync('git', ['init', '-q', appRoot]);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+    writeFileSync(join(appRoot, 'package.json'), '{}\n');
+    execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+    execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+    mkdirSync(join(appRoot, '.rn-agent', 'integration'), { recursive: true });
+    writeFileSync(
+      join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json'),
+      '{"version":1}\n',
+    );
+
+    const portProbe = createServer();
+    await new Promise<void>((resolve, reject) => {
+      portProbe.once('error', reject);
+      portProbe.listen(0, '127.0.0.1', resolve);
+    });
+    const address = portProbe.address();
+    assert.ok(address && typeof address !== 'string');
+    await new Promise<void>((resolve) => portProbe.close(() => resolve()));
+
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    let registry = openSessionRegistry(layout.registry, {
+      ownerStatus: () => 'match',
+      listenerStatus: () => 'absent',
+    });
+    const sessionId = 'session-cleanup';
+    const signerCapability = 'signer';
+    const cleanupAuthority = {
+      port: address.port,
+      pid: 2_147_483_646,
+      birth: 'listener-birth',
+      launcherPid: 2_147_483_646,
+      launcherBirth: 'launcher-birth',
+      instanceId: 'retained-metro',
+      runtimeEvidencePath: join(root, 'runtime-evidence.jsonl'),
+      runtimeEvidenceSocket: `/tmp/rn-dev-agent-${'a'.repeat(32)}.sock`,
+      runtimeEvidenceAuthority: 'reported-v1',
+      runtimeEvidenceProtocol: 2,
+      servingRoot: appRoot,
+      buildGeneration: 2,
+    };
+    const metroCleanup = {
+      mode: 'managed',
+      ...cleanupAuthority,
+      managementProof: createHmac('sha256', signerCapability)
+        .update(canonicalAuthorityJson({ sessionId, ...cleanupAuthority }))
+        .digest('hex'),
+    };
+    const session = registry.createSession({
+      sessionId,
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'fixture' },
+      source: { ...source },
+      bindings: {
+        metroPort: address.port,
+        device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+        metroCleanup,
+      },
+    });
+    registry.updateBindings(session, { state: 'device_claimed', bindings: {} });
+    registry.close();
+    writeSessionSecret(layout, session.sessionId, {
+      signerCapability,
+      observeCapability: 'observe',
+      recoveryCapability: 'recovery',
+    });
+
+    const result = spawnSync(process.execPath, [cliPath, 'ensure-metro'], {
+      cwd: appRoot,
+      env: {
+        ...process.env,
+        XDG_STATE_HOME: stateHome,
+        RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      },
+      encoding: 'utf8',
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /project is neither Expo nor bare React Native/);
+
+    registry = openSessionRegistry(layout.registry, {
+      ownerStatus: () => 'match',
+      listenerStatus: () => 'absent',
+    });
+    const status = registry.getSessionStatus(session.sessionId);
+    registry.close();
+    assert.equal(status?.bindings.metroCleanup, null);
+    assert.equal(status?.bindings.metro, undefined);
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('package-local CLI does not discover a sibling app session in the same worktree', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-monorepo-'));
   const appA = join(root, 'apps', 'a');
@@ -249,7 +357,6 @@ test('package-local CLI refuses marker writes through a replaced .rn-agent symli
     bindings: {
       metroPort: 8193,
       device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
-      metro: { instanceId: 'metro-a', buildGeneration: 1 },
     },
   });
   registry.updateBindings(session, { state: 'device_claimed', bindings: {} });
@@ -260,7 +367,7 @@ test('package-local CLI refuses marker writes through a replaced .rn-agent symli
     recoveryCapability: 'recovery',
   });
 
-  const result = spawnSync(process.execPath, [cliPath, 'prepare-build', 'ios'], {
+  const result = spawnSync(process.execPath, [cliPath, 'ensure-metro'], {
     cwd: appRoot,
     env: {
       ...process.env,
@@ -280,7 +387,7 @@ test('package-local CLI refuses marker writes through a replaced .rn-agent symli
   assert.equal(wroteExternalMarker, false);
 });
 
-test('package-local CLI refuses to reuse external Metro as managed authority', async () => {
+test('package-local CLI refuses external Metro for managed startup and builds', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-external-metro-'));
   const appRoot = join(root, 'app');
   const stateHome = join(root, 'state');
@@ -349,18 +456,23 @@ test('package-local CLI refuses to reuse external Metro as managed authority', a
       recoveryCapability: 'recovery',
     });
 
-    const result = spawnSync(process.execPath, [cliPath, 'ensure-metro'], {
-      cwd: appRoot,
-      env: {
-        ...process.env,
-        XDG_STATE_HOME: stateHome,
-        RN_DEV_AGENT_SESSION_ID: session.sessionId,
-      },
-      encoding: 'utf8',
-    });
+    for (const args of [['ensure-metro'], ['prepare-build', 'ios']]) {
+      const result = spawnSync(process.execPath, [cliPath, ...args], {
+        cwd: appRoot,
+        env: {
+          ...process.env,
+          XDG_STATE_HOME: stateHome,
+          RN_DEV_AGENT_SESSION_ID: session.sessionId,
+        },
+        encoding: 'utf8',
+      });
 
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /existing Metro binding is not authenticated managed authority/);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        result.stderr,
+        /authenticated managed authority|lifecycle evidence is not authenticated/,
+      );
+    }
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previousStateHome;
@@ -509,7 +621,12 @@ test('package-local CLI reserves Metro, build, and release operations before cle
         encoding: 'utf8',
       });
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /OPERATION_ALREADY_IN_PROGRESS/);
+      assert.match(
+        result.stderr,
+        args[0] === 'prepare-build'
+          ? /managed Metro lifecycle evidence is not authenticated/
+          : /OPERATION_ALREADY_IN_PROGRESS/,
+      );
       assert.doesNotThrow(() => process.kill(runnerPid, 0));
     }
 

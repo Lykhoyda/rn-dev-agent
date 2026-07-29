@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, rmSync, } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { captureMetroBinding, metroListenerPid, probeMetroListener, } from './metro-binding.js';
 import { resolveTrustedSystemExecutable, } from '../util/trusted-system-executable.js';
 import { probeProcessBirth, readProcessBirth, } from './process-birth.js';
@@ -971,9 +971,16 @@ export function probeManagedMetroListener(port, platform = process.platform, exe
 export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
     const exists = dependencies.exists ?? existsSync;
     const readText = dependencies.readText ?? ((path) => readFileSync(path, 'utf8'));
+    const platform = dependencies.platform ?? process.platform;
     const packageJson = JSON.parse(readText(join(appRoot, 'package.json')));
     const all = { ...packageJson.dependencies, ...packageJson.devDependencies };
     if (all.expo) {
+        if (platform === 'win32') {
+            return resolveWindowsPackageCommand(appRoot, 'expo', 'expo', ['start', '--dev-client'], {
+                exists,
+                readText,
+            });
+        }
         const executable = join(appRoot, 'node_modules', '.bin', 'expo');
         if (!exists(executable)) {
             throw new Error('METRO_START_UNAVAILABLE: package-local Expo CLI is unavailable');
@@ -981,6 +988,12 @@ export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
         return { executable, args: ['start', '--dev-client'] };
     }
     if (all['react-native']) {
+        if (platform === 'win32') {
+            return resolveWindowsPackageCommand(appRoot, 'react-native', 'react-native', ['start'], {
+                exists,
+                readText,
+            });
+        }
         const executable = join(appRoot, 'node_modules', '.bin', 'react-native');
         if (!exists(executable)) {
             throw new Error('METRO_START_UNAVAILABLE: package-local React Native CLI is unavailable');
@@ -989,9 +1002,33 @@ export function resolveManagedMetroCommand(appRoot, dependencies = {}) {
     }
     throw new Error('METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native');
 }
+function resolveWindowsPackageCommand(appRoot, packageName, commandName, args, dependencies) {
+    const packageRoot = resolve(appRoot, 'node_modules', packageName);
+    const manifest = JSON.parse(dependencies.readText(join(packageRoot, 'package.json')));
+    const bin = typeof manifest.bin === 'string'
+        ? manifest.bin
+        : typeof manifest.bin?.[commandName] === 'string'
+            ? manifest.bin[commandName]
+            : null;
+    if (!bin) {
+        throw new Error(`METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`);
+    }
+    const executable = resolve(packageRoot, bin);
+    const relativeExecutable = relative(packageRoot, executable);
+    if (!relativeExecutable ||
+        relativeExecutable === '..' ||
+        relativeExecutable.startsWith('../') ||
+        relativeExecutable.startsWith('..\\') ||
+        isAbsolute(relativeExecutable) ||
+        !dependencies.exists(executable)) {
+        throw new Error(`METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`);
+    }
+    return { executable, args };
+}
 function resolveManagedMetroLaunchCommand(command, dependencies) {
     const exists = dependencies.exists ?? existsSync;
     const readText = dependencies.readText ?? ((path) => readFileSync(path, 'utf8'));
+    const platform = dependencies.platform ?? process.platform;
     let firstLine = '';
     try {
         firstLine = readText(command.executable).split(/\r?\n/, 1)[0] ?? '';
@@ -1020,7 +1057,8 @@ function resolveManagedMetroLaunchCommand(command, dependencies) {
             protectedRuntimeRoots: [],
         };
     }
-    if (/^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(firstLine)) {
+    if (platform !== 'win32' &&
+        /^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(firstLine)) {
         const shellSelector = exists('/private/var/select/sh') ? '/private/var/select/sh' : '/bin/sh';
         const shellExecutable = canonicalRuntimeInput(shellSelector);
         const shellHelpers = ['/usr/bin/dirname', '/usr/bin/sed', '/usr/bin/uname']

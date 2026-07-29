@@ -7739,6 +7739,122 @@ print -r -- "$result"
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+import { execFileSync as execFileSync4 } from "node:child_process";
+function resolveMetroListenerExecutable(platform, dependencies = {}) {
+  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
+  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
+}
+function numericListener(output, emptyStatus) {
+  const value = String(output).trim();
+  if (!value)
+    return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: "unknown" };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+}
+function probeMetroListener(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
+  if (!executable)
+    return { status: "unknown" };
+  try {
+    if (platform === "win32") {
+      const output = execute(executable, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
+    }
+    if (platform === "linux") {
+      const output = execute(executable, ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const value = String(output).trim();
+      if (!value)
+        return { status: "absent" };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+    }
+    if (platform === "darwin") {
+      const output = execute(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 2e3
+      });
+      return numericListener(output, "unknown");
+    }
+    return { status: "unknown" };
+  } catch (error) {
+    const failure = error;
+    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
+  }
+}
+function metroListenerPid(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+  const probe = probeMetroListener(port, platform, execute, executableDependencies);
+  return probe.status === "listening" ? probe.pid : null;
+}
+async function fetchMetroStatus(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: controller.signal
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function captureMetroBinding(input, dependencies = {}) {
+  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
+  if (!birth) {
+    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
+  }
+  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
+  if (!status.includes("packager-status:running")) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
+  }
+  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
+  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
+  }
+  return {
+    port: input.port,
+    pid: input.pid,
+    birth: birth.token,
+    instanceId: input.instanceId,
+    servingRoot,
+    buildGeneration: input.buildGeneration
+  };
+}
+var init_metro_binding = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
+    "use strict";
+    init_metro_cwd();
+    init_trusted_system_executable();
+    init_process_birth();
+    init_trusted_system_executable();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/authority-store.js
 import { chmodSync, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
 import { createRequire } from "node:module";
@@ -7956,6 +8072,7 @@ var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
+    init_metro_binding();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
     SessionAuthorityError = class extends Error {
@@ -7985,6 +8102,7 @@ var init_registry = __esm({
       #secureFiles;
       #now;
       #ownerStatus;
+      #listenerStatus;
       #leaseMs;
       #operationContext = new AsyncLocalStorage();
       #pendingPlatformReceipts = /* @__PURE__ */ new Map();
@@ -7994,6 +8112,7 @@ var init_registry = __esm({
         this.#secureFiles = secureFiles;
         this.#now = dependencies.now ?? Date.now;
         this.#ownerStatus = dependencies.ownerStatus;
+        this.#listenerStatus = dependencies.listenerStatus ?? ((port) => probeMetroListener(port).status);
         this.#leaseMs = dependencies.leaseMs ?? 3e4;
         this.#initializeWithRetry();
       }
@@ -9245,8 +9364,16 @@ var init_registry = __esm({
         }
         return this.#transaction(() => {
           const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
-          if (existing)
-            return existing.port;
+          if (existing) {
+            const claim = this.#findClaim(`${input.service}-port`, String(existing.port));
+            const listenerStatus = claim ? "absent" : this.#listenerStatus(existing.port);
+            if (listenerStatus === "absent")
+              return existing.port;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${existing.port} is unavailable`);
+            }
+            this.#database.prepare("DELETE FROM allocations WHERE service = ? AND worktree_key = ?").run(input.service, input.worktreeKey);
+          }
           const digest3 = createHash5("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
           const preferred = digest3.readUInt32BE(0) % input.span;
           for (let offset = 0; offset < input.span; offset += 1) {
@@ -9254,11 +9381,17 @@ var init_registry = __esm({
             const occupied = this.#database.prepare("SELECT worktree_key FROM allocations WHERE service = ? AND port = ?").get(input.service, port);
             if (occupied)
               continue;
+            const listenerStatus = this.#listenerStatus(port);
+            if (listenerStatus === "listening")
+              continue;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${port} is unavailable`);
+            }
             this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
              VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, port);
             return port;
           }
-          const orphan = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
+          const orphanRows = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
            FROM allocations allocation
            WHERE allocation.service = ?
              AND allocation.port >= ?
@@ -9269,8 +9402,18 @@ var init_registry = __esm({
                  AND session.state NOT IN ('released', 'stale')
              )
            ORDER BY allocation.generation ASC, allocation.worktree_key ASC
-           LIMIT 1`).get(input.service, input.base, input.base + input.span);
-          if (orphan) {
+           `).all(input.service, input.base, input.base + input.span);
+          for (const row of orphanRows) {
+            if (!Number.isSafeInteger(row.port) || typeof row.worktree_key !== "string") {
+              throw new SessionAuthorityError("AUTHORITY_STORE_INVALID", "persisted port allocation is malformed");
+            }
+            const orphan = { port: row.port, worktree_key: row.worktree_key };
+            const listenerStatus = this.#listenerStatus(orphan.port);
+            if (listenerStatus === "listening")
+              continue;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${orphan.port} is unavailable`);
+            }
             this.#database.prepare(`DELETE FROM allocations
              WHERE service = ? AND worktree_key = ? AND port = ?`).run(input.service, orphan.worktree_key, orphan.port);
             this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
@@ -10060,7 +10203,7 @@ function add(names, profile) {
     profiles.set(name, profile);
   }
 }
-var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, cdpRead, cdpMutation, observe, proof, profiles;
+var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
@@ -10107,6 +10250,7 @@ var init_tool_profiles = __esm({
     ];
     hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
     optionalHybridMutation = ["cdp_run_action"];
+    nativeDiagnostic = ["cdp_native_errors"];
     cdpRead = [
       "cdp_component_state",
       "cdp_component_tree",
@@ -10116,7 +10260,6 @@ var init_tool_profiles = __esm({
       "cdp_error_log",
       "cdp_heap_usage",
       "cdp_metro_events",
-      "cdp_native_errors",
       "cdp_navigation_state",
       "cdp_network_body",
       "cdp_network_log",
@@ -10192,6 +10335,12 @@ var init_tool_profiles = __esm({
       managedOrigin: true,
       mutation: true,
       liveBundleProbe: true
+    });
+    add(nativeDiagnostic, {
+      kind: "authoritative",
+      axes: ["C", "S", "I", "D"],
+      mutation: false,
+      liveBundleProbe: false
     });
     add(cdpRead, {
       kind: "authoritative",
@@ -10956,124 +11105,17 @@ function createMetroAuthorityModule(marker) {
 `;
 }
 
-// packages/rn-dev-agent-core/dist/session/metro-binding.js
-init_metro_cwd();
-init_trusted_system_executable();
-init_process_birth();
-init_trusted_system_executable();
-import { execFileSync as execFileSync4 } from "node:child_process";
-function resolveMetroListenerExecutable(platform, dependencies = {}) {
-  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
-  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
-}
-function numericListener(output, emptyStatus) {
-  const value = String(output).trim();
-  if (!value)
-    return { status: emptyStatus };
-  const candidates = value.split(/\s+/);
-  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
-    return { status: "unknown" };
-  }
-  const pids = new Set(candidates.map(Number));
-  const [pid] = pids;
-  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-}
-function probeMetroListener(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
-  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
-  if (!executable)
-    return { status: "unknown" };
-  try {
-    if (platform === "win32") {
-      const output = execute(executable, [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
-      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
-      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
-    }
-    if (platform === "linux") {
-      const output = execute(executable, ["-H", "-ltnp", `sport = :${port}`], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2e3
-      });
-      const value = String(output).trim();
-      if (!value)
-        return { status: "absent" };
-      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
-      const [pid] = pids;
-      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-    }
-    if (platform === "darwin") {
-      const output = execute(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 2e3
-      });
-      return numericListener(output, "unknown");
-    }
-    return { status: "unknown" };
-  } catch (error) {
-    const failure = error;
-    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
-  }
-}
-function metroListenerPid(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
-  const probe = probeMetroListener(port, platform, execute, executableDependencies);
-  return probe.status === "listening" ? probe.pid : null;
-}
-async function fetchMetroStatus(port) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2e3);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/status`, {
-      signal: controller.signal
-    });
-    if (!response.ok)
-      throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function captureMetroBinding(input, dependencies = {}) {
-  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
-  }
-  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
-  if (listenerPid !== input.pid) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
-  if (!birth) {
-    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
-  }
-  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
-  if (!status.includes("packager-status:running")) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
-  }
-  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
-  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
-  }
-  return {
-    port: input.port,
-    pid: input.pid,
-    birth: birth.token,
-    instanceId: input.instanceId,
-    servingRoot,
-    buildGeneration: input.buildGeneration
-  };
-}
+// packages/rn-dev-agent-core/dist/rn-session.js
+init_metro_binding();
 
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
+init_metro_binding();
+init_trusted_system_executable();
+init_process_birth();
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
-import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
-init_trusted_system_executable();
-init_process_birth();
+import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative as relative2, resolve as resolve3 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/authority-json.js
 var intrinsicJsonStringify = JSON.stringify;
@@ -12677,9 +12719,16 @@ function probeManagedMetroListener(port, platform = process.platform, execute = 
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync4;
   const readText = dependencies.readText ?? ((path) => readFileSync4(path, "utf8"));
+  const platform = dependencies.platform ?? process.platform;
   const packageJson = JSON.parse(readText(join3(appRoot, "package.json")));
   const all = { ...packageJson.dependencies, ...packageJson.devDependencies };
   if (all.expo) {
+    if (platform === "win32") {
+      return resolveWindowsPackageCommand(appRoot, "expo", "expo", ["start", "--dev-client"], {
+        exists,
+        readText
+      });
+    }
     const executable = join3(appRoot, "node_modules", ".bin", "expo");
     if (!exists(executable)) {
       throw new Error("METRO_START_UNAVAILABLE: package-local Expo CLI is unavailable");
@@ -12687,6 +12736,12 @@ function resolveManagedMetroCommand(appRoot, dependencies = {}) {
     return { executable, args: ["start", "--dev-client"] };
   }
   if (all["react-native"]) {
+    if (platform === "win32") {
+      return resolveWindowsPackageCommand(appRoot, "react-native", "react-native", ["start"], {
+        exists,
+        readText
+      });
+    }
     const executable = join3(appRoot, "node_modules", ".bin", "react-native");
     if (!exists(executable)) {
       throw new Error("METRO_START_UNAVAILABLE: package-local React Native CLI is unavailable");
@@ -12695,9 +12750,24 @@ function resolveManagedMetroCommand(appRoot, dependencies = {}) {
   }
   throw new Error("METRO_START_UNAVAILABLE: project is neither Expo nor bare React Native");
 }
+function resolveWindowsPackageCommand(appRoot, packageName, commandName, args, dependencies) {
+  const packageRoot = resolve3(appRoot, "node_modules", packageName);
+  const manifest = JSON.parse(dependencies.readText(join3(packageRoot, "package.json")));
+  const bin = typeof manifest.bin === "string" ? manifest.bin : typeof manifest.bin?.[commandName] === "string" ? manifest.bin[commandName] : null;
+  if (!bin) {
+    throw new Error(`METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`);
+  }
+  const executable = resolve3(packageRoot, bin);
+  const relativeExecutable = relative2(packageRoot, executable);
+  if (!relativeExecutable || relativeExecutable === ".." || relativeExecutable.startsWith("../") || relativeExecutable.startsWith("..\\") || isAbsolute2(relativeExecutable) || !dependencies.exists(executable)) {
+    throw new Error(`METRO_START_UNAVAILABLE: package-local ${commandName} CLI is unavailable`);
+  }
+  return { executable, args };
+}
 function resolveManagedMetroLaunchCommand(command, dependencies) {
   const exists = dependencies.exists ?? existsSync4;
   const readText = dependencies.readText ?? ((path) => readFileSync4(path, "utf8"));
+  const platform = dependencies.platform ?? process.platform;
   let firstLine = "";
   try {
     firstLine = readText(command.executable).split(/\r?\n/, 1)[0] ?? "";
@@ -12725,7 +12795,7 @@ function resolveManagedMetroLaunchCommand(command, dependencies) {
       protectedRuntimeRoots: []
     };
   }
-  if (/^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(firstLine)) {
+  if (platform !== "win32" && /^#!\s*(?:\/bin\/sh|\/usr\/bin\/env\s+sh|\/bin\/bash)(?:\s|$)/.test(firstLine)) {
     const shellSelector = exists("/private/var/select/sh") ? "/private/var/select/sh" : "/bin/sh";
     const shellExecutable = canonicalRuntimeInput(shellSelector);
     const shellHelpers = ["/usr/bin/dirname", "/usr/bin/sed", "/usr/bin/uname"].filter(exists).map(canonicalRuntimeInput);
@@ -13580,7 +13650,7 @@ init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync3, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
-import { dirname as dirname5, isAbsolute as isAbsolute2, join as join4, relative as relative2, resolve as resolve4 } from "node:path";
+import { dirname as dirname5, isAbsolute as isAbsolute3, join as join4, relative as relative3, resolve as resolve4 } from "node:path";
 function digest2(parts) {
   const hash = createHash6("sha256");
   for (const part of parts) {
@@ -13648,8 +13718,8 @@ function isDefinitiveNonGitError(error) {
 ${stderr}`.toLowerCase().includes("not a git repository");
 }
 function assertContained(root, candidate, code) {
-  const child = relative2(root, candidate);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute2(child)) {
+  const child = relative3(root, candidate);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute3(child)) {
     throw new Error(`${code}: path is outside the declared content root`);
   }
 }
@@ -13663,10 +13733,10 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   for (const entry of [...dependencies.declaredManifests].sort()) {
     const manifest = canonicalize(resolve4(contentRoot, entry));
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
-    manifestParts.push(relative2(contentRoot, manifest), readFileSync5(manifest));
+    manifestParts.push(relative3(contentRoot, manifest), readFileSync5(manifest));
   }
   const manifestDigest = digest2(manifestParts);
-  const appRelative = relative2(contentRoot, appRoot) || ".";
+  const appRelative = relative3(contentRoot, appRoot) || ".";
   return {
     kind: "declared-root",
     contentRoot,
@@ -13686,9 +13756,9 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
     const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
     assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
     const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
-    const commonDirectory = canonicalize(isAbsolute2(commonRaw) ? commonRaw : join4(appRoot, commonRaw));
+    const commonDirectory = canonicalize(isAbsolute3(commonRaw) ? commonRaw : join4(appRoot, commonRaw));
     const head = git(appRoot, ["rev-parse", "HEAD"]);
-    const appRelative = relative2(contentRoot, appRoot) || ".";
+    const appRelative = relative3(contentRoot, appRoot) || ".";
     return {
       kind: "git",
       contentRoot,
@@ -15520,7 +15590,10 @@ function inspectAuthorityMigration(status, dependencies = {}) {
       const manifestText = readPackageIntegrationManifest(appRoot, dependencies);
       const manifest = manifestText ? JSON.parse(manifestText) : void 0;
       packageIntegrationInstalled = manifest?.version === 1;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("SESSION_INTEGRATION_PATH_UNSAFE") && !error.message.includes("ancestor is unavailable")) {
+        throw error;
+      }
       packageIntegrationInstalled = false;
     }
   }
@@ -16022,6 +16095,7 @@ async function ensureManagedMetro(status) {
   }
   const signerCapability = readSigner(status);
   const existing = status.bindings.metro;
+  const retainedCleanup = status.bindings.metroCleanup;
   const operation = beginCliOperation(status, "rn-session ensure-metro", "transition:ensure-metro");
   let currentOperation = operation;
   let startedBinding = null;
@@ -16029,6 +16103,24 @@ async function ensureManagedMetro(status) {
   let bindingCommitted = false;
   try {
     await status.registry.runWithOperation(operation, async () => {
+      if (retainedCleanup) {
+        if (!verifyManagedMetroManagementProof(retainedCleanup, {
+          sessionId: status.sessionId,
+          signerCapability
+        })) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "retained Metro cleanup is not authenticated managed authority; run rn_session stop_metro");
+        }
+        if (!await stopManagedMetro(retainedCleanup, {
+          sessionId: status.sessionId,
+          signerCapability
+        })) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "retained managed Metro cleanup is unresolved; run rn_session stop_metro");
+        }
+        status.registry.verifyOperation(currentOperation);
+        currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+          bindings: { metroCleanup: null, bundle: null }
+        });
+      }
       if (existing && !verifyManagedMetroManagementProof(existing, {
         sessionId: status.sessionId,
         signerCapability
@@ -16064,7 +16156,7 @@ async function ensureManagedMetro(status) {
         });
       }
       const instanceId = randomUUID3();
-      const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
+      const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(retainedCleanup?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
       writeMarker(status, {
         platform,
         appId,
@@ -16089,7 +16181,12 @@ async function ensureManagedMetro(status) {
       cleanupBindingCommitted = true;
       currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
         state: "device_claimed",
-        bindings: { metro: startedBinding, metroCleanup: null, bundle: null }
+        bindings: {
+          metro: startedBinding,
+          metroCleanup: null,
+          metroTerminal: null,
+          bundle: null
+        }
       });
       cleanupBindingCommitted = false;
       bindingCommitted = true;
@@ -16190,13 +16287,20 @@ async function main() {
       const appId = device.appId;
       const metroInstanceId = metro.instanceId;
       const signerCapability = readSigner(status);
+      const metroInspection = inspectManagedMetroLifecycle(metro, {
+        sessionId: status.sessionId,
+        signerCapability
+      });
+      if (metro.mode !== "managed" || metroInspection.status !== "live") {
+        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", metroInspection.status === "lost" ? `${metroInspection.reason}; run rn_session stop_metro before retrying` : "build requires authenticated managed Metro authority");
+      }
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
       const buildToken = randomUUID3();
-      const buildMetro = metro.mode === "managed" ? refreshManagedMetroBuildGeneration(metro, {
+      const buildMetro = refreshManagedMetroBuildGeneration(metro, {
         sessionId: status.sessionId,
         buildGeneration,
         signerCapability
-      }) : { ...metro, buildGeneration };
+      });
       const runner = status.bindings.runner;
       const recorder = status.bindings.recorder;
       const releaseResources = [];

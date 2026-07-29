@@ -39,7 +39,12 @@ export function inspectAuthorityMigration(status, dependencies = {}) {
                 : undefined;
             packageIntegrationInstalled = manifest?.version === 1;
         }
-        catch {
+        catch (error) {
+            if (error instanceof Error &&
+                error.message.includes('SESSION_INTEGRATION_PATH_UNSAFE') &&
+                !error.message.includes('ancestor is unavailable')) {
+                throw error;
+            }
             packageIntegrationInstalled = false;
         }
     }

@@ -109,6 +109,14 @@ test('diagnostics are explicitly non-verdict and arbitrary evaluate is mutating'
   assert.equal(authorityProfileFor('cdp_evaluate').mutation, true);
 });
 
+test('native crash diagnostics do not require Metro or bundle authority', () => {
+  const profile = authorityProfileFor('cdp_native_errors');
+
+  assert.deepEqual(profile.axes, ['C', 'S', 'I', 'D']);
+  assert.equal(profile.liveBundleProbe, false);
+  assert.equal(profile.mutation, false);
+});
+
 test('iOS hard reset transitions through runner authority', () => {
   const profile = authorityProfileFor('cdp_restart', { hardReset: true, platform: 'ios' });
 

@@ -17,12 +17,12 @@ function conflict(flag: string): never {
 }
 
 function ensureValue(command: string[], flag: string, value: string): void {
-  const index = command.indexOf(flag);
-  if (index >= 0) {
+  let found = false;
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
+    found = true;
     if (command[index + 1] !== value) conflict(flag);
-    return;
   }
-  command.push(flag, value);
+  if (!found) command.push(flag, value);
 }
 
 function ensureFlag(command: string[], flag: string): void {

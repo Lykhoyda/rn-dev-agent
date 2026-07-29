@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { openAuthorityStore, } from './authority-store.js';
+import { probeMetroListener } from './metro-binding.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
 export class SessionAuthorityError extends Error {
@@ -125,6 +126,7 @@ export class SessionRegistry {
     #secureFiles;
     #now;
     #ownerStatus;
+    #listenerStatus;
     #leaseMs;
     #operationContext = new AsyncLocalStorage();
     #pendingPlatformReceipts = new Map();
@@ -134,6 +136,8 @@ export class SessionRegistry {
         this.#secureFiles = secureFiles;
         this.#now = dependencies.now ?? Date.now;
         this.#ownerStatus = dependencies.ownerStatus;
+        this.#listenerStatus =
+            dependencies.listenerStatus ?? ((port) => probeMetroListener(port).status);
         this.#leaseMs = dependencies.leaseMs ?? 30_000;
         this.#initializeWithRetry();
     }
@@ -1748,8 +1752,18 @@ export class SessionRegistry {
             const existing = this.#database
                 .prepare('SELECT port FROM allocations WHERE service = ? AND worktree_key = ?')
                 .get(input.service, input.worktreeKey);
-            if (existing)
-                return existing.port;
+            if (existing) {
+                const claim = this.#findClaim(`${input.service}-port`, String(existing.port));
+                const listenerStatus = claim ? 'absent' : this.#listenerStatus(existing.port);
+                if (listenerStatus === 'absent')
+                    return existing.port;
+                if (listenerStatus === 'unknown') {
+                    throw new SessionAuthorityError('PORT_LISTENER_PROBE_UNAVAILABLE', `listener ownership for ${input.service} port ${existing.port} is unavailable`);
+                }
+                this.#database
+                    .prepare('DELETE FROM allocations WHERE service = ? AND worktree_key = ?')
+                    .run(input.service, input.worktreeKey);
+            }
             const digest = createHash('sha256')
                 .update(`${input.uid}\0${input.worktreeKey}\0${input.service}`)
                 .digest();
@@ -1761,13 +1775,19 @@ export class SessionRegistry {
                     .get(input.service, port);
                 if (occupied)
                     continue;
+                const listenerStatus = this.#listenerStatus(port);
+                if (listenerStatus === 'listening')
+                    continue;
+                if (listenerStatus === 'unknown') {
+                    throw new SessionAuthorityError('PORT_LISTENER_PROBE_UNAVAILABLE', `listener ownership for ${input.service} port ${port} is unavailable`);
+                }
                 this.#database
                     .prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
              VALUES (?, ?, ?, 1)`)
                     .run(input.service, input.worktreeKey, port);
                 return port;
             }
-            const orphan = this.#database
+            const orphanRows = this.#database
                 .prepare(`SELECT allocation.worktree_key, allocation.port
            FROM allocations allocation
            WHERE allocation.service = ?
@@ -1779,9 +1799,19 @@ export class SessionRegistry {
                  AND session.state NOT IN ('released', 'stale')
              )
            ORDER BY allocation.generation ASC, allocation.worktree_key ASC
-           LIMIT 1`)
-                .get(input.service, input.base, input.base + input.span);
-            if (orphan) {
+           `)
+                .all(input.service, input.base, input.base + input.span);
+            for (const row of orphanRows) {
+                if (!Number.isSafeInteger(row.port) || typeof row.worktree_key !== 'string') {
+                    throw new SessionAuthorityError('AUTHORITY_STORE_INVALID', 'persisted port allocation is malformed');
+                }
+                const orphan = { port: row.port, worktree_key: row.worktree_key };
+                const listenerStatus = this.#listenerStatus(orphan.port);
+                if (listenerStatus === 'listening')
+                    continue;
+                if (listenerStatus === 'unknown') {
+                    throw new SessionAuthorityError('PORT_LISTENER_PROBE_UNAVAILABLE', `listener ownership for ${input.service} port ${orphan.port} is unavailable`);
+                }
                 this.#database
                     .prepare(`DELETE FROM allocations
              WHERE service = ? AND worktree_key = ? AND port = ?`)

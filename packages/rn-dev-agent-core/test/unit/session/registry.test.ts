@@ -15,7 +15,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
 
-function fixture() {
+function fixture(dependencies = {}) {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-registry-'));
   roots.push(root);
   const path = join(root, 'registry.sqlite3');
@@ -24,7 +24,9 @@ function fixture() {
   const registry = openSessionRegistry(path, {
     now: () => now,
     ownerStatus: (owner) => ownerStates.get(owner.sessionId) ?? 'unknown',
+    listenerStatus: () => 'absent',
     leaseMs: 30_000,
+    ...dependencies,
   });
   const create = (sessionId, worktreeKey = sessionId) => {
     ownerStates.set(sessionId, 'match');
@@ -227,6 +229,30 @@ test('deterministic port allocation persists collision resolution per worktree',
     }),
     second,
   );
+});
+
+test('persisted allocation rotates away from an unclaimed live listener', () => {
+  let occupiedPort = null;
+  const { registry } = fixture({
+    listenerStatus: (port) => (port === occupiedPort ? 'listening' : 'absent'),
+  });
+  occupiedPort = registry.allocatePort({
+    service: 'metro',
+    worktreeKey: 'worktree-a',
+    uid: '501',
+    base: 8300,
+    span: 4,
+  });
+
+  const replacement = registry.allocatePort({
+    service: 'metro',
+    worktreeKey: 'worktree-a',
+    uid: '501',
+    base: 8300,
+    span: 4,
+  });
+
+  assert.notEqual(replacement, occupiedPort);
 });
 
 test('exhausted port spans reclaim only terminal worktree allocations', () => {

@@ -223,6 +223,10 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
   }
   const signerCapability = readSigner(status);
   const existing = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
+  const retainedCleanup = status.bindings.metroCleanup as
+    | Partial<ManagedMetroBinding>
+    | null
+    | undefined;
   const operation = beginCliOperation(status, 'rn-session ensure-metro', 'transition:ensure-metro');
   let currentOperation = operation;
   let startedBinding: ManagedMetroBinding | null = null;
@@ -230,6 +234,34 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
   let bindingCommitted = false;
   try {
     await status.registry.runWithOperation(operation, async () => {
+      if (retainedCleanup) {
+        if (
+          !verifyManagedMetroManagementProof(retainedCleanup as Record<string, unknown>, {
+            sessionId: status.sessionId,
+            signerCapability,
+          })
+        ) {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'retained Metro cleanup is not authenticated managed authority; run rn_session stop_metro',
+          );
+        }
+        if (
+          !(await stopManagedMetro(retainedCleanup, {
+            sessionId: status.sessionId,
+            signerCapability,
+          }))
+        ) {
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            'retained managed Metro cleanup is unresolved; run rn_session stop_metro',
+          );
+        }
+        status.registry.verifyOperation(currentOperation);
+        currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+          bindings: { metroCleanup: null, bundle: null },
+        });
+      }
       if (
         existing &&
         !verifyManagedMetroManagementProof(existing as Record<string, unknown>, {
@@ -284,6 +316,7 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
       const buildGeneration =
         Math.max(
           Number(existing?.buildGeneration ?? 0),
+          Number(retainedCleanup?.buildGeneration ?? 0),
           Number(
             (status.bindings.install as Record<string, unknown> | undefined)?.buildGeneration ?? 0,
           ),
@@ -312,7 +345,12 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
       cleanupBindingCommitted = true;
       currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
         state: 'device_claimed',
-        bindings: { metro: startedBinding, metroCleanup: null, bundle: null },
+        bindings: {
+          metro: startedBinding,
+          metroCleanup: null,
+          metroTerminal: null,
+          bundle: null,
+        },
       });
       cleanupBindingCommitted = false;
       bindingCommitted = true;
@@ -451,6 +489,18 @@ async function main(): Promise<void> {
       const appId = device.appId;
       const metroInstanceId = metro.instanceId;
       const signerCapability = readSigner(status);
+      const metroInspection = inspectManagedMetroLifecycle(metro as Record<string, unknown>, {
+        sessionId: status.sessionId,
+        signerCapability,
+      });
+      if (metro.mode !== 'managed' || metroInspection.status !== 'live') {
+        throw new SessionAuthorityError(
+          'METRO_AUTHORITY_MISMATCH',
+          metroInspection.status === 'lost'
+            ? `${metroInspection.reason}; run rn_session stop_metro before retrying`
+            : 'build requires authenticated managed Metro authority',
+        );
+      }
       const buildGeneration =
         Math.max(
           Number(metro.buildGeneration ?? 0),
@@ -459,14 +509,11 @@ async function main(): Promise<void> {
           ),
         ) + 1;
       const buildToken = randomUUID();
-      const buildMetro =
-        metro.mode === 'managed'
-          ? refreshManagedMetroBuildGeneration(metro as ManagedMetroBinding, {
-              sessionId: status.sessionId,
-              buildGeneration,
-              signerCapability,
-            })
-          : { ...metro, buildGeneration };
+      const buildMetro = refreshManagedMetroBuildGeneration(metro as ManagedMetroBinding, {
+        sessionId: status.sessionId,
+        buildGeneration,
+        signerCapability,
+      });
       const runner = status.bindings.runner as Record<string, unknown> | null | undefined;
       const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
       const releaseResources: Array<{ type: string; key: string }> = [];

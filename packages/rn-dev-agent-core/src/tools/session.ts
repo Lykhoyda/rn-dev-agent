@@ -233,38 +233,25 @@ export function reconcileManagedMetroStatus(
     observedAt: (dependencies.now ?? Date.now)(),
     instanceId: metro.instanceId,
   };
-  try {
-    registry.updateBindings(session, {
-      expectedAuthorityVersion: authority.authorityVersion,
-      state: authority.bindings.install
-        ? 'device_bound'
-        : authority.bindings.device
-          ? 'device_claimed'
-          : 'source_bound',
-      bindings: {
-        metro: null,
-        metroCleanup: metro,
-        metroTerminal,
-        bundle: null,
-      },
-      releaseResources:
-        typeof priorTargetId === 'string' && Number.isSafeInteger(metroPort)
-          ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
-          : [],
-    });
-    return runtime.status();
-  } catch {
-    return {
-      ...authority,
-      bindings: {
-        ...authority.bindings,
-        metro: null,
-        metroCleanup: metro,
-        metroTerminal,
-        bundle: null,
-      },
-    };
-  }
+  registry.updateBindings(session, {
+    expectedAuthorityVersion: authority.authorityVersion,
+    state: authority.bindings.install
+      ? 'device_bound'
+      : authority.bindings.device
+        ? 'device_claimed'
+        : 'source_bound',
+    bindings: {
+      metro: null,
+      metroCleanup: metro,
+      metroTerminal,
+      bundle: null,
+    },
+    releaseResources:
+      typeof priorTargetId === 'string' && Number.isSafeInteger(metroPort)
+        ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
+        : [],
+  });
+  return runtime.status();
 }
 
 export function createSessionHandler(

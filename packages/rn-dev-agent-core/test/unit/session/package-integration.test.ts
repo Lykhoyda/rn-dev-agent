@@ -3686,6 +3686,32 @@ test('copied adapter accepts build identity only from the package-local session 
       session: 'session-ios',
     });
     assert.match(result.stdout, /"receipt":true/);
+
+    const manifest = JSON.parse(
+      readFileSync(join(integrationRoot, 'rn-session-integration.json'), 'utf8'),
+    );
+    manifest.originalScripts.ios = [
+      'npx',
+      'expo',
+      'run:ios',
+      '--device',
+      'session-ios-device',
+      '--device',
+      'foreign-device',
+    ];
+    writeFileSync(join(integrationRoot, 'rn-session-integration.json'), JSON.stringify(manifest));
+    const conflicting = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binRoot}:${process.env.PATH}`,
+        ADAPTER_RECORD: outputPath,
+        ADAPTER_COMPLETION: completionPath,
+      },
+    });
+    assert.notEqual(conflicting.status, 0);
+    assert.match(conflicting.stderr, /SESSION_BUILD_IDENTITY_CONFLICT/);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

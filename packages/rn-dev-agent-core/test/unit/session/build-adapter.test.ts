@@ -97,6 +97,15 @@ test('Expo removes a matching port, retains no-bundler, and refuses a conflictin
       }),
     /SESSION_BUILD_IDENTITY_CONFLICT/,
   );
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'ios',
+        command: ['expo', 'run:ios', '--device', iosSession.deviceId, '--device', 'foreign-device'],
+        session: iosSession,
+      }),
+    /SESSION_BUILD_IDENTITY_CONFLICT/,
+  );
 });
 
 test('Expo Android physical device requires an explicit exact Dev Client endpoint', () => {

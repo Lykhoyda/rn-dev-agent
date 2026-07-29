@@ -26149,6 +26149,122 @@ var init_maestro_runner_report = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/metro-binding.js
+import { execFileSync as execFileSync6 } from "node:child_process";
+function resolveMetroListenerExecutable(platform, dependencies = {}) {
+  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
+  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
+}
+function numericListener(output, emptyStatus) {
+  const value = String(output).trim();
+  if (!value)
+    return { status: emptyStatus };
+  const candidates = value.split(/\s+/);
+  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
+    return { status: "unknown" };
+  }
+  const pids = new Set(candidates.map(Number));
+  const [pid] = pids;
+  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+}
+function probeMetroListener(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
+  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
+  if (!executable)
+    return { status: "unknown" };
+  try {
+    if (platform === "win32") {
+      const output = execute(executable, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
+      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
+    }
+    if (platform === "linux") {
+      const output = execute(executable, ["-H", "-ltnp", `sport = :${port}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2e3
+      });
+      const value = String(output).trim();
+      if (!value)
+        return { status: "absent" };
+      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
+      const [pid] = pids;
+      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
+    }
+    if (platform === "darwin") {
+      const output = execute(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 2e3
+      });
+      return numericListener(output, "unknown");
+    }
+    return { status: "unknown" };
+  } catch (error2) {
+    const failure = error2;
+    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
+  }
+}
+function metroListenerPid(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
+  const probe = probeMetroListener(port, platform, execute, executableDependencies);
+  return probe.status === "listening" ? probe.pid : null;
+}
+async function fetchMetroStatus(port) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2e3);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: controller.signal
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function captureMetroBinding(input, dependencies = {}) {
+  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
+  }
+  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
+  if (listenerPid !== input.pid) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
+  if (!birth) {
+    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
+  }
+  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
+  if (!status.includes("packager-status:running")) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
+  }
+  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
+  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
+  }
+  return {
+    port: input.port,
+    pid: input.pid,
+    birth: birth.token,
+    instanceId: input.instanceId,
+    servingRoot,
+    buildGeneration: input.buildGeneration
+  };
+}
+var init_metro_binding = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-binding.js"() {
+    "use strict";
+    init_metro_cwd();
+    init_trusted_system_executable();
+    init_process_birth();
+    init_trusted_system_executable();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash6, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -26221,6 +26337,7 @@ var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
+    init_metro_binding();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
     SessionAuthorityError = class extends Error {
@@ -26277,6 +26394,7 @@ var init_registry = __esm({
       #secureFiles;
       #now;
       #ownerStatus;
+      #listenerStatus;
       #leaseMs;
       #operationContext = new AsyncLocalStorage();
       #pendingPlatformReceipts = /* @__PURE__ */ new Map();
@@ -26286,6 +26404,7 @@ var init_registry = __esm({
         this.#secureFiles = secureFiles;
         this.#now = dependencies.now ?? Date.now;
         this.#ownerStatus = dependencies.ownerStatus;
+        this.#listenerStatus = dependencies.listenerStatus ?? ((port) => probeMetroListener(port).status);
         this.#leaseMs = dependencies.leaseMs ?? 3e4;
         this.#initializeWithRetry();
       }
@@ -27537,8 +27656,16 @@ var init_registry = __esm({
         }
         return this.#transaction(() => {
           const existing = this.#database.prepare("SELECT port FROM allocations WHERE service = ? AND worktree_key = ?").get(input.service, input.worktreeKey);
-          if (existing)
-            return existing.port;
+          if (existing) {
+            const claim = this.#findClaim(`${input.service}-port`, String(existing.port));
+            const listenerStatus = claim ? "absent" : this.#listenerStatus(existing.port);
+            if (listenerStatus === "absent")
+              return existing.port;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${existing.port} is unavailable`);
+            }
+            this.#database.prepare("DELETE FROM allocations WHERE service = ? AND worktree_key = ?").run(input.service, input.worktreeKey);
+          }
           const digest3 = createHash6("sha256").update(`${input.uid}\0${input.worktreeKey}\0${input.service}`).digest();
           const preferred = digest3.readUInt32BE(0) % input.span;
           for (let offset = 0; offset < input.span; offset += 1) {
@@ -27546,11 +27673,17 @@ var init_registry = __esm({
             const occupied = this.#database.prepare("SELECT worktree_key FROM allocations WHERE service = ? AND port = ?").get(input.service, port);
             if (occupied)
               continue;
+            const listenerStatus = this.#listenerStatus(port);
+            if (listenerStatus === "listening")
+              continue;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${port} is unavailable`);
+            }
             this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
              VALUES (?, ?, ?, 1)`).run(input.service, input.worktreeKey, port);
             return port;
           }
-          const orphan = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
+          const orphanRows = this.#database.prepare(`SELECT allocation.worktree_key, allocation.port
            FROM allocations allocation
            WHERE allocation.service = ?
              AND allocation.port >= ?
@@ -27561,8 +27694,18 @@ var init_registry = __esm({
                  AND session.state NOT IN ('released', 'stale')
              )
            ORDER BY allocation.generation ASC, allocation.worktree_key ASC
-           LIMIT 1`).get(input.service, input.base, input.base + input.span);
-          if (orphan) {
+           `).all(input.service, input.base, input.base + input.span);
+          for (const row of orphanRows) {
+            if (!Number.isSafeInteger(row.port) || typeof row.worktree_key !== "string") {
+              throw new SessionAuthorityError("AUTHORITY_STORE_INVALID", "persisted port allocation is malformed");
+            }
+            const orphan = { port: row.port, worktree_key: row.worktree_key };
+            const listenerStatus = this.#listenerStatus(orphan.port);
+            if (listenerStatus === "listening")
+              continue;
+            if (listenerStatus === "unknown") {
+              throw new SessionAuthorityError("PORT_LISTENER_PROBE_UNAVAILABLE", `listener ownership for ${input.service} port ${orphan.port} is unavailable`);
+            }
             this.#database.prepare(`DELETE FROM allocations
              WHERE service = ? AND worktree_key = ? AND port = ?`).run(input.service, orphan.worktree_key, orphan.port);
             this.#database.prepare(`INSERT INTO allocations(service, worktree_key, port, generation)
@@ -28055,7 +28198,7 @@ function authorityProfileFor(tool, args = {}) {
     throw new Error(`UNPROFILED_AUTHORITY_TOOL: ${tool}`);
   return profile;
 }
-var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, cdpRead, cdpMutation, observe, proof, profiles;
+var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
@@ -28102,6 +28245,7 @@ var init_tool_profiles = __esm({
     ];
     hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
     optionalHybridMutation = ["cdp_run_action"];
+    nativeDiagnostic = ["cdp_native_errors"];
     cdpRead = [
       "cdp_component_state",
       "cdp_component_tree",
@@ -28111,7 +28255,6 @@ var init_tool_profiles = __esm({
       "cdp_error_log",
       "cdp_heap_usage",
       "cdp_metro_events",
-      "cdp_native_errors",
       "cdp_navigation_state",
       "cdp_network_body",
       "cdp_network_log",
@@ -28187,6 +28330,12 @@ var init_tool_profiles = __esm({
       managedOrigin: true,
       mutation: true,
       liveBundleProbe: true
+    });
+    add(nativeDiagnostic, {
+      kind: "authoritative",
+      axes: ["C", "S", "I", "D"],
+      mutation: false,
+      liveBundleProbe: false
     });
     add(cdpRead, {
       kind: "authoritative",
@@ -29986,7 +30135,7 @@ var init_external_runner_detect = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { execFileSync as execFileSync6 } from "node:child_process";
+import { execFileSync as execFileSync7 } from "node:child_process";
 import { existsSync as existsSync17, readFileSync as readFileSync14, unlinkSync as unlinkSync6 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join21 } from "node:path";
@@ -30044,7 +30193,7 @@ function defaultDeps2() {
     // caller's try/catch, which records a warning. Swallowing it here and
     // returning '' made single-runner enforcement degrade to a silent no-op
     // with no operator signal — exactly when the machine is busy.
-    listProcesses: () => execFileSync6("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
+    listProcesses: () => execFileSync7("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try {
@@ -30065,13 +30214,13 @@ function defaultDeps2() {
     fileExists: (path) => existsSync17(path),
     removeFile: (path) => unlinkSync6(path),
     delay: (ms) => new Promise((resolve10) => setTimeout(resolve10, ms)),
-    listApps: (udid) => execFileSync6("xcrun", ["simctl", "listapps", udid], {
+    listApps: (udid) => execFileSync7("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
       stdio: ["ignore", "pipe", "ignore"]
     }),
     uninstallApp: (udid, bundleId) => {
-      execFileSync6("xcrun", ["simctl", "uninstall", udid, bundleId], {
+      execFileSync7("xcrun", ["simctl", "uninstall", udid, bundleId], {
         encoding: "utf8",
         timeout: 1e4,
         stdio: ["ignore", "pipe", "ignore"]
@@ -55485,7 +55634,10 @@ function inspectAuthorityMigration(status, dependencies = {}) {
       const manifestText = readPackageIntegrationManifest(appRoot, dependencies);
       const manifest = manifestText ? JSON.parse(manifestText) : void 0;
       packageIntegrationInstalled = manifest?.version === 1;
-    } catch {
+    } catch (error2) {
+      if (error2 instanceof Error && error2.message.includes("SESSION_INTEGRATION_PATH_UNSAFE") && !error2.message.includes("ancestor is unavailable")) {
+        throw error2;
+      }
       packageIntegrationInstalled = false;
     }
   }
@@ -55589,12 +55741,12 @@ function verifyBuildReceipt(receipt2, capability, expected) {
 }
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync7 } from "node:child_process";
+import { execFileSync as execFileSync8 } from "node:child_process";
 import { createHash as createHash7 } from "node:crypto";
 import { lstatSync as lstatSync8, readFileSync as readFileSync22, readdirSync as readdirSync6, readlinkSync as readlinkSync2, realpathSync as realpathSync6, statSync as statSync7 } from "node:fs";
 import { isAbsolute as isAbsolute3, join as join30, relative as relative2 } from "node:path";
 function runText(command, args) {
-  return execFileSync7(command, [...args], {
+  return execFileSync8(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
@@ -55602,7 +55754,7 @@ function runText(command, args) {
   });
 }
 function runBuffer(command, args) {
-  return execFileSync7(command, [...args], {
+  return execFileSync8(command, [...args], {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 3e4,
@@ -55768,129 +55920,22 @@ function verifyInstalledArtifact(expected, observed) {
   }
 }
 
-// packages/rn-dev-agent-core/dist/session/metro-binding.js
-init_metro_cwd();
-init_trusted_system_executable();
-init_process_birth();
-init_trusted_system_executable();
-import { execFileSync as execFileSync8 } from "node:child_process";
-function resolveMetroListenerExecutable(platform, dependencies = {}) {
-  const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
-  return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
-}
-function numericListener(output, emptyStatus) {
-  const value = String(output).trim();
-  if (!value)
-    return { status: emptyStatus };
-  const candidates = value.split(/\s+/);
-  if (candidates.some((candidate) => !/^\d+$/.test(candidate))) {
-    return { status: "unknown" };
-  }
-  const pids = new Set(candidates.map(Number));
-  const [pid] = pids;
-  return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-}
-function probeMetroListener(port, platform = process.platform, execute = execFileSync8, executableDependencies = {}) {
-  const executable = resolveMetroListenerExecutable(platform, executableDependencies);
-  if (!executable)
-    return { status: "unknown" };
-  try {
-    if (platform === "win32") {
-      const output = execute(executable, [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port}); if ($connections.Count -eq 0) { 'ABSENT' } else { $connections.OwningProcess | Sort-Object -Unique }`
-      ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 });
-      return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
-    }
-    if (platform === "linux") {
-      const output = execute(executable, ["-H", "-ltnp", `sport = :${port}`], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2e3
-      });
-      const value = String(output).trim();
-      if (!value)
-        return { status: "absent" };
-      const pids = new Set([...value.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1])));
-      const [pid] = pids;
-      return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
-    }
-    if (platform === "darwin") {
-      const output = execute(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 2e3
-      });
-      return numericListener(output, "unknown");
-    }
-    return { status: "unknown" };
-  } catch (error2) {
-    const failure = error2;
-    return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
-  }
-}
-function metroListenerPid(port, platform = process.platform, execute = execFileSync8, executableDependencies = {}) {
-  const probe = probeMetroListener(port, platform, execute, executableDependencies);
-  return probe.status === "listening" ? probe.pid : null;
-}
-async function fetchMetroStatus(port) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2e3);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/status`, {
-      signal: controller.signal
-    });
-    if (!response.ok)
-      throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function captureMetroBinding(input, dependencies = {}) {
-  if (!Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65535 || !Number.isSafeInteger(input.pid) || input.pid < 1 || !input.instanceId || !Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < 1) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro binding is incomplete");
-  }
-  const listenerPid = (dependencies.listenerPid ?? metroListenerPid)(input.port);
-  if (listenerPid !== input.pid) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro process does not own the claimed listener");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(input.pid);
-  if (!birth) {
-    throw new Error("PROCESS_BIRTH_UNAVAILABLE: Metro process birth could not be proven conservatively");
-  }
-  const status = await (dependencies.fetchStatus ?? fetchMetroStatus)(input.port);
-  if (!status.includes("packager-status:running")) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: claimed Metro endpoint is not running");
-  }
-  const servingRoot = dependencies.servingRoot ? dependencies.servingRoot(input.port) : cwdForProcess(input.pid);
-  if (!servingRoot || !pathIsWithinRoot(servingRoot, input.sourceRoot)) {
-    throw new Error("METRO_AUTHORITY_MISMATCH: Metro serving root does not match the source worktree");
-  }
-  return {
-    port: input.port,
-    pid: input.pid,
-    birth: birth.token,
-    instanceId: input.instanceId,
-    servingRoot,
-    buildGeneration: input.buildGeneration
-  };
-}
+// packages/rn-dev-agent-core/dist/tools/session.js
+init_metro_binding();
 
 // packages/rn-dev-agent-core/dist/session/build-adapter.js
 function conflict(flag) {
   throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
 }
 function ensureValue(command, flag, value) {
-  const index = command.indexOf(flag);
-  if (index >= 0) {
+  let found = false;
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
+    found = true;
     if (command[index + 1] !== value)
       conflict(flag);
-    return;
   }
-  command.push(flag, value);
+  if (!found)
+    command.push(flag, value);
 }
 function ensureFlag(command, flag) {
   if (!command.includes(flag))
@@ -55981,6 +56026,7 @@ function createBuildLaunchPlan(input) {
 import { execFileSync as execFileSync9, spawn as spawn5 } from "node:child_process";
 import { createHash as createHash9, createHmac as createHmac2, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { closeSync as closeSync5, existsSync as existsSync25, fstatSync as fstatSync3, mkdirSync as mkdirSync14, openSync as openSync5, readFileSync as readFileSync24, readSync as readSync2, realpathSync as realpathSync8, rmSync as rmSync10 } from "node:fs";
+init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
 
@@ -60662,15 +60708,15 @@ if (typeof manifest.sessionCli === 'string') {
   }
 }
 function ensureValue(flag, value) {
-  const index = command.indexOf(flag);
-  if (index >= 0) {
+  let found = false;
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
+    found = true;
     if (command[index + 1] !== value) {
       process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
       process.exit(2);
     }
-    return;
   }
-  command.push(flag, value);
+  if (!found) command.push(flag, value);
 }
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
@@ -61599,31 +61645,18 @@ function reconcileManagedMetroStatus(runtime, dependencies = {}) {
     observedAt: (dependencies.now ?? Date.now)(),
     instanceId: metro.instanceId
   };
-  try {
-    registry2.updateBindings(session, {
-      expectedAuthorityVersion: authority.authorityVersion,
-      state: authority.bindings.install ? "device_bound" : authority.bindings.device ? "device_claimed" : "source_bound",
-      bindings: {
-        metro: null,
-        metroCleanup: metro,
-        metroTerminal,
-        bundle: null
-      },
-      releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
-    });
-    return runtime.status();
-  } catch {
-    return {
-      ...authority,
-      bindings: {
-        ...authority.bindings,
-        metro: null,
-        metroCleanup: metro,
-        metroTerminal,
-        bundle: null
-      }
-    };
-  }
+  registry2.updateBindings(session, {
+    expectedAuthorityVersion: authority.authorityVersion,
+    state: authority.bindings.install ? "device_bound" : authority.bindings.device ? "device_claimed" : "source_bound",
+    bindings: {
+      metro: null,
+      metroCleanup: metro,
+      metroTerminal,
+      bundle: null
+    },
+    releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
+  });
+  return runtime.status();
 }
 function createSessionHandler(runtime, dependencies = {}) {
   return async (input) => {
@@ -77135,6 +77168,7 @@ function verifyMetroAuthorityMarker(marker, signerCapability, expected = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
+init_metro_binding();
 init_process_birth();
 init_registry();
 

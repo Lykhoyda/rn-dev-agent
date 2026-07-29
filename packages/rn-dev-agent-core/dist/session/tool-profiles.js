@@ -41,6 +41,7 @@ const nativeMutation = [
 ];
 const hybridMutation = ['cdp_auto_login', 'cdp_run_e2e_suite'];
 const optionalHybridMutation = ['cdp_run_action'];
+const nativeDiagnostic = ['cdp_native_errors'];
 const cdpRead = [
     'cdp_component_state',
     'cdp_component_tree',
@@ -50,7 +51,6 @@ const cdpRead = [
     'cdp_error_log',
     'cdp_heap_usage',
     'cdp_metro_events',
-    'cdp_native_errors',
     'cdp_navigation_state',
     'cdp_network_body',
     'cdp_network_log',
@@ -133,6 +133,12 @@ add(optionalHybridMutation, {
     managedOrigin: true,
     mutation: true,
     liveBundleProbe: true,
+});
+add(nativeDiagnostic, {
+    kind: 'authoritative',
+    axes: ['C', 'S', 'I', 'D'],
+    mutation: false,
+    liveBundleProbe: false,
 });
 add(cdpRead, {
     kind: 'authoritative',

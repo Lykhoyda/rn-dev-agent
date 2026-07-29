@@ -2986,15 +2986,15 @@ if (typeof manifest.sessionCli === 'string') {
   }
 }
 function ensureValue(flag, value) {
-  const index = command.indexOf(flag);
-  if (index >= 0) {
+  let found = false;
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
+    found = true;
     if (command[index + 1] !== value) {
       process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
       process.exit(2);
     }
-    return;
   }
-  command.push(flag, value);
+  if (!found) command.push(flag, value);
 }
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);

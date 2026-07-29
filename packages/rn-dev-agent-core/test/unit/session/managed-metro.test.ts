@@ -258,6 +258,20 @@ test('managed Metro selects only package-local Expo and bare RN CLIs', () => {
     }),
     { executable: '/app/node_modules/.bin/react-native', args: ['start'] },
   );
+  assert.deepEqual(
+    resolveManagedMetroCommand('/app', {
+      platform: 'win32',
+      readText: (path) =>
+        path.endsWith('/node_modules/expo/package.json')
+          ? JSON.stringify({ bin: { expo: 'bin/cli.js' } })
+          : JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+    }),
+    {
+      executable: '/app/node_modules/expo/bin/cli.js',
+      args: ['start', '--dev-client'],
+    },
+  );
 });
 
 test('managed Metro child environment excludes session authority', () => {

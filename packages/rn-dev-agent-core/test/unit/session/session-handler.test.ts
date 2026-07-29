@@ -161,7 +161,7 @@ test('handoff preparation forwards an explicit operator TTL', async () => {
     ttlMs: 120_000,
   });
 
-  assert.equal(result.isError, undefined);
+  assert.equal(result.isError, undefined, result.content[0]!.text);
   assert.deepEqual(observed, { targetHandle: 'recipient', ttlMs: 120_000 });
 });
 
@@ -1124,7 +1124,7 @@ test('forced dev-client pin invalidates the prior target before recreating the c
 
   const result = await handler({ action: 'pin_dev_client', force: true });
 
-  assert.equal(result.isError, undefined);
+  assert.equal(result.isError, undefined, result.content[0]!.text);
   assert.deepEqual(calls, [
     'release:8193:target-a',
     'clear-bundle',
@@ -1397,6 +1397,50 @@ test('session status atomically invalidates lost managed Metro before and after 
       );
     });
   }
+});
+
+test('session status reports a failed atomic Metro invalidation', async () => {
+  const metro = { mode: 'managed', port: 8341, instanceId: 'metro-a' };
+  const authority = {
+    sessionId: 'session-a',
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    state: 'ready',
+    claimEpoch: 1,
+    authorityVersion: 4,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: { metroPort: 8341, metro, bundle: { targetId: 'target-a' } },
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...authority }),
+      requireAvailable: () => ({
+        registry: {
+          updateBindings: () => {
+            throw new Error('registry write failed');
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      getSignerCapability: () => 'signer',
+      inspectManagedMetroLifecycle: () => ({
+        status: 'lost',
+        code: 'METRO_LAUNCHER_EXITED',
+        reason: 'authenticated managed Metro launcher exited',
+      }),
+    },
+  );
+
+  const result = await handler({ action: 'status' });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /registry write failed/);
 });
 
 test('session stop_metro retains the recovery owner on process mismatch', async (t) => {

@@ -2,13 +2,14 @@ function conflict(flag) {
     throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
 }
 function ensureValue(command, flag, value) {
-    const index = command.indexOf(flag);
-    if (index >= 0) {
+    let found = false;
+    for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
+        found = true;
         if (command[index + 1] !== value)
             conflict(flag);
-        return;
     }
-    command.push(flag, value);
+    if (!found)
+        command.push(flag, value);
 }
 function ensureFlag(command, flag) {
     if (!command.includes(flag))
