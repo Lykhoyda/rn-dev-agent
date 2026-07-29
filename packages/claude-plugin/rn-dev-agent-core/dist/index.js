@@ -31012,19 +31012,20 @@ async function closeDeviceSession(deps) {
     return okResult({ closed: true, message: "No active session to close" });
   }
   const deviceId = deps.getDeviceId?.();
-  const result = await deps.closeUnderlyingSession();
-  if (!result.isError) {
+  const finalizeClose = async () => {
     await deps.stopFastRunner(deviceId);
     await deps.stopAndroidRunner(deviceId);
+    await deps.finalizeSuccessfulClose();
     deps.clearActiveSession();
     deps.releaseDeviceLock();
+  };
+  const result = await deps.closeUnderlyingSession();
+  if (!result.isError) {
+    await finalizeClose();
     return result;
   }
   if (isBenignSessionGoneError(result)) {
-    await deps.stopFastRunner(deviceId);
-    await deps.stopAndroidRunner(deviceId);
-    deps.clearActiveSession();
-    deps.releaseDeviceLock();
+    await finalizeClose();
     return okResult({
       closed: true,
       sessionAlreadyGone: true,
@@ -31350,15 +31351,15 @@ function createDeviceSnapshotHandler(deps = {}) {
             await reapActiveAndroidRunner(deviceId);
           }
         },
+        finalizeSuccessfulClose: async () => {
+          if (closingPlatform === "ios") {
+            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+          }
+          await deps.unbindRunner?.();
+        },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId
       });
-      if (!result2.isError) {
-        if (closingPlatform === "ios") {
-          (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-        }
-        await deps.unbindRunner?.();
-      }
       return result2;
     }
     if (!getActiveSession()) {

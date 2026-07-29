@@ -35,19 +35,20 @@ export async function closeDeviceSession(deps) {
     // GH #383: read the closing session's deviceId before clearActiveSession()
     // wipes it, so the adoption-aware stopFastRunner reaps the right per-device runner.
     const deviceId = deps.getDeviceId?.();
-    const result = await deps.closeUnderlyingSession();
-    if (!result.isError) {
+    const finalizeClose = async () => {
         await deps.stopFastRunner(deviceId);
         await deps.stopAndroidRunner(deviceId);
+        await deps.finalizeSuccessfulClose();
         deps.clearActiveSession();
         deps.releaseDeviceLock();
+    };
+    const result = await deps.closeUnderlyingSession();
+    if (!result.isError) {
+        await finalizeClose();
         return result;
     }
     if (isBenignSessionGoneError(result)) {
-        await deps.stopFastRunner(deviceId);
-        await deps.stopAndroidRunner(deviceId);
-        deps.clearActiveSession();
-        deps.releaseDeviceLock();
+        await finalizeClose();
         return okResult({
             closed: true,
             sessionAlreadyGone: true,

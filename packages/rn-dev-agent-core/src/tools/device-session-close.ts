@@ -11,6 +11,7 @@ export interface CloseDeviceSessionDeps {
   // GH #383: mirror stopFastRunner — pass the closing session's deviceId so a
   // post-respawn stop reaps the persisted per-device runner instead of no-oping.
   stopAndroidRunner: (deviceId?: string) => Promise<void>;
+  finalizeSuccessfulClose: () => void | Promise<void>;
   releaseDeviceLock: () => void;
   getDeviceId?: () => string | undefined;
 }
@@ -50,22 +51,23 @@ export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<
   // GH #383: read the closing session's deviceId before clearActiveSession()
   // wipes it, so the adoption-aware stopFastRunner reaps the right per-device runner.
   const deviceId = deps.getDeviceId?.();
+  const finalizeClose = async (): Promise<void> => {
+    await deps.stopFastRunner(deviceId);
+    await deps.stopAndroidRunner(deviceId);
+    await deps.finalizeSuccessfulClose();
+    deps.clearActiveSession();
+    deps.releaseDeviceLock();
+  };
 
   const result = await deps.closeUnderlyingSession();
 
   if (!result.isError) {
-    await deps.stopFastRunner(deviceId);
-    await deps.stopAndroidRunner(deviceId);
-    deps.clearActiveSession();
-    deps.releaseDeviceLock();
+    await finalizeClose();
     return result;
   }
 
   if (isBenignSessionGoneError(result)) {
-    await deps.stopFastRunner(deviceId);
-    await deps.stopAndroidRunner(deviceId);
-    deps.clearActiveSession();
-    deps.releaseDeviceLock();
+    await finalizeClose();
     return okResult({
       closed: true,
       sessionAlreadyGone: true,

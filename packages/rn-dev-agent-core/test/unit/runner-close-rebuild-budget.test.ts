@@ -8,6 +8,7 @@ afterEach(() => clearActiveSession());
 
 test('supported iOS runner close restores the cold-rebuild recovery credit', async () => {
   let resets = 0;
+  let unbinds = 0;
   setActiveSession({
     name: 'runner-budget',
     platform: 'ios',
@@ -18,6 +19,9 @@ test('supported iOS runner close restores the cold-rebuild recovery credit', asy
     resetIosRunnerRebuildBudget: () => {
       resets += 1;
     },
+    unbindRunner: async () => {
+      unbinds += 1;
+    },
   });
 
   const result = await handler({ action: 'close' });
@@ -25,4 +29,5 @@ test('supported iOS runner close restores the cold-rebuild recovery credit', asy
 
   assert.equal(envelope.ok, true);
   assert.equal(resets, 1);
+  assert.equal(unbinds, 1);
 });

@@ -584,15 +584,15 @@ export function createDeviceSnapshotHandler(
             await reapActiveAndroidRunner(deviceId);
           }
         },
+        finalizeSuccessfulClose: async () => {
+          if (closingPlatform === 'ios') {
+            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+          }
+          await deps.unbindRunner?.();
+        },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId,
       });
-      if (!result.isError) {
-        if (closingPlatform === 'ios') {
-          (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-        }
-        await deps.unbindRunner?.();
-      }
       return result;
     }
 
