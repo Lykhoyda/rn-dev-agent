@@ -1295,13 +1295,12 @@ export function createAuthorityGate(
                 axes: effectiveProfile.axes.filter((axis) => axis !== 'B'),
               }
             : effectiveProfile;
-          const runnerAwareReceiptProfile =
-            runnerAuthorityReleased
-              ? {
-                  ...receiptBaseProfile,
-                  axes: receiptBaseProfile.axes.filter((axis) => axis !== 'R'),
-                }
-              : receiptBaseProfile;
+          const runnerAwareReceiptProfile = runnerAuthorityReleased
+            ? {
+                ...receiptBaseProfile,
+                axes: receiptBaseProfile.axes.filter((axis) => axis !== 'R'),
+              }
+            : receiptBaseProfile;
           const receiptProfile = finalOrigin
             ? {
                 ...runnerAwareReceiptProfile,

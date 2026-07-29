@@ -207,6 +207,15 @@ for (const transport of [
             | undefined;
           assert.equal(runtimeAuthority?.status, 'signed');
           assert.equal(runtimeAuthority.marker?.payload?.sessionId, sessionId);
+          console.log(
+            JSON.stringify({
+              attempt: attempt + 1,
+              bundleBytes: bundle.body.length,
+              markerSessionId: runtimeAuthority.marker.payload.sessionId,
+              markerStatus: runtimeAuthority.status,
+              transport: transport.name,
+            }),
+          );
         }
 
         const evidence = readFileSync(binding.runtimeEvidencePath, 'utf8')
@@ -217,6 +226,12 @@ for (const transport of [
         assert.equal(
           evidence.some((entry) => entry.kind === 'violation'),
           false,
+        );
+        console.log(
+          JSON.stringify({
+            authorityViolationObserved: false,
+            transport: transport.name,
+          }),
         );
       } finally {
         if (binding) {

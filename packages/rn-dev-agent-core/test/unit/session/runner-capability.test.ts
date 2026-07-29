@@ -16,10 +16,7 @@ import {
   androidHealthMatchesAuthority,
   buildInstrumentAuthorityArgs,
 } from '../../../dist/runners/rn-android-runner-client.js';
-import {
-  bindNativeRunner,
-  unbindNativeRunner,
-} from '../../../dist/session/runner-binding.js';
+import { bindNativeRunner, unbindNativeRunner } from '../../../dist/session/runner-binding.js';
 
 afterEach(() => {
   _setFetchForTest(globalThis.fetch);

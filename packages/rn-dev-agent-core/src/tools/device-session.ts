@@ -208,9 +208,7 @@ interface DeviceSnapshotDependencies {
     deviceId: string,
     appId: string,
   ) => Promise<void> | void;
-  unbindRunner?: (
-    beforeRelease?: (platform: 'ios' | 'android') => void,
-  ) => Promise<void> | void;
+  unbindRunner?: (beforeRelease?: (platform: 'ios' | 'android') => void) => Promise<void> | void;
   resetIosRunnerRebuildBudget?: () => void;
 }
 
