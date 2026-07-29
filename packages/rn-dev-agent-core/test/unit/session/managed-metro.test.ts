@@ -9,6 +9,7 @@ import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js'
 import {
   hasNodeLoaderOption,
   hasUnsupportedNodeOption,
+  inspectManagedMetroLifecycle,
   managedMetroChildEnvironment,
   managedMetroListenerPid,
   managedMetroParentPid,
@@ -266,6 +267,7 @@ test('managed Metro child environment excludes session authority', () => {
       HOME: '/home/test',
       EXPO_PUBLIC_MODE: 'test',
       BABEL_ENV: 'development',
+      CI: 'true',
       CUSTOM_METRO_FLAG: 'enabled',
       RN_DEV_AGENT_SESSION_SECRET_PATH: '/secret',
       RN_DEV_AGENT_REGISTRY_PATH: '/registry',
@@ -777,6 +779,103 @@ test('managed Metro stops its owned process tree and proves the listener is gone
   assert.equal(result, true);
   assert.deepEqual(signals, [[101, 'SIGTERM']]);
   assert.equal(removedEvidenceSocket, binding.runtimeEvidenceSocket);
+});
+
+test('managed Metro lifecycle inspection fails closed for every lost authority signal', async (t) => {
+  const binding = await startManagedMetro(
+    {
+      appRoot: '/app',
+      runtimeRoot: '/tmp',
+      sourceRoot: '/app',
+      sessionId: 'session-a',
+      port: 8341,
+      instanceId: 'metro-a',
+      buildGeneration: 1,
+      signerCapability: 'signer',
+    },
+    {
+      readText: () => JSON.stringify({ dependencies: { expo: '1' } }),
+      exists: () => true,
+      spawnProcess: () => ({
+        pid: 101,
+        exitCode: null,
+        signalCode: null,
+        kill: () => true,
+        unref: () => {},
+      }),
+      listenerPid: () => 202,
+      listenerOwnedByLauncher: () => true,
+      readBirth: (pid) => ({ pid, source: 'linux-proc', token: `birth-${pid}` }),
+      capture: async (input) => ({
+        ...input,
+        birth: 'birth-202',
+        servingRoot: '/app',
+      }),
+    },
+  );
+  const liveBirth = (pid: number) => ({
+    status: 'present' as const,
+    birth: { pid, source: 'linux-proc' as const, token: `birth-${pid}` },
+  });
+  const inspect = (
+    overrides: {
+      exists?: () => boolean;
+      probeBirth?: (pid: number) => ReturnType<typeof liveBirth> | { status: 'absent' };
+      probeListener?: () =>
+        | { status: 'listening'; pid: number }
+        | { status: 'absent' }
+        | { status: 'unknown' };
+    } = {},
+  ) =>
+    inspectManagedMetroLifecycle(
+      binding as unknown as Record<string, unknown>,
+      { sessionId: 'session-a', signerCapability: 'signer' },
+      {
+        exists: overrides.exists ?? (() => true),
+        probeBirth: overrides.probeBirth ?? liveBirth,
+        probeListener: overrides.probeListener ?? (() => ({ status: 'listening', pid: 202 })),
+      },
+    );
+
+  assert.deepEqual(inspect(), { status: 'live' });
+
+  await t.test('exit before bundle bind', () => {
+    assert.equal(
+      inspect({ probeBirth: (pid) => (pid === 101 ? { status: 'absent' } : liveBirth(pid)) }).code,
+      'METRO_LAUNCHER_EXITED',
+    );
+  });
+  await t.test('exit after bundle bind', () => {
+    assert.equal(
+      inspect({ probeBirth: (pid) => (pid === 202 ? { status: 'absent' } : liveBirth(pid)) }).code,
+      'METRO_LISTENER_EXITED',
+    );
+  });
+  await t.test('signal termination', () => {
+    const afterSignal = inspect({ probeBirth: () => ({ status: 'absent' }) });
+    assert.deepEqual(afterSignal, {
+      status: 'lost',
+      code: 'METRO_LAUNCHER_EXITED',
+      reason: 'authenticated managed Metro launcher exited',
+    });
+  });
+  await t.test('missing evidence socket', () => {
+    assert.equal(inspect({ exists: () => false }).code, 'METRO_EVIDENCE_SOCKET_MISSING');
+  });
+  await t.test('stale listener process identity', () => {
+    assert.equal(
+      inspect({
+        probeBirth: (pid) =>
+          pid === 202
+            ? {
+                status: 'present',
+                birth: { pid, source: 'linux-proc', token: 'replacement-birth' },
+              }
+            : liveBirth(pid),
+      }).code,
+      'METRO_LISTENER_IDENTITY_CHANGED',
+    );
+  });
 });
 
 test('managed Metro proof authenticates every cleanup authority field', async () => {

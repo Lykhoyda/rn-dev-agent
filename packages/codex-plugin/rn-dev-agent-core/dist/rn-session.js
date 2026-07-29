@@ -12781,7 +12781,7 @@ function managementProof(sessionId, authority, signerCapability) {
   })).digest("hex");
 }
 function managedMetroChildEnvironment(environment) {
-  return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== void 0 && !name.startsWith("RN_DEV_AGENT_")));
+  return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== void 0 && name !== "CI" && !name.startsWith("RN_DEV_AGENT_")));
 }
 function verifyManagedMetroRuntimeAdmission(path, capability, expected) {
   try {
@@ -12829,6 +12829,77 @@ function verifyManagedMetroManagementProof(binding, input) {
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
   return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+}
+function exactManagedProcessInspection(role, pid, birth, probe) {
+  const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
+  if (probe.status === "absent") {
+    return {
+      status: "lost",
+      code: `${prefix}_EXITED`,
+      reason: `authenticated managed Metro ${role} exited`
+    };
+  }
+  if (probe.status === "unknown") {
+    return {
+      status: "lost",
+      code: `${prefix}_UNVERIFIABLE`,
+      reason: `authenticated managed Metro ${role} process identity is unavailable`
+    };
+  }
+  if (probe.birth.pid !== pid || probe.birth.token !== birth) {
+    return {
+      status: "lost",
+      code: `${prefix}_IDENTITY_CHANGED`,
+      reason: `authenticated managed Metro ${role} process identity changed`
+    };
+  }
+  return null;
+}
+function inspectManagedMetroLifecycle(binding, input, dependencies = {}) {
+  if (!verifyManagedMetroManagementProof(binding, input)) {
+    return {
+      status: "lost",
+      code: "METRO_MANAGEMENT_PROOF_INVALID",
+      reason: "managed Metro lifecycle evidence is not authenticated by this session"
+    };
+  }
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const launcher = exactManagedProcessInspection("launcher", binding.launcherPid, binding.launcherBirth, probeBirth(binding.launcherPid));
+  if (launcher)
+    return launcher;
+  const listener = exactManagedProcessInspection("listener", binding.pid, binding.birth, probeBirth(binding.pid));
+  if (listener)
+    return listener;
+  const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+  if (port.status === "absent") {
+    return {
+      status: "lost",
+      code: "METRO_PORT_RELEASED",
+      reason: "authenticated managed Metro no longer owns its allocated listener port"
+    };
+  }
+  if (port.status === "unknown") {
+    return {
+      status: "lost",
+      code: "METRO_PORT_UNVERIFIABLE",
+      reason: "managed Metro listener port ownership is unavailable"
+    };
+  }
+  if (port.pid !== binding.pid) {
+    return {
+      status: "lost",
+      code: "METRO_PORT_OWNER_CHANGED",
+      reason: "allocated managed Metro port is owned by a different process"
+    };
+  }
+  if (!(dependencies.exists ?? existsSync4)(binding.runtimeEvidenceSocket)) {
+    return {
+      status: "lost",
+      code: "METRO_EVIDENCE_SOCKET_MISSING",
+      reason: "managed Metro runtime evidence socket is missing"
+    };
+  }
+  return { status: "live" };
 }
 function refreshManagedMetroBuildGeneration(binding, input) {
   if (!Number.isSafeInteger(input.buildGeneration) || input.buildGeneration < binding.buildGeneration || !verifyManagedMetroManagementProof(binding, input)) {
@@ -15494,6 +15565,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
   } : void 0;
   const metro = status.bindings.metro;
+  const metroTerminal = status.bindings.metroTerminal;
   return {
     available: true,
     ...options.includeSessionId ? { sessionId: status.sessionId } : {},
@@ -15505,6 +15577,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
     deviceBound: Boolean(status.bindings.device),
     installBound: Boolean(status.bindings.install),
     metroBound: Boolean(status.bindings.metro),
+    ...metroTerminal ? {
+      metroTerminal: {
+        code: metroTerminal.code,
+        reason: metroTerminal.reason,
+        phase: metroTerminal.phase,
+        observedAt: metroTerminal.observedAt
+      }
+    } : {},
     sandbox: metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable",
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
@@ -15859,6 +15939,46 @@ function readSigner(status) {
   }
   return secret.signerCapability;
 }
+function reconcileManagedMetroStatus(status) {
+  const metro = status.bindings.metro;
+  if (metro?.mode !== "managed")
+    return status;
+  const inspection = inspectManagedMetroLifecycle(metro, {
+    sessionId: status.sessionId,
+    signerCapability: readSigner(status)
+  });
+  if (inspection.status === "live")
+    return status;
+  const priorTargetId = status.bindings.bundle?.targetId;
+  const metroPort = Number(status.bindings.metroPort);
+  const session = { sessionId: status.sessionId, claimEpoch: status.claimEpoch };
+  status.registry.updateBindings(session, {
+    expectedAuthorityVersion: status.authorityVersion,
+    state: status.bindings.install ? "device_bound" : status.bindings.device ? "device_claimed" : "source_bound",
+    bindings: {
+      metro: null,
+      metroCleanup: metro,
+      metroTerminal: {
+        code: inspection.code,
+        reason: inspection.reason,
+        phase: status.bindings.bundle ? "after-bind" : "before-bind",
+        observedAt: Date.now(),
+        instanceId: metro.instanceId
+      },
+      bundle: null
+    },
+    releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
+  });
+  const current = status.registry.getSessionStatus(status.sessionId);
+  if (!current) {
+    throw new SessionAuthorityError("SESSION_OWNER_LOST", "session disappeared during managed Metro reconciliation");
+  }
+  return Object.assign(current, {
+    closeRegistry: status.closeRegistry,
+    registry: status.registry,
+    layout: status.layout
+  });
+}
 function beginCliOperation(status, tool, profile) {
   const operation = status.registry.beginOperation({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { operationId: randomUUID3(), tool, profile });
   if (operation.authorityVersion !== status.authorityVersion) {
@@ -16013,8 +16133,11 @@ async function ensureManagedMetro(status) {
 }
 async function main() {
   const command = process.argv[2] ?? "status";
-  const status = resolveStatus();
+  let status = resolveStatus();
   try {
+    if (command === "status" || command === "feedback-json" || command === "prepare-build") {
+      status = reconcileManagedMetroStatus(status);
+    }
     if (command === "status") {
       process.stdout.write(`${JSON.stringify(projectPublicAuthorityStatus({ available: true, ...status }), null, 2)}
 `);

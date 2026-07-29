@@ -65,6 +65,73 @@ test('package-local CLI resolves one exact worktree session for literal build sc
   });
 });
 
+test('package-local CLI status persists lost managed Metro reconciliation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-metro-status-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    execFileSync('git', ['init', '-q', appRoot]);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+    writeFileSync(join(appRoot, 'package.json'), '{}\n');
+    execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+    execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    let registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const session = registry.createSession({
+      sessionId: 'session-lost-metro',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'fixture' },
+      source: { ...source },
+      bindings: {
+        metroPort: 8193,
+        metro: { mode: 'managed', port: 8193, instanceId: 'lost-metro' },
+      },
+    });
+    registry.updateBindings(session, { state: 'device_claimed', bindings: {} });
+    registry.close();
+    writeSessionSecret(layout, session.sessionId, {
+      signerCapability: 'signer',
+      observeCapability: 'observe',
+      recoveryCapability: 'recovery',
+    });
+
+    const result = spawnSync(process.execPath, [cliPath, 'status'], {
+      cwd: appRoot,
+      env: {
+        ...process.env,
+        XDG_STATE_HOME: stateHome,
+        RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const projected = JSON.parse(result.stdout);
+    assert.equal(projected.metroBound, false);
+    assert.equal(projected.metroTerminal.code, 'METRO_MANAGEMENT_PROOF_INVALID');
+
+    registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const reconciled = registry.getSessionStatus(session.sessionId);
+    registry.close();
+    assert.equal(reconciled?.bindings.metro, null);
+    assert.deepEqual(reconciled?.bindings.metroCleanup, {
+      mode: 'managed',
+      port: 8193,
+      instanceId: 'lost-metro',
+    });
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('package-local CLI does not discover a sibling app session in the same worktree', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-monorepo-'));
   const appA = join(root, 'apps', 'a');

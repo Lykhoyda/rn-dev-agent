@@ -887,6 +887,36 @@ test('transition handlers remain fenced across their expected authority version 
   assert.equal(calls.at(-1), 'end');
 });
 
+test('repeated managed Metro stop remains fenced without requiring a generation advance', async () => {
+  const { runtime, status, calls } = fixture();
+  status.bindings.metro = null;
+  status.bindings.bundle = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('rn_session', async () =>
+    okResult({ stopped: false, alreadyStopped: true }),
+  )({ action: 'stop_metro' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.alreadyStopped, true);
+  assert.equal(envelope.meta.authorityTransition, true);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S'],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('postflight:')),
+    ['postflight:C', 'postflight:S'],
+  );
+  assert.equal(calls.at(-1), 'end');
+});
+
 test('repeated Observe start is an authoritative idempotent read of the existing binding', async () => {
   const { runtime, calls } = fixture();
   const gate = createAuthorityGate(runtime, {

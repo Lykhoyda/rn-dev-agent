@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
-import { stopManagedMetro, } from '../session/managed-metro.js';
+import { inspectManagedMetroLifecycle, stopManagedMetro, } from '../session/managed-metro.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
@@ -67,14 +67,83 @@ function required(value, name) {
     }
     return value;
 }
+export function reconcileManagedMetroStatus(runtime, dependencies = {}) {
+    const authority = runtime.status();
+    const metro = authority.available
+        ? authority.bindings.metro
+        : null;
+    if (!authority.available || metro?.mode !== 'managed')
+        return authority;
+    const signerCapability = dependencies.getSignerCapability?.(authority.sessionId);
+    const inspection = signerCapability
+        ? (dependencies.inspectManagedMetroLifecycle ?? inspectManagedMetroLifecycle)(metro, {
+            sessionId: authority.sessionId,
+            signerCapability,
+        })
+        : {
+            status: 'lost',
+            code: 'METRO_MANAGEMENT_PROOF_INVALID',
+            reason: 'managed Metro session signer is unavailable',
+        };
+    if (inspection.status === 'live')
+        return authority;
+    const { registry, session } = runtime.requireAvailable();
+    const priorTargetId = authority.bindings.bundle
+        ?.targetId;
+    const metroPort = Number(authority.bindings.metroPort);
+    const metroTerminal = {
+        code: inspection.code,
+        reason: inspection.reason,
+        phase: authority.bindings.bundle ? 'after-bind' : 'before-bind',
+        observedAt: (dependencies.now ?? Date.now)(),
+        instanceId: metro.instanceId,
+    };
+    try {
+        registry.updateBindings(session, {
+            expectedAuthorityVersion: authority.authorityVersion,
+            state: authority.bindings.install
+                ? 'device_bound'
+                : authority.bindings.device
+                    ? 'device_claimed'
+                    : 'source_bound',
+            bindings: {
+                metro: null,
+                metroCleanup: metro,
+                metroTerminal,
+                bundle: null,
+            },
+            releaseResources: typeof priorTargetId === 'string' && Number.isSafeInteger(metroPort)
+                ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
+                : [],
+        });
+        return runtime.status();
+    }
+    catch {
+        return {
+            ...authority,
+            bindings: {
+                ...authority.bindings,
+                metro: null,
+                metroCleanup: metro,
+                metroTerminal,
+                bundle: null,
+            },
+        };
+    }
+}
 export function createSessionHandler(runtime, dependencies = {}) {
     return async (input) => {
         if (input.action === 'status') {
-            const authority = runtime.status();
-            return okResult({
-                authoritative: false,
-                authority: projectPublicAuthorityStatus(authority, { includeSessionId: true }),
-            });
+            try {
+                const projectedAuthority = reconcileManagedMetroStatus(runtime, dependencies);
+                return okResult({
+                    authoritative: false,
+                    authority: projectPublicAuthorityStatus(projectedAuthority, { includeSessionId: true }),
+                });
+            }
+            catch (error) {
+                return authorityFailure(error);
+            }
         }
         try {
             const isRecovery = input.action === 'accept_handoff' || input.action === 'adopt_stale';
@@ -256,10 +325,10 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before managed Metro cleanup');
                 }
-                const metro = status.bindings.metro;
+                const metro = (status.bindings.metroCleanup ?? status.bindings.metro);
                 if (!metro) {
                     return okResult({
-                        stopped: true,
+                        stopped: false,
                         alreadyStopped: true,
                         session: projectPublicAuthorityStatus(runtime.status()),
                     });
@@ -287,7 +356,12 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         : status.bindings.device
                             ? 'device_claimed'
                             : 'source_bound',
-                    bindings: { metro: null, bundle: null },
+                    bindings: {
+                        metro: null,
+                        metroCleanup: null,
+                        metroTerminal: null,
+                        bundle: null,
+                    },
                     releaseResources: typeof priorTargetId === 'string' && Number.isSafeInteger(metroPort)
                         ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
                         : [],

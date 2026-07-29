@@ -6,7 +6,7 @@ import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
-import { refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
+import { inspectManagedMetroLifecycle, refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
@@ -52,6 +52,53 @@ function readSigner(status) {
         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session build signer is unavailable');
     }
     return secret.signerCapability;
+}
+function reconcileManagedMetroStatus(status) {
+    const metro = status.bindings.metro;
+    if (metro?.mode !== 'managed')
+        return status;
+    const inspection = inspectManagedMetroLifecycle(metro, {
+        sessionId: status.sessionId,
+        signerCapability: readSigner(status),
+    });
+    if (inspection.status === 'live')
+        return status;
+    const priorTargetId = status.bindings.bundle
+        ?.targetId;
+    const metroPort = Number(status.bindings.metroPort);
+    const session = { sessionId: status.sessionId, claimEpoch: status.claimEpoch };
+    status.registry.updateBindings(session, {
+        expectedAuthorityVersion: status.authorityVersion,
+        state: status.bindings.install
+            ? 'device_bound'
+            : status.bindings.device
+                ? 'device_claimed'
+                : 'source_bound',
+        bindings: {
+            metro: null,
+            metroCleanup: metro,
+            metroTerminal: {
+                code: inspection.code,
+                reason: inspection.reason,
+                phase: status.bindings.bundle ? 'after-bind' : 'before-bind',
+                observedAt: Date.now(),
+                instanceId: metro.instanceId,
+            },
+            bundle: null,
+        },
+        releaseResources: typeof priorTargetId === 'string' && Number.isSafeInteger(metroPort)
+            ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
+            : [],
+    });
+    const current = status.registry.getSessionStatus(status.sessionId);
+    if (!current) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session disappeared during managed Metro reconciliation');
+    }
+    return Object.assign(current, {
+        closeRegistry: status.closeRegistry,
+        registry: status.registry,
+        layout: status.layout,
+    });
 }
 function beginCliOperation(status, tool, profile) {
     const operation = status.registry.beginOperation({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { operationId: randomUUID(), tool, profile });
@@ -217,8 +264,11 @@ async function ensureManagedMetro(status) {
 }
 async function main() {
     const command = process.argv[2] ?? 'status';
-    const status = resolveStatus();
+    let status = resolveStatus();
     try {
+        if (command === 'status' || command === 'feedback-json' || command === 'prepare-build') {
+            status = reconcileManagedMetroStatus(status);
+        }
         if (command === 'status') {
             process.stdout.write(`${JSON.stringify(projectPublicAuthorityStatus({ available: true, ...status }), null, 2)}\n`);
             return;

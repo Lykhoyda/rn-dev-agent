@@ -23,6 +23,7 @@ export function projectPublicAuthorityStatus(status, options = {}) {
         }
         : undefined;
     const metro = status.bindings.metro;
+    const metroTerminal = status.bindings.metroTerminal;
     return {
         available: true,
         ...(options.includeSessionId ? { sessionId: status.sessionId } : {}),
@@ -34,6 +35,16 @@ export function projectPublicAuthorityStatus(status, options = {}) {
         deviceBound: Boolean(status.bindings.device),
         installBound: Boolean(status.bindings.install),
         metroBound: Boolean(status.bindings.metro),
+        ...(metroTerminal
+            ? {
+                metroTerminal: {
+                    code: metroTerminal.code,
+                    reason: metroTerminal.reason,
+                    phase: metroTerminal.phase,
+                    observedAt: metroTerminal.observedAt,
+                },
+            }
+            : {}),
         sandbox: metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1'
             ? 'managed-sandbox-v1'
             : 'unavailable',

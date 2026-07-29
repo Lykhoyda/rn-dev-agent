@@ -251,6 +251,67 @@ test('supervisor close atomically blocks operation admission before Metro teardo
   await assert.doesNotReject(close);
 });
 
+test('supervisor close preserves session-owned Metro while package integration remains installed', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(stateDir);
+  const stoppedBindings = [];
+  const authority = createSupervisorAuthority(
+    {
+      stateDir,
+      source: {
+        kind: 'git',
+        contentRoot: '/repo',
+        appRoot: '/repo',
+        sourceKey: 'source-key',
+        worktreeKey: 'worktree-key',
+        appRootKey: 'app-key',
+        head: 'abc123',
+      },
+      supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+      uid: '501',
+      startHeartbeat: false,
+      ownerStatus: () => 'match',
+    },
+    {
+      stopManagedMetro: async (binding) => {
+        stoppedBindings.push(binding);
+        return true;
+      },
+    },
+  );
+  const metro = {
+    mode: 'managed',
+    port: authority.metroPort,
+    instanceId: 'persistent-metro',
+  };
+  authority.registry.updateBindings(authority.session, {
+    state: 'ready',
+    bindings: {
+      metro,
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: authority.session.sessionId,
+        manifestSha256: 'a'.repeat(64),
+      },
+    },
+  });
+
+  await assert.doesNotReject(authority.close());
+  assert.deepEqual(stoppedBindings, []);
+
+  const registry = openSessionRegistry(authority.layout.registry, {
+    ownerStatus: () => 'match',
+  });
+  try {
+    const status = registry.getSessionStatus(authority.session.sessionId);
+    assert.equal(status?.state, 'ready');
+    assert.deepEqual(status?.bindings.metro, metro);
+    assert.ok(status?.bindings.packageIntegration);
+  } finally {
+    registry.close();
+  }
+});
+
 test('supervisor close proves runner and Observe cleanup before releasing claims', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
   roots.push(stateDir);

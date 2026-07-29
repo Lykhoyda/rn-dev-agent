@@ -898,16 +898,17 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
   });
 }
 
+const getSessionSignerCapability = (sessionId?: string): string | null => {
+  const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
+  if (!currentSecretPath) return null;
+  if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) return null;
+  const secretPath = sessionId
+    ? join(dirname(dirname(currentSecretPath)), sessionId, 'secret.json')
+    : currentSecretPath;
+  return readJsonStateFile<{ signerCapability?: string }>(secretPath)?.signerCapability ?? null;
+};
 const sessionHandler = createSessionHandler(authorityRuntime, {
-  getSignerCapability: (sessionId) => {
-    const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
-    if (!currentSecretPath) return null;
-    if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) return null;
-    const secretPath = sessionId
-      ? join(dirname(dirname(currentSecretPath)), sessionId, 'secret.json')
-      : currentSecretPath;
-    return readJsonStateFile<{ signerCapability?: string }>(secretPath)?.signerCapability ?? null;
-  },
+  getSignerCapability: getSessionSignerCapability,
   pinDevClient: pinSessionDevClient,
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
@@ -996,7 +997,9 @@ trackedTool(
         'Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups',
       ),
   },
-  createPassiveStatusHandler(getClient, authorityRuntime),
+  createPassiveStatusHandler(getClient, authorityRuntime, {
+    getSignerCapability: getSessionSignerCapability,
+  }),
 );
 
 trackedTool(

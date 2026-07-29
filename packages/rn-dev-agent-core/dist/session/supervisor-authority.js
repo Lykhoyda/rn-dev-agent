@@ -165,6 +165,10 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                 clearInterval(heartbeat);
             try {
                 let status = registry.getSessionStatus(session.sessionId);
+                if (status?.bindings.packageIntegration &&
+                    (status.bindings.metroCleanup ?? status.bindings.metro)) {
+                    return;
+                }
                 if (status && RELEASABLE_SESSION_STATES.has(status.state)) {
                     status = registry.beginSessionClose(session);
                 }

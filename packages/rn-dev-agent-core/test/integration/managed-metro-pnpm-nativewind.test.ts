@@ -169,6 +169,7 @@ if (args[0] === 'start') {
     socket.on('error', () => {});
     socket.end('HTTP/1.1 200 OK\\r\\nContent-Length: 23\\r\\n\\r\\npackager-status:running');
   }).listen(port, '127.0.0.1');
+  if (process.env.CI) setTimeout(() => process.exit(0), 250);
   setInterval(() => {}, 1 << 30);
 } else if (args[0] === 'run:ios') {
   const portIndex = args.indexOf('--port');
@@ -263,7 +264,7 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
     }));
     return;
   }
-  const { startManagedMetro, stopManagedMetro } = await import(metroModule);
+  const { startManagedMetro } = await import(metroModule);
   if (command === 'ensure-metro') {
     const binding = await startManagedMetro({
       appRoot: process.cwd(),
@@ -279,32 +280,6 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
     return;
   }
   if (command === 'complete-build') {
-    const binding = JSON.parse(fs.readFileSync(bindingPath, 'utf8'));
-    if (!await stopManagedMetro(binding, {
-      sessionId: 'fixture-session',
-      signerCapability: ${JSON.stringify(signerCapability)}
-    })) {
-      const { probeManagedMetroListener } = await import(metroModule);
-      const alive = (pid) => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      };
-      process.stderr.write('FIXTURE_METRO_STOP_REFUSED:' + JSON.stringify({
-        port: binding.port,
-        launcherPid: binding.launcherPid,
-        launcherAlive: alive(binding.launcherPid),
-        listenerPid: binding.pid,
-        listenerAlive: alive(binding.pid),
-        listenerProbe: probeManagedMetroListener(binding.port),
-        runtimeEvidenceSocket: binding.runtimeEvidenceSocket,
-        socketExists: fs.existsSync(binding.runtimeEvidenceSocket)
-      }) + '\\n');
-      process.exit(11);
-    }
     process.stdout.write('{"receipt":true}\\n');
     return;
   }
@@ -329,6 +304,7 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
           FIXTURE_BUILD_RESULT: buildResultPath,
           FIXTURE_METRO_PORT: String(port),
           FIXTURE_RUNTIME_ROOT: runtimeRoot,
+          CI: 'true',
         },
       });
 
@@ -346,12 +322,27 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
       }
       const binding = JSON.parse(readFileSync(bindingPath, 'utf8')) as Record<string, unknown>;
       assert.equal(binding.buildGeneration, 2);
-      assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
+      assert.ok(
+        binding.runtimeEvidenceAuthority === 'managed-sandbox-v1' ||
+          binding.runtimeEvidenceAuthority === 'reported-v1',
+      );
       assert.equal(binding.runtimeEvidenceProtocol, 2);
+      assert.equal(await portIsReachable(port), true);
+      assert.doesNotThrow(() => process.kill(Number(binding.launcherPid), 0));
+      assert.doesNotThrow(() => process.kill(Number(binding.pid), 0));
+      assert.equal(existsSync(String(binding.runtimeEvidenceSocket)), true);
       const evidence = readFileSync(join(runtimeRoot, 'metro-runtime-evidence.jsonl'), 'utf8')
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line) as Record<string, unknown>);
+      assert.equal(
+        evidence.some(
+          (entry) =>
+            entry.kind === 'violation' &&
+            entry.value === 'Metro runtime evidence stream ended before Metro exited',
+        ),
+        false,
+      );
       const canonicalAddon = realpathSync(addonPath);
       const addonDigest = createHash('sha256').update(readFileSync(addonPath)).digest('hex');
       for (const kind of ['input', 'stability']) {

@@ -1241,7 +1241,7 @@ function managementProof(
 export function managedMetroChildEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(environment).filter(
-      ([name, value]) => value !== undefined && !name.startsWith('RN_DEV_AGENT_'),
+      ([name, value]) => value !== undefined && name !== 'CI' && !name.startsWith('RN_DEV_AGENT_'),
     ),
   );
 }
@@ -1348,6 +1348,115 @@ export function verifyManagedMetroManagementProof(
     expectedBuffer.length === observedBuffer.length &&
     timingSafeEqual(expectedBuffer, observedBuffer)
   );
+}
+
+export type ManagedMetroLifecycleInspection =
+  | { status: 'live' }
+  | {
+      status: 'lost';
+      code:
+        | 'METRO_MANAGEMENT_PROOF_INVALID'
+        | 'METRO_LAUNCHER_EXITED'
+        | 'METRO_LAUNCHER_IDENTITY_CHANGED'
+        | 'METRO_LAUNCHER_UNVERIFIABLE'
+        | 'METRO_LISTENER_EXITED'
+        | 'METRO_LISTENER_IDENTITY_CHANGED'
+        | 'METRO_LISTENER_UNVERIFIABLE'
+        | 'METRO_PORT_RELEASED'
+        | 'METRO_PORT_OWNER_CHANGED'
+        | 'METRO_PORT_UNVERIFIABLE'
+        | 'METRO_EVIDENCE_SOCKET_MISSING';
+      reason: string;
+    };
+
+function exactManagedProcessInspection(
+  role: 'launcher' | 'listener',
+  pid: number,
+  birth: string,
+  probe: ProcessBirthProbe,
+): ManagedMetroLifecycleInspection | null {
+  const prefix = role === 'launcher' ? 'METRO_LAUNCHER' : 'METRO_LISTENER';
+  if (probe.status === 'absent') {
+    return {
+      status: 'lost',
+      code: `${prefix}_EXITED`,
+      reason: `authenticated managed Metro ${role} exited`,
+    };
+  }
+  if (probe.status === 'unknown') {
+    return {
+      status: 'lost',
+      code: `${prefix}_UNVERIFIABLE`,
+      reason: `authenticated managed Metro ${role} process identity is unavailable`,
+    };
+  }
+  if (probe.birth.pid !== pid || probe.birth.token !== birth) {
+    return {
+      status: 'lost',
+      code: `${prefix}_IDENTITY_CHANGED`,
+      reason: `authenticated managed Metro ${role} process identity changed`,
+    };
+  }
+  return null;
+}
+
+export function inspectManagedMetroLifecycle(
+  binding: Record<string, unknown>,
+  input: { sessionId: string; signerCapability: string },
+  dependencies: Pick<ManagedMetroDependencies, 'exists' | 'probeBirth' | 'probeListener'> = {},
+): ManagedMetroLifecycleInspection {
+  if (!verifyManagedMetroManagementProof(binding, input)) {
+    return {
+      status: 'lost',
+      code: 'METRO_MANAGEMENT_PROOF_INVALID',
+      reason: 'managed Metro lifecycle evidence is not authenticated by this session',
+    };
+  }
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const launcher = exactManagedProcessInspection(
+    'launcher',
+    binding.launcherPid,
+    binding.launcherBirth,
+    probeBirth(binding.launcherPid),
+  );
+  if (launcher) return launcher;
+  const listener = exactManagedProcessInspection(
+    'listener',
+    binding.pid,
+    binding.birth,
+    probeBirth(binding.pid),
+  );
+  if (listener) return listener;
+  const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+  if (port.status === 'absent') {
+    return {
+      status: 'lost',
+      code: 'METRO_PORT_RELEASED',
+      reason: 'authenticated managed Metro no longer owns its allocated listener port',
+    };
+  }
+  if (port.status === 'unknown') {
+    return {
+      status: 'lost',
+      code: 'METRO_PORT_UNVERIFIABLE',
+      reason: 'managed Metro listener port ownership is unavailable',
+    };
+  }
+  if (port.pid !== binding.pid) {
+    return {
+      status: 'lost',
+      code: 'METRO_PORT_OWNER_CHANGED',
+      reason: 'allocated managed Metro port is owned by a different process',
+    };
+  }
+  if (!(dependencies.exists ?? existsSync)(binding.runtimeEvidenceSocket)) {
+    return {
+      status: 'lost',
+      code: 'METRO_EVIDENCE_SOCKET_MISSING',
+      reason: 'managed Metro runtime evidence socket is missing',
+    };
+  }
+  return { status: 'live' };
 }
 
 export function refreshManagedMetroBuildGeneration(

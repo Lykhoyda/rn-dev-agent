@@ -1316,8 +1316,87 @@ test('session stop_metro is idempotent when managed Metro is already absent', as
   const envelope = JSON.parse(result.content[0]!.text);
 
   assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.equal(envelope.data.stopped, false);
   assert.equal(envelope.data.alreadyStopped, true);
   assert.equal(released, false);
+});
+
+test('session status atomically invalidates lost managed Metro before and after bundle bind', async (t) => {
+  for (const bundleBound of [false, true]) {
+    await t.test(bundleBound ? 'after bundle bind' : 'before bundle bind', async () => {
+      const metro = {
+        mode: 'managed',
+        port: 8341,
+        instanceId: 'metro-a',
+      };
+      const status = {
+        sessionId: 'session-a',
+        sourceKey: 'source',
+        worktreeKey: 'worktree',
+        appRootKey: 'app',
+        state: 'ready',
+        claimEpoch: 1,
+        authorityVersion: 4,
+        leaseUntilMs: 100,
+        source: { kind: 'git' },
+        bindings: {
+          metroPort: 8341,
+          metro,
+          bundle: bundleBound ? { targetId: 'target-a' } : null,
+        } as Record<string, unknown>,
+        claims: [],
+        worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+      };
+      const updates: Array<Record<string, unknown>> = [];
+      const runtime = {
+        status: () => ({ available: true, ...status }),
+        requireAvailable: () => ({
+          registry: {
+            updateBindings: (_session: unknown, update: Record<string, unknown>) => {
+              updates.push(update);
+              assert.equal(update.expectedAuthorityVersion, 4);
+              status.authorityVersion += 1;
+              status.bindings = {
+                ...status.bindings,
+                ...(update.bindings as Record<string, unknown>),
+              };
+            },
+          },
+          session: { sessionId: 'session-a', claimEpoch: 1 },
+        }),
+      };
+      const handler = createSessionHandler(runtime as never, {
+        getSignerCapability: () => 'signer',
+        inspectManagedMetroLifecycle: () => ({
+          status: 'lost',
+          code: 'METRO_LAUNCHER_EXITED',
+          reason: 'authenticated managed Metro launcher exited',
+        }),
+        now: () => 1234,
+      });
+
+      const result = await handler({ action: 'status' });
+      const envelope = JSON.parse(result.content[0]!.text);
+
+      assert.equal(result.isError, undefined, result.content[0]!.text);
+      assert.equal(envelope.data.authority.metroBound, false);
+      assert.equal(envelope.data.authority.bundleBound, false);
+      assert.deepEqual(envelope.data.authority.metroTerminal, {
+        code: 'METRO_LAUNCHER_EXITED',
+        reason: 'authenticated managed Metro launcher exited',
+        phase: bundleBound ? 'after-bind' : 'before-bind',
+        observedAt: 1234,
+      });
+      assert.deepEqual(status.bindings.metroCleanup, metro);
+      assert.equal(status.bindings.metro, null);
+      assert.equal(status.bindings.bundle, null);
+      assert.equal(updates.length, 1);
+      assert.deepEqual(
+        updates[0]?.releaseResources,
+        bundleBound ? [{ type: 'target', key: '8341:target-a' }] : [],
+      );
+    });
+  }
 });
 
 test('session stop_metro retains the recovery owner on process mismatch', async (t) => {
@@ -1878,8 +1957,14 @@ test('transferred owner can stop Metro, restore integration, and release in orde
     assert.equal(listener.listening, false);
     assert.ok(status.bindings.packageIntegration);
 
+    const repeatedStop = await handler({ action: 'stop_metro' });
+    const repeatedStopEnvelope = JSON.parse(repeatedStop.content[0]!.text);
+    assert.equal(repeatedStop.isError, undefined, repeatedStop.content[0]!.text);
+    assert.equal(repeatedStopEnvelope.data.stopped, false);
+    assert.equal(repeatedStopEnvelope.data.alreadyStopped, true);
+
     const restored = await handler({ action: 'restore_integration', confirmed: true });
-    assert.equal(restored.isError, undefined);
+    assert.equal(restored.isError, undefined, restored.content[0]!.text);
     assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), originalPackage);
     assert.equal(readFileSync(metroPath, 'utf8'), originalMetro);
     assert.equal(status.bindings.packageIntegration, null);

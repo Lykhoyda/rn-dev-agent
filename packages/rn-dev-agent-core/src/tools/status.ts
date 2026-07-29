@@ -29,6 +29,7 @@ import type { ConnectFilters } from '../cdp/connect.js';
 import type { HermesTarget } from '../types.js';
 import type { WorkerAuthorityRuntime } from '../session/runtime.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
+import { reconcileManagedMetroStatus, type ManagedMetroStatusDependencies } from './session.js';
 
 export function sessionConnectFilters(
   session: ReturnType<typeof getActiveSession>,
@@ -68,13 +69,15 @@ export function targetMatchesSession(
 export function createPassiveStatusHandler(
   getClient: () => CDPClient,
   authorityRuntime: WorkerAuthorityRuntime,
+  statusDependencies: ManagedMetroStatusDependencies = {},
 ) {
   return async (args: { metroPort?: number; platform?: string }) => {
     const client = getClient();
     const target = client.connectedTarget;
+    const authority = reconcileManagedMetroStatus(authorityRuntime, statusDependencies);
     return okResult({
       authoritative: false,
-      authority: projectPublicAuthorityStatus(authorityRuntime.status()),
+      authority: projectPublicAuthorityStatus(authority),
       metro: {
         port: client.metroPort,
         requestedPort: args.metroPort ?? null,

@@ -139,6 +139,27 @@ function requireCompleteAxes(status: SessionStatus, profile: AuthorityProfile): 
   }
 }
 
+function isAuthenticatedIdempotentMetroStop(
+  tool: string,
+  args: Record<string, unknown>,
+  result: unknown,
+): boolean {
+  if (tool !== 'rn_session' || args.action !== 'stop_metro') return false;
+  try {
+    const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
+      ok?: unknown;
+      data?: { stopped?: unknown; alreadyStopped?: unknown };
+    };
+    return (
+      envelope.ok === true &&
+      envelope.data?.stopped === false &&
+      envelope.data.alreadyStopped === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 function requireDeviceTransition(status: SessionStatus, args: Record<string, unknown>): void {
   const action = args.action ?? 'snapshot';
   if (action === 'open') {
@@ -657,7 +678,8 @@ export function createAuthorityGate(
                 authorityTransition: true,
               });
             }
-            if (!gateCommitsProof) {
+            const idempotentMetroStop = isAuthenticatedIdempotentMetroStop(tool, args, result);
+            if (!gateCommitsProof && !idempotentMetroStop) {
               registry.verifyOperation(operation);
               const nextStatus = runtime.status();
               if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {

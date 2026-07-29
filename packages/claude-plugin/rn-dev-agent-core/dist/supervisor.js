@@ -17576,6 +17576,16 @@ function requireCompleteAxes(status, profile) {
     }
   }
 }
+function isAuthenticatedIdempotentMetroStop(tool, args, result) {
+  if (tool !== "rn_session" || args.action !== "stop_metro")
+    return false;
+  try {
+    const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
+    return envelope.ok === true && envelope.data?.stopped === false && envelope.data.alreadyStopped === true;
+  } catch {
+    return false;
+  }
+}
 function requireDeviceTransition(status, args) {
   const action = args.action ?? "snapshot";
   if (action === "open") {
@@ -17905,7 +17915,8 @@ function createAuthorityGate(runtime, dependencies) {
               authorityTransition: true
             });
           }
-          if (!gateCommitsProof) {
+          const idempotentMetroStop = isAuthenticatedIdempotentMetroStop(tool, args, result);
+          if (!gateCommitsProof && !idempotentMetroStop) {
             registry3.verifyOperation(operation2);
             const nextStatus = runtime.status();
             if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
@@ -24311,6 +24322,77 @@ function verifyManagedMetroManagementProof(binding, input) {
   const expectedBuffer = Buffer.from(expected, "hex");
   const observedBuffer = Buffer.from(binding.managementProof, "hex");
   return expectedBuffer.length === observedBuffer.length && timingSafeEqual3(expectedBuffer, observedBuffer);
+}
+function exactManagedProcessInspection(role, pid, birth, probe) {
+  const prefix = role === "launcher" ? "METRO_LAUNCHER" : "METRO_LISTENER";
+  if (probe.status === "absent") {
+    return {
+      status: "lost",
+      code: `${prefix}_EXITED`,
+      reason: `authenticated managed Metro ${role} exited`
+    };
+  }
+  if (probe.status === "unknown") {
+    return {
+      status: "lost",
+      code: `${prefix}_UNVERIFIABLE`,
+      reason: `authenticated managed Metro ${role} process identity is unavailable`
+    };
+  }
+  if (probe.birth.pid !== pid || probe.birth.token !== birth) {
+    return {
+      status: "lost",
+      code: `${prefix}_IDENTITY_CHANGED`,
+      reason: `authenticated managed Metro ${role} process identity changed`
+    };
+  }
+  return null;
+}
+function inspectManagedMetroLifecycle(binding, input, dependencies = {}) {
+  if (!verifyManagedMetroManagementProof(binding, input)) {
+    return {
+      status: "lost",
+      code: "METRO_MANAGEMENT_PROOF_INVALID",
+      reason: "managed Metro lifecycle evidence is not authenticated by this session"
+    };
+  }
+  const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+  const launcher = exactManagedProcessInspection("launcher", binding.launcherPid, binding.launcherBirth, probeBirth(binding.launcherPid));
+  if (launcher)
+    return launcher;
+  const listener = exactManagedProcessInspection("listener", binding.pid, binding.birth, probeBirth(binding.pid));
+  if (listener)
+    return listener;
+  const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+  if (port.status === "absent") {
+    return {
+      status: "lost",
+      code: "METRO_PORT_RELEASED",
+      reason: "authenticated managed Metro no longer owns its allocated listener port"
+    };
+  }
+  if (port.status === "unknown") {
+    return {
+      status: "lost",
+      code: "METRO_PORT_UNVERIFIABLE",
+      reason: "managed Metro listener port ownership is unavailable"
+    };
+  }
+  if (port.pid !== binding.pid) {
+    return {
+      status: "lost",
+      code: "METRO_PORT_OWNER_CHANGED",
+      reason: "allocated managed Metro port is owned by a different process"
+    };
+  }
+  if (!(dependencies.exists ?? existsSync21)(binding.runtimeEvidenceSocket)) {
+    return {
+      status: "lost",
+      code: "METRO_EVIDENCE_SOCKET_MISSING",
+      reason: "managed Metro runtime evidence socket is missing"
+    };
+  }
+  return { status: "live" };
 }
 function legacyManagementProof(sessionId, authority, signerCapability) {
   return createHmac2("sha256", signerCapability).update([
@@ -59864,6 +59946,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     adoptionExpiresMs: typeof recovery.adoptStale?.expiresMs === "number" ? recovery.adoptStale.expiresMs : void 0
   } : void 0;
   const metro = status.bindings.metro;
+  const metroTerminal = status.bindings.metroTerminal;
   return {
     available: true,
     ...options.includeSessionId ? { sessionId: status.sessionId } : {},
@@ -59875,6 +59958,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
     deviceBound: Boolean(status.bindings.device),
     installBound: Boolean(status.bindings.install),
     metroBound: Boolean(status.bindings.metro),
+    ...metroTerminal ? {
+      metroTerminal: {
+        code: metroTerminal.code,
+        reason: metroTerminal.reason,
+        phase: metroTerminal.phase,
+        observedAt: metroTerminal.observedAt
+      }
+    } : {},
     sandbox: metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable",
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
@@ -59887,6 +59978,4510 @@ var init_public_status = __esm({
   "packages/rn-dev-agent-core/dist/session/public-status.js"() {
     "use strict";
     init_migration_diagnostic();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/build-receipt.js
+import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+function serialize(payload) {
+  return JSON.stringify(payload);
+}
+function sign(payload, capability) {
+  return createHmac3("sha256", capability).update(serialize(payload)).digest("hex");
+}
+function verifyBuildReceipt(receipt2, capability, expected) {
+  if (receipt2.version !== 1 || !receipt2.payload || !receipt2.signature) {
+    throw new Error("BUILD_RECEIPT_INVALID: build receipt shape is invalid");
+  }
+  const expectedSignature = Buffer.from(sign(receipt2.payload, capability), "hex");
+  const actualSignature = Buffer.from(receipt2.signature, "hex");
+  if (expectedSignature.length !== actualSignature.length || !timingSafeEqual5(expectedSignature, actualSignature)) {
+    throw new Error("BUILD_RECEIPT_INVALID: build receipt signature is invalid");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (receipt2.payload[key] !== value) {
+      throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${key} contradicts the active session`);
+    }
+  }
+  return receipt2.payload;
+}
+var init_build_receipt = __esm({
+  "packages/rn-dev-agent-core/dist/session/build-receipt.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/install-authority.js
+import { execFileSync as execFileSync11 } from "node:child_process";
+import { createHash as createHash12 } from "node:crypto";
+import { lstatSync as lstatSync10, readFileSync as readFileSync26, readdirSync as readdirSync8, readlinkSync as readlinkSync4, realpathSync as realpathSync9, statSync as statSync10 } from "node:fs";
+import { isAbsolute as isAbsolute4, join as join34, relative as relative3 } from "node:path";
+function runText(command, args) {
+  return execFileSync11(command, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 1e4,
+    maxBuffer: 8 * 1024 * 1024
+  });
+}
+function runBuffer(command, args) {
+  return execFileSync11(command, [...args], {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 3e4,
+    maxBuffer: 512 * 1024 * 1024
+  });
+}
+function digest2(parts) {
+  const hash = createHash12("sha256");
+  for (const part of parts) {
+    hash.update(`${part.byteLength}:`);
+    hash.update(part);
+  }
+  return hash.digest("hex");
+}
+function generation(parts) {
+  return digest2(parts.map((part) => Buffer.from(part)));
+}
+function listAppFiles(appPath) {
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync8(directory, { withFileTypes: true })) {
+      const path = join34(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        files.push(relative3(appPath, path));
+      } else {
+        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
+      }
+    }
+  };
+  visit(appPath);
+  return files.sort();
+}
+function iosAppFiles(appPath, dependencies) {
+  return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
+}
+function assertIosSymlinkContained(appPath, path, realpath) {
+  const target = realpath(path);
+  const child = relative3(realpath(appPath), target);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute4(child)) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
+  }
+}
+function androidApkPaths(target, text) {
+  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
+}
+function captureInstallGeneration(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join34(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const stat2 = dependencies.stat ?? statSync10;
+    const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
+      const path = join34(appPath, entry);
+      const value = stat2(path);
+      return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+    });
+    return generation(metadata2);
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  const metadata = text("adb", [
+    "-s",
+    target.deviceId,
+    "shell",
+    "stat",
+    "-c",
+    "%n:%i:%s:%Y",
+    ...apkPaths
+  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
+  if (metadata.length !== apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
+  }
+  return generation(metadata);
+}
+function captureInstalledArtifact(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  const buffer = dependencies.runBuffer ?? runBuffer;
+  const read = dependencies.read ?? readFileSync26;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join34(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const files = iosAppFiles(appPath, dependencies);
+    const lstat = dependencies.lstat ?? lstatSync10;
+    const readLink = dependencies.readLink ?? readlinkSync4;
+    const realpath = dependencies.realpath ?? realpathSync9;
+    const artifactParts = [];
+    for (const entry of files) {
+      const path = join34(appPath, entry);
+      const stat2 = lstat(path);
+      artifactParts.push(Buffer.from(entry));
+      if (stat2.isFile()) {
+        artifactParts.push(Buffer.from("file"), read(path));
+      } else if (stat2.isSymbolicLink()) {
+        assertIosSymlinkContained(appPath, path, realpath);
+        artifactParts.push(Buffer.from("symlink"), Buffer.from(readLink(path)));
+      } else {
+        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
+      }
+    }
+    return {
+      ...target,
+      artifactDigest: digest2(artifactParts),
+      installGeneration: captureInstallGeneration(target, dependencies)
+    };
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  return {
+    ...target,
+    artifactDigest: digest2(apkPaths.map((path) => buffer("adb", ["-s", target.deviceId, "exec-out", "cat", path]))),
+    installGeneration: captureInstallGeneration(target, dependencies)
+  };
+}
+function verifyInstalledArtifact(expected, observed) {
+  if (expected.platform !== observed.platform || expected.deviceId !== observed.deviceId || expected.appId !== observed.appId || expected.artifactDigest !== observed.artifactDigest || expected.installGeneration !== observed.installGeneration) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: installed artifact no longer matches the session build");
+  }
+}
+var init_install_authority = __esm({
+  "packages/rn-dev-agent-core/dist/session/install-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/build-adapter.js
+function conflict(flag) {
+  throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
+}
+function ensureValue(command, flag, value) {
+  const index = command.indexOf(flag);
+  if (index >= 0) {
+    if (command[index + 1] !== value)
+      conflict(flag);
+    return;
+  }
+  command.push(flag, value);
+}
+function ensureFlag(command, flag) {
+  if (!command.includes(flag))
+    command.push(flag);
+}
+function removeValue(command, flag, value) {
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
+    if (command[index + 1] !== value)
+      conflict(flag);
+    command.splice(index, 2);
+  }
+}
+function managedMetroProxyUrl(session) {
+  if (session.platform === "ios") {
+    return `http://127.0.0.1:${session.metroPort}`;
+  }
+  if (/^emulator-\d+$/.test(session.deviceId)) {
+    return `http://10.0.2.2:${session.metroPort}`;
+  }
+  if (!session.devClientUrl) {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL");
+  }
+  let metroUrl;
+  try {
+    const encodedMetroUrl = new URL(session.devClientUrl).searchParams.get("url");
+    if (!encodedMetroUrl)
+      throw new Error("missing url parameter");
+    metroUrl = new URL(encodedMetroUrl);
+  } catch {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint");
+  }
+  if (!["http:", "https:"].includes(metroUrl.protocol) || Number(metroUrl.port) !== session.metroPort) {
+    throw new Error("SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro");
+  }
+  return metroUrl.origin;
+}
+function commandKind(command) {
+  const offset = command[0] === "npx" ? 1 : 0;
+  const executable = command[offset];
+  const subcommand = command[offset + 1];
+  if (executable === "expo" && (subcommand === "run:ios" || subcommand === "run:android")) {
+    return "expo";
+  }
+  if (executable === "react-native" && subcommand === "run-ios")
+    return "bare-ios";
+  if (executable === "react-native" && subcommand === "run-android")
+    return "bare-android";
+  return null;
+}
+function createBuildLaunchPlan(input) {
+  const command = [...input.command];
+  if (!input.session)
+    return { mode: "passthrough", command, env: {} };
+  if (input.session.platform !== input.platform)
+    conflict("platform");
+  const kind = commandKind(command);
+  const expectedKind = input.platform === "ios" ? /* @__PURE__ */ new Set(["expo", "bare-ios"]) : /* @__PURE__ */ new Set(["expo", "bare-android"]);
+  if (!kind || !expectedKind.has(kind)) {
+    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized");
+  }
+  if (kind === "expo") {
+    ensureValue(command, "--device", input.session.deviceId);
+    removeValue(command, "--port", String(input.session.metroPort));
+    ensureFlag(command, "--no-bundler");
+  } else if (kind === "bare-ios") {
+    ensureValue(command, "--udid", input.session.deviceId);
+    ensureValue(command, "--port", String(input.session.metroPort));
+    ensureFlag(command, "--no-packager");
+  } else {
+    ensureValue(command, "--deviceId", input.session.deviceId);
+    ensureValue(command, "--port", String(input.session.metroPort));
+    ensureFlag(command, "--no-packager");
+  }
+  const env = {
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
+    RCT_METRO_PORT: String(input.session.metroPort),
+    RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
+    ...kind === "expo" ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}
+  };
+  return {
+    mode: "session",
+    command,
+    env
+  };
+}
+var init_build_adapter = __esm({
+  "packages/rn-dev-agent-core/dist/session/build-adapter.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/package-integration.js
+import { closeSync as closeSync8, constants as constants5, fstatSync as fstatSync5, lstatSync as lstatSync11, openSync as openSync8, readFileSync as readFileSync27 } from "node:fs";
+import { basename as basename4, isAbsolute as isAbsolute5, join as join35, relative as relative4, resolve as resolve8, sep as sep4 } from "node:path";
+function serializePackageIntegrationManifest(manifest) {
+  return `${JSON.stringify(manifest, null, 2)}
+`;
+}
+function renderMetroIntegrationAdapter() {
+  return `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const { createHash, createHmac, randomBytes } = require('node:crypto');
+const childProcess = require('node:child_process');
+const { execFileSync } = childProcess;
+const diagnosticsChannel = require('node:diagnostics_channel');
+const moduleApi = require('node:module');
+const { registerHooks } = moduleApi;
+const { fileURLToPath } = require('node:url');
+const { deserialize, serialize } = require('node:v8');
+const workerThreads = require('node:worker_threads');
+const IntrinsicObject = Object;
+const IntrinsicMap = Map;
+const IntrinsicProxy = Proxy;
+const IntrinsicSet = Set;
+const IntrinsicWeakMap = WeakMap;
+const IntrinsicWeakSet = WeakSet;
+const intrinsicArrayIsArray = Array.isArray;
+const intrinsicJsonStringify = JSON.stringify;
+const intrinsicNumberIsFinite = Number.isFinite;
+const intrinsicObjectPrototype = Object.prototype;
+const intrinsicArrayFilter = Array.prototype.filter;
+const intrinsicArrayForEach = Array.prototype.forEach;
+const intrinsicArrayMap = Array.prototype.map;
+const intrinsicArrayPush = Array.prototype.push;
+const intrinsicArraySlice = Array.prototype.slice;
+const intrinsicArraySort = Array.prototype.sort;
+const intrinsicDefineProperty = Object.defineProperty;
+const intrinsicObjectEntries = Object.entries;
+const intrinsicObjectFromEntries = Object.fromEntries;
+const intrinsicObjectValues = Object.values;
+const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
+const intrinsicGetOwnPropertySymbols = Object.getOwnPropertySymbols;
+const intrinsicGetPrototypeOf = Object.getPrototypeOf;
+const intrinsicMapDelete = Map.prototype.delete;
+const intrinsicMapForEach = Map.prototype.forEach;
+const intrinsicMapGet = Map.prototype.get;
+const intrinsicMapHas = Map.prototype.has;
+const intrinsicMapSet = Map.prototype.set;
+const intrinsicReflectApply = Reflect.apply;
+const intrinsicReflectConstruct = Reflect.construct;
+const intrinsicReflectGet = Reflect.get;
+const intrinsicReflectSet = Reflect.set;
+const intrinsicSetAdd = Set.prototype.add;
+const intrinsicSetForEach = Set.prototype.forEach;
+const intrinsicSetHas = Set.prototype.has;
+const intrinsicSymbolToString = Symbol.prototype.toString;
+const intrinsicWeakMapDelete = WeakMap.prototype.delete;
+const intrinsicWeakMapGet = WeakMap.prototype.get;
+const intrinsicWeakMapHas = WeakMap.prototype.has;
+const intrinsicWeakMapSet = WeakMap.prototype.set;
+const intrinsicWeakSetAdd = WeakSet.prototype.add;
+const intrinsicWeakSetDelete = WeakSet.prototype.delete;
+const intrinsicWeakSetHas = WeakSet.prototype.has;
+const intrinsicProcessNextTick = process.nextTick;
+const intrinsicProcessBinding = process.binding;
+const intrinsicUvBinding = intrinsicReflectApply(intrinsicProcessBinding, process, ['uv']);
+function isAsynchronousNativeSpawnError(result) {
+  return (
+    result === intrinsicUvBinding.UV_EACCES ||
+    result === intrinsicUvBinding.UV_EAGAIN ||
+    result === intrinsicUvBinding.UV_EMFILE ||
+    result === intrinsicUvBinding.UV_ENFILE ||
+    result === intrinsicUvBinding.UV_ENOENT
+  );
+}
+function privateMapDelete(map, key) {
+  return intrinsicReflectApply(intrinsicMapDelete, map, [key]);
+}
+function privateMapForEach(map, callback) {
+  return intrinsicReflectApply(intrinsicMapForEach, map, [callback]);
+}
+function privateMapGet(map, key) {
+  return intrinsicReflectApply(intrinsicMapGet, map, [key]);
+}
+function privateMapHas(map, key) {
+  return intrinsicReflectApply(intrinsicMapHas, map, [key]);
+}
+function privateMapSet(map, key, value) {
+  return intrinsicReflectApply(intrinsicMapSet, map, [key, value]);
+}
+function privateArrayForEach(array, callback) {
+  return intrinsicReflectApply(intrinsicArrayForEach, array, [callback]);
+}
+function privateArrayFilter(array, callback) {
+  return intrinsicReflectApply(intrinsicArrayFilter, array, [callback]);
+}
+function privateArrayMap(array, callback) {
+  return intrinsicReflectApply(intrinsicArrayMap, array, [callback]);
+}
+function privateArrayPush(array, ...values) {
+  return intrinsicReflectApply(intrinsicArrayPush, array, values);
+}
+function privateArraySlice(array, start, end) {
+  return intrinsicReflectApply(
+    intrinsicArraySlice,
+    array,
+    end === undefined ? [start] : [start, end],
+  );
+}
+function privateArraySort(array, compare) {
+  return intrinsicReflectApply(
+    intrinsicArraySort,
+    array,
+    compare === undefined ? [] : [compare],
+  );
+}
+function privateGetOwnPropertyDescriptor(value, property) {
+  return intrinsicReflectApply(intrinsicGetOwnPropertyDescriptor, IntrinsicObject, [
+    value,
+    property,
+  ]);
+}
+function privateGetOwnPropertyNames(value) {
+  return intrinsicReflectApply(intrinsicGetOwnPropertyNames, IntrinsicObject, [value]);
+}
+function privateGetOwnPropertySymbols(value) {
+  return intrinsicReflectApply(intrinsicGetOwnPropertySymbols, IntrinsicObject, [value]);
+}
+function privateGetPrototypeOf(value) {
+  return intrinsicReflectApply(intrinsicGetPrototypeOf, IntrinsicObject, [value]);
+}
+function privateObjectEntries(value) {
+  return intrinsicReflectApply(intrinsicObjectEntries, IntrinsicObject, [value]);
+}
+function privateObjectFromEntries(entries) {
+  return intrinsicReflectApply(intrinsicObjectFromEntries, IntrinsicObject, [entries]);
+}
+function privateObjectValues(value) {
+  return intrinsicReflectApply(intrinsicObjectValues, IntrinsicObject, [value]);
+}
+function privateSetAdd(set, value) {
+  return intrinsicReflectApply(intrinsicSetAdd, set, [value]);
+}
+function privateSetForEach(set, callback) {
+  return intrinsicReflectApply(intrinsicSetForEach, set, [callback]);
+}
+function privateSetHas(set, value) {
+  return intrinsicReflectApply(intrinsicSetHas, set, [value]);
+}
+function privateSetValues(set) {
+  const values = [];
+  privateSetForEach(set, (value) => privateArrayPush(values, value));
+  return values;
+}
+function privateWeakMapDelete(map, key) {
+  return intrinsicReflectApply(intrinsicWeakMapDelete, map, [key]);
+}
+function privateWeakMapGet(map, key) {
+  return intrinsicReflectApply(intrinsicWeakMapGet, map, [key]);
+}
+function privateWeakMapHas(map, key) {
+  return intrinsicReflectApply(intrinsicWeakMapHas, map, [key]);
+}
+function privateWeakMapSet(map, key, value) {
+  return intrinsicReflectApply(intrinsicWeakMapSet, map, [key, value]);
+}
+function privateWeakSetAdd(set, value) {
+  return intrinsicReflectApply(intrinsicWeakSetAdd, set, [value]);
+}
+function privateWeakSetDelete(set, value) {
+  return intrinsicReflectApply(intrinsicWeakSetDelete, set, [value]);
+}
+function privateWeakSetHas(set, value) {
+  return intrinsicReflectApply(intrinsicWeakSetHas, set, [value]);
+}
+function canonicalAuthorityJson(value) {
+  const active = new IntrinsicWeakSet();
+  const encode = (candidate) => {
+    if (candidate === null) return 'null';
+    if (typeof candidate === 'string') {
+      return intrinsicReflectApply(intrinsicJsonStringify, null, [candidate]);
+    }
+    if (typeof candidate === 'boolean') return candidate ? 'true' : 'false';
+    if (typeof candidate === 'number') {
+      return intrinsicNumberIsFinite(candidate)
+        ? intrinsicReflectApply(intrinsicJsonStringify, null, [candidate])
+        : 'null';
+    }
+    if (typeof candidate !== 'object') throw descendantError();
+    if (privateWeakSetHas(active, candidate)) throw descendantError();
+    privateWeakSetAdd(active, candidate);
+    try {
+      if (intrinsicArrayIsArray(candidate)) {
+        let serialized = '[';
+        for (let index = 0; index < candidate.length; index += 1) {
+          if (index > 0) serialized += ',';
+          const descriptor = privateGetOwnPropertyDescriptor(candidate, String(index));
+          if (!descriptor || !('value' in descriptor)) throw descendantError();
+          serialized += encode(descriptor.value);
+        }
+        return serialized + ']';
+      }
+      const prototype = privateGetPrototypeOf(candidate);
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw descendantError();
+      }
+      const names = privateGetOwnPropertyNames(candidate);
+      const enumerable = [];
+      for (let index = 0; index < names.length; index += 1) {
+        const name = names[index];
+        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
+        if (descriptor?.enumerable) privateArrayPush(enumerable, name);
+      }
+      privateArraySort(enumerable);
+      let serialized = '{';
+      for (let index = 0; index < enumerable.length; index += 1) {
+        if (index > 0) serialized += ',';
+        const name = enumerable[index];
+        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
+        if (!descriptor || !('value' in descriptor)) throw descendantError();
+        serialized +=
+          intrinsicReflectApply(intrinsicJsonStringify, null, [name]) +
+          ':' +
+          encode(descriptor.value);
+      }
+      return serialized + '}';
+    } finally {
+      privateWeakSetDelete(active, candidate);
+    }
+  };
+  return encode(value);
+}
+${parseNodeOptions.toString()}
+${hasNodeLoaderOption.toString()}
+${hasUnsupportedNodeOption.toString()}
+const accumulatedRuntimeInputs = new IntrinsicSet();
+const accumulatedViolations = new IntrinsicSet();
+const observedLoaderDigests = new IntrinsicMap();
+const metroPolicyCapability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+const usesExternalEvidenceOwner = Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
+const authorityEnvironment = privateArrayFilter(privateObjectEntries(process.env),
+  ([key]) =>
+    (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY' &&
+    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE' &&
+    (!usesExternalEvidenceOwner ||
+      (key !== 'RN_DEV_AGENT_METRO_POLICY_CAPABILITY' &&
+        key !== 'RN_DEV_AGENT_METRO_RUNTIME_LOADS')),
+);
+let cachedSourceRoot;
+let sourceRootResolved = false;
+let lastPolicyPayload;
+let initialCacheCaptured = false;
+let loaderEpoch = 0;
+let runtimeLoadsDescriptor;
+let runtimeLoadsDescriptorOwned = false;
+const authoritySessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+const authorityMetroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+const authorityContentRoot =
+  process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT || fs.realpathSync(process.cwd());
+const authorityAppRoot =
+  process.env.RN_DEV_AGENT_METRO_APP_ROOT || fs.realpathSync(process.cwd());
+const authorityRootNonce =
+  process.env.RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE ||
+  createHash('sha256')
+    .update('reported-v1:' + authoritySessionId + ':' + authorityMetroInstanceId)
+    .digest('hex')
+    .slice(0, 32);
+const allowedCodeRootsSource = process.env.RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS;
+let allowedCodeRoots = [];
+if (allowedCodeRootsSource) {
+  try {
+    const parsed = JSON.parse(allowedCodeRootsSource);
+    if (!Array.isArray(parsed) || parsed.length === 0) throw descendantError();
+    allowedCodeRoots = privateArraySort(
+      privateArrayMap(parsed, (entry) => {
+        if (typeof entry !== 'string') throw descendantError();
+        return fs.realpathSync(entry);
+      }),
+    );
+  } catch {
+    throw descendantError();
+  }
+}
+function isWithinAllowedCodeRoot(candidate) {
+  return allowedCodeRoots.length === 0 || allowedCodeRoots.some((root) => {
+    const relative = path.relative(root, candidate);
+    return relative === '' || (
+      relative !== '..' &&
+      !relative.startsWith('..' + path.sep) &&
+      !path.isAbsolute(relative)
+    );
+  });
+}
+function sanitizedNativeAddonBasename(candidate) {
+  const value = typeof candidate === 'string' ? candidate : '';
+  return path.basename(value || 'unknown.node');
+}
+function sanitizedNativeAddonPath(candidate) {
+  return 'outside:' + sanitizedNativeAddonBasename(candidate);
+}
+function writeRuntimeLoad(line, loadsPath) {
+  if (runtimeLoadsDescriptor === undefined) {
+    runtimeLoadsDescriptor =
+      typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
+    runtimeLoadsDescriptorOwned = typeof loadsPath !== 'number';
+  }
+  const bytes = Buffer.from(line);
+  let offset = 0;
+  while (offset < bytes.length) {
+    offset += fs.writeSync(runtimeLoadsDescriptor, bytes, offset, bytes.length - offset);
+  }
+}
+process.once('exit', () => {
+  if (runtimeLoadsDescriptorOwned && runtimeLoadsDescriptor !== undefined) {
+    fs.closeSync(runtimeLoadsDescriptor);
+  }
+});
+function persistLoaderObservation(kind, value, digest = null) {
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
+  const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
+  if (!sessionId || !metroInstanceId) return;
+  const payload = {
+    version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sessionId,
+    metroInstanceId,
+    kind,
+    value,
+    digest,
+  };
+  if (Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3) {
+    writeRuntimeLoad(canonicalAuthorityJson(payload) + '\\n', evidenceDescriptor);
+    return;
+  }
+  if (!metroPolicyCapability || !loadsPath) return;
+  const serializedPayload = canonicalAuthorityJson(payload);
+  const receipt = {
+    ...payload,
+    signature: createHmac('sha256', metroPolicyCapability)
+      .update(serializedPayload)
+      .digest('hex'),
+  };
+  writeRuntimeLoad(canonicalAuthorityJson(receipt) + '\\n', loadsPath);
+}
+const effectiveBaseNodeOptions = parseNodeOptions(
+  process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '',
+);
+persistLoaderObservation(
+  'semantics',
+  canonicalAuthorityJson({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
+);
+function recordLoaderViolation(value) {
+  if (privateSetHas(accumulatedViolations, value)) return;
+  privateSetAdd(accumulatedViolations, value);
+  loaderEpoch += 1;
+  persistLoaderObservation('violation', value);
+}
+const nativeChannelContexts = new IntrinsicWeakMap();
+const nativeProcessContexts = new IntrinsicWeakMap();
+const nativeProcessHandles = new IntrinsicWeakSet();
+const fencedNativeHandlePrototypes = new IntrinsicWeakSet();
+const nativeChannelControlNames = new IntrinsicSet([
+  'close',
+  'hasRef',
+  'readStart',
+  'readStop',
+  'ref',
+  'setBlocking',
+  'unref',
+]);
+const nativeProcessControlNames = new IntrinsicSet(['close', 'hasRef', 'ref', 'unref']);
+const descendantNonce = process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+const descendantParentIdentity =
+  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
+const descendantParentNonce =
+  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
+const currentIdentity = workerThreads.isMainThread
+  ? 'process:' + process.pid
+  : 'worker:' + workerThreads.threadId;
+const currentAuthorityNonce = descendantNonce || authorityRootNonce;
+function descendantExecutionRecord(nonce, identity, semantics, parentIdentity, parentNonce) {
+  return canonicalAuthorityJson({
+    version: 1,
+    nonce,
+    identity,
+    parent: {
+      identity: parentIdentity,
+      nonce: parentNonce,
+    },
+    semantics,
+    authority: {
+      sessionId: authoritySessionId,
+      metroInstanceId: authorityMetroInstanceId,
+      contentRoot: authorityContentRoot,
+      appRoot: authorityAppRoot,
+    },
+  });
+}
+const descendantMessageContext = descendantNonce
+  ? {
+      mode: workerThreads.isMainThread ? 'fork-message' : 'worker-message',
+      recipient: 'parent:' + descendantNonce,
+      sequence: 0,
+      sendDepth: 0,
+      nativeWriteDepth: 0,
+      nativeControlDepth: 0,
+      nativeControlContext: lifecycleContext(
+        'native-channel',
+        'parent:' + descendantNonce,
+      ),
+    }
+  : undefined;
+if (descendantNonce) {
+  const descendantSemantics = process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
+  const semanticsAvailable = /^[a-f0-9]{64}$/.test(descendantSemantics || '');
+  const parentIdentityAvailable = /^(?:process|worker):\\d+$/.test(
+    descendantParentIdentity || '',
+  );
+  const parentNonceAvailable = /^[a-f0-9]{32}$/.test(descendantParentNonce || '');
+  const parentAvailable = parentIdentityAvailable && parentNonceAvailable;
+  if (semanticsAvailable && parentAvailable) {
+    persistLoaderObservation(
+      'attestation',
+      descendantExecutionRecord(
+        descendantNonce,
+        currentIdentity,
+        descendantSemantics,
+        descendantParentIdentity,
+        descendantParentNonce,
+      ),
+    );
+  } else if (!semanticsAvailable) {
+    recordLoaderViolation('Metro descendant execution semantics are unavailable');
+  } else if (!parentIdentityAvailable) {
+    recordLoaderViolation('Metro descendant parent identity is unavailable');
+  } else {
+    recordLoaderViolation('Metro descendant parent nonce is unavailable');
+  }
+  if (workerThreads.isMainThread) {
+    const descendantLifecycleContext = lifecycleContext(
+      'descendant-lifecycle',
+      descendantNonce,
+    );
+    const processDisconnectImplementation =
+      typeof process.disconnect === 'function' ? process.disconnect : undefined;
+    if (processDisconnectImplementation) {
+      const processDisconnectDelegate = process._disconnect;
+      const processHandleQueue = process._handleQueue;
+      const processChannel = requireNativeChannelHandle(process);
+      const processChannelHandleSymbol = processChannel.symbol;
+      const processChannelHandle = processChannel.handle;
+      const processChannelClose = processChannelHandle?.close;
+      if (
+        typeof processDisconnectDelegate !== 'function' ||
+        processHandleQueue ||
+        typeof processChannelClose !== 'function'
+      ) {
+        throw descendantError();
+      }
+      const authenticatedChannelClose = () =>
+        authenticatedLifecycleResult(
+          descendantLifecycleContext,
+          'channel-close',
+          undefined,
+          () =>
+            withNativeChannelControl(descendantMessageContext, () =>
+              intrinsicReflectApply(processChannelClose, processChannelHandle, []),
+            ),
+        );
+      Object.defineProperty(processChannelHandle, 'close', {
+        configurable: false,
+        enumerable: false,
+        value: authenticatedChannelClose,
+        writable: false,
+      });
+      Object.defineProperty(process, '_disconnect', {
+        configurable: false,
+        enumerable: false,
+        value() {
+          if (descendantLifecycleContext.disconnectDepth > 0) {
+            return withNativeChannelControl(descendantMessageContext, () =>
+              intrinsicReflectApply(processDisconnectDelegate, process, []),
+            );
+          }
+          return authenticatedLifecycleResult(
+            descendantLifecycleContext,
+            'disconnect',
+            undefined,
+            () => {
+              descendantLifecycleContext.disconnectDepth += 1;
+              try {
+                process.connected = false;
+                return withNativeChannelControl(descendantMessageContext, () =>
+                  intrinsicReflectApply(processDisconnectDelegate, process, []),
+                );
+              } finally {
+                descendantLifecycleContext.disconnectDepth -= 1;
+              }
+            },
+          );
+        },
+        writable: false,
+      });
+      Object.defineProperty(process, '_handleQueue', {
+        configurable: false,
+        enumerable: false,
+        value: processHandleQueue,
+        writable: false,
+      });
+      Object.defineProperty(process, 'disconnect', {
+        configurable: false,
+        enumerable: true,
+        value() {
+          return authenticatedLifecycleResult(
+            descendantLifecycleContext,
+            'disconnect',
+            undefined,
+            () => {
+              descendantLifecycleContext.disconnectDepth += 1;
+              try {
+                return intrinsicReflectApply(
+                  processDisconnectImplementation,
+                  process,
+                  [],
+                );
+              } finally {
+                descendantLifecycleContext.disconnectDepth -= 1;
+              }
+            },
+          );
+        },
+        writable: false,
+      });
+      fenceNativeChannel(
+        processChannelHandle,
+        descendantMessageContext,
+        new IntrinsicSet(['close']),
+      );
+      process[processChannelHandleSymbol] = nativeHandleFacade(
+        processChannelHandle,
+        'onread',
+      );
+    } else {
+      Object.defineProperty(process, 'disconnect', {
+        configurable: false,
+        enumerable: true,
+        value: undefined,
+        writable: false,
+      });
+    }
+    if (typeof process._send === 'function') {
+      const processSendPrimitive = process._send;
+      Object.defineProperty(process, '_send', {
+        configurable: false,
+        enumerable: false,
+        value(message, sendHandle, options, callback) {
+          return authenticatedIpcSend(
+            processSendPrimitive,
+            process,
+            descendantMessageContext,
+            message,
+            sendHandle,
+            options,
+            callback,
+            true,
+          );
+        },
+        writable: false,
+      });
+    }
+  }
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
+  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
+}
+if (workerThreads.isMainThread && typeof process.send === 'function') {
+  process.on('message', (message) => {
+    if (
+      message?.type === 'rn-dev-agent:evidence-barrier' &&
+      typeof message.challenge === 'string' &&
+      /^[a-f0-9]{64}$/.test(message.challenge)
+    ) {
+      persistLoaderObservation('barrier', message.challenge);
+    }
+  });
+  process.channel?.unref();
+}
+if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
+function normalizedInvocationEnvironment(environment) {
+  const entries = [];
+  privateArrayForEach(privateObjectEntries(environment || process.env), ([key, value]) => {
+    const normalizedKey = key.toUpperCase();
+    if (normalizedKey === 'NODE_OPTIONS' || normalizedKey.startsWith('RN_DEV_AGENT_')) return;
+    privateArrayPush(entries, [key, value]);
+  });
+  return privateArraySort(entries, ([left], [right]) => left.localeCompare(right));
+}
+function authenticatedChildEnvironment(entries, nonce, semantics) {
+  const nextEnvironment = privateObjectFromEntries(entries);
+  privateArrayForEach(authorityEnvironment, ([key, value]) => {
+    nextEnvironment[key] = value;
+  });
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY = currentIdentity;
+  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE = currentAuthorityNonce;
+  return nextEnvironment;
+}
+function snapshotInvocation(value) {
+  let bytes;
+  try {
+    bytes = serialize(value);
+  } catch {
+    throw descendantError();
+  }
+  if (bytes.byteLength > 1024 * 1024) throw descendantError();
+  const cloned = deserialize(bytes);
+  const pending = [cloned];
+  const seen = new IntrinsicWeakSet();
+  while (pending.length > 0) {
+    const candidate = pending.pop();
+    if (candidate instanceof SharedArrayBuffer) throw descendantError();
+    if (!candidate || typeof candidate !== 'object' || privateWeakSetHas(seen, candidate)) {
+      continue;
+    }
+    privateWeakSetAdd(seen, candidate);
+    if (candidate instanceof IntrinsicMap) {
+      privateMapForEach(candidate, (entry, key) =>
+        privateArrayPush(pending, key, entry)
+      );
+      continue;
+    }
+    if (candidate instanceof IntrinsicSet) {
+      privateSetForEach(candidate, (entry) => privateArrayPush(pending, entry));
+      continue;
+    }
+    privateArrayPush(pending, ...privateObjectValues(candidate));
+  }
+  return {
+    digest: createHash('sha256').update(bytes).digest('hex'),
+    value: cloned,
+  };
+}
+function digestInvocation(value) {
+  return snapshotInvocation(value).digest;
+}
+const childMessageContexts = new IntrinsicWeakMap();
+const childSendImplementations = new IntrinsicWeakMap();
+const childSendPrimitiveImplementations = new IntrinsicWeakMap();
+const childDisconnectImplementations = new IntrinsicWeakMap();
+const childLifecycleContexts = new IntrinsicWeakMap();
+const childLifecycleTargets = new IntrinsicWeakMap();
+const childNativeProcessHandles = new IntrinsicWeakMap();
+const nativeProcessHandleSlots = new IntrinsicWeakMap();
+const workerMessageContexts = new IntrinsicWeakMap();
+const workerLifecycleContexts = new IntrinsicWeakMap();
+const portMessageContexts = new IntrinsicWeakMap();
+const processLifecycleTargets = new IntrinsicMap();
+const authorizedChildSpawns = new IntrinsicWeakMap();
+const authorizedNativeProcessSpawns = new IntrinsicWeakMap();
+const fencedNativeProcessPrototypes = new IntrinsicWeakSet();
+let activeChildSpawnAuthorization;
+function authenticatedMessage(context, value) {
+  const snapshot = snapshotInvocation(value);
+  context.sequence += 1;
+  persistLoaderObservation(
+    'semantics',
+    canonicalAuthorityJson({
+      mode: context.mode,
+      recipient: context.recipient,
+      sequence: context.sequence,
+      invocationDigest: snapshot.digest,
+    }),
+  );
+  return snapshot.value;
+}
+function authenticatedPostMessage(original, receiver, context, message, transferList) {
+  if (!context || context.blocked) throw descendantError();
+  if (transferList !== undefined) {
+    if (!Array.isArray(transferList) || transferList.length > 0) throw descendantError();
+  }
+  return intrinsicReflectApply(original, receiver, [
+    authenticatedMessage(context, message),
+  ]);
+}
+function authenticatedIpcSend(
+  original,
+  receiver,
+  context,
+  message,
+  sendHandle,
+  options,
+  callback,
+  primitive = false,
+) {
+  if (!context) throw descendantError();
+  if (context.sendDepth > 0) {
+    if (!primitive) throw descendantError();
+    context.nativeWriteDepth += 1;
+    try {
+      return intrinsicReflectApply(original, receiver, [
+        message,
+        sendHandle,
+        options,
+        callback,
+      ]);
+    } finally {
+      context.nativeWriteDepth -= 1;
+    }
+  }
+  let nextCallback = callback;
+  let nextOptions = options;
+  if (typeof sendHandle === 'function') {
+    nextCallback = sendHandle;
+    sendHandle = undefined;
+    nextOptions = undefined;
+  } else if (typeof options === 'function') {
+    nextCallback = options;
+    nextOptions = undefined;
+  }
+  if (sendHandle !== undefined && sendHandle !== null) throw descendantError();
+  if (primitive && nextCallback === undefined && nextOptions?.swallowErrors !== false) {
+    throw descendantError();
+  }
+  const authenticated = authenticatedMessage(context, { message, options: nextOptions });
+  const completionId = randomBytes(16).toString('hex');
+  persistLoaderObservation('pending', completionId);
+  let completionRecorded = false;
+  const recordCompletion = (callbackArgs) => {
+    if (completionRecorded) throw descendantError();
+    const normalizedCallbackArgs = privateArrayMap(callbackArgs, (entry) => {
+      if (!(entry instanceof Error)) return snapshotInvocation(entry).value;
+      const normalized = {};
+      const errorFields = ['name', 'message', 'code', 'errno', 'syscall', 'path', 'dest'];
+      for (let index = 0; index < errorFields.length; index += 1) {
+        const name = errorFields[index];
+        const descriptor = privateGetOwnPropertyDescriptor(entry, name);
+        if (descriptor && 'value' in descriptor) normalized[name] = descriptor.value;
+      }
+      return normalized;
+    });
+    authenticatedMessage(context, {
+      status: 'completed',
+      callbackArgs: normalizedCallbackArgs,
+    });
+    persistLoaderObservation('completion', completionId);
+    completionRecorded = true;
+  };
+  const completionCallback =
+    nextCallback === undefined || typeof nextCallback === 'function'
+      ? function (...callbackArgs) {
+          recordCompletion(callbackArgs);
+          if (typeof nextCallback === 'function') {
+            return intrinsicReflectApply(nextCallback, this, callbackArgs);
+          }
+          if (callbackArgs[0] !== null && callbackArgs[0] !== undefined) {
+            return receiver.emit('error', callbackArgs[0]);
+          }
+        }
+      : nextCallback;
+  context.sendDepth += 1;
+  try {
+    if (primitive) context.nativeWriteDepth += 1;
+    let result;
+    try {
+      result = intrinsicReflectApply(original, receiver, [
+        authenticated.message,
+        undefined,
+        authenticated.options,
+        completionCallback,
+      ]);
+    } finally {
+      if (primitive) context.nativeWriteDepth -= 1;
+    }
+    return authenticatedMessage(context, {
+      status: 'fulfilled',
+      result,
+    }).result;
+  } catch (error) {
+    if (!completionRecorded) {
+      recordCompletion([error]);
+    }
+    authenticatedMessage(context, {
+      status: 'rejected',
+      error,
+    });
+    throw error;
+  } finally {
+    context.sendDepth -= 1;
+  }
+}
+function withNativeChannelControl(context, run) {
+  if (!context) throw descendantError();
+  context.nativeControlDepth += 1;
+  try {
+    return run();
+  } finally {
+    context.nativeControlDepth -= 1;
+  }
+}
+function nativeHandleFacade(handle, hiddenCallback, hiddenCallbackDelegate) {
+  const blockedCallback = function () {
+    throw descendantError();
+  };
+  return new IntrinsicProxy(new IntrinsicObject(), {
+    defineProperty() {
+      throw descendantError();
+    },
+    deleteProperty() {
+      throw descendantError();
+    },
+    get(_target, property) {
+      if (property === hiddenCallback) {
+        return hiddenCallbackDelegate || blockedCallback;
+      }
+      const value = intrinsicReflectGet(handle, property, handle);
+      if (typeof value !== 'function') return value;
+      return function (...args) {
+        return intrinsicReflectApply(value, handle, args);
+      };
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      const descriptor = privateGetOwnPropertyDescriptor(handle, property);
+      if (!descriptor) return undefined;
+      if (property !== hiddenCallback) {
+        return {
+          configurable: true,
+          enumerable: descriptor.enumerable,
+          value: intrinsicReflectGet(handle, property, handle),
+          writable: false,
+        };
+      }
+      return {
+        configurable: true,
+        enumerable: descriptor.enumerable,
+        value: blockedCallback,
+        writable: false,
+      };
+    },
+    getPrototypeOf() {
+      return null;
+    },
+    preventExtensions() {
+      throw descendantError();
+    },
+    set() {
+      throw descendantError();
+    },
+    setPrototypeOf() {
+      throw descendantError();
+    },
+  });
+}
+function exposeNativeProcessHandle(child, handle) {
+  const originalOnExit = handle.onexit;
+  if (typeof originalOnExit !== 'function') throw descendantError();
+  const slot = {
+    deliveringSpawnError: false,
+    exitDepth: 0,
+    exposed: undefined,
+    invokeOnExit: undefined,
+    pendingSpawnError: undefined,
+    spawnDepth: 0,
+  };
+  const invokeOnExit = (...args) => {
+    slot.exitDepth += 1;
+    try {
+      return intrinsicReflectApply(originalOnExit, handle, args);
+    } finally {
+      slot.exitDepth -= 1;
+    }
+  };
+  slot.invokeOnExit = invokeOnExit;
+  intrinsicDefineProperty(handle, 'onexit', {
+    configurable: false,
+    enumerable: true,
+    value: invokeOnExit,
+    writable: false,
+  });
+  slot.exposed = nativeHandleFacade(handle, 'onexit');
+  privateWeakMapSet(nativeProcessHandleSlots, handle, slot);
+  intrinsicDefineProperty(child, '_handle', {
+    configurable: false,
+    enumerable: true,
+    get() {
+      return slot.exposed;
+    },
+    set(value) {
+      if (
+        value !== null ||
+        (slot.exitDepth <= 0 && slot.spawnDepth <= 0)
+      ) {
+        throw descendantError();
+      }
+      if (slot.deliveringSpawnError && slot.pendingSpawnError !== undefined) {
+        const deliveredSpawnError = slot.pendingSpawnError;
+        slot.exposed = nativeHandleFacade(handle, 'onexit', (...args) => {
+          if (args.length !== 1 || args[0] !== deliveredSpawnError) {
+            throw descendantError();
+          }
+          slot.exposed = null;
+        });
+      } else {
+        slot.exposed = null;
+      }
+    },
+  });
+}
+function requireNativeChannelHandle(owner) {
+  const candidates = [];
+  privateArrayForEach(privateGetOwnPropertySymbols(owner), (symbol) => {
+    if (
+      intrinsicReflectApply(intrinsicSymbolToString, symbol, []) ===
+      'Symbol(kChannelHandle)'
+    ) {
+      privateArrayPush(candidates, symbol);
+    }
+  });
+  if (candidates.length !== 1) throw descendantError();
+  const symbol = candidates[0];
+  const descriptor = privateGetOwnPropertyDescriptor(owner, symbol);
+  if (!descriptor || !descriptor.value || typeof descriptor.value !== 'object') {
+    throw descendantError();
+  }
+  return { handle: descriptor.value, symbol };
+}
+function fenceNativeReadCallback(handle, descriptor) {
+  const blockedRead = function () {
+    throw descendantError();
+  };
+  intrinsicDefineProperty(handle, 'onread', {
+    configurable: false,
+    enumerable: descriptor.enumerable,
+    get() {
+      return blockedRead;
+    },
+    set(value) {
+      if (typeof value !== 'function') throw descendantError();
+    },
+  });
+}
+function fenceNativeHandleOwner(owner, handle, allowedOwnControls) {
+  if (privateWeakSetHas(fencedNativeHandlePrototypes, owner)) return;
+  privateWeakSetAdd(fencedNativeHandlePrototypes, owner);
+  const names = privateGetOwnPropertyNames(owner);
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (
+      name === 'constructor' ||
+      (owner === handle && privateSetHas(allowedOwnControls, name))
+    ) {
+      continue;
+    }
+    const descriptor = privateGetOwnPropertyDescriptor(owner, name);
+    if (typeof descriptor?.value !== 'function') continue;
+    const implementation = descriptor.value;
+    const isWrite = name.startsWith('write');
+    intrinsicDefineProperty(owner, name, {
+      configurable: false,
+      enumerable: false,
+      value(...args) {
+        if (privateWeakSetHas(nativeProcessHandles, this)) {
+          const processContext = privateWeakMapGet(nativeProcessContexts, this);
+          if (!processContext || !privateSetHas(nativeProcessControlNames, name)) {
+            throw descendantError();
+          }
+          return authenticatedLifecycleResult(
+            processContext,
+            name,
+            { args },
+            (authenticated) =>
+              intrinsicReflectApply(implementation, this, authenticated.args),
+          );
+        }
+        const channelContext = privateWeakMapGet(nativeChannelContexts, this);
+        if (channelContext && isWrite && channelContext.nativeWriteDepth <= 0) {
+          throw descendantError();
+        }
+        if (channelContext && !isWrite && channelContext.nativeControlDepth <= 0) {
+          if (!privateSetHas(nativeChannelControlNames, name)) throw descendantError();
+          return authenticatedLifecycleResult(
+            channelContext.nativeControlContext,
+            name,
+            { args },
+            (authenticated) =>
+              intrinsicReflectApply(implementation, this, authenticated.args),
+          );
+        }
+        return intrinsicReflectApply(implementation, this, args);
+      },
+      writable: false,
+    });
+  }
+}
+function fenceNativeChannel(
+  handle,
+  context,
+  allowedOwnControls = new IntrinsicSet(),
+) {
+  if (!handle || !context) throw descendantError();
+  privateWeakMapSet(nativeChannelContexts, handle, context);
+  const readDescriptor = privateGetOwnPropertyDescriptor(handle, 'onread');
+  const readCallback = handle.onread;
+  if (typeof readCallback === 'function') {
+    if (readDescriptor && !readDescriptor.configurable) throw descendantError();
+    fenceNativeReadCallback(handle, {
+      enumerable: readDescriptor?.enumerable ?? false,
+      value: readCallback,
+    });
+  }
+  for (
+    let owner = handle;
+    owner && owner !== Object.prototype;
+    owner = privateGetPrototypeOf(owner)
+  ) {
+    fenceNativeHandleOwner(owner, handle, allowedOwnControls);
+  }
+}
+function fenceNativeProcessHandle(handle, context) {
+  if (!handle) throw descendantError();
+  privateWeakSetAdd(nativeProcessHandles, handle);
+  if (context) privateWeakMapSet(nativeProcessContexts, handle, context);
+  const prototype = privateGetPrototypeOf(handle);
+  if (!privateWeakSetHas(fencedNativeProcessPrototypes, prototype)) {
+    const spawn = privateGetOwnPropertyDescriptor(prototype, 'spawn')?.value;
+    if (typeof spawn !== 'function') throw descendantError();
+    privateWeakSetAdd(fencedNativeProcessPrototypes, prototype);
+    intrinsicDefineProperty(prototype, 'spawn', {
+      configurable: false,
+      enumerable: false,
+      value(...args) {
+        const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
+        if (
+          authorizedOptions === undefined ||
+          args.length !== 1 ||
+          args[0] !== authorizedOptions
+        ) {
+          throw descendantError();
+        }
+        privateWeakMapDelete(authorizedNativeProcessSpawns, this);
+        const result = intrinsicReflectApply(spawn, this, args);
+        const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
+        if (slot && isAsynchronousNativeSpawnError(result)) {
+          slot.pendingSpawnError = result;
+          intrinsicReflectApply(intrinsicProcessNextTick, process, [
+            () => {
+              if (slot.pendingSpawnError !== result) throw descendantError();
+              slot.deliveringSpawnError = true;
+              try {
+                slot.invokeOnExit(result);
+              } finally {
+                slot.deliveringSpawnError = false;
+                slot.pendingSpawnError = undefined;
+              }
+            },
+          ]);
+        } else if (slot) {
+          slot.pendingSpawnError = undefined;
+        }
+        return result;
+      },
+      writable: false,
+    });
+    intrinsicDefineProperty(prototype, 'kill', {
+      configurable: false,
+      enumerable: false,
+      value() {
+        throw descendantError();
+      },
+      writable: false,
+    });
+    intrinsicDefineProperty(prototype, 'constructor', {
+      configurable: false,
+      enumerable: false,
+      value: function FencedNativeProcess() {
+        throw descendantError();
+      },
+      writable: false,
+    });
+  }
+  for (
+    let owner = privateGetPrototypeOf(prototype);
+    owner && owner !== Object.prototype;
+    owner = privateGetPrototypeOf(owner)
+  ) {
+    fenceNativeHandleOwner(owner, handle, new IntrinsicSet());
+  }
+}
+function invocationCwd(cwd) {
+  try {
+    return fs.realpathSync(cwd || process.cwd());
+  } catch {
+    throw descendantError();
+  }
+}
+function authenticatedChildArguments(
+  args,
+  optionsIndex,
+  options,
+  environmentEntries,
+  nonce,
+  semantics,
+) {
+  const nextArgs = [...args];
+  const candidate = nextArgs[optionsIndex];
+  const authenticatedOptions = {
+    ...options,
+    env: authenticatedChildEnvironment(environmentEntries, nonce, semantics),
+  };
+  if (typeof candidate === 'function') {
+    nextArgs.splice(optionsIndex, 0, authenticatedOptions);
+  } else {
+    nextArgs[optionsIndex] = authenticatedOptions;
+  }
+  return nextArgs;
+}
+function authenticatedChildStdio(stdio, mode, silent, input) {
+  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
+  const hasEvidenceDescriptor =
+    Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3;
+  const normalized =
+    Array.isArray(stdio)
+      ? [...stdio]
+      : stdio === 'inherit'
+        ? ['inherit', 'inherit', 'inherit']
+        : stdio === 'ignore'
+          ? ['ignore', 'ignore', 'ignore']
+          : mode === 'fork' && !silent
+            ? ['ignore', 'inherit', 'inherit']
+            : [mode === 'sync' ? 'pipe' : 'ignore', 'pipe', 'pipe'];
+  if (mode === 'sync') {
+    if (normalized[0] !== 'pipe' && normalized[0] !== 'ignore') throw descendantError();
+    if (input !== undefined && normalized[0] !== 'pipe') throw descendantError();
+  } else if (normalized[0] !== 'ignore') {
+    throw descendantError();
+  }
+  if (hasEvidenceDescriptor) {
+    while (normalized.length <= evidenceDescriptor) privateArrayPush(normalized, 'ignore');
+  }
+  for (let index = 3; index < normalized.length; index += 1) {
+    const value = normalized[index];
+    if (hasEvidenceDescriptor && index === evidenceDescriptor) continue;
+    if (mode === 'fork' && index === 3 && value === 'ipc') continue;
+    if (value !== undefined && value !== null && value !== 'ignore') throw descendantError();
+  }
+  if (mode === 'fork') normalized[3] = 'ipc';
+  if (hasEvidenceDescriptor) normalized[evidenceDescriptor] = evidenceDescriptor;
+  return normalized;
+}
+function descendantError() {
+  const error = new Error('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION');
+  error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
+  return error;
+}
+if (typeof process.execve === 'function') {
+  Object.defineProperty(process, 'execve', {
+    configurable: false,
+    enumerable: true,
+    value() {
+      throw descendantError();
+    },
+    writable: false,
+  });
+}
+const nodeExecutable = fs.realpathSync(process.execPath);
+function requireNodeExecutable(command, options) {
+  if (options.shell) throw descendantError();
+  try {
+    if (typeof command !== 'string' || fs.realpathSync(command) !== nodeExecutable) {
+      throw descendantError();
+    }
+  } catch (error) {
+    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
+    throw descendantError();
+  }
+}
+function isInlineNodeOption(value) {
+  if (typeof value !== 'string') return false;
+  const option = value.replaceAll('_', '-');
+  return (
+    /^-(?:e|p).*/.test(option) ||
+    option === '--eval' ||
+    option.startsWith('--eval=') ||
+    option === '--print' ||
+    option.startsWith('--print=') ||
+    option === '--input-type' ||
+    option.startsWith('--input-type=')
+  );
+}
+const safeBooleanNodeOptions = new IntrinsicSet([
+    '--enable-source-maps',
+    '--experimental-strip-types',
+    '--experimental-transform-types',
+    '--no-deprecation',
+    '--no-warnings',
+    '--preserve-symlinks',
+    '--preserve-symlinks-main',
+    '--trace-deprecation',
+    '--trace-uncaught',
+    '--trace-warnings',
+]);
+const safeValueNodeOptions = new IntrinsicSet(['--conditions', '--title']);
+function normalizeSafeNodeOption(args, index) {
+  const argument = args[index];
+  if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
+  const equals = argument.indexOf('=');
+  const option = (equals < 0 ? argument : argument.slice(0, equals)).replaceAll('_', '-');
+  if (privateSetHas(safeBooleanNodeOptions, option)) {
+    if (equals >= 0) throw descendantError();
+    return { index, value: option };
+  }
+  if (!privateSetHas(safeValueNodeOptions, option)) throw descendantError();
+  if (equals >= 0) {
+    const value = argument.slice(equals + 1);
+    if (value.length === 0) throw descendantError();
+    return { index, value: option + '=' + value };
+  }
+  const value = args[index + 1];
+  if (typeof value !== 'string' || value.length === 0) throw descendantError();
+  return { index: index + 1, value: option + '=' + value };
+}
+function requireFileBackedNodeArguments(args, cwd) {
+  if (!Array.isArray(args)) throw descendantError();
+  let entrypoint;
+  let entrypointIndex = -1;
+  const execArgv = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
+    if (argument === '--') {
+      entrypoint = args[index + 1];
+      entrypointIndex = index + 1;
+      break;
+    }
+    if (!argument.startsWith('-')) {
+      entrypoint = argument;
+      entrypointIndex = index;
+      break;
+    }
+    const normalized = normalizeSafeNodeOption(args, index);
+    privateArrayPush(execArgv, normalized.value);
+    index = normalized.index;
+  }
+  return {
+    entrypoint: requireFileBackedEntrypoint(entrypoint, cwd),
+    execArgv,
+    applicationArgs: privateArrayMap(
+      privateArraySlice(args, entrypointIndex + 1),
+      (value) => {
+      if (typeof value !== 'string') throw descendantError();
+      return value;
+      },
+    ),
+  };
+}
+function requireFileBackedEntrypoint(entrypoint, cwd) {
+  if (typeof entrypoint !== 'string' || entrypoint === '-' || entrypoint.startsWith('-')) {
+    throw descendantError();
+  }
+  try {
+    const candidate = path.resolve(cwd || process.cwd(), entrypoint);
+    const canonical = fs.realpathSync(candidate);
+    if (!fs.statSync(canonical).isFile()) throw descendantError();
+    if (!isWithinAllowedCodeRoot(canonical)) {
+      throw descendantError();
+    }
+    return canonical;
+  } catch (error) {
+    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
+    throw descendantError();
+  }
+}
+function requireSafeExecArgv(execArgv) {
+  if (!Array.isArray(execArgv)) throw descendantError();
+  const normalized = [];
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const option = normalizeSafeNodeOption(execArgv, index);
+    privateArrayPush(normalized, option.value);
+    index = option.index;
+  }
+  return normalized;
+}
+function executionSemantics(mode, entrypoint, execArgv, invocation) {
+  const value = canonicalAuthorityJson({
+    mode,
+    entrypoint,
+    entrypointDigest: digestRuntimeFile(entrypoint),
+    execArgv,
+    invocationDigest: digestInvocation(invocation),
+    allowedCodeRoots,
+    authority: {
+      sessionId: authoritySessionId,
+      metroInstanceId: authorityMetroInstanceId,
+      contentRoot: authorityContentRoot,
+      appRoot: authorityAppRoot,
+      parentIdentity: currentIdentity,
+      parentNonce: currentAuthorityNonce,
+    },
+  });
+  persistLoaderObservation('semantics', value);
+  return createHash('sha256').update(value).digest('hex');
+}
+function recordChildLaunch(nonce, child, semantics) {
+  if (!child || typeof child.pid !== 'number') return;
+  persistLoaderObservation(
+    'launch',
+    descendantExecutionRecord(
+      nonce,
+      'process:' + child.pid,
+      semantics,
+      currentIdentity,
+      currentAuthorityNonce,
+    ),
+  );
+}
+function lifecycleContext(mode, recipient) {
+  return { mode, recipient, sequence: 0, disconnectDepth: 0 };
+}
+function authenticatedLifecycle(context, action, value) {
+  if (!context) throw descendantError();
+  return authenticatedMessage(context, { action, value });
+}
+function authenticatedLifecycleResult(context, action, value, run) {
+  const authenticated = authenticatedLifecycle(context, action, value);
+  try {
+    const result = run(authenticated.value);
+    return authenticatedMessage(context, {
+      action,
+      status: 'fulfilled',
+      result,
+    }).result;
+  } catch (error) {
+    authenticatedMessage(context, {
+      action,
+      status: 'rejected',
+      error,
+    });
+    throw error;
+  }
+}
+function authenticatedLifecyclePromise(context, action, value, run) {
+  const authenticated = authenticatedLifecycle(context, action, value);
+  let result;
+  try {
+    result = run(authenticated.value);
+  } catch (error) {
+    authenticatedMessage(context, {
+      action,
+      status: 'rejected',
+      error,
+    });
+    throw error;
+  }
+  return Promise.resolve(result).then(
+    (resolved) =>
+      authenticatedMessage(context, {
+        action,
+        status: 'fulfilled',
+        result: resolved,
+      }).result,
+    (error) => {
+      authenticatedMessage(context, {
+        action,
+        status: 'rejected',
+        error,
+      });
+      throw error;
+    },
+  );
+}
+function installMessageFences() {
+  const childPrototype = childProcess.ChildProcess.prototype;
+  const originalChildSpawn = childPrototype.spawn;
+  const childProcessChannel = diagnosticsChannel.channel('child_process');
+  if (childProcessChannel.hasSubscribers) throw descendantError();
+  const channelPrototype = privateGetPrototypeOf(childProcessChannel);
+  const channelSubscribe = channelPrototype.subscribe;
+  intrinsicReflectApply(channelSubscribe, childProcessChannel, [({ process: spawnedProcess }) => {
+    const authorization = activeChildSpawnAuthorization;
+    const nativeHandle = spawnedProcess._handle;
+    fenceNativeProcessHandle(nativeHandle, authorization?.lifecycleContext);
+    privateWeakMapSet(childNativeProcessHandles, spawnedProcess, nativeHandle);
+    exposeNativeProcessHandle(spawnedProcess, nativeHandle);
+    if (!authorization || authorization.receiver) return;
+    authorization.receiver = spawnedProcess;
+    privateWeakMapSet(authorizedChildSpawns, spawnedProcess, authorization);
+    intrinsicDefineProperty(spawnedProcess, 'spawn', {
+      configurable: false,
+      enumerable: true,
+      value(options) {
+        return intrinsicReflectApply(childPrototype.spawn, spawnedProcess, [options]);
+      },
+      writable: false,
+    });
+  }]);
+  Object.defineProperty(childPrototype, 'spawn', {
+    configurable: false,
+    enumerable: true,
+    value(options) {
+      const authorization = privateWeakMapGet(authorizedChildSpawns, this);
+      if (
+        !authorization ||
+        authorization.environment !== options?.env ||
+        authorization.receiver !== this
+      ) {
+        throw descendantError();
+      }
+      privateWeakMapDelete(authorizedChildSpawns, this);
+      const nativeHandle = privateWeakMapGet(childNativeProcessHandles, this);
+      if (!nativeHandle) throw descendantError();
+      const slot = privateWeakMapGet(nativeProcessHandleSlots, nativeHandle);
+      if (!slot) throw descendantError();
+      privateWeakMapSet(authorizedNativeProcessSpawns, nativeHandle, options);
+      slot.spawnDepth += 1;
+      try {
+        return intrinsicReflectApply(originalChildSpawn, this, [options]);
+      } finally {
+        slot.spawnDepth -= 1;
+        privateWeakMapDelete(authorizedNativeProcessSpawns, nativeHandle);
+      }
+    },
+    writable: false,
+  });
+  const authenticatedChildSend = function (message, sendHandle, options, callback) {
+    const implementation = privateWeakMapGet(childSendImplementations, this);
+    if (!implementation || !privateWeakMapHas(childMessageContexts, this)) {
+      throw descendantError();
+    }
+    return authenticatedIpcSend(
+      implementation,
+      this,
+      privateWeakMapGet(childMessageContexts, this),
+      message,
+      sendHandle,
+      options,
+      callback,
+    );
+  };
+  Object.defineProperty(childPrototype, 'send', {
+    configurable: false,
+    enumerable: true,
+    get() {
+      if (
+        this !== childPrototype &&
+        (!privateWeakMapHas(childSendImplementations, this) ||
+          !privateWeakMapHas(childMessageContexts, this))
+      ) {
+        return undefined;
+      }
+      return authenticatedChildSend;
+    },
+    set(value) {
+      if (
+        typeof value !== 'function' ||
+        privateWeakMapHas(childSendImplementations, this)
+      ) {
+        throw descendantError();
+      }
+      privateWeakMapSet(childSendImplementations, this, value);
+    },
+  });
+  const authenticatedChildSendPrimitive = function (message, sendHandle, options, callback) {
+    return authenticatedIpcSend(
+      privateWeakMapGet(childSendPrimitiveImplementations, this),
+      this,
+      privateWeakMapGet(childMessageContexts, this),
+      message,
+      sendHandle,
+      options,
+      callback,
+      true,
+    );
+  };
+  Object.defineProperty(childPrototype, '_send', {
+    configurable: false,
+    enumerable: false,
+    get() {
+      if (
+        this !== childPrototype &&
+        (!privateWeakMapHas(childSendPrimitiveImplementations, this) ||
+          !privateWeakMapHas(childMessageContexts, this))
+      ) {
+        return undefined;
+      }
+      return authenticatedChildSendPrimitive;
+    },
+    set(value) {
+      if (
+        typeof value !== 'function' ||
+        privateWeakMapHas(childSendPrimitiveImplementations, this)
+      ) {
+        throw descendantError();
+      }
+      privateWeakMapSet(childSendPrimitiveImplementations, this, value);
+    },
+  });
+  const workerPrototype = workerThreads.Worker.prototype;
+  const originalWorkerPostMessage = workerPrototype.postMessage;
+  const originalWorkerTerminate = workerPrototype.terminate;
+  Object.defineProperty(workerPrototype, 'postMessage', {
+    configurable: false,
+    enumerable: true,
+    value(message, transferList) {
+      return authenticatedPostMessage(
+        originalWorkerPostMessage,
+        this,
+        privateWeakMapGet(workerMessageContexts, this),
+        message,
+        transferList,
+      );
+    },
+    writable: false,
+  });
+  Object.defineProperty(workerPrototype, 'terminate', {
+    configurable: false,
+    enumerable: true,
+    value() {
+      return authenticatedLifecyclePromise(
+        privateWeakMapGet(workerLifecycleContexts, this),
+        'terminate',
+        undefined,
+        () => intrinsicReflectApply(originalWorkerTerminate, this, []),
+      );
+    },
+    writable: false,
+  });
+  const originalChildKill = childPrototype.kill;
+  const originalProcessKill = process.kill;
+  const normalizeChildSignal = (signal) => {
+    let normalizedSignal;
+    intrinsicReflectApply(
+      originalChildKill,
+      {
+        _handle: {
+          kill(value) {
+            normalizedSignal = value;
+            return 0;
+          },
+        },
+        killed: false,
+      },
+      [signal],
+    );
+    return normalizedSignal;
+  };
+  Object.defineProperty(childPrototype, 'kill', {
+    configurable: false,
+    enumerable: true,
+    value(signal) {
+      const target = privateWeakMapGet(childLifecycleTargets, this);
+      return authenticatedLifecycleResult(
+        target?.context,
+        'kill',
+        signal,
+        (authenticatedSignal) => {
+          const normalizedSignal = normalizeChildSignal(authenticatedSignal);
+          if (target.pid === undefined) return false;
+          if (privateMapGet(processLifecycleTargets, target.pid) !== target) return false;
+          try {
+            const result = intrinsicReflectApply(originalProcessKill, process, [
+              target.pid,
+              normalizedSignal,
+            ]);
+            if (result) this.killed = true;
+            return result;
+          } catch (error) {
+            if (error?.code === 'ESRCH') return false;
+            if (error?.code === 'EINVAL' || error?.code === 'ENOSYS') throw error;
+            if (error?.code) {
+              this.emit('error', error);
+              return false;
+            }
+            throw error;
+          }
+        },
+      );
+    },
+    writable: false,
+  });
+  const authenticatedChildDisconnect = function () {
+    return authenticatedLifecycleResult(
+      privateWeakMapGet(childLifecycleContexts, this),
+      'disconnect',
+      undefined,
+      () =>
+        withNativeChannelControl(privateWeakMapGet(childMessageContexts, this), () =>
+          intrinsicReflectApply(
+            privateWeakMapGet(childDisconnectImplementations, this),
+            this,
+            [],
+          ),
+        ),
+    );
+  };
+  Object.defineProperty(childPrototype, 'disconnect', {
+    configurable: false,
+    enumerable: true,
+    get() {
+      if (
+        this !== childPrototype &&
+        (!privateWeakMapHas(childDisconnectImplementations, this) ||
+          !privateWeakMapHas(childLifecycleContexts, this))
+      ) {
+        return undefined;
+      }
+      return authenticatedChildDisconnect;
+    },
+    set(value) {
+      if (typeof value !== 'function') throw descendantError();
+      privateWeakMapSet(childDisconnectImplementations, this, value);
+    },
+  });
+  Object.defineProperty(process, 'kill', {
+    configurable: false,
+    enumerable: true,
+    value(pid, signal) {
+      const target = privateMapGet(processLifecycleTargets, pid);
+      if (!target) throw descendantError();
+      return authenticatedLifecycleResult(
+        target.context,
+        'kill',
+        { pid, signal },
+        (authenticated) =>
+          intrinsicReflectApply(originalProcessKill, process, [
+            authenticated.pid,
+            authenticated.signal,
+          ]),
+      );
+    },
+    writable: false,
+  });
+  const portPrototype = workerThreads.MessagePort.prototype;
+  const originalPortPostMessage = portPrototype.postMessage;
+  Object.defineProperty(portPrototype, 'postMessage', {
+    configurable: false,
+    enumerable: true,
+    value(message, transferList) {
+      const context = privateWeakMapGet(portMessageContexts, this);
+      if (!context) {
+        return intrinsicReflectApply(originalPortPostMessage, this, [
+          message,
+          transferList,
+        ]);
+      }
+      return authenticatedPostMessage(
+        originalPortPostMessage,
+        this,
+        context,
+        message,
+        transferList,
+      );
+    },
+    writable: false,
+  });
+  const OriginalMessageChannel = workerThreads.MessageChannel;
+  class FencedMessageChannel extends OriginalMessageChannel {
+    constructor() {
+      super();
+      privateWeakMapSet(portMessageContexts, this.port1, { blocked: true });
+      privateWeakMapSet(portMessageContexts, this.port2, { blocked: true });
+    }
+  }
+  Object.defineProperty(workerThreads, 'MessageChannel', {
+    configurable: false,
+    enumerable: true,
+    value: FencedMessageChannel,
+    writable: false,
+  });
+  if (typeof workerThreads.postMessageToThread === 'function') {
+    Object.defineProperty(workerThreads, 'postMessageToThread', {
+      configurable: false,
+      enumerable: true,
+      value() {
+        throw descendantError();
+      },
+      writable: false,
+    });
+  }
+  Object.defineProperty(workerThreads, 'setEnvironmentData', {
+    configurable: false,
+    enumerable: true,
+    value() {
+      throw descendantError();
+    },
+    writable: false,
+  });
+  if (workerThreads.BroadcastChannel) {
+    class FencedBroadcastChannel {
+      constructor() {
+        throw descendantError();
+      }
+    }
+    Object.defineProperty(workerThreads, 'BroadcastChannel', {
+      configurable: false,
+      enumerable: true,
+      value: FencedBroadcastChannel,
+      writable: false,
+    });
+    if (globalThis.BroadcastChannel) {
+      Object.defineProperty(globalThis, 'BroadcastChannel', {
+        configurable: false,
+        enumerable: true,
+        value: FencedBroadcastChannel,
+        writable: false,
+      });
+    }
+  }
+}
+function fenceChildProcessMethod(name, optionsIndex, mode) {
+  const original = childProcess[name];
+  Object.defineProperty(childProcess, name, {
+    configurable: false,
+    enumerable: true,
+    value(...receivedArgs) {
+      const args = [...receivedArgs];
+      if (Array.isArray(args[1])) args[1] = [...args[1]];
+      const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
+      const nonce = randomBytes(16).toString('hex');
+      const candidate = args[index];
+      const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
+      if (candidate && typeof candidate === 'object') args[index] = rawOptions;
+      if (rawOptions.signal !== undefined) throw descendantError();
+      const cwd = invocationCwd(rawOptions.cwd);
+      const environmentEntries = snapshotInvocation(
+        normalizedInvocationEnvironment(rawOptions.env),
+      ).value;
+      const stdio = authenticatedChildStdio(
+        rawOptions.stdio,
+        mode,
+        rawOptions.silent,
+        rawOptions.input,
+      );
+      let entrypoint;
+      let execArgv;
+      let applicationArgs;
+      if (mode === 'node' || mode === 'sync') {
+        requireNodeExecutable(args[0], rawOptions);
+        const invocation = requireFileBackedNodeArguments(args[1], cwd);
+        entrypoint = invocation.entrypoint;
+        execArgv = invocation.execArgv;
+        applicationArgs = invocation.applicationArgs;
+      }
+      if (mode === 'fork') {
+        if (rawOptions.execPath) requireNodeExecutable(rawOptions.execPath, rawOptions);
+        entrypoint = requireFileBackedEntrypoint(args[0], cwd);
+        execArgv = requireSafeExecArgv(
+          Array.isArray(rawOptions.execArgv) ? rawOptions.execArgv : process.execArgv,
+        );
+        applicationArgs = Array.isArray(args[1]) ? [...args[1]] : [];
+        if (applicationArgs.some((value) => typeof value !== 'string')) throw descendantError();
+      }
+      const authenticatedOptions = snapshotInvocation({
+        ...rawOptions,
+        cwd,
+        env: privateObjectFromEntries(environmentEntries),
+        stdio,
+      }).value;
+      const semantics = executionSemantics(mode, entrypoint, execArgv, {
+        applicationArgs,
+        options: authenticatedOptions,
+      });
+      const authenticatedArgs = authenticatedChildArguments(
+        args,
+        index,
+        authenticatedOptions,
+        environmentEntries,
+        nonce,
+        semantics,
+      );
+      const options = authenticatedArgs[index];
+      if (mode === 'fork') {
+        options.execPath = nodeExecutable;
+      }
+      if (mode !== 'sync' && activeChildSpawnAuthorization) throw descendantError();
+      const spawnAuthorization =
+        mode === 'sync'
+          ? undefined
+          : {
+              environment: options.env,
+              lifecycleContext: lifecycleContext('child-lifecycle', nonce),
+              receiver: undefined,
+            };
+      if (spawnAuthorization) {
+        activeChildSpawnAuthorization = spawnAuthorization;
+      }
+      let child;
+      try {
+        child = intrinsicReflectApply(original, this, authenticatedArgs);
+      } finally {
+        if (spawnAuthorization) {
+          activeChildSpawnAuthorization = undefined;
+          if (spawnAuthorization.receiver) {
+            privateWeakMapDelete(authorizedChildSpawns, spawnAuthorization.receiver);
+          }
+        }
+      }
+      if (mode === 'sync') {
+        recordChildLaunch(nonce, child, semantics);
+      } else if (typeof child?.once === 'function') {
+        child.once('spawn', () => recordChildLaunch(nonce, child, semantics));
+      }
+      if (mode !== 'sync') {
+        const context = spawnAuthorization.lifecycleContext;
+        const target = {
+          pid: typeof child?.pid === 'number' ? child.pid : undefined,
+          context,
+        };
+        privateWeakMapSet(childLifecycleContexts, child, context);
+        privateWeakMapSet(childLifecycleTargets, child, target);
+        if (target.pid !== undefined) {
+          const pid = target.pid;
+          privateMapSet(processLifecycleTargets, pid, target);
+          child.once?.('exit', () => {
+            if (privateMapGet(processLifecycleTargets, pid) === target) {
+              privateMapDelete(processLifecycleTargets, pid);
+            }
+          });
+        }
+      }
+      if (mode === 'fork') {
+        const messageContext = {
+          mode: 'fork-message',
+          recipient: nonce,
+          sequence: 0,
+          sendDepth: 0,
+          nativeWriteDepth: 0,
+          nativeControlDepth: 0,
+          nativeControlContext: lifecycleContext('native-channel', nonce),
+        };
+        privateWeakMapSet(childMessageContexts, child, messageContext);
+        let channel;
+        try {
+          channel = requireNativeChannelHandle(child);
+        } catch (error) {
+          child.kill();
+          throw error;
+        }
+        fenceNativeChannel(channel.handle, messageContext);
+        child[channel.symbol] = nativeHandleFacade(channel.handle, 'onread');
+      }
+      return child;
+    },
+    writable: false,
+  });
+}
+function rejectChildProcessMethod(name) {
+  Object.defineProperty(childProcess, name, {
+    configurable: false,
+    enumerable: true,
+    value() {
+      throw descendantError();
+    },
+    writable: false,
+  });
+}
+function fenceNativeProcessLaunchBindings() {
+  const originalBinding = process.binding;
+  Object.defineProperty(process, 'binding', {
+    configurable: false,
+    enumerable: false,
+    value(name) {
+      if (name === 'process_wrap' || name === 'spawn_sync') {
+        throw descendantError();
+      }
+      return intrinsicReflectApply(originalBinding, process, [name]);
+    },
+    writable: false,
+  });
+}
+function fenceWorkers() {
+  const OriginalWorker = workerThreads.Worker;
+  const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
+  function AuthenticatedWorker(filename, options = {}) {
+    if (!new.target) throw descendantError();
+    const capturedOptions = { ...options };
+    if (
+      capturedOptions.eval ||
+      (typeof filename === 'string' && filename.startsWith('data:')) ||
+      (filename instanceof URL && filename.protocol === 'data:')
+    ) {
+      throw descendantError();
+    }
+    const nonce = randomBytes(16).toString('hex');
+    const requestedExecArgv = Array.isArray(capturedOptions.execArgv)
+      ? [...capturedOptions.execArgv]
+      : [...process.execArgv];
+    const normalizedExecArgv = requireSafeExecArgv(requestedExecArgv);
+    if (Array.isArray(capturedOptions.transferList) && capturedOptions.transferList.length > 0) {
+      throw descendantError();
+    }
+    if (capturedOptions.stdin || capturedOptions.signal !== undefined) throw descendantError();
+    const entrypoint = requireFileBackedEntrypoint(
+      filename instanceof URL ? fileURLToPath(filename) : filename,
+    );
+    const invocationOptions = { ...capturedOptions };
+    delete invocationOptions.execArgv;
+    delete invocationOptions.transferList;
+    const environmentEntries = snapshotInvocation(
+      normalizedInvocationEnvironment(capturedOptions.env),
+    ).value;
+    invocationOptions.env = privateObjectFromEntries(environmentEntries);
+    const authenticatedInvocationOptions = snapshotInvocation(invocationOptions).value;
+    const semantics = executionSemantics(
+      'worker',
+      entrypoint,
+      normalizedExecArgv,
+      {
+        options: authenticatedInvocationOptions,
+      },
+    );
+    const workerNewTarget =
+      new.target === AuthenticatedWorker ? OriginalWorker : new.target;
+    const worker = intrinsicReflectConstruct(
+      OriginalWorker,
+      [
+        entrypoint,
+        {
+          ...authenticatedInvocationOptions,
+          env: authenticatedChildEnvironment(
+            environmentEntries,
+            nonce,
+            semantics,
+          ),
+          execArgv: ['--require', authorityPreload, ...requestedExecArgv],
+        },
+      ],
+      workerNewTarget,
+    );
+    privateWeakMapSet(workerMessageContexts, worker, {
+      mode: 'worker-message',
+      recipient: nonce,
+      sequence: 0,
+    });
+    privateWeakMapSet(
+      workerLifecycleContexts,
+      worker,
+      lifecycleContext('worker-lifecycle', nonce),
+    );
+    persistLoaderObservation(
+      'launch',
+      descendantExecutionRecord(
+        nonce,
+        'worker:' + worker.threadId,
+        semantics,
+        currentIdentity,
+        currentAuthorityNonce,
+      ),
+    );
+    return worker;
+  }
+  Object.defineProperty(AuthenticatedWorker, 'prototype', {
+    configurable: false,
+    value: OriginalWorker.prototype,
+    writable: false,
+  });
+  Object.setPrototypeOf(AuthenticatedWorker, Function.prototype);
+  Object.defineProperty(OriginalWorker.prototype, 'constructor', {
+    configurable: false,
+    enumerable: false,
+    value: AuthenticatedWorker,
+    writable: false,
+  });
+  Object.defineProperty(workerThreads, 'Worker', {
+    configurable: false,
+    enumerable: true,
+    value: AuthenticatedWorker,
+    writable: false,
+  });
+}
+const optionalArgsIndex = (args) => (Array.isArray(args[1]) ? 2 : 1);
+const canAuthenticateChildProcesses =
+  Boolean(process.env.NODE_OPTIONS) &&
+  Boolean(process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD) &&
+  (Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD) ||
+    (Boolean(metroPolicyCapability) && Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS)));
+if (canAuthenticateChildProcesses) {
+  fenceNativeProcessLaunchBindings();
+  installMessageFences();
+  if (descendantNonce) {
+    if (typeof process.send === 'function') {
+      const originalSend = process.send;
+      Object.defineProperty(process, 'send', {
+        configurable: false,
+        enumerable: true,
+        value(message, sendHandle, options, callback) {
+          return authenticatedIpcSend(
+            originalSend,
+            process,
+            descendantMessageContext,
+            message,
+            sendHandle,
+            options,
+            callback,
+          );
+        },
+        writable: false,
+      });
+    }
+    if (workerThreads.parentPort) {
+      privateWeakMapSet(
+        portMessageContexts,
+        workerThreads.parentPort,
+        descendantMessageContext,
+      );
+    }
+  }
+  fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
+  fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
+  fenceChildProcessMethod('fork', optionalArgsIndex, 'fork');
+  rejectChildProcessMethod('exec');
+  rejectChildProcessMethod('execFile');
+  rejectChildProcessMethod('execFileSync');
+  rejectChildProcessMethod('execSync');
+  fenceWorkers();
+}
+function digestRuntimeFile(file) {
+  const refusal = (message) => {
+    const error = new Error('METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    return error;
+  };
+  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const initial = fs.fstatSync(descriptor);
+    if (!initial.isFile()) {
+      throw refusal('native addon is not a regular file');
+    }
+    if (initial.size > 128 * 1024 * 1024) {
+      throw refusal('native addon exceeds the 128 MiB evidence limit');
+    }
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (position < initial.size) {
+      const bytesRead = fs.readSync(
+        descriptor,
+        buffer,
+        0,
+        Math.min(buffer.length, initial.size - position),
+        position,
+      );
+      if (bytesRead === 0 || position + bytesRead > 128 * 1024 * 1024) {
+        throw refusal('native addon changed while reading evidence');
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    if (fs.readSync(descriptor, buffer, 0, 1, position) !== 0) {
+      throw refusal('native addon changed while reading evidence');
+    }
+    const final = fs.fstatSync(descriptor);
+    if (
+      final.dev !== initial.dev ||
+      final.ino !== initial.ino ||
+      final.size !== initial.size ||
+      final.mtimeMs !== initial.mtimeMs ||
+      final.ctimeMs !== initial.ctimeMs
+    ) {
+      throw refusal('native addon changed while reading evidence');
+    }
+    return hash.digest('hex');
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+function waitForNativeAddonAcknowledgment(requestId, digest) {
+  const refusal = (message) => {
+    const error = new Error('METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    return error;
+  };
+  const acknowledgmentRoot = process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
+  if (!usesExternalEvidenceOwner) return null;
+  if (!acknowledgmentRoot || !/^[a-f0-9]{32}$/.test(requestId)) {
+    throw refusal('launcher acknowledgment channel is unavailable');
+  }
+  const acknowledgmentPath = path.join(acknowledgmentRoot, requestId + '.json');
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      const acknowledgment = JSON.parse(fs.readFileSync(acknowledgmentPath, 'utf8'));
+      if (
+        acknowledgment.version !== 1 ||
+        acknowledgment.requestId !== requestId ||
+        acknowledgment.digest !== digest ||
+        acknowledgment.accepted !== true ||
+        typeof acknowledgment.path !== 'string'
+      ) {
+        throw refusal(
+          typeof acknowledgment.reason === 'string'
+            ? acknowledgment.reason
+            : 'launcher rejected the requested bytes',
+        );
+      }
+      return acknowledgment.path;
+    } catch (error) {
+      if (error && error.code !== 'ENOENT') throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  throw refusal('launcher acknowledgment timed out');
+}
+function nativeAddonEvidenceStageError(stage, caught) {
+  if (
+    caught &&
+    (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
+      caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
+  ) {
+    return caught;
+  }
+  const code =
+    caught && typeof caught.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(caught.code)
+      ? caught.code
+      : 'UNKNOWN';
+  const error = new Error(
+    'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + stage + ' failed (' + code + ')',
+  );
+  error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+  return error;
+}
+function prepareNativeAddonLoad(file) {
+  const requestedPath = path.resolve(String(file));
+  let resolved;
+  try {
+    resolved = fs.realpathSync(requestedPath);
+  } catch (caught) {
+    if (caught && (caught.code === 'ENOENT' || caught.code === 'ENOTDIR')) {
+      const error = new Error(
+        'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
+      );
+      error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+      throw error;
+    }
+    throw nativeAddonEvidenceStageError('canonical-path', caught);
+  }
+  let regularFile;
+  try {
+    regularFile = fs.statSync(resolved).isFile();
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('file-metadata', caught);
+  }
+  if (!regularFile) {
+    const error = new Error(
+      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: not-regular:' +
+        sanitizedNativeAddonBasename(resolved),
+    );
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  let withinAllowedRoot;
+  try {
+    withinAllowedRoot = isWithinAllowedCodeRoot(resolved);
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('root-containment', caught);
+  }
+  if (!withinAllowedRoot) {
+    const error = new Error(
+      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
+    );
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  let digest;
+  try {
+    digest = digestRuntimeFile(resolved);
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('pre-load-digest', caught);
+  }
+  let requestId;
+  try {
+    requestId = randomBytes(16).toString('hex');
+  } catch (caught) {
+    throw nativeAddonEvidenceStageError('request-id', caught);
+  }
+  if (usesExternalEvidenceOwner) {
+    try {
+      persistLoaderObservation(
+        'native-addon-request',
+        canonicalAuthorityJson({ requestId, path: resolved, digest }),
+      );
+    } catch (caught) {
+      throw nativeAddonEvidenceStageError('request-publish', caught);
+    }
+    let acknowledgedPath;
+    try {
+      acknowledgedPath = waitForNativeAddonAcknowledgment(requestId, digest);
+    } catch (caught) {
+      throw nativeAddonEvidenceStageError('acknowledgment-read', caught);
+    }
+    if (acknowledgedPath !== resolved) {
+      throw new Error('native addon acknowledgment path changed');
+    }
+  } else {
+    persistLoaderObservation('input', resolved, digest);
+  }
+  if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
+    privateMapSet(observedLoaderDigests, resolved, digest);
+    privateSetAdd(accumulatedRuntimeInputs, resolved);
+    loaderEpoch += 1;
+  }
+  return { requestId, resolved, digest };
+}
+function recordRuntimeFileInput(file) {
+  const resolved = fs.realpathSync(file);
+  if (!fs.statSync(resolved).isFile() || !isWithinAllowedCodeRoot(resolved)) {
+    const error = new Error(
+      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
+    );
+    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
+    throw error;
+  }
+  const digest = digestRuntimeFile(resolved);
+  if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
+    privateMapSet(observedLoaderDigests, resolved, digest);
+    privateSetAdd(accumulatedRuntimeInputs, resolved);
+    loaderEpoch += 1;
+    persistLoaderObservation('input', resolved, digest);
+  }
+  return resolved;
+}
+const originalDlopen = process.dlopen;
+function reportNativeAddonCompletion(prepared, outcome, digest) {
+  if (usesExternalEvidenceOwner) {
+    persistLoaderObservation(
+      'native-addon-completion',
+      canonicalAuthorityJson({
+        requestId: prepared.requestId,
+        path: prepared.resolved,
+        digest,
+        outcome,
+      }),
+    );
+  } else if (outcome === 'success') {
+    persistLoaderObservation('stability', prepared.resolved, digest);
+  } else {
+    recordLoaderViolation(
+      'METRO_NATIVE_ADDON_LOAD_FAILED: ' + sanitizedNativeAddonBasename(prepared.resolved),
+    );
+  }
+}
+const attestNativeAddonLoad = function(module, file) {
+  let prepared;
+  try {
+    prepared = prepareNativeAddonLoad(file);
+  } catch (caught) {
+    const sanitizedPath = sanitizedNativeAddonPath(file);
+    const preparationCode =
+      caught && typeof caught.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(caught.code)
+        ? caught.code
+        : 'UNKNOWN';
+    const message =
+      caught &&
+      (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
+        caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
+        ? caught.message
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: preparation failed (' +
+          preparationCode +
+          '): ' +
+          sanitizedPath;
+    recordLoaderViolation(message);
+    const error = new Error(message);
+    error.code =
+      caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
+        ? caught.code
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    throw error;
+  }
+  const args = privateArraySlice(arguments);
+  args[1] = prepared.resolved;
+  let result;
+  try {
+    result = intrinsicReflectApply(originalDlopen, process, args);
+  } catch (caught) {
+    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
+    throw caught;
+  }
+  let postLoadDigest;
+  try {
+    postLoadDigest = digestRuntimeFile(prepared.resolved);
+  } catch (caught) {
+    const message =
+      caught && caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE'
+        ? caught.message
+        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon stability could not be verified';
+    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
+    recordLoaderViolation(message);
+    const error = new Error(message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    throw error;
+  }
+  if (postLoadDigest !== prepared.digest) {
+    const message =
+      'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon changed during load';
+    reportNativeAddonCompletion(prepared, 'failure', postLoadDigest);
+    recordLoaderViolation(message);
+    const error = new Error(message);
+    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
+    throw error;
+  }
+  reportNativeAddonCompletion(prepared, 'success', postLoadDigest);
+  return result;
+};
+Object.defineProperty(process, 'dlopen', {
+  configurable: false,
+  enumerable: true,
+  value: attestNativeAddonLoad,
+  writable: false,
+});
+function digestRuntimeSource(source) {
+  const bytes =
+    typeof source === 'string'
+      ? Buffer.from(source)
+      : Buffer.isBuffer(source)
+        ? source
+        : source instanceof ArrayBuffer
+          ? Buffer.from(source)
+          : typeof SharedArrayBuffer !== 'undefined' && source instanceof SharedArrayBuffer
+            ? Buffer.from(source)
+          : ArrayBuffer.isView(source)
+            ? Buffer.from(source.buffer, source.byteOffset, source.byteLength)
+            : null;
+  if (!bytes || bytes.byteLength > 128 * 1024 * 1024) {
+    throw new Error('unsupported runtime module source');
+  }
+  return createHash('sha256').update(bytes).digest('hex');
+}
+function recordLoaderResult(url, result) {
+  if (url.startsWith('node:')) return;
+  if (!url.startsWith('file:')) {
+    recordLoaderViolation('Metro runtime module URL scheme is unsupported');
+    return;
+  }
+  if (result && result.format === 'addon') {
+    try {
+      recordRuntimeFileInput(fileURLToPath(url));
+    } catch (caught) {
+      const message =
+        caught &&
+        (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
+          caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
+          ? caught.message
+          : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' +
+            sanitizedNativeAddonPath(fileURLToPath(url));
+      recordLoaderViolation(message);
+    }
+    return;
+  }
+  try {
+    const resolved = fs.realpathSync(fileURLToPath(url));
+    const digest = digestRuntimeSource(result && result.source);
+    if (privateMapGet(observedLoaderDigests, resolved) === digest) return;
+    privateMapSet(observedLoaderDigests, resolved, digest);
+    privateSetAdd(accumulatedRuntimeInputs, resolved);
+    loaderEpoch += 1;
+    persistLoaderObservation('input', resolved, digest);
+  } catch {
+    recordLoaderViolation('Metro runtime module cannot be resolved');
+  }
+}
+if (typeof registerHooks === 'function') {
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      return nextResolve(specifier, context);
+    },
+    load(url, context, nextLoad) {
+      const result = nextLoad(url, context);
+      recordLoaderResult(url, result);
+      return result;
+    },
+  });
+  const rejectHookRegistration = () => {
+    recordLoaderViolation('additional Metro runtime loader hooks are unsupported');
+    throw new Error('RN_DEV_AGENT_UNSUPPORTED_MODULE_HOOK');
+  };
+  moduleApi.register = rejectHookRegistration;
+  moduleApi.registerHooks = rejectHookRegistration;
+  moduleApi.syncBuiltinESMExports();
+} else {
+  recordLoaderViolation('Metro runtime module loading requires Node.js 22.15 or newer');
+}
+const preloadPath = fs.realpathSync(__filename);
+const preloadDigest = digestRuntimeFile(preloadPath);
+privateMapSet(observedLoaderDigests, preloadPath, preloadDigest);
+privateSetAdd(accumulatedRuntimeInputs, preloadPath);
+loaderEpoch += 1;
+persistLoaderObservation('input', preloadPath, preloadDigest);
+function sourceRoot() {
+  if (sourceRootResolved) return cachedSourceRoot;
+  if (process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT) {
+    cachedSourceRoot = fs.realpathSync(process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT);
+    sourceRootResolved = true;
+    return cachedSourceRoot;
+  }
+  try {
+    cachedSourceRoot = fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim());
+    sourceRootResolved = true;
+    return cachedSourceRoot;
+  } catch (error) {
+    if (String(error && error.stderr || '').toLowerCase().includes('not a git repository')) {
+      sourceRootResolved = true;
+      cachedSourceRoot = null;
+      return cachedSourceRoot;
+    }
+    throw error;
+  }
+}
+function runtimePolicy(config, callbackRuntimeInputs = []) {
+  const root = sourceRoot();
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
+  if (root === null || !metroPolicyCapability || !sessionId || !metroInstanceId) return;
+  const runtimeInputs = new IntrinsicSet();
+  const violations = [];
+  const excludedRuntimeDirectories = [
+    '.gradle',
+    '.expo',
+    '.cache',
+    'ios/Pods',
+    'ios/build',
+    'ios/DerivedData',
+    'android/build',
+    'android/app/build',
+    'android/app/.cxx',
+  ];
+  const resolver = config.resolver || {};
+  const transformer = config.transformer || {};
+  const serializer = config.serializer || {};
+  function isContained(candidate) {
+    const child = path.relative(root, candidate);
+    return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
+  }
+  function isWithin(parent, candidate) {
+    const child = path.relative(parent, candidate);
+    return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
+  }
+  function isExcluded(candidate) {
+    const entry = path.relative(root, candidate).split(path.sep).join('/');
+    return excludedRuntimeDirectories.some((excluded) =>
+      entry === excluded ||
+      entry.startsWith(excluded + '/') ||
+      entry.endsWith('/' + excluded) ||
+      entry.includes('/' + excluded + '/')
+    );
+  }
+  function addPath(value, field) {
+    if (value == null) return;
+    if (typeof value !== 'string') {
+      privateArrayPush(violations, field + ' must be a path');
+      return;
+    }
+    try {
+      privateSetAdd(runtimeInputs, fs.realpathSync(path.resolve(process.cwd(), value)));
+    } catch {
+      privateArrayPush(violations, field + ' cannot be resolved');
+    }
+  }
+  function addPaths(values, field) {
+    if (values == null) return;
+    if (!Array.isArray(values)) {
+      privateArrayPush(violations, field + ' must contain paths');
+      return;
+    }
+    privateArrayForEach(values, (value) => addPath(value, field));
+  }
+  function addModule(value, field) {
+    if (value == null) return null;
+    if (typeof value !== 'string') {
+      privateArrayPush(violations, field + ' must identify a module');
+      return null;
+    }
+    try {
+      const resolved = fs.realpathSync(require.resolve(value, { paths: [process.cwd()] }));
+      privateSetAdd(runtimeInputs, resolved);
+      if (!isContained(resolved) || isExcluded(resolved)) {
+        privateArrayPush(
+          violations,
+          field + ' must resolve to Git-authenticated source or a local dependency store',
+        );
+      }
+      return resolved;
+    } catch {
+      privateArrayPush(violations, field + ' cannot be resolved as an authenticated module');
+      return null;
+    }
+  }
+  function canonicalPackageRoot(packageName) {
+    const entry = fs.realpathSync(require.resolve(packageName, { paths: [process.cwd()] }));
+    let cursor = path.dirname(entry);
+    while (true) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(cursor, 'package.json'), 'utf8'));
+        if (manifest.name === packageName) return fs.realpathSync(cursor);
+      } catch {}
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return null;
+      cursor = parent;
+    }
+  }
+  function addExecutableModule(value, field, supportedPackages) {
+    const resolved = addModule(value, field);
+    if (!resolved) return null;
+    const packageName =
+      supportedPackages.find((candidate) => {
+        try {
+          const packageRoot = canonicalPackageRoot(candidate);
+          return packageRoot !== null && isWithin(packageRoot, resolved);
+        } catch {
+          return false;
+        }
+      }) || null;
+    if (packageName === null) {
+      privateArrayPush(violations, field + ' is not a supported Metro executable module');
+    }
+    return { resolved, packageName };
+  }
+  addPath(config.projectRoot, 'projectRoot');
+  addPaths(config.watchFolders, 'watchFolders');
+  addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
+  addPaths((process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
+  privateArrayForEach(callbackRuntimeInputs, (value) =>
+    addModule(value, 'Metro callback runtime input')
+  );
+  if (resolver.extraNodeModules !== undefined) {
+    if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
+      privateArrayPush(violations, 'extraNodeModules must be a path map');
+    } else {
+      privateArrayForEach(privateObjectValues(resolver.extraNodeModules), (value) =>
+        addPath(value, 'extraNodeModules')
+      );
+    }
+  }
+  if (resolver.resolveRequest != null) {
+    privateArrayPush(violations, 'custom Metro resolvers are unsupported');
+  }
+  const transformerPath = addExecutableModule(
+    config.transformerPath,
+    'transformerPath',
+    ['metro-transform-worker', '@expo/metro-config'],
+  );
+  const babelTransformerPath = addExecutableModule(
+    transformer.babelTransformerPath,
+    'babelTransformerPath',
+    ['metro-babel-transformer', '@react-native/metro-babel-transformer', '@expo/metro-config'],
+  );
+  const expoSerializerSupported =
+    transformerPath?.packageName === '@expo/metro-config' ||
+    babelTransformerPath?.packageName === '@expo/metro-config';
+  const expoSerializer =
+    typeof serializer.customSerializer === 'function' &&
+    ('__originalSerializer' in serializer.customSerializer ||
+      serializer.customSerializer.__expoSerializer === true);
+  if (serializer.customSerializer != null && (!expoSerializerSupported || !expoSerializer)) {
+    privateArrayPush(violations, 'custom Metro serializers are unsupported');
+  }
+  addExecutableModule(resolver.dependencyExtractor, 'dependencyExtractor', []);
+  addExecutableModule(resolver.hasteImplModulePath, 'hasteImplModulePath', []);
+  addExecutableModule(resolver.emptyModulePath, 'emptyModulePath', ['metro-runtime']);
+  addExecutableModule(transformer.asyncRequireModulePath, 'asyncRequireModulePath', [
+    'metro-runtime',
+  ]);
+  addExecutableModule(transformer.assetRegistryPath, 'assetRegistryPath', [
+    '@react-native/assets-registry',
+    'expo-asset',
+  ]);
+  addExecutableModule(transformer.minifierPath, 'minifierPath', ['metro-minify-terser']);
+  if (transformer.assetPlugins != null) {
+    if (!Array.isArray(transformer.assetPlugins)) {
+      privateArrayPush(violations, 'assetPlugins must identify modules');
+    } else {
+      privateArrayForEach(transformer.assetPlugins, (value) =>
+        addExecutableModule(value, 'assetPlugins', ['expo-asset', '@expo/metro-config'])
+      );
+    }
+  }
+  if (serializer.polyfillModuleNames != null) {
+    if (!Array.isArray(serializer.polyfillModuleNames)) {
+      privateArrayPush(violations, 'polyfillModuleNames must identify modules');
+    } else {
+      privateArrayForEach(serializer.polyfillModuleNames, (value) =>
+        addModule(value, 'polyfillModuleNames')
+      );
+    }
+  }
+  const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD || '';
+  const baseNodeOptions = process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '';
+  const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + canonicalAuthorityJson(authorityPreload)]
+    .filter(Boolean)
+    .join(' ');
+  let authorityPreloadMatches = false;
+  try {
+    authorityPreloadMatches =
+      fs.realpathSync(authorityPreload) === fs.realpathSync(__filename) &&
+      (Number.isInteger(Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD)) ||
+        fs.realpathSync(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS) ===
+          fs.realpathSync(path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_LOADS)})));
+  } catch {}
+  if (
+    !authorityPreload ||
+    !authorityPreloadMatches ||
+    process.env.NODE_OPTIONS !== expectedNodeOptions ||
+    hasNodeLoaderOption(baseNodeOptions) ||
+    hasUnsupportedNodeOption(baseNodeOptions)
+  ) {
+    privateArrayPush(violations, 'NODE_OPTIONS contain unsupported execution inputs');
+  }
+  if (!initialCacheCaptured) {
+    privateArrayForEach(Object.keys(require.cache), (value) =>
+      addPath(value, 'loaded Metro config module')
+    );
+    initialCacheCaptured = true;
+  }
+  privateSetForEach(runtimeInputs, (value) =>
+    privateSetAdd(accumulatedRuntimeInputs, value),
+  );
+  privateArrayForEach(violations, (value) =>
+    privateSetAdd(accumulatedViolations, value)
+  );
+  const payload = {
+    version: 1,
+    runtimeEvidenceAuthority: 'reported-v1',
+    sessionId,
+    metroInstanceId,
+    contentRoot: root,
+    appRoot: fs.realpathSync(process.cwd()),
+    runtimeInputs: privateArraySort(privateSetValues(accumulatedRuntimeInputs)),
+    violations: privateArraySort(privateSetValues(accumulatedViolations)),
+  };
+  const serializedPayload = canonicalAuthorityJson(payload);
+  if (serializedPayload === lastPolicyPayload) return;
+  const receipt = {
+    ...payload,
+    signature: createHmac('sha256', metroPolicyCapability)
+      .update(serializedPayload)
+      .digest('hex'),
+  };
+  const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY2)});
+  const temporary = policyPath + '.' + process.pid + '.tmp';
+  fs.writeFileSync(temporary, canonicalAuthorityJson(receipt) + '\\n', { mode: 0o600 });
+  fs.renameSync(temporary, policyPath);
+  lastPolicyPayload = serializedPayload;
+}
+function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
+  const wrapped = function (...args) {
+    const loaderEpochBefore = loaderEpoch;
+    const refresh = (returnedPaths) => {
+      if (returnedPaths.length > 0 || loaderEpoch !== loaderEpochBefore) {
+        runtimePolicy(getConfig(), returnedPaths);
+      }
+    };
+    const finish = (value) => {
+      const returnedPaths = includeReturnedPaths && Array.isArray(value) ? value : [];
+      refresh(returnedPaths);
+      return typeof value === 'function'
+        ? withPolicyRefresh(value, getConfig, false)
+        : value;
+    };
+    const fail = (error) => {
+      refresh([]);
+      throw error;
+    };
+    try {
+      const result = callback.apply(this, args);
+      return result && typeof result.then === 'function' ? result.then(finish, fail) : finish(result);
+    } catch (error) {
+      return fail(error);
+    }
+  };
+  return Object.assign(wrapped, callback);
+}
+function withPolicyCallbacks(config, names, getConfig) {
+  const callbacks = {};
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (typeof config[name] === 'function') {
+      callbacks[name] = withPolicyRefresh(config[name], getConfig, false);
+    }
+  }
+  return callbacks;
+}
+module.exports = function withRnDevAgentAuthority(config) {
+  if (config && typeof config.then === 'function') {
+    return config.then(withRnDevAgentAuthority);
+  }
+  const current = config || {};
+  const resolver = current.resolver || {};
+  const transformer = current.transformer || {};
+  const serializer = current.serializer || {};
+  const original = serializer.getModulesRunBeforeMainModule;
+  const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
+  let finalConfig;
+  finalConfig = {
+    ...current,
+    ...(Array.isArray(current.watchFolders) ? { watchFolders: [...current.watchFolders] } : {}),
+    resolver: {
+      ...resolver,
+      ...(Array.isArray(resolver.nodeModulesPaths) ? { nodeModulesPaths: [...resolver.nodeModulesPaths] } : {}),
+      ...(resolver.extraNodeModules && typeof resolver.extraNodeModules === 'object'
+        ? { extraNodeModules: { ...resolver.extraNodeModules } }
+        : {}),
+    },
+    transformer: {
+      ...transformer,
+      ...(Array.isArray(transformer.assetPlugins) ? { assetPlugins: [...transformer.assetPlugins] } : {}),
+      ...(typeof transformer.getTransformOptions === 'function'
+        ? { getTransformOptions: withPolicyRefresh(transformer.getTransformOptions, () => finalConfig, false) }
+        : {}),
+    },
+    serializer: {
+      ...serializer,
+      ...(typeof serializer.customSerializer === 'function'
+        ? { customSerializer: withPolicyRefresh(serializer.customSerializer, () => finalConfig, false) }
+        : {}),
+      ...withPolicyCallbacks(
+        serializer,
+        [
+          'createModuleIdFactory',
+          'processModuleFilter',
+          'getRunModuleStatement',
+          'isThirdPartyModule',
+          'experimentalSerializerHook',
+        ],
+        () => finalConfig,
+      ),
+      ...(typeof serializer.getPolyfills === 'function'
+        ? { getPolyfills: withPolicyRefresh(serializer.getPolyfills, () => finalConfig, true) }
+        : {}),
+      getModulesRunBeforeMainModule(entryFile) {
+        const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+        runtimePolicy(finalConfig, result);
+        return result;
+      },
+    },
+  };
+  runtimePolicy(finalConfig);
+  return finalConfig;
+};
+`;
+}
+function previewMetroIntegration(source) {
+  const hasStart = source.includes(METRO_START);
+  const hasEnd = source.includes(METRO_END);
+  if (hasStart !== hasEnd) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt");
+  }
+  if (hasStart)
+    return source;
+  return `${source.trimEnd()}
+
+${METRO_START}
+module.exports = require('./${METRO_ADAPTER}')(module.exports);
+${METRO_END}
+`;
+}
+function restoreMetroIntegration(source) {
+  const start = source.indexOf(METRO_START);
+  const end = source.indexOf(METRO_END);
+  if (start < 0 && end < 0)
+    return source;
+  if (start < 0 || end < start || source.indexOf(METRO_START, start + METRO_START.length) >= 0 || source.indexOf(METRO_END, end + METRO_END.length) >= 0) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt");
+  }
+  const blockEnd = end + METRO_END.length;
+  const prefix = source.slice(0, start).trimEnd();
+  const suffix = source.slice(blockEnd).replace(/^(?:\r?\n)+/, "");
+  return suffix ? `${prefix}
+${suffix}` : `${prefix}
+`;
+}
+function parseSupportedScript(script, platform) {
+  if (/[;&|`$<>()\\'"]/.test(script)) {
+    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: shell syntax cannot be wrapped safely");
+  }
+  const command = script.trim().split(/\s+/).filter(Boolean);
+  createBuildLaunchPlan({
+    platform,
+    command,
+    session: {
+      platform,
+      deviceId: platform === "android" ? "emulator-5554" : "preview-device",
+      metroPort: 8081,
+      sessionId: "preview-session"
+    }
+  });
+  return command;
+}
+function previewPackageIntegration(packageJson, existing, sessionCli) {
+  if (existing && packageJson.scripts?.ios === SENTINELS.ios && packageJson.scripts?.android === SENTINELS.android) {
+    return {
+      packageJson,
+      manifest: sessionCli ? { ...existing, sessionCli: resolve8(sessionCli) } : existing
+    };
+  }
+  const ios = packageJson.scripts?.ios;
+  const android = packageJson.scripts?.android;
+  if (typeof ios !== "string" || typeof android !== "string") {
+    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: ios and android scripts are required");
+  }
+  const manifest = {
+    version: 1,
+    adapter: ADAPTER,
+    ...sessionCli ? { sessionCli: resolve8(sessionCli) } : {},
+    originalScripts: {
+      ios: parseSupportedScript(ios, "ios"),
+      android: parseSupportedScript(android, "android")
+    }
+  };
+  return {
+    packageJson: {
+      ...packageJson,
+      scripts: { ...packageJson.scripts, ...SENTINELS }
+    },
+    manifest
+  };
+}
+function restorePackageIntegration(packageJson, manifest) {
+  const restoredScripts = {
+    ios: manifest.originalScripts.ios.join(" "),
+    android: manifest.originalScripts.android.join(" ")
+  };
+  if (packageJson.scripts?.ios === restoredScripts.ios && packageJson.scripts?.android === restoredScripts.android) {
+    return packageJson;
+  }
+  if (packageJson.scripts?.ios !== SENTINELS.ios || packageJson.scripts?.android !== SENTINELS.android) {
+    throw new Error("SESSION_INTEGRATION_CONFLICT: package scripts changed after integration was installed");
+  }
+  return {
+    ...packageJson,
+    scripts: {
+      ...packageJson.scripts,
+      ...restoredScripts
+    }
+  };
+}
+function renderProjectAdapter() {
+  return String.raw`#!/usr/bin/env node
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const platform = process.argv[2];
+if (platform !== 'ios' && platform !== 'android') {
+  process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: expected ios or android\n');
+  process.exit(2);
+}
+const manifestPath = path.join(process.cwd(), '.rn-agent', 'integration', 'rn-session-integration.json');
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+const original = manifest.originalScripts && manifest.originalScripts[platform];
+if (!Array.isArray(original) || original.length === 0 || original.some((part) => typeof part !== 'string')) {
+  process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: integration manifest is invalid\n');
+  process.exit(2);
+}
+const command = [...original, ...process.argv.slice(3)];
+let session = null;
+let sessionCli = null;
+if (typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
+  process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
+  process.exit(2);
+}
+if (typeof manifest.sessionCli === 'string') {
+  sessionCli = manifest.sessionCli;
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
+    ? ['--experimental-sqlite']
+    : [];
+  let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+  });
+  if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
+    const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+    });
+    if (metro.status !== 0) {
+      process.stderr.write(String(metro.stderr) || 'METRO_START_UNAVAILABLE: managed Metro failed\n');
+      process.exit(2);
+    }
+    probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+    });
+  }
+  if (probe.status === 0) {
+    try {
+      session = JSON.parse(probe.stdout);
+    } catch {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON\n');
+      process.exit(2);
+    }
+  } else if (!String(probe.stderr).includes('no live session matches this canonical worktree')) {
+    process.stderr.write(String(probe.stderr) || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed\n');
+    process.exit(2);
+  }
+}
+function ensureValue(flag, value) {
+  const index = command.indexOf(flag);
+  if (index >= 0) {
+    if (command[index + 1] !== value) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
+      process.exit(2);
+    }
+    return;
+  }
+  command.push(flag, value);
+}
+function ensureFlag(flag) {
+  if (!command.includes(flag)) command.push(flag);
+}
+function removeValue(flag, value) {
+  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
+    if (command[index + 1] !== value) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
+      process.exit(2);
+    }
+    command.splice(index, 2);
+  }
+}
+function managedMetroProxyUrl(binding) {
+  if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
+  if (/^emulator-\\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
+  if (typeof binding.devClientUrl !== 'string') {
+    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL\n');
+    process.exit(2);
+  }
+  try {
+    const encodedMetroUrl = new URL(binding.devClientUrl).searchParams.get('url');
+    if (!encodedMetroUrl) throw new Error('missing url parameter');
+    const metroUrl = new URL(encodedMetroUrl);
+    if (!['http:', 'https:'].includes(metroUrl.protocol) || Number(metroUrl.port) !== binding.metroPort) {
+      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro\n');
+      process.exit(2);
+    }
+    return metroUrl.origin;
+  } catch {
+    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint\n');
+    process.exit(2);
+  }
+}
+let expoProxyUrl = null;
+if (session) {
+  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
+    process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete\n');
+    process.exit(2);
+  }
+  if (!sessionCli) {
+    process.stderr.write('SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI\n');
+    process.exit(2);
+  }
+  const offset = command[0] === 'npx' ? 1 : 0;
+  const executable = command[offset];
+  const subcommand = command[offset + 1];
+  if (executable === 'expo' && subcommand === 'run:' + platform) {
+    ensureValue('--device', session.deviceId);
+    removeValue('--port', String(session.metroPort));
+    ensureFlag('--no-bundler');
+    expoProxyUrl = managedMetroProxyUrl(session);
+  } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
+    ensureValue('--udid', session.deviceId);
+    ensureValue('--port', String(session.metroPort));
+    ensureFlag('--no-packager');
+  } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
+    ensureValue('--deviceId', session.deviceId);
+    ensureValue('--port', String(session.metroPort));
+    ensureFlag('--no-packager');
+  } else {
+    process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized\n');
+    process.exit(2);
+  }
+}
+
+const child = spawnSync(command[0], command.slice(1), {
+  cwd: process.cwd(),
+  env: session ? {
+    ...process.env,
+    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
+    RCT_METRO_PORT: String(session.metroPort),
+    RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
+  } : process.env,
+  stdio: 'inherit',
+});
+if (child.error) {
+  process.stderr.write('rn-session-adapter: ' + child.error.message + '\n');
+  process.exit(1);
+}
+if (child.status !== 0) process.exit(child.status === null ? 1 : child.status);
+if (session) {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
+    ? ['--experimental-sqlite']
+    : [];
+  const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    },
+    encoding: 'utf8',
+  });
+  if (complete.status !== 0) {
+    process.stderr.write(String(complete.stderr) || 'APP_INSTALL_IDENTITY_CHANGED: build receipt could not be recorded\n');
+    process.exit(2);
+  }
+  process.stdout.write(String(complete.stdout));
+}
+process.exit(0);
+`;
+}
+function snapshotBoundFiles(directory, directoryPath, names) {
+  return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
+    ...snapshot,
+    path: join35(directoryPath, snapshot.name)
+  }));
+}
+function casReplaceBoundBatch(directory, writes, dependencies = {}) {
+  return casBoundDirectoryFiles(directory, writes.map((write) => ({
+    expected: write.expected,
+    expectedMode: write.expectedMode ?? write.snapshot.mode,
+    mode: write.mode,
+    name: write.snapshot.name,
+    replacement: write.replacement
+  })), dependencies);
+}
+function assertBoundCleanup(result) {
+  if (result.cleanupPending) {
+    const transaction = result.cleanupObligation?.transactionId ?? "unknown transaction";
+    throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${transaction}: ${result.cleanupError ?? "cleanup unavailable"}`);
+  }
+}
+function assertNoSymlinkPath(root, candidate) {
+  const child = relative4(root, candidate);
+  if (child === ".." || child.startsWith(`..${sep4}`) || isAbsolute5(child)) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
+  }
+  let current = root;
+  for (const component of [root, ...child.split(sep4).filter(Boolean)]) {
+    current = component === root ? root : join35(current, component);
+    try {
+      if (lstatSync11(current).isSymbolicLink()) {
+        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
+      }
+    } catch (error2) {
+      if (error2.code === "ENOENT")
+        break;
+      throw error2;
+    }
+  }
+}
+function regularFileIdentity(root, candidate) {
+  assertNoSymlinkPath(root, candidate);
+  const identity2 = lstatSync11(candidate, { bigint: true });
+  if (!identity2.isFile()) {
+    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file");
+  }
+  return { dev: identity2.dev, ino: identity2.ino };
+}
+function readRegularFile(root, candidate) {
+  const before = regularFileIdentity(root, candidate);
+  const descriptor = openSync8(candidate, constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0) | (constants5.O_NONBLOCK ?? 0));
+  try {
+    const opened = fstatSync5(descriptor, { bigint: true });
+    const after = regularFileIdentity(root, candidate);
+    if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
+    }
+    return readFileSync27(descriptor, "utf8");
+  } finally {
+    closeSync8(descriptor);
+  }
+}
+function readOptionalRegularFile(root, candidate) {
+  try {
+    return readRegularFile(root, candidate);
+  } catch (error2) {
+    if (error2.code === "ENOENT")
+      return void 0;
+    throw error2;
+  }
+}
+function readOptionalRegularFileNoFollow(root, candidate) {
+  return readOptionalRegularFile(root, candidate);
+}
+function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
+  const appRoot = resolve8(appRootInput);
+  const app = openBoundDirectory(appRoot);
+  let agent = null;
+  let integration = null;
+  let primaryError;
+  try {
+    const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
+      "package.json",
+      "metro.config.js",
+      "metro.config.cjs"
+    ]);
+    if (!packageSnapshot?.contents) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: package.json is unavailable");
+    }
+    const metroSnapshot = metroJsSnapshot?.contents ? metroJsSnapshot : metroCjsSnapshot;
+    if (!metroSnapshot?.contents) {
+      throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
+    }
+    dependencies.afterAppRead?.();
+    agent = openOptionalBoundSubdirectory(app, ".rn-agent");
+    if (agent) {
+      integration = openOptionalBoundSubdirectory(agent, "integration");
+    }
+    const manifest = integration ? readBoundDirectoryFiles(integration, ["rn-session-integration.json"])[0]?.contents : null;
+    return {
+      packageJson: packageSnapshot.contents.toString("utf8"),
+      metroConfig: {
+        contents: metroSnapshot.contents.toString("utf8"),
+        path: join35(appRoot, metroSnapshot.name)
+      },
+      ...manifest ? { manifest: manifest.toString("utf8") } : {}
+    };
+  } catch (error2) {
+    primaryError = error2;
+    throw error2;
+  } finally {
+    closeBoundDirectories([integration, agent, app], primaryError);
+  }
+}
+function openIntegrationDirectories(appRoot) {
+  const app = openBoundDirectory(appRoot);
+  try {
+    const agent = openBoundSubdirectory(app, ".rn-agent", { create: true });
+    try {
+      const integration = openBoundSubdirectory(agent, "integration", { create: true });
+      return { app, agent, integration };
+    } catch (error2) {
+      closeBoundDirectories([agent], error2);
+      throw error2;
+    }
+  } catch (error2) {
+    closeBoundDirectories([app], error2);
+    throw error2;
+  }
+}
+function rollbackWrites(writes, dependencies) {
+  const errors = [];
+  for (const write of [...writes].reverse()) {
+    try {
+      const result = casReplaceBoundBatch(write.directory, [
+        {
+          snapshot: write.snapshot,
+          expected: write.written,
+          expectedMode: write.writtenMode,
+          replacement: write.snapshot.contents,
+          mode: write.snapshot.mode
+        }
+      ], dependencies);
+      assertBoundCleanup(result);
+    } catch (error2) {
+      errors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
+    }
+  }
+  return errors;
+}
+function applyPackageIntegration(input, dependencies = {}) {
+  const appRoot = resolve8(input.appRoot);
+  const packagePath = join35(appRoot, "package.json");
+  let metroConfigPath;
+  for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join35(appRoot, name))) {
+    if (readOptionalRegularFileNoFollow(appRoot, path) !== void 0) {
+      metroConfigPath = path;
+      break;
+    }
+  }
+  if (!metroConfigPath) {
+    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
+  }
+  const directories = openIntegrationDirectories(appRoot);
+  const generatedNames = [
+    "rn-session-integration.json",
+    "rn-session-adapter.cjs",
+    "rn-session-metro.cjs",
+    "authority-marker.js",
+    "metro-runtime-policy.json",
+    basename4(METRO_RUNTIME_LOADS)
+  ];
+  const applied = [];
+  let primaryError;
+  try {
+    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
+      basename4(packagePath),
+      basename4(metroConfigPath)
+    ]);
+    const generated = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
+    if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
+      throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
+    }
+    const packageJson = JSON.parse(packageSnapshot.contents.toString("utf8"));
+    let existing;
+    if (generated[0]?.contents) {
+      try {
+        existing = JSON.parse(generated[0].contents.toString("utf8"));
+      } catch (error2) {
+        if (!(error2 instanceof SyntaxError))
+          throw error2;
+      }
+    }
+    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
+    const nextMetroSource = previewMetroIntegration(metroSnapshot.contents.toString("utf8"));
+    preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
+    dependencies.beforeCommit?.();
+    const outputs = [
+      {
+        snapshot: generated[0],
+        contents: Buffer.from(serializePackageIntegrationManifest(preview.manifest)),
+        mode: 384
+      },
+      { snapshot: generated[1], contents: Buffer.from(renderProjectAdapter()), mode: 493 },
+      {
+        snapshot: generated[2],
+        contents: Buffer.from(renderMetroIntegrationAdapter()),
+        mode: 420
+      },
+      {
+        snapshot: generated[3],
+        contents: Buffer.from("globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n"),
+        mode: 384
+      }
+    ];
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+    const generatedResult = casReplaceBoundBatch(directories.integration, outputs.map((output) => ({
+      snapshot: output.snapshot,
+      expected: output.snapshot.contents,
+      replacement: output.contents,
+      mode: output.mode
+    })), dependencies.boundOperationDependencies);
+    for (const output of outputs) {
+      applied.push({
+        snapshot: output.snapshot,
+        written: output.contents,
+        writtenMode: output.mode,
+        directory: directories.integration
+      });
+      dependencies.afterWrite?.(output.snapshot.path);
+    }
+    assertBoundCleanup(generatedResult);
+    const metroOutput = Buffer.from(nextMetroSource);
+    const metroResult = casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: metroSnapshot,
+        expected: metroSnapshot.contents,
+        replacement: metroOutput,
+        mode: metroSnapshot.mode
+      }
+    ], dependencies.boundOperationDependencies);
+    applied.push({
+      snapshot: metroSnapshot,
+      written: metroOutput,
+      writtenMode: metroSnapshot.mode,
+      directory: directories.app
+    });
+    dependencies.afterWrite?.(metroConfigPath);
+    assertBoundCleanup(metroResult);
+    const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}
+`);
+    const packageResult = casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: packageSnapshot,
+        expected: packageSnapshot.contents,
+        replacement: packageOutput,
+        mode: packageSnapshot.mode
+      }
+    ], dependencies.boundOperationDependencies);
+    applied.push({
+      snapshot: packageSnapshot,
+      written: packageOutput,
+      writtenMode: packageSnapshot.mode,
+      directory: directories.app
+    });
+    dependencies.afterWrite?.(packagePath);
+    assertBoundCleanup(packageResult);
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+    return preview;
+  } catch (error2) {
+    const rollbackErrors = rollbackWrites(applied);
+    primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
+    throw primaryError;
+  } finally {
+    closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
+  }
+}
+function restorePackageIntegrationFiles(input, dependencies = {}) {
+  const appRoot = resolve8(input.appRoot);
+  const packagePath = join35(appRoot, "package.json");
+  const directories = openIntegrationDirectories(appRoot);
+  const generatedNames = [
+    "rn-session-integration.json",
+    "rn-session-adapter.cjs",
+    "rn-session-metro.cjs",
+    "authority-marker.js",
+    "metro-runtime-policy.json",
+    basename4(METRO_RUNTIME_LOADS)
+  ];
+  const applied = [];
+  let primaryError;
+  try {
+    const generatedSnapshots = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
+    const installedManifestSource = generatedSnapshots[0]?.contents?.toString("utf8");
+    if (installedManifestSource && input.manifestSource && installedManifestSource !== input.manifestSource) {
+      throw new Error("SESSION_INTEGRATION_CONFLICT: integration manifest changed before restore");
+    }
+    const manifestSource = installedManifestSource ?? input.manifestSource;
+    if (!manifestSource) {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration manifest is missing");
+    }
+    const manifest = JSON.parse(manifestSource);
+    const metroConfig = manifest.metroConfig === void 0 ? "metro.config.js" : manifest.metroConfig;
+    if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
+      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
+    }
+    const metroConfigPath = join35(appRoot, metroConfig);
+    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
+      basename4(packagePath),
+      basename4(metroConfigPath)
+    ]);
+    if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
+      throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
+    }
+    const packageJson = JSON.parse(packageSnapshot.contents.toString("utf8"));
+    const metroSource = metroSnapshot.contents.toString("utf8");
+    dependencies.beforeCommit?.();
+    const packageOutput = Buffer.from(`${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
+`);
+    const packageResult = casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: packageSnapshot,
+        expected: packageSnapshot.contents,
+        replacement: packageOutput,
+        mode: packageSnapshot.mode
+      }
+    ]);
+    applied.push({
+      snapshot: packageSnapshot,
+      written: packageOutput,
+      writtenMode: packageSnapshot.mode,
+      directory: directories.app
+    });
+    dependencies.afterWrite?.(packagePath);
+    assertBoundCleanup(packageResult);
+    const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
+    const metroResult = casReplaceBoundBatch(directories.app, [
+      {
+        snapshot: metroSnapshot,
+        expected: metroSnapshot.contents,
+        replacement: metroOutput,
+        mode: metroSnapshot.mode
+      }
+    ]);
+    applied.push({
+      snapshot: metroSnapshot,
+      written: metroOutput,
+      writtenMode: metroSnapshot.mode,
+      directory: directories.app
+    });
+    dependencies.afterWrite?.(metroConfigPath);
+    assertBoundCleanup(metroResult);
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+    const generatedResult = casReplaceBoundBatch(directories.integration, generatedSnapshots.map((snapshot) => ({
+      snapshot,
+      expected: snapshot.contents,
+      replacement: null,
+      mode: snapshot.mode
+    })), dependencies.boundOperationDependencies);
+    for (const snapshot of generatedSnapshots) {
+      applied.push({
+        snapshot,
+        written: null,
+        directory: directories.integration
+      });
+    }
+    assertBoundCleanup(generatedResult);
+    assertBoundDirectoryCurrent(directories.agent);
+    assertBoundDirectoryCurrent(directories.integration);
+  } catch (error2) {
+    const rollbackErrors = rollbackWrites(applied);
+    primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
+    throw primaryError;
+  } finally {
+    closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
+  }
+}
+var ADAPTER, METRO_ADAPTER, AUTHORITY_MODULE, METRO_RUNTIME_POLICY2, METRO_RUNTIME_LOADS, METRO_START, METRO_END, SENTINELS;
+var init_package_integration = __esm({
+  "packages/rn-dev-agent-core/dist/session/package-integration.js"() {
+    "use strict";
+    init_build_adapter();
+    init_managed_metro();
+    init_bound_directory();
+    ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
+    METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
+    AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
+    METRO_RUNTIME_POLICY2 = ".rn-agent/integration/metro-runtime-policy.json";
+    METRO_RUNTIME_LOADS = ".rn-agent/integration/metro-runtime-loads.jsonl";
+    METRO_START = "// rn-dev-agent session integration: begin";
+    METRO_END = "// rn-dev-agent session integration: end";
+    SENTINELS = {
+      ios: `node ${ADAPTER} ios`,
+      android: `node ${ADAPTER} android`
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/device-existence.js
+import { execFileSync as execFileSync12 } from "node:child_process";
+function deviceExistsOnHost(platform, deviceId) {
+  if (platform === "ios") {
+    const output2 = execFileSync12("xcrun", ["simctl", "list", "devices", "--json"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5e3
+    });
+    const parsed = JSON.parse(output2);
+    return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
+  }
+  const output = execFileSync12("adb", ["devices"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5e3
+  });
+  return output.split("\n").some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
+}
+var init_device_existence = __esm({
+  "packages/rn-dev-agent-core/dist/session/device-existence.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+import { dirname as dirname15, join as join36 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { createHash as createHash13 } from "node:crypto";
+function sameMetroAuthority(current, next) {
+  return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
+}
+function assertPackageIntegrationInactive(bindings, action) {
+  const activeBindings = [
+    "metro",
+    "metroCleanup",
+    "runner",
+    "observe",
+    "recorder",
+    "proof",
+    "pendingBuild",
+    "handoffCleanup"
+  ].filter((binding) => bindings[binding] != null);
+  if (activeBindings.length > 0) {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${action} requires releasing active ${activeBindings.join(", ")} authority`);
+  }
+}
+async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2e3) {
+  const stopRequestedAt = Number(binding.stopRequestedAt);
+  if (!Number.isFinite(stopRequestedAt)) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
+  }
+  await stopBoundObserve(binding, listenerProbe, processProbe, timeoutMs);
+}
+async function stopHandoffRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
+  const claimKey = String(binding.claimKey ?? "");
+  const stopRequestedAt = Number(binding.stopRequestedAt);
+  if (!claimKey || !Number.isFinite(stopRequestedAt)) {
+    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner cleanup identity is incomplete");
+  }
+  await stopBoundRunner(binding, processProbe, signalProcess, timeoutMs);
+}
+function authorityFailure2(error2) {
+  if (error2 instanceof SessionAuthorityError) {
+    return failResult(error2.message, error2.code, authorityErrorMeta(error2));
+  }
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? "SESSION_AUTHORITY_REQUIRED";
+  return failResult(message, code);
+}
+function required2(value, name) {
+  if (value === void 0 || value === "") {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${name} is required for this session transition`);
+  }
+  return value;
+}
+function reconcileManagedMetroStatus(runtime, dependencies = {}) {
+  const authority = runtime.status();
+  const metro = authority.available ? authority.bindings.metro : null;
+  if (!authority.available || metro?.mode !== "managed")
+    return authority;
+  const signerCapability = dependencies.getSignerCapability?.(authority.sessionId);
+  const inspection = signerCapability ? (dependencies.inspectManagedMetroLifecycle ?? inspectManagedMetroLifecycle)(metro, {
+    sessionId: authority.sessionId,
+    signerCapability
+  }) : {
+    status: "lost",
+    code: "METRO_MANAGEMENT_PROOF_INVALID",
+    reason: "managed Metro session signer is unavailable"
+  };
+  if (inspection.status === "live")
+    return authority;
+  const { registry: registry2, session } = runtime.requireAvailable();
+  const priorTargetId = authority.bindings.bundle?.targetId;
+  const metroPort = Number(authority.bindings.metroPort);
+  const metroTerminal = {
+    code: inspection.code,
+    reason: inspection.reason,
+    phase: authority.bindings.bundle ? "after-bind" : "before-bind",
+    observedAt: (dependencies.now ?? Date.now)(),
+    instanceId: metro.instanceId
+  };
+  try {
+    registry2.updateBindings(session, {
+      expectedAuthorityVersion: authority.authorityVersion,
+      state: authority.bindings.install ? "device_bound" : authority.bindings.device ? "device_claimed" : "source_bound",
+      bindings: {
+        metro: null,
+        metroCleanup: metro,
+        metroTerminal,
+        bundle: null
+      },
+      releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
+    });
+    return runtime.status();
+  } catch {
+    return {
+      ...authority,
+      bindings: {
+        ...authority.bindings,
+        metro: null,
+        metroCleanup: metro,
+        metroTerminal,
+        bundle: null
+      }
+    };
+  }
+}
+function createSessionHandler(runtime, dependencies = {}) {
+  return async (input) => {
+    if (input.action === "status") {
+      try {
+        const projectedAuthority = reconcileManagedMetroStatus(runtime, dependencies);
+        return okResult({
+          authoritative: false,
+          authority: projectPublicAuthorityStatus(projectedAuthority, { includeSessionId: true })
+        });
+      } catch (error2) {
+        return authorityFailure2(error2);
+      }
+    }
+    try {
+      const isRecovery = input.action === "accept_handoff" || input.action === "adopt_stale";
+      const { registry: registry2, session } = isRecovery ? runtime.requireRecovery() : runtime.requireOperational();
+      if (input.action === "recover_arbiter") {
+        if (input.confirmed !== true) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "recover_arbiter requires confirmed=true");
+        }
+        const arbiterReset = (dependencies.resetArbiter ?? ((reason) => arbiter.reset(reason)))("manual via fenced rn_session");
+        return okResult({
+          arbiterReset,
+          session: projectPublicAuthorityStatus(runtime.status())
+        });
+      }
+      if (input.action === "bind_device") {
+        const platform = required2(input.platform, "platform");
+        const deviceId = required2(input.deviceId, "deviceId");
+        const appId = required2(input.appId, "appId");
+        const status2 = registry2.getSessionStatus(session.sessionId);
+        const signer = dependencies.getSignerCapability?.();
+        if (!status2) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before device binding");
+        }
+        if (status2.bindings.runner || status2.bindings.observe || status2.bindings.proof) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner, Observe, or proof authority to be released first");
+        }
+        let deviceExists;
+        try {
+          deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+        } catch (error2) {
+          throw new SessionAuthorityError("DEVICE_DISCOVERY_UNAVAILABLE", `could not verify exact ${platform} device ${deviceId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
+        }
+        if (!deviceExists) {
+          throw new SessionAuthorityError("DEVICE_NOT_FOUND", `exact ${platform} device ${deviceId} does not exist or is unavailable`);
+        }
+        const currentInstall = status2.bindings.install;
+        if (!input.buildReceipt && currentInstall && (currentInstall.platform !== platform || currentInstall.deviceId !== deviceId || currentInstall.appId !== appId)) {
+          throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
+        }
+        if (!input.buildReceipt) {
+          registry2.replaceDeviceAuthority(session, {
+            resource: { type: "device", key: `${platform}:${deviceId}` },
+            device: {
+              platform,
+              deviceId,
+              appId,
+              ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
+            }
+          });
+          return okResult({
+            session: projectPublicAuthorityStatus(runtime.status()),
+            buildReceiptRequired: true
+          });
+        }
+        if (!signer) {
+          throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "the session signer is unavailable for build receipt verification");
+        }
+        const receipt2 = verifyBuildReceipt(input.buildReceipt, signer, {
+          sessionId: session.sessionId,
+          sourceKey: status2.sourceKey,
+          worktreeKey: status2.worktreeKey,
+          appRootKey: status2.appRootKey,
+          platform,
+          deviceId,
+          appId,
+          metroPort: Number(status2.bindings.metroPort)
+        });
+        const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
+          platform,
+          deviceId,
+          appId
+        });
+        if (observedGeneration !== receipt2.installGeneration) {
+          throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact generation does not match the signed build receipt");
+        }
+        registry2.replaceDeviceAuthority(session, {
+          resource: { type: "device", key: `${platform}:${deviceId}` },
+          device: { platform, deviceId, appId },
+          install: { ...receipt2 }
+        });
+        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+      }
+      if (input.action === "bind_metro") {
+        if (input.mode === "managed") {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro authority can only be established by the verified managed launcher");
+        }
+        const port = required2(input.metroPort, "metroPort");
+        const pid = required2(input.metroPid, "metroPid");
+        const instanceId = required2(input.metroInstanceId, "metroInstanceId");
+        const buildGeneration = required2(input.buildGeneration, "buildGeneration");
+        const status2 = registry2.getSessionStatus(session.sessionId);
+        if (status2?.bindings.metroPort !== port) {
+          throw new SessionAuthorityError("METRO_PORT_CLAIM_CONFLICT", "requested Metro port does not match the session allocation");
+        }
+        const sourceRoot = String(status2.source.contentRoot ?? "");
+        const metro2 = await (dependencies.captureMetro ?? captureMetroBinding)({
+          port,
+          pid,
+          instanceId,
+          sourceRoot,
+          buildGeneration
+        });
+        const nextMetro = { ...metro2, mode: "external" };
+        const priorMetro = status2.bindings.metro;
+        const priorBundle = status2.bindings.bundle;
+        const priorTargetId = priorBundle?.targetId;
+        const metroUnchanged = sameMetroAuthority(priorMetro, nextMetro);
+        registry2.claimResources(session, [{ type: "metro-port", key: String(port) }]);
+        registry2.updateBindings(session, {
+          state: metroUnchanged ? status2.state : status2.bindings.install ? "device_bound" : "metro_bound",
+          bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
+          releaseResources: !metroUnchanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }] : []
+        });
+        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+      }
+      if (input.action === "pin_dev_client") {
+        const status2 = registry2.getSessionStatus(session.sessionId);
+        if (!status2 || !dependencies.pinDevClient) {
+          throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "pinning integration is unavailable");
+        }
+        for (const requiredBinding of ["install", "metro", "device"]) {
+          if (!status2.bindings[requiredBinding]) {
+            throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", `${requiredBinding} must be bound before pinning`);
+          }
+        }
+        const priorTargetId = status2.bindings.bundle?.targetId;
+        if (input.force === true && typeof priorTargetId === "string") {
+          registry2.releaseResources(session, [
+            { type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }
+          ]);
+          registry2.updateBindings(session, {
+            state: "device_bound",
+            bindings: { bundle: null }
+          });
+        }
+        const bundle = await dependencies.pinDevClient(status2, {
+          force: input.force === true
+        });
+        registry2.claimResources(session, [
+          { type: "target", key: `${bundle.metroPort}:${bundle.targetId}` }
+        ]);
+        registry2.updateBindings(session, {
+          state: "ready",
+          bindings: { bundle }
+        });
+        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+      }
+      if (input.action === "prepare_handoff") {
+        const targetHandle = required2(input.targetHandle, "targetHandle");
+        return okResult(registry2.prepareHandoffForHandle(session, {
+          targetHandle,
+          ...input.ttlMs === void 0 ? {} : { ttlMs: input.ttlMs }
+        }));
+      }
+      if (input.action === "cancel_handoff") {
+        const handoffId = required2(input.handoffId, "handoffId");
+        registry2.cancelHandoff(session, handoffId);
+        return okResult({
+          cancelled: true,
+          session: projectPublicAuthorityStatus(runtime.status())
+        });
+      }
+      if (input.action === "stop_metro") {
+        const status2 = registry2.getSessionStatus(session.sessionId);
+        if (!status2) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before managed Metro cleanup");
+        }
+        const metro2 = status2.bindings.metroCleanup ?? status2.bindings.metro;
+        if (!metro2) {
+          return okResult({
+            stopped: false,
+            alreadyStopped: true,
+            session: projectPublicAuthorityStatus(runtime.status())
+          });
+        }
+        if (metro2.mode !== "managed") {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stop_metro cannot terminate an externally managed Metro");
+        }
+        const signerCapability = dependencies.getSignerCapability?.();
+        if (!signerCapability) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro cleanup requires the session signer capability");
+        }
+        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro2, {
+          sessionId: session.sessionId,
+          signerCapability
+        });
+        if (!stopped) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+        }
+        const priorTargetId = status2.bindings.bundle?.targetId;
+        const metroPort = Number(status2.bindings.metroPort);
+        registry2.updateBindings(session, {
+          state: status2.bindings.install ? "device_bound" : status2.bindings.device ? "device_claimed" : "source_bound",
+          bindings: {
+            metro: null,
+            metroCleanup: null,
+            metroTerminal: null,
+            bundle: null
+          },
+          releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
+        });
+        return okResult({
+          stopped: true,
+          alreadyStopped: false,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          nextAction: "Restore package integration with confirmed=true, then release the exact session."
+        });
+      }
+      if (input.action === "preview_integration" || input.action === "apply_integration" || input.action === "restore_integration") {
+        const status2 = registry2.getSessionStatus(session.sessionId);
+        const appRoot = String(status2?.source.appRoot ?? "");
+        if (!status2 || !appRoot) {
+          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
+        }
+        const packagePath = join36(appRoot, "package.json");
+        const integrationInputs = readPackageIntegrationInputs(appRoot);
+        const manifestPath = join36(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+        const packageJson = JSON.parse(integrationInputs.packageJson);
+        const integrationBinding = status2.bindings.packageIntegration;
+        const installationManifestSource = integrationBinding?.installation?.phase === "started" && typeof integrationBinding.installation.manifestSource === "string" ? integrationBinding.installation.manifestSource : void 0;
+        const restorationManifestSource = integrationBinding?.restoration?.phase === "started" && typeof integrationBinding.restoration.manifestSource === "string" ? integrationBinding.restoration.manifestSource : void 0;
+        const manifestSource = integrationInputs.manifest ?? restorationManifestSource ?? installationManifestSource;
+        let existing;
+        try {
+          existing = manifestSource === void 0 ? void 0 : JSON.parse(manifestSource);
+        } catch (error2) {
+          if (!(error2 instanceof SyntaxError))
+            throw error2;
+        }
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join36(dirname15(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
+        if (input.action === "restore_integration") {
+          if (input.confirmed !== true) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "restore_integration requires confirmed=true");
+          }
+          if (!existing) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration manifest is unavailable for restoration");
+          }
+          assertPackageIntegrationInactive(status2.bindings, input.action);
+          const manifestSha256 = createHash13("sha256").update(manifestSource ?? "").digest("hex");
+          if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
+          }
+          if (!restorationManifestSource) {
+            registry2.updateBindings(session, {
+              bindings: {
+                packageIntegration: {
+                  ...integrationBinding,
+                  restoration: { phase: "started", manifestSource }
+                }
+              }
+            });
+          }
+          restorePackageIntegrationFiles({ appRoot, manifestSource });
+          registry2.updateBindings(session, {
+            bindings: { packageIntegration: null }
+          });
+          return okResult({ restored: true, packagePath, manifestPath });
+        }
+        const preview = previewPackageIntegration(packageJson, existing, sessionCli);
+        const metroConfigPath = integrationInputs.metroConfig.path;
+        const metroBefore = integrationInputs.metroConfig.contents;
+        const metroAfter = previewMetroIntegration(metroBefore);
+        if (input.action === "preview_integration") {
+          return okResult({
+            confirmed: false,
+            packagePath,
+            before: packageJson,
+            after: preview.packageJson,
+            metroConfigPath,
+            metroBefore,
+            metroAfter,
+            manifest: preview.manifest
+          });
+        }
+        if (input.confirmed !== true) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "apply_integration requires confirmed=true after reviewing preview_integration");
+        }
+        assertPackageIntegrationInactive(status2.bindings, input.action);
+        if (integrationBinding && !installationManifestSource) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration is already owned by an active session lifecycle");
+        }
+        preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
+        const expectedManifestSource = installationManifestSource ?? serializePackageIntegrationManifest(preview.manifest);
+        const expectedManifestSha256 = createHash13("sha256").update(expectedManifestSource).digest("hex");
+        if (installationManifestSource && (integrationBinding?.version !== 1 || integrationBinding.installedBySessionId !== session.sessionId || integrationBinding.manifestSha256 !== expectedManifestSha256)) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration installation requires the original session manifest authority binding");
+        }
+        if (!installationManifestSource) {
+          registry2.updateBindings(session, {
+            bindings: {
+              packageIntegration: {
+                version: 1,
+                installedBySessionId: session.sessionId,
+                manifestSha256: expectedManifestSha256,
+                installation: { phase: "started", manifestSource: expectedManifestSource }
+              }
+            }
+          });
+        }
+        try {
+          applyPackageIntegration({ appRoot, sessionCli });
+          const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
+          if (!installedManifest) {
+            throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
+          }
+          if (createHash13("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "applied integration manifest no longer matches its durable installation authority");
+          }
+          registry2.updateBindings(session, {
+            bindings: {
+              packageIntegration: {
+                version: 1,
+                installedBySessionId: session.sessionId,
+                manifestSha256: expectedManifestSha256
+              }
+            }
+          });
+        } catch (error2) {
+          try {
+            restorePackageIntegrationFiles({
+              appRoot,
+              manifestSource: expectedManifestSource
+            });
+            registry2.updateBindings(session, {
+              bindings: { packageIntegration: null }
+            });
+          } catch (rollbackError) {
+            throw new AggregateError([error2, rollbackError]);
+          }
+          throw error2;
+        }
+        return okResult({ applied: true, packagePath, manifestPath });
+      }
+      if (input.action === "accept_handoff") {
+        const handoffId = required2(input.handoffId, "handoffId");
+        const token2 = required2(input.token, "token");
+        const status2 = registry2.getSessionStatus(session.sessionId);
+        if (!status2?.worker.instanceId) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "target worker identity is unavailable");
+        }
+        let cleanup = status2.bindings.handoffCleanup;
+        const priorSessionId = registry2.getHandoffOwner(handoffId);
+        const priorStatus = priorSessionId ? registry2.getSessionStatus(priorSessionId) : null;
+        const priorRunner = cleanup?.runner ?? priorStatus?.bindings.runner;
+        if (status2.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
+          sessionId: priorSessionId ?? "unknown",
+          pid: priorRunner.pid,
+          token: priorRunner.processBirth
+        }) !== "match")) {
+          throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "prior runner process identity cannot be proven for capability rotation");
+        }
+        if (status2.state !== "handoff_cleanup") {
+          const priorManagedMetro = priorStatus?.bindings.metro && typeof priorStatus.bindings.metro === "object" && priorStatus.bindings.metro.mode === "managed" ? priorStatus.bindings.metro : null;
+          let signerCapability = null;
+          if (priorManagedMetro) {
+            if (!priorSessionId) {
+              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro handoff source authority is unavailable");
+            }
+            signerCapability = dependencies.getSignerCapability?.(priorSessionId) ?? null;
+            if (!signerCapability) {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff requires the source session signer capability");
+            }
+          }
+          const reservation = registry2.reserveManagedMetroHandoffCleanup(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status2.worker.instanceId
+          });
+          if (reservation && reservation.phase !== "shutdown_completed") {
+            const sourceSessionId = reservation.metro.sourceSessionId;
+            if (typeof sourceSessionId !== "string" || !signerCapability) {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff reservation requires the source session signer capability");
+            }
+            const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(reservation.metro, {
+              sessionId: sourceSessionId,
+              signerCapability
+            });
+            if (!stopped) {
+              registry2.refuseManagedMetroHandoffCleanup(session, {
+                handoffId,
+                token: token2,
+                targetInstance: status2.worker.instanceId
+              });
+              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro shutdown was refused; the handoff was cancelled and donor authority was restored");
+            }
+            registry2.completeManagedMetroHandoffCleanup(session, {
+              handoffId,
+              token: token2,
+              targetInstance: status2.worker.instanceId
+            });
+          }
+          cleanup = registry2.acceptHandoffInto(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status2.worker.instanceId
+          });
+        }
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup binding disappeared while fenced");
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
+        }
+        const afterRecorder = registry2.getSessionStatus(session.sessionId);
+        cleanup = afterRecorder?.bindings.handoffCleanup;
+        if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
+          const runnerCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "runner");
+          if (!runnerCleanup) {
+            throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(runnerCleanup);
+          } else {
+            await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "runner");
+        }
+        const afterRunner = registry2.getSessionStatus(session.sessionId);
+        cleanup = afterRunner?.bindings.handoffCleanup;
+        if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
+          const observeCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "observe");
+          if (!observeCleanup) {
+            throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffObserve) {
+            await dependencies.stopHandoffObserve(observeCleanup);
+          } else {
+            await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "observe");
+        }
+        const afterObserve = registry2.getSessionStatus(session.sessionId);
+        cleanup = afterObserve?.bindings.handoffCleanup;
+        if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
+          const metroCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "metro");
+          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro cleanup binding disappeared while fenced");
+          }
+          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
+          if (!signerCapability) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff cleanup requires the source session signer capability");
+          }
+          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
+            sessionId: metroCleanup.sourceSessionId,
+            signerCapability
+          });
+          if (!stopped) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with its source session authority");
+          }
+          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "metro");
+        }
+        registry2.finishHandoffCleanup(session, status2.worker.instanceId);
+        const acceptedStatus = registry2.getSessionStatus(session.sessionId);
+        const transferredIntegration = acceptedStatus?.bindings.packageIntegration;
+        return okResult({
+          accepted: true,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          runnerCapabilityRotated: Boolean(priorRunner),
+          integrationRestoration: typeof transferredIntegration?.installedBySessionId === "string" ? {
+            required: true,
+            action: "restore_integration",
+            ownerSessionId: session.sessionId,
+            installedBySessionId: transferredIntegration.installedBySessionId
+          } : { required: false },
+          nextAction: typeof transferredIntegration?.installedBySessionId === "string" ? "The recipient now owns integration restoration; call restore_integration with confirmed=true before release." : "Reopen the exact device runner and pin the dev client before authoritative tools."
+        });
+      }
+      if (input.action === "adopt_stale") {
+        const adoptionHandle = required2(input.adoptionHandle, "adoptionHandle");
+        const current = registry2.getSessionStatus(session.sessionId);
+        if (!current?.worker.instanceId) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "recovery worker identity is unavailable");
+        }
+        if (current.state !== "handoff_cleanup") {
+          registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
+        }
+        const adopted = registry2.getSessionStatus(session.sessionId);
+        const cleanup = adopted?.bindings.handoffCleanup;
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup binding disappeared while fenced");
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+        }
+        if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
+          const runnerCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "runner");
+          if (!runnerCleanup) {
+            throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(runnerCleanup);
+          } else {
+            await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "runner");
+        }
+        if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
+          const observeCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "observe");
+          if (!observeCleanup) {
+            throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffObserve) {
+            await dependencies.stopHandoffObserve(observeCleanup);
+          } else {
+            await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "observe");
+        }
+        if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
+          const metroCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "metro");
+          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale Metro cleanup binding disappeared while fenced");
+          }
+          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
+          if (!signerCapability) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "stale Metro cleanup requires the source session signer capability");
+          }
+          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
+            sessionId: metroCleanup.sourceSessionId,
+            signerCapability
+          });
+          if (!stopped) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale managed Metro could not be stopped with exact process authority");
+          }
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "metro");
+        }
+        if (adopted?.state === "handoff_cleanup") {
+          registry2.finishHandoffCleanup(session, current.worker.instanceId);
+        }
+        return okResult({
+          adopted: true,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          runner: {
+            adopted: false,
+            reason: "runner capability is never crash-adopted; reopen the exact device to bind a fresh runner"
+          }
+        });
+      }
+      const status = registry2.getSessionStatus(session.sessionId);
+      if (!status) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before release cleanup");
+      }
+      if (status.bindings.packageIntegration) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
+      }
+      const metro = status.bindings.metro;
+      const runner = status.bindings.runner;
+      const recorder2 = status.bindings.recorder;
+      if (recorder2) {
+        const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
+        if (!status.claims.some((claim) => claim.type === "recorder" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup claim no longer matches the authenticated binding");
+        }
+        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder2);
+      }
+      if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
+        if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
+        }
+        const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
+        if (dependencies.stopHandoffRunner) {
+          await dependencies.stopHandoffRunner(cleanup);
+        } else {
+          await stopBoundRunner(cleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+        }
+      }
+      const observe2 = status.bindings.observe;
+      if (observe2) {
+        const port = String(observe2.port);
+        if (status.bindings.observePort !== observe2.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
+          throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
+        }
+        const cleanup = { ...observe2, stopRequestedAt: Date.now() };
+        if (dependencies.stopHandoffObserve) {
+          await dependencies.stopHandoffObserve(cleanup);
+        } else {
+          await stopBoundObserve(cleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
+        }
+      }
+      if (metro?.mode === "managed") {
+        const signerCapability = dependencies.getSignerCapability?.();
+        if (!signerCapability) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro release requires the session signer capability");
+        }
+        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+          sessionId: session.sessionId,
+          signerCapability
+        });
+        if (!stopped) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+        }
+      }
+      registry2.releaseSession(session);
+      return okResult({ released: true, sessionId: session.sessionId });
+    } catch (error2) {
+      return authorityFailure2(error2);
+    }
+  };
+}
+var init_session = __esm({
+  "packages/rn-dev-agent-core/dist/tools/session.js"() {
+    "use strict";
+    init_registry();
+    init_utils();
+    init_build_receipt();
+    init_install_authority();
+    init_metro_binding();
+    init_package_integration();
+    init_process_owner();
+    init_public_status();
+    init_process_birth();
+    init_managed_metro();
+    init_device_arbiter();
+    init_process_cleanup();
+    init_device_existence();
   }
 });
 
@@ -59903,13 +64498,14 @@ function targetMatchesSession(target, filters) {
   }
   return true;
 }
-function createPassiveStatusHandler(getClient2, authorityRuntime2) {
+function createPassiveStatusHandler(getClient2, authorityRuntime2, statusDependencies = {}) {
   return async (args) => {
     const client2 = getClient2();
     const target = client2.connectedTarget;
+    const authority = reconcileManagedMetroStatus(authorityRuntime2, statusDependencies);
     return okResult({
       authoritative: false,
-      authority: projectPublicAuthorityStatus(authorityRuntime2.status()),
+      authority: projectPublicAuthorityStatus(authority),
       metro: {
         port: client2.metroPort,
         requestedPort: args.metroPort ?? null,
@@ -59948,6 +64544,7 @@ var init_status = __esm({
     init_engine_pin();
     init_agent_device_wrapper();
     init_public_status();
+    init_session();
   }
 });
 
@@ -61152,7 +65749,7 @@ var init_diagnostic_renderers = __esm({
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
 import { execFile as execFileCb16 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { statSync as statSync10 } from "node:fs";
+import { statSync as statSync11 } from "node:fs";
 async function checkSipsAvailable(deps) {
   if (sipsAvailable !== null)
     return sipsAvailable;
@@ -61240,7 +65837,7 @@ var init_device_screenshot_resize = __esm({
     sipsAvailable = null;
     defaultFileSize = (path) => {
       try {
-        return statSync10(path).size;
+        return statSync11(path).size;
       } catch {
         return void 0;
       }
@@ -61249,7 +65846,7 @@ var init_device_screenshot_resize = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve8, sep as sep4 } from "node:path";
+import { resolve as resolve9, sep as sep5 } from "node:path";
 function isValidActionId(s) {
   if (typeof s !== "string")
     return false;
@@ -61266,11 +65863,11 @@ function assertValidActionId(s, context) {
   }
 }
 function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve8(baseDir);
-  const resolvedChild = resolve8(baseDir, child);
+  const resolvedBase = resolve9(baseDir);
+  const resolvedChild = resolve9(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
-  const baseWithSep = resolvedBase.endsWith(sep4) ? resolvedBase : resolvedBase + sep4;
+  const baseWithSep = resolvedBase.endsWith(sep5) ? resolvedBase : resolvedBase + sep5;
   if (!resolvedChild.startsWith(baseWithSep)) {
     throw new PathTraversalError(`Path "${child}" escapes containment dir "${baseDir}" (resolved to ${resolvedChild})`);
   }
@@ -61539,18 +66136,18 @@ var init_events = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
-import { closeSync as closeSync8, constants as constants5, fstatSync as fstatSync5, openSync as openSync8, readSync as readSync4 } from "node:fs";
-import { isAbsolute as isAbsolute4 } from "node:path";
+import { closeSync as closeSync9, constants as constants6, fstatSync as fstatSync6, openSync as openSync9, readSync as readSync4 } from "node:fs";
+import { isAbsolute as isAbsolute6 } from "node:path";
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute4(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute6(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
   try {
-    fd = openSync8(p, constants5.O_RDONLY | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
-    const st = fstatSync5(fd);
+    fd = openSync9(p, constants6.O_RDONLY | constants6.O_NOFOLLOW | constants6.O_NONBLOCK);
+    const st = fstatSync6(fd);
     if (!st.isFile() || st.size > MAX_SHOT_BYTES)
       return null;
     const size = Number(st.size);
@@ -61564,7 +66161,7 @@ function readShotBounded(p) {
   } finally {
     if (fd !== void 0) {
       try {
-        closeSync8(fd);
+        closeSync9(fd);
       } catch {
       }
     }
@@ -61637,7 +66234,7 @@ var init_recorder = __esm({
        * whatever path the pipeline actually captured to.
        */
       registerCapturedScreenshot(p) {
-        if (typeof p !== "string" || !isAbsolute4(p))
+        if (typeof p !== "string" || !isAbsolute6(p))
           return;
         this.trustedShotPaths.delete(p);
         this.trustedShotPaths.add(p);
@@ -61725,7 +66322,7 @@ var init_recorder = __esm({
 import { mkdirSync as mkdirSync16 } from "node:fs";
 import { execFile as execFile18 } from "node:child_process";
 import { promisify as promisify20 } from "node:util";
-import { dirname as dirname15, join as join34 } from "node:path";
+import { dirname as dirname16, join as join37 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
   try {
@@ -61769,7 +66366,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join34(homedir9(), args.path.slice(2));
+      return join37(homedir9(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
@@ -61780,7 +66377,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
 }
 function ensureScreenshotDir(path) {
   try {
-    mkdirSync16(dirname15(path), { recursive: true });
+    mkdirSync16(dirname16(path), { recursive: true });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -62826,8 +67423,8 @@ var init_macro_asserts = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync14, renameSync as renameSync7, statSync as statSync11, mkdirSync as mkdirSync17, existsSync as existsSync28, unlinkSync as unlinkSync9, readdirSync as readdirSync8 } from "node:fs";
-import { dirname as dirname16, basename as basename4 } from "node:path";
+import { writeFileSync as writeFileSync14, renameSync as renameSync7, statSync as statSync12, mkdirSync as mkdirSync17, existsSync as existsSync28, unlinkSync as unlinkSync9, readdirSync as readdirSync9 } from "node:fs";
+import { dirname as dirname17, basename as basename5 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${process.pid}.${Date.now().toString(36)}.${rand}`;
@@ -62858,15 +67455,15 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
   return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
 }
 function ensureDir(filePath) {
-  const dir = dirname16(filePath);
+  const dir = dirname17(filePath);
   if (!atomicWriter._exists(dir))
     atomicWriter._mkdir(dir);
 }
 function cleanupOrphans(yamlPath, sidecarPath) {
   const now = Date.now();
   for (const targetPath of [yamlPath, sidecarPath]) {
-    const dir = dirname16(targetPath);
-    const prefix = `${basename4(targetPath)}.tmp.`;
+    const dir = dirname17(targetPath);
+    const prefix = `${basename5(targetPath)}.tmp.`;
     let entries;
     try {
       entries = atomicWriter._readdir(dir);
@@ -62904,7 +67501,7 @@ var init_atomic_writer = __esm({
       },
       /** Underlying `fs.statSync(path).mtimeMs`. */
       _statMtimeMs(path) {
-        return statSync11(path).mtimeMs;
+        return statSync12(path).mtimeMs;
       },
       /** Underlying `fs.existsSync(path)`. Routed through the seam so test
        *  cases for ensureDir / cleanupOrphans can simulate exotic failures
@@ -62922,7 +67519,7 @@ var init_atomic_writer = __esm({
       },
       /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
       _readdir(path) {
-        return readdirSync8(path);
+        return readdirSync9(path);
       },
       /**
        * Atomic pair-write. Cleans up any orphaned `.tmp` files before
@@ -62938,14 +67535,14 @@ var init_atomic_writer = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync29, readFileSync as readFileSync26, statSync as statSync12 } from "node:fs";
-import { join as join35 } from "node:path";
+import { existsSync as existsSync29, readFileSync as readFileSync28, statSync as statSync13 } from "node:fs";
+import { join as join38 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join35(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join38(projectRoot, ".rn-agent", "actions");
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
-  return join35(actionsDir, fileName);
+  return join38(actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -63010,7 +67607,7 @@ function loadAction(projectRoot, actionId) {
   const filePath = actionPathFor(projectRoot, actionId);
   if (!existsSync29(filePath))
     return null;
-  const text = readFileSync26(filePath, "utf8");
+  const text = readFileSync28(filePath, "utf8");
   const metadata = parseM7Header(text, actionId);
   if (!metadata)
     return null;
@@ -63029,7 +67626,7 @@ function saveAction(action) {
   }
   let topSection = "";
   if (existsSync29(action.filePath)) {
-    const existing = readFileSync26(action.filePath, "utf8");
+    const existing = readFileSync28(action.filePath, "utf8");
     topSection = splitYaml(existing).topSection;
   }
   if (!topSection && action.metadata.appId) {
@@ -63055,7 +67652,7 @@ function actionWasEditedExternally(action) {
 function acknowledgeExternalEdit(action) {
   let currentMtimeMs;
   try {
-    currentMtimeMs = statSync12(action.filePath).mtimeMs;
+    currentMtimeMs = statSync13(action.filePath).mtimeMs;
   } catch {
     return action;
   }
@@ -63082,7 +67679,7 @@ function canonicalRuntimeJson(state) {
 function runtimeSidecarMatches(sidecarPath, expected) {
   let onDisk;
   try {
-    onDisk = JSON.parse(readFileSync26(sidecarPath, "utf8"));
+    onDisk = JSON.parse(readFileSync28(sidecarPath, "utf8"));
   } catch {
     return false;
   }
@@ -63113,7 +67710,7 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync26(expected.filePath, "utf8");
+  const yaml2 = readFileSync28(expected.filePath, "utf8");
   const marker = /^# status: experimental[ \t]*$/gm;
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
@@ -64145,7 +68742,7 @@ var init_test_recorder_generators = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder.js
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join as join36 } from "node:path";
+import { join as join39 } from "node:path";
 function deduplicateEvents(events) {
   const out = [];
   for (let i = 0; i < events.length; i++) {
@@ -64323,7 +68920,7 @@ function createRecordTestSaveHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join36(dir, `${safe}.json`);
+    const filePath = join39(dir, `${safe}.json`);
     const payload = { savedAt: (/* @__PURE__ */ new Date()).toISOString(), events: storedEvents };
     await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
     return okResult({
@@ -64344,7 +68941,7 @@ function createRecordTestLoadHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join36(dir, `${safe}.json`);
+    const filePath = join39(dir, `${safe}.json`);
     let raw;
     try {
       raw = await readFile(filePath, "utf8");
@@ -67542,11 +72139,11 @@ var init_runtime = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile23 } from "node:child_process";
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
 import { promisify as promisify25 } from "node:util";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { dirname as dirname17, join as join37 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { dirname as dirname18, join as join40 } from "node:path";
 function parseAllBootedIosDevices(jsonText) {
   let data;
   try {
@@ -67625,23 +72222,23 @@ function compactUnique2(paths) {
   }
   return out;
 }
-function candidateRecordScripts(baseDir = dirname17(fileURLToPath2(import.meta.url))) {
+function candidateRecordScripts(baseDir = dirname18(fileURLToPath3(import.meta.url))) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
     process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
-    codexPluginRoot ? join37(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join37(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join37(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
+    codexPluginRoot ? join40(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join40(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join40(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join37(baseDir, "..", "..", "scripts", "record_proof.sh"),
+    join40(baseDir, "..", "..", "scripts", "record_proof.sh"),
     // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
-    join37(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
+    join40(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
     // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
-    join37(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
+    join40(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
-function resolveRecordScript(baseDir = dirname17(fileURLToPath2(import.meta.url))) {
+function resolveRecordScript(baseDir = dirname18(fileURLToPath3(import.meta.url))) {
   if (process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT) {
     return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
   }
@@ -67690,7 +72287,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash12("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash14("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -67974,7 +72571,7 @@ var init_device_record = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 function canonicalizeProofValue(value) {
   if (Array.isArray(value))
     return value.map(canonicalizeProofValue);
@@ -67986,14 +72583,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash13("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash15("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash13("sha256").update(bytes).digest("hex");
+  return createHash15("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -68516,11 +73113,11 @@ var init_startup_integrity = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash14, randomUUID as randomUUID8 } from "node:crypto";
-import { execFileSync as execFileSync11 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync9, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync10, mkdirSync as mkdirSync18, openSync as openSync9, readFileSync as readFileSync27, realpathSync as realpathSync9, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
-import { basename as basename5, dirname as dirname18, extname, isAbsolute as isAbsolute5, join as join38, relative as relative3, resolve as resolve9, sep as sep5 } from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
+import { execFileSync as execFileSync13 } from "node:child_process";
+import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync12, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync29, realpathSync as realpathSync10, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
+import { basename as basename6, dirname as dirname19, extname, isAbsolute as isAbsolute7, join as join41, relative as relative5, resolve as resolve10, sep as sep6 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   if (timestamps.length !== steps.length)
     return ["SCREENSHOT_TIMESTAMPS_INVALID"];
@@ -68543,22 +73140,22 @@ function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   return reasons;
 }
 function hashBytes(bytes) {
-  return createHash14("sha256").update(bytes).digest("hex");
+  return createHash16("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute5(argv[1])) {
-      executedEntrypointPath = realpathSync9(argv[1]);
+    if (typeof argv[1] === "string" && isAbsolute7(argv[1])) {
+      executedEntrypointPath = realpathSync10(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync9(fileURLToPath3(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync10(fileURLToPath4(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -68574,7 +73171,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 }
 function realpathOrSelf(path) {
   try {
-    return realpathSync9(path);
+    return realpathSync10(path);
   } catch {
     return path;
   }
@@ -68582,23 +73179,23 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync9(candidateRoot);
+    root = realpathSync10(candidateRoot);
   } catch {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute5(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute7(authorityArg))
     return null;
   let arg;
   try {
-    arg = realpathSync9(authorityArg);
+    arg = realpathSync10(authorityArg);
   } catch {
     return null;
   }
   for (const host of ["claude-plugin", "codex-plugin"]) {
-    const hostRoot = join38(root, "packages", host);
-    const coreIndex = realpathOrSelf(join38(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-    const coreSupervisor = realpathOrSelf(join38(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+    const hostRoot = join41(root, "packages", host);
+    const coreIndex = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+    const coreSupervisor = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
     if (arg === coreIndex) {
       return {
         host,
@@ -68617,7 +73214,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
         kind: "core-supervisor"
       };
     }
-    if (host === "codex-plugin" && arg === realpathOrSelf(join38(hostRoot, "bin", "cdp-supervisor.js"))) {
+    if (host === "codex-plugin" && arg === realpathOrSelf(join41(hostRoot, "bin", "cdp-supervisor.js"))) {
       if (!existsSync32(coreIndex) || !existsSync32(coreSupervisor))
         return null;
       return {
@@ -68636,10 +73233,10 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute5(value))
+    if (!value || !isAbsolute7(value))
       return value ? null : "";
     try {
-      return realpathSync9(value);
+      return realpathSync10(value);
     } catch {
       return null;
     }
@@ -68652,7 +73249,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   }
   if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
     return false;
-  if (coreRootOverride && join38(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+  if (coreRootOverride && join41(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
     return false;
   }
   if (workerOverride && workerOverride !== entrypoint.coreBundle)
@@ -68661,7 +73258,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync9(candidateRoot);
+    const root = realpathSync10(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -68670,35 +73267,35 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync11("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync13("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync9(artifactPath);
-      const artifactRelativePath = relative3(root, resolvedArtifactPath).split(sep5).join("/");
+      const resolvedArtifactPath = realpathSync10(artifactPath);
+      const artifactRelativePath = relative5(root, resolvedArtifactPath).split(sep6).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync11("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync11("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync13("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync13("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
-      const artifactBytes = readFileSync27(resolvedArtifactPath);
+      const artifactBytes = readFileSync29(resolvedArtifactPath);
       if (hashBytes(artifactBytes) !== hashBytes(headBytes))
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync11("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync13("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync9(resolve9(candidateRoot));
-  const sha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
+  const root = realpathSync10(resolve10(candidateRoot));
+  const sha = execFileSync13("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync11("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync13("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!isOfficialProofCandidateRemote(remote)) {
@@ -68710,7 +73307,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
   const { host, coreBundle } = entrypoint;
-  const runnerManifest = join38(root, "packages", host, "runner-manifest.json");
+  const runnerManifest = join41(root, "packages", host, "runner-manifest.json");
   const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
@@ -68719,7 +73316,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
   if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
-  const confirmedSha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync13("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -68762,34 +73359,34 @@ function sameProofAction(left, right) {
 function readProofActionIdentity(appProjectRoot, actionId) {
   try {
     const path = actionPathFor(appProjectRoot, actionId);
-    const bytesBefore = readFileSync27(path);
+    const bytesBefore = readFileSync29(path);
     const action = loadAction(appProjectRoot, actionId);
-    const bytesAfter = readFileSync27(path);
+    const bytesAfter = readFileSync29(path);
     if (!action || action.metadata.id !== actionId || !bytesBefore.equals(bytesAfter) || !Number.isInteger(action.state.revision) || action.state.revision < 1) {
       return null;
     }
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash14("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash16("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute5(root) || !isAbsolute5(path) || resolve9(root) !== root || resolve9(path) !== path) {
+  if (!isAbsolute7(root) || !isAbsolute7(path) || resolve10(root) !== root || resolve10(path) !== path) {
     return false;
   }
-  const fromRoot = relative3(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep5}`) && !isAbsolute5(fromRoot);
+  const fromRoot = relative5(root, path);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute7(fromRoot);
 }
 function hasExistingSymlink(root, path) {
-  const parts = relative3(root, path).split(sep5);
+  const parts = relative5(root, path).split(sep6);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve9(root, ...parts.slice(0, length));
+    const candidate = resolve10(root, ...parts.slice(0, length));
     try {
-      if (lstatSync10(candidate).isSymbolicLink())
+      if (lstatSync12(candidate).isSymbolicLink())
         return true;
     } catch {
     }
@@ -68797,43 +73394,43 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve9(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve10(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
     return false;
-  const proofRoot = join38(expectedRoot, "docs", "proof", args.runId);
+  const proofRoot = join41(expectedRoot, "docs", "proof", args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
     return false;
   }
   const imageExtensions = /* @__PURE__ */ new Set([".jpg", ".jpeg", ".png"]);
-  return basename5(args.receiptPath) === "proof-receipt.json" && extname(args.videoPath).toLowerCase() === ".mp4" && [".jpg", ".jpeg"].includes(extname(args.contactSheetPath).toLowerCase()) && screenshots.every((path) => imageExtensions.has(extname(path).toLowerCase())) && args.storyboard.steps.every((step) => step.assertionArgsSha256 === hashProofArgs({
+  return basename6(args.receiptPath) === "proof-receipt.json" && extname(args.videoPath).toLowerCase() === ".mp4" && [".jpg", ".jpeg"].includes(extname(args.contactSheetPath).toLowerCase()) && screenshots.every((path) => imageExtensions.has(extname(path).toLowerCase())) && args.storyboard.steps.every((step) => step.assertionArgsSha256 === hashProofArgs({
     verifyTestID: step.verifyTestID,
     screenshotPath: step.screenshotPath,
     waitMs: step.assertionWaitMs
   }));
 }
 function proofRootExists(args) {
-  const proofRoot = join38(args.projectRoot, "docs", "proof", args.runId);
+  const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
   try {
-    lstatSync10(proofRoot);
+    lstatSync12(proofRoot);
     return true;
   } catch (error2) {
     return error2.code !== "ENOENT";
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute5(detectedProjectRoot) || resolve9(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute7(detectedProjectRoot) || resolve10(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync11("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync13("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute5(root) && resolve9(root) === root ? root : null;
+    return root && isAbsolute7(root) && resolve10(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -68861,8 +73458,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync11("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync11("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync13("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync13("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -68872,8 +73469,8 @@ function readProofGitInfo(root) {
 function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
-  const path = relative3(root, proofRoot).replaceAll(sep5, "/");
-  return execFileSync11("git", ["ls-files", "-z", "--", path], {
+  const path = relative5(root, proofRoot).replaceAll(sep6, "/");
+  return execFileSync13("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -68949,14 +73546,14 @@ function traceFor(storyboard, events) {
   return validateTrace([...required3, ...allowedExtras], events);
 }
 function readProofContractAt(moduleUrl = import.meta.url) {
-  const moduleDir = dirname18(fileURLToPath3(moduleUrl));
+  const moduleDir = dirname19(fileURLToPath4(moduleUrl));
   const candidates = [
-    resolve9(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve9(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve10(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve10(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
-      const bytes = readFileSync27(path, "utf8");
+      const bytes = readFileSync29(path, "utf8");
       return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
     } catch {
     }
@@ -68964,22 +73561,22 @@ function readProofContractAt(moduleUrl = import.meta.url) {
   throw new Error("PROOF_CONTRACT_MISSING");
 }
 function writeProofReceiptAtomic(path, receipt2) {
-  const directory = dirname18(path);
+  const directory = dirname19(path);
   mkdirSync18(directory, { recursive: true, mode: 448 });
-  const temporary = resolve9(directory, `.${randomUUID8()}.proof-receipt.tmp`);
+  const temporary = resolve10(directory, `.${randomUUID8()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
-    descriptor = openSync9(temporary, "wx", 384);
+    descriptor = openSync10(temporary, "wx", 384);
     writeFileSync15(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
-    closeSync9(descriptor);
+    closeSync10(descriptor);
     descriptor = null;
     renameSync8(temporary, path);
     chmodSync4(path, 384);
   } catch (error2) {
     if (descriptor !== null)
-      closeSync9(descriptor);
+      closeSync10(descriptor);
     try {
       unlinkSync10(temporary);
     } catch {
@@ -69141,7 +73738,7 @@ function createProofCaptureHandler(deps) {
       return current.reasons;
     return sameProofAction(current.value, active.actionIdentity) ? [] : ["PROOF_ACTION_IDENTITY_CHANGED"];
   };
-  const repositoryPath = (active, path) => relative3(active.context.projectRoot, path).replaceAll(sep5, "/");
+  const repositoryPath = (active, path) => relative5(active.context.projectRoot, path).replaceAll(sep6, "/");
   const observedSetupScreenshots = (active) => {
     const owned = /* @__PURE__ */ new Set();
     for (const observation of deps.monitor.observations()) {
@@ -69160,7 +73757,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git.changes.some((change) => isAbsolute5(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git.changes.some((change) => isAbsolute7(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -69301,7 +73898,7 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
       }
       try {
-        const proofRoot = join38(args.projectRoot, "docs", "proof", args.runId);
+        const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
           return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
         }
@@ -69775,7 +74372,7 @@ var init_proof_capture2 = __esm({
     init_proof_receipt();
     init_utils();
     init_startup_integrity();
-    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute5, "path must be absolute");
+    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute7, "path must be absolute");
     beginRehearsalSchema = external_exports.object({
       action: external_exports.literal("begin_rehearsal"),
       projectRoot: absolutePathSchema,
@@ -69860,11 +74457,11 @@ var init_proof_capture2 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
-import { dirname as dirname19, join as join39 } from "node:path";
+import { dirname as dirname20, join as join42 } from "node:path";
 function fail2(reason) {
   throw new MediaFailure(reason);
 }
@@ -69895,7 +74492,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash15("sha256");
+  const hash = createHash17("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -69993,7 +74590,7 @@ async function matchScreenshotAt(process3, input) {
   if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
     fail2("INVALID_MEDIA_INPUT");
   }
-  const normalizedScreenshotPath = join39(input.scratchDir, `screenshot-${index}.png`);
+  const normalizedScreenshotPath = join42(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process3, [
     "-y",
@@ -70018,7 +74615,7 @@ async function matchScreenshotAt(process3, input) {
   let best = null;
   let decodedFrameCount = 0;
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
-    const framePath = join39(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    const framePath = join42(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
     await rm(framePath, { force: true });
     try {
       await runFrameProcess(process3, [
@@ -70090,7 +74687,7 @@ async function buildContactSheet(process3, selectedFramePaths, contactSheetPath)
     await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
   }
   try {
-    await mkdir2(dirname19(contactSheetPath), { recursive: true });
+    await mkdir2(dirname20(contactSheetPath), { recursive: true });
     await rm(contactSheetPath, { force: true });
   } catch {
     fail2("MEDIA_IO_FAILED");
@@ -70142,7 +74739,7 @@ async function validateMedia(process3, input) {
     const scratchRoot = input.scratchRoot ?? tmpdir11();
     try {
       await mkdir2(scratchRoot, { recursive: true });
-      scratchDir = await mkdtemp(join39(scratchRoot, "proof-media-"));
+      scratchDir = await mkdtemp(join42(scratchRoot, "proof-media-"));
     } catch {
       fail2("MEDIA_IO_FAILED");
     }
@@ -70603,10 +75200,10 @@ var init_query = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync12("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync14("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -71354,8 +75951,8 @@ var init_nav_graph = __esm({
 // packages/rn-dev-agent-core/dist/tools/auto-login.js
 import { execFile as execFileCb20 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
-import { existsSync as existsSync33, readFileSync as readFileSync28, writeFileSync as writeFileSync16, readdirSync as readdirSync9 } from "node:fs";
-import { join as join40 } from "node:path";
+import { existsSync as existsSync33, readFileSync as readFileSync30, writeFileSync as writeFileSync16, readdirSync as readdirSync10 } from "node:fs";
+import { join as join43 } from "node:path";
 import { homedir as homedir10 } from "node:os";
 function matchesAuthPattern(routeName) {
   const lower = routeName.toLowerCase();
@@ -71386,24 +75983,24 @@ async function isOnAuthScreen(client2) {
   }
 }
 function findLoginFlow(projectRoot) {
-  const searchDirs = [join40(projectRoot, ".maestro", "subflows"), join40(projectRoot, ".maestro")];
+  const searchDirs = [join43(projectRoot, ".maestro", "subflows"), join43(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
     if (!existsSync33(dir))
       continue;
     let files;
     try {
-      files = readdirSync9(dir);
+      files = readdirSync10(dir);
     } catch {
       continue;
     }
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join40(dir, candidate);
+        return join43(dir, candidate);
       }
     }
     const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
     if (authFile)
-      return join40(dir, authFile);
+      return join43(dir, authFile);
   }
   return null;
 }
@@ -71439,7 +76036,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
-  const originalContent = readFileSync28(flowPath, "utf-8");
+  const originalContent = readFileSync30(flowPath, "utf-8");
   const flowContent = stripClearState(originalContent);
   let validatedCommands;
   try {
@@ -71476,7 +76073,7 @@ async function handleAutoLogin(client2, opts = {}) {
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync16(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join40(homedir10(), ".maestro-runner", "bin", "maestro-runner");
+  const runnerPath = join43(homedir10(), ".maestro-runner", "bin", "maestro-runner");
   if (!existsSync33(runnerPath)) {
     return {
       loggedIn: false,
@@ -71967,7 +76564,7 @@ var init_graceful_shutdown = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/maestro-generate.js
 import { existsSync as existsSync34, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
-import { join as join41 } from "node:path";
+import { join as join44 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
   switch (step.action) {
@@ -72023,7 +76620,7 @@ function createMaestroGenerateHandler() {
       return failResult("Provide a flow name and at least one step.");
     }
     const root = findProjectRoot();
-    const outputDir = args.outputDir ?? (root ? join41(root, ".rn-agent", "actions") : null);
+    const outputDir = args.outputDir ?? (root ? join44(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
@@ -72032,7 +76629,7 @@ function createMaestroGenerateHandler() {
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join41(outputDir, fileName);
+    const filePath = join44(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
@@ -72072,14 +76669,14 @@ var init_maestro_generate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
 import { execFile as execFileCb22 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
-import { existsSync as existsSync35, readdirSync as readdirSync10, readFileSync as readFileSync29, writeFileSync as writeFileSync18 } from "node:fs";
-import { join as join42 } from "node:path";
+import { existsSync as existsSync35, readdirSync as readdirSync11, readFileSync as readFileSync31, writeFileSync as writeFileSync18 } from "node:fs";
+import { join as join45 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
 function discoverFlows(dir, pattern) {
   if (!existsSync35(dir))
     return [];
-  const files = readdirSync10(dir, { recursive: true });
-  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join42(dir, f)).sort();
+  const files = readdirSync11(dir, { recursive: true });
+  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join45(dir, f)).sort();
   if (pattern) {
     if (pattern.length > 256) {
       return yamls;
@@ -72112,7 +76709,7 @@ function createMaestroTestAllHandler() {
       return failResult(dispatch.error);
     }
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join42(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join45(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
@@ -72134,14 +76731,14 @@ function createMaestroTestAllHandler() {
       let parsedCommands = [];
       let parsedAppId;
       try {
-        const yamlText = readFileSync29(flow, "utf-8");
+        const yamlText = readFileSync31(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
         planMaestroAuthorityStages(parsed.commands);
         parsedCommands = parsed.commands;
         parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
-        safeFlowFile = join42(tmpdir12(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        safeFlowFile = join45(tmpdir12(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync18(safeFlowFile, canonical, "utf-8");
         const appFileResolution = resolveAppFileForClearState(platform, canonical, parsedAppId, void 0);
         if (!appFileResolution.ok) {
@@ -72312,8 +76909,8 @@ var init_maestro_test_all = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
-import { readFileSync as readFileSync30, readdirSync as readdirSync11, lstatSync as lstatSync11 } from "node:fs";
-import { join as join43, extname as extname2 } from "node:path";
+import { readFileSync as readFileSync32, readdirSync as readdirSync12, lstatSync as lstatSync13 } from "node:fs";
+import { join as join46, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
   return nodes.some((n) => {
@@ -72329,16 +76926,16 @@ function discoverTestIDs(dir) {
   function walk(d) {
     let entries;
     try {
-      entries = readdirSync11(d);
+      entries = readdirSync12(d);
     } catch {
       return;
     }
     for (const entry of entries) {
       if (entry === "node_modules" || entry.startsWith("."))
         continue;
-      const full = join43(d, entry);
+      const full = join46(d, entry);
       try {
-        const st = lstatSync11(full);
+        const st = lstatSync13(full);
         if (st.isSymbolicLink())
           continue;
         if (st.isDirectory()) {
@@ -72347,7 +76944,7 @@ function discoverTestIDs(dir) {
         }
         if (!SCAN_EXTENSIONS.has(extname2(entry)))
           continue;
-        const src = readFileSync30(full, "utf8");
+        const src = readFileSync32(full, "utf8");
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id)
@@ -72584,191 +77181,6 @@ var init_metro_events = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync13 } from "node:child_process";
-import { createHash as createHash16 } from "node:crypto";
-import { lstatSync as lstatSync12, readFileSync as readFileSync31, readdirSync as readdirSync12, readlinkSync as readlinkSync4, realpathSync as realpathSync10, statSync as statSync13 } from "node:fs";
-import { isAbsolute as isAbsolute6, join as join44, relative as relative4 } from "node:path";
-function runText(command, args) {
-  return execFileSync13(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 1e4,
-    maxBuffer: 8 * 1024 * 1024
-  });
-}
-function runBuffer(command, args) {
-  return execFileSync13(command, [...args], {
-    encoding: "buffer",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 3e4,
-    maxBuffer: 512 * 1024 * 1024
-  });
-}
-function digest2(parts) {
-  const hash = createHash16("sha256");
-  for (const part of parts) {
-    hash.update(`${part.byteLength}:`);
-    hash.update(part);
-  }
-  return hash.digest("hex");
-}
-function generation(parts) {
-  return digest2(parts.map((part) => Buffer.from(part)));
-}
-function listAppFiles(appPath) {
-  const files = [];
-  const visit = (directory) => {
-    for (const entry of readdirSync12(directory, { withFileTypes: true })) {
-      const path = join44(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(path);
-      } else if (entry.isFile() || entry.isSymbolicLink()) {
-        files.push(relative4(appPath, path));
-      } else {
-        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
-      }
-    }
-  };
-  visit(appPath);
-  return files.sort();
-}
-function iosAppFiles(appPath, dependencies) {
-  return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
-}
-function assertIosSymlinkContained(appPath, path, realpath) {
-  const target = realpath(path);
-  const child = relative4(realpath(appPath), target);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute6(child)) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
-  }
-}
-function androidApkPaths(target, text) {
-  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
-}
-function captureInstallGeneration(target, dependencies = {}) {
-  const text = dependencies.runText ?? runText;
-  if (target.platform === "ios") {
-    const appPath = text("xcrun", [
-      "simctl",
-      "get_app_container",
-      target.deviceId,
-      target.appId,
-      "app"
-    ]).trim();
-    if (!appPath) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
-    }
-    const infoPath = join44(appPath, "Info.plist");
-    const executable = text("plutil", [
-      "-extract",
-      "CFBundleExecutable",
-      "raw",
-      "-o",
-      "-",
-      infoPath
-    ]).trim();
-    if (!executable) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
-    }
-    const stat2 = dependencies.stat ?? statSync13;
-    const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
-      const path = join44(appPath, entry);
-      const value = stat2(path);
-      return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
-    });
-    return generation(metadata2);
-  }
-  const apkPaths = androidApkPaths(target, text);
-  if (!apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
-  }
-  const metadata = text("adb", [
-    "-s",
-    target.deviceId,
-    "shell",
-    "stat",
-    "-c",
-    "%n:%i:%s:%Y",
-    ...apkPaths
-  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
-  if (metadata.length !== apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
-  }
-  return generation(metadata);
-}
-function captureInstalledArtifact(target, dependencies = {}) {
-  const text = dependencies.runText ?? runText;
-  const buffer = dependencies.runBuffer ?? runBuffer;
-  const read = dependencies.read ?? readFileSync31;
-  if (target.platform === "ios") {
-    const appPath = text("xcrun", [
-      "simctl",
-      "get_app_container",
-      target.deviceId,
-      target.appId,
-      "app"
-    ]).trim();
-    if (!appPath) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
-    }
-    const infoPath = join44(appPath, "Info.plist");
-    const executable = text("plutil", [
-      "-extract",
-      "CFBundleExecutable",
-      "raw",
-      "-o",
-      "-",
-      infoPath
-    ]).trim();
-    if (!executable) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
-    }
-    const files = iosAppFiles(appPath, dependencies);
-    const lstat = dependencies.lstat ?? lstatSync12;
-    const readLink = dependencies.readLink ?? readlinkSync4;
-    const realpath = dependencies.realpath ?? realpathSync10;
-    const artifactParts = [];
-    for (const entry of files) {
-      const path = join44(appPath, entry);
-      const stat2 = lstat(path);
-      artifactParts.push(Buffer.from(entry));
-      if (stat2.isFile()) {
-        artifactParts.push(Buffer.from("file"), read(path));
-      } else if (stat2.isSymbolicLink()) {
-        assertIosSymlinkContained(appPath, path, realpath);
-        artifactParts.push(Buffer.from("symlink"), Buffer.from(readLink(path)));
-      } else {
-        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
-      }
-    }
-    return {
-      ...target,
-      artifactDigest: digest2(artifactParts),
-      installGeneration: captureInstallGeneration(target, dependencies)
-    };
-  }
-  const apkPaths = androidApkPaths(target, text);
-  if (!apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
-  }
-  return {
-    ...target,
-    artifactDigest: digest2(apkPaths.map((path) => buffer("adb", ["-s", target.deviceId, "exec-out", "cat", path]))),
-    installGeneration: captureInstallGeneration(target, dependencies)
-  };
-}
-function verifyInstalledArtifact(expected, observed) {
-  if (expected.platform !== observed.platform || expected.deviceId !== observed.deviceId || expected.appId !== observed.appId || expected.artifactDigest !== observed.artifactDigest || expected.installGeneration !== observed.installGeneration) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: installed artifact no longer matches the session build");
-  }
-}
-var init_install_authority = __esm({
-  "packages/rn-dev-agent-core/dist/session/install-authority.js"() {
-    "use strict";
-  }
-});
-
 // packages/rn-dev-agent-core/dist/observability/instrumentation.js
 function addToolObserver(fn) {
   toolObservers.add(fn);
@@ -72876,7 +77288,7 @@ var init_instrumentation = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join45 } from "node:path";
+import { join as join47 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
@@ -72980,7 +77392,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join45(tmpdir13(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join47(tmpdir13(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -73041,7 +77453,7 @@ var init_live_device = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
-import { randomBytes as randomBytes8, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { randomBytes as randomBytes8, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
 function makeCsrfToken() {
   return randomBytes8(24).toString("hex");
 }
@@ -73054,7 +77466,7 @@ function isPostAllowed(req, token2) {
     const got = String(gotRaw);
     const a = Buffer.from(got);
     const b = Buffer.from(token2);
-    if (a.length !== b.length || !timingSafeEqual5(a, b)) {
+    if (a.length !== b.length || !timingSafeEqual6(a, b)) {
       return { ok: false, status: 403, reason: "bad csrf token" };
     }
   }
@@ -73075,9 +77487,9 @@ var init_e2e_csrf = __esm({
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync32 } from "node:fs";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
-import { dirname as dirname20, join as join46 } from "node:path";
+import { readFileSync as readFileSync33 } from "node:fs";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
+import { dirname as dirname21, join as join48 } from "node:path";
 function listen(server3, port) {
   return new Promise((resolve11, reject) => {
     const onErr = (e) => {
@@ -73099,7 +77511,7 @@ var init_server3 = __esm({
     init_e2e_csrf();
     init_logger();
     HOST = "127.0.0.1";
-    __dir = dirname20(fileURLToPath4(import.meta.url));
+    __dir = dirname21(fileURLToPath5(import.meta.url));
     ObservabilityServer = class {
       recorder;
       e2e;
@@ -73331,7 +77743,7 @@ var init_server3 = __esm({
       }
       index(res) {
         try {
-          let html = readFileSync32(join46(__dir, "web-dist", "index.html"), "utf8");
+          let html = readFileSync33(join48(__dir, "web-dist", "index.html"), "utf8");
           if (this.e2e) {
             const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
             html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -73498,10 +77910,10 @@ var init_server3 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
-import { join as join47 } from "node:path";
+import { join as join49 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join47(getStateDir(), "observe", `${safe}.json`);
+  return join49(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -73781,7 +78193,7 @@ var init_jpeg_stream = __esm({
 import { spawn as spawn8, execFile as execFile26 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
-import { join as join48 } from "node:path";
+import { join as join50 } from "node:path";
 async function detectIdb(execFileFn = execFile26) {
   return new Promise((resolve11) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve11(!err));
@@ -73937,7 +78349,7 @@ var init_sources = __esm({
         this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
         this.idleDelayMs = opts.idleDelayMs ?? 25;
         this.failurePauseMs = opts.failurePauseMs ?? 500;
-        this.tmpPath = opts.tmpPath ?? (() => join48(tmpdir14(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+        this.tmpPath = opts.tmpPath ?? (() => join50(tmpdir14(), "rn-mirror-simctl-" + process.pid + ".jpg"));
       }
       start(sink) {
         this.active = true;
@@ -74359,16 +78771,16 @@ var init_target = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname21, join as join49 } from "node:path";
-import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync19, renameSync as renameSync9, readFileSync as readFileSync33, readdirSync as readdirSync13, existsSync as existsSync36 } from "node:fs";
-import { createHash as createHash17 } from "node:crypto";
+import { dirname as dirname22, join as join51 } from "node:path";
+import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync19, renameSync as renameSync9, readFileSync as readFileSync34, readdirSync as readdirSync13, existsSync as existsSync36 } from "node:fs";
+import { createHash as createHash18 } from "node:crypto";
 function e2eDirFor(projectRoot) {
-  return join49(projectRoot, ".rn-agent", "e2e");
+  return join51(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join49(dir, `${id}.yaml`);
+  const file = join51(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -74392,11 +78804,11 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash17("sha256").update(s).digest("hex");
+  return createHash18("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
-  mkdirSync20(dirname21(filePath), { recursive: true });
+  mkdirSync20(dirname22(filePath), { recursive: true });
   const meta = {
     id: source.id,
     intent: source.intent,
@@ -74418,7 +78830,7 @@ function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
   if (!existsSync36(filePath))
     return null;
-  return parseLockedTest(readFileSync33(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync34(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
@@ -74469,12 +78881,12 @@ var init_e2e_test = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync34 } from "node:fs";
-import { join as join50 } from "node:path";
+import { readFileSync as readFileSync35 } from "node:fs";
+import { join as join52 } from "node:path";
 function loadE2eConfig(projectRoot) {
-  const filePath = join50(projectRoot, ".rn-agent", "e2e.config.json");
+  const filePath = join52(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync34(filePath, "utf8");
+    const raw = readFileSync35(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -74516,7 +78928,7 @@ var init_e2e_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -74530,12 +78942,12 @@ var defaultExec3;
 var init_git_info = __esm({
   "packages/rn-dev-agent-core/dist/e2e/git-info.js"() {
     "use strict";
-    defaultExec3 = (cmd, args) => execFileSync14(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    defaultExec3 = (cmd, args) => execFileSync15(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   }
 });
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync35 } from "node:fs";
+import { readFileSync as readFileSync36 } from "node:fs";
 function readPassed(result) {
   try {
     const env = JSON.parse(result.content[0].text);
@@ -74550,7 +78962,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync35(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync36(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -74624,8 +79036,8 @@ var init_lock_e2e_test = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
-import { join as join51 } from "node:path";
-import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync10, readFileSync as readFileSync36, existsSync as existsSync37 } from "node:fs";
+import { join as join53 } from "node:path";
+import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync10, readFileSync as readFileSync37, existsSync as existsSync37 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -74679,20 +79091,20 @@ function diffNewlyFailing(current, previousGreen) {
   return current.results.filter((r) => !r.passed && r.classification !== "skipped" && (previousGreen === null || wasPassing.has(r.testId))).map((r) => r.testId);
 }
 function e2eRunsDirFor(projectRoot) {
-  return join51(sessionStateDirectory(projectRoot), "e2e-runs");
+  return join53(sessionStateDirectory(projectRoot), "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync21(join51(file, ".."), { recursive: true });
+  mkdirSync21(join53(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync20(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync10(tmp, file);
 }
 function loadIndex(projectRoot) {
-  const file = join51(e2eRunsDirFor(projectRoot), "index.json");
+  const file = join53(e2eRunsDirFor(projectRoot), "index.json");
   if (!existsSync37(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync36(file, "utf8"));
+    const parsed = JSON.parse(readFileSync37(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -74701,7 +79113,7 @@ function loadIndex(projectRoot) {
 function writeRunRecord(projectRoot, rec) {
   assertValidActionId(rec.runId, "writeRunRecord");
   const dir = e2eRunsDirFor(projectRoot);
-  writeJsonAtomic(join51(dir, `${rec.runId}.json`), rec);
+  writeJsonAtomic(join53(dir, `${rec.runId}.json`), rec);
   const entry = {
     runId: rec.runId,
     finishedAt: rec.finishedAt,
@@ -74709,15 +79121,15 @@ function writeRunRecord(projectRoot, rec) {
     totals: rec.totals
   };
   const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
-  writeJsonAtomic(join51(dir, "index.json"), next);
+  writeJsonAtomic(join53(dir, "index.json"), next);
 }
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
-  const file = join51(e2eRunsDirFor(projectRoot), `${runId}.json`);
+  const file = join53(e2eRunsDirFor(projectRoot), `${runId}.json`);
   if (!existsSync37(file))
     return null;
   try {
-    return JSON.parse(readFileSync36(file, "utf8"));
+    return JSON.parse(readFileSync37(file, "utf8"));
   } catch {
     return null;
   }
@@ -74737,14 +79149,14 @@ var init_e2e_run = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
-import { join as join52 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync11, readFileSync as readFileSync37, readdirSync as readdirSync14, existsSync as existsSync38 } from "node:fs";
+import { join as join54 } from "node:path";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync11, readFileSync as readFileSync38, readdirSync as readdirSync14, existsSync as existsSync38 } from "node:fs";
 function requestsDir(projectRoot) {
-  return join52(e2eRunsDirFor(projectRoot), "requests");
+  return join54(e2eRunsDirFor(projectRoot), "requests");
 }
 function requestPath(projectRoot, runId) {
   assertValidActionId(runId, "e2e-run-request");
-  return join52(requestsDir(projectRoot), `${runId}.json`);
+  return join54(requestsDir(projectRoot), `${runId}.json`);
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
@@ -74758,7 +79170,7 @@ function loadRequest(projectRoot, runId) {
   if (!existsSync38(file))
     return null;
   try {
-    return JSON.parse(readFileSync37(file, "utf8"));
+    return JSON.parse(readFileSync38(file, "utf8"));
   } catch {
     return null;
   }
@@ -75088,9 +79500,9 @@ var init_preflight = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
 import { readdirSync as readdirSync15 } from "node:fs";
-import { join as join53 } from "node:path";
+import { join as join55 } from "node:path";
 async function listActions(projectRoot) {
-  const actionsDir = join53(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join55(projectRoot, ".rn-agent", "actions");
   let files;
   try {
     files = readdirSync15(actionsDir);
@@ -75129,4264 +79541,6 @@ var init_action_inventory = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-inventory.js"() {
     "use strict";
     init_action_store();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/build-receipt.js
-import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
-function serialize(payload) {
-  return JSON.stringify(payload);
-}
-function sign(payload, capability) {
-  return createHmac3("sha256", capability).update(serialize(payload)).digest("hex");
-}
-function verifyBuildReceipt(receipt2, capability, expected) {
-  if (receipt2.version !== 1 || !receipt2.payload || !receipt2.signature) {
-    throw new Error("BUILD_RECEIPT_INVALID: build receipt shape is invalid");
-  }
-  const expectedSignature = Buffer.from(sign(receipt2.payload, capability), "hex");
-  const actualSignature = Buffer.from(receipt2.signature, "hex");
-  if (expectedSignature.length !== actualSignature.length || !timingSafeEqual6(expectedSignature, actualSignature)) {
-    throw new Error("BUILD_RECEIPT_INVALID: build receipt signature is invalid");
-  }
-  for (const [key, value] of Object.entries(expected)) {
-    if (receipt2.payload[key] !== value) {
-      throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${key} contradicts the active session`);
-    }
-  }
-  return receipt2.payload;
-}
-var init_build_receipt = __esm({
-  "packages/rn-dev-agent-core/dist/session/build-receipt.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/build-adapter.js
-function conflict(flag) {
-  throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
-}
-function ensureValue(command, flag, value) {
-  const index = command.indexOf(flag);
-  if (index >= 0) {
-    if (command[index + 1] !== value)
-      conflict(flag);
-    return;
-  }
-  command.push(flag, value);
-}
-function ensureFlag(command, flag) {
-  if (!command.includes(flag))
-    command.push(flag);
-}
-function removeValue(command, flag, value) {
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
-    if (command[index + 1] !== value)
-      conflict(flag);
-    command.splice(index, 2);
-  }
-}
-function managedMetroProxyUrl(session) {
-  if (session.platform === "ios") {
-    return `http://127.0.0.1:${session.metroPort}`;
-  }
-  if (/^emulator-\d+$/.test(session.deviceId)) {
-    return `http://10.0.2.2:${session.metroPort}`;
-  }
-  if (!session.devClientUrl) {
-    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL");
-  }
-  let metroUrl;
-  try {
-    const encodedMetroUrl = new URL(session.devClientUrl).searchParams.get("url");
-    if (!encodedMetroUrl)
-      throw new Error("missing url parameter");
-    metroUrl = new URL(encodedMetroUrl);
-  } catch {
-    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint");
-  }
-  if (!["http:", "https:"].includes(metroUrl.protocol) || Number(metroUrl.port) !== session.metroPort) {
-    throw new Error("SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro");
-  }
-  return metroUrl.origin;
-}
-function commandKind(command) {
-  const offset = command[0] === "npx" ? 1 : 0;
-  const executable = command[offset];
-  const subcommand = command[offset + 1];
-  if (executable === "expo" && (subcommand === "run:ios" || subcommand === "run:android")) {
-    return "expo";
-  }
-  if (executable === "react-native" && subcommand === "run-ios")
-    return "bare-ios";
-  if (executable === "react-native" && subcommand === "run-android")
-    return "bare-android";
-  return null;
-}
-function createBuildLaunchPlan(input) {
-  const command = [...input.command];
-  if (!input.session)
-    return { mode: "passthrough", command, env: {} };
-  if (input.session.platform !== input.platform)
-    conflict("platform");
-  const kind = commandKind(command);
-  const expectedKind = input.platform === "ios" ? /* @__PURE__ */ new Set(["expo", "bare-ios"]) : /* @__PURE__ */ new Set(["expo", "bare-android"]);
-  if (!kind || !expectedKind.has(kind)) {
-    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized");
-  }
-  if (kind === "expo") {
-    ensureValue(command, "--device", input.session.deviceId);
-    removeValue(command, "--port", String(input.session.metroPort));
-    ensureFlag(command, "--no-bundler");
-  } else if (kind === "bare-ios") {
-    ensureValue(command, "--udid", input.session.deviceId);
-    ensureValue(command, "--port", String(input.session.metroPort));
-    ensureFlag(command, "--no-packager");
-  } else {
-    ensureValue(command, "--deviceId", input.session.deviceId);
-    ensureValue(command, "--port", String(input.session.metroPort));
-    ensureFlag(command, "--no-packager");
-  }
-  const env = {
-    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
-    RCT_METRO_PORT: String(input.session.metroPort),
-    RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
-    ...kind === "expo" ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}
-  };
-  return {
-    mode: "session",
-    command,
-    env
-  };
-}
-var init_build_adapter = __esm({
-  "packages/rn-dev-agent-core/dist/session/build-adapter.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/package-integration.js
-import { closeSync as closeSync10, constants as constants6, fstatSync as fstatSync6, lstatSync as lstatSync13, openSync as openSync10, readFileSync as readFileSync38 } from "node:fs";
-import { basename as basename6, isAbsolute as isAbsolute7, join as join54, relative as relative5, resolve as resolve10, sep as sep6 } from "node:path";
-function serializePackageIntegrationManifest(manifest) {
-  return `${JSON.stringify(manifest, null, 2)}
-`;
-}
-function renderMetroIntegrationAdapter() {
-  return `'use strict';
-const fs = require('node:fs');
-const path = require('node:path');
-const { createHash, createHmac, randomBytes } = require('node:crypto');
-const childProcess = require('node:child_process');
-const { execFileSync } = childProcess;
-const diagnosticsChannel = require('node:diagnostics_channel');
-const moduleApi = require('node:module');
-const { registerHooks } = moduleApi;
-const { fileURLToPath } = require('node:url');
-const { deserialize, serialize } = require('node:v8');
-const workerThreads = require('node:worker_threads');
-const IntrinsicObject = Object;
-const IntrinsicMap = Map;
-const IntrinsicProxy = Proxy;
-const IntrinsicSet = Set;
-const IntrinsicWeakMap = WeakMap;
-const IntrinsicWeakSet = WeakSet;
-const intrinsicArrayIsArray = Array.isArray;
-const intrinsicJsonStringify = JSON.stringify;
-const intrinsicNumberIsFinite = Number.isFinite;
-const intrinsicObjectPrototype = Object.prototype;
-const intrinsicArrayFilter = Array.prototype.filter;
-const intrinsicArrayForEach = Array.prototype.forEach;
-const intrinsicArrayMap = Array.prototype.map;
-const intrinsicArrayPush = Array.prototype.push;
-const intrinsicArraySlice = Array.prototype.slice;
-const intrinsicArraySort = Array.prototype.sort;
-const intrinsicDefineProperty = Object.defineProperty;
-const intrinsicObjectEntries = Object.entries;
-const intrinsicObjectFromEntries = Object.fromEntries;
-const intrinsicObjectValues = Object.values;
-const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
-const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
-const intrinsicGetOwnPropertySymbols = Object.getOwnPropertySymbols;
-const intrinsicGetPrototypeOf = Object.getPrototypeOf;
-const intrinsicMapDelete = Map.prototype.delete;
-const intrinsicMapForEach = Map.prototype.forEach;
-const intrinsicMapGet = Map.prototype.get;
-const intrinsicMapHas = Map.prototype.has;
-const intrinsicMapSet = Map.prototype.set;
-const intrinsicReflectApply = Reflect.apply;
-const intrinsicReflectConstruct = Reflect.construct;
-const intrinsicReflectGet = Reflect.get;
-const intrinsicReflectSet = Reflect.set;
-const intrinsicSetAdd = Set.prototype.add;
-const intrinsicSetForEach = Set.prototype.forEach;
-const intrinsicSetHas = Set.prototype.has;
-const intrinsicSymbolToString = Symbol.prototype.toString;
-const intrinsicWeakMapDelete = WeakMap.prototype.delete;
-const intrinsicWeakMapGet = WeakMap.prototype.get;
-const intrinsicWeakMapHas = WeakMap.prototype.has;
-const intrinsicWeakMapSet = WeakMap.prototype.set;
-const intrinsicWeakSetAdd = WeakSet.prototype.add;
-const intrinsicWeakSetDelete = WeakSet.prototype.delete;
-const intrinsicWeakSetHas = WeakSet.prototype.has;
-const intrinsicProcessNextTick = process.nextTick;
-const intrinsicProcessBinding = process.binding;
-const intrinsicUvBinding = intrinsicReflectApply(intrinsicProcessBinding, process, ['uv']);
-function isAsynchronousNativeSpawnError(result) {
-  return (
-    result === intrinsicUvBinding.UV_EACCES ||
-    result === intrinsicUvBinding.UV_EAGAIN ||
-    result === intrinsicUvBinding.UV_EMFILE ||
-    result === intrinsicUvBinding.UV_ENFILE ||
-    result === intrinsicUvBinding.UV_ENOENT
-  );
-}
-function privateMapDelete(map, key) {
-  return intrinsicReflectApply(intrinsicMapDelete, map, [key]);
-}
-function privateMapForEach(map, callback) {
-  return intrinsicReflectApply(intrinsicMapForEach, map, [callback]);
-}
-function privateMapGet(map, key) {
-  return intrinsicReflectApply(intrinsicMapGet, map, [key]);
-}
-function privateMapHas(map, key) {
-  return intrinsicReflectApply(intrinsicMapHas, map, [key]);
-}
-function privateMapSet(map, key, value) {
-  return intrinsicReflectApply(intrinsicMapSet, map, [key, value]);
-}
-function privateArrayForEach(array, callback) {
-  return intrinsicReflectApply(intrinsicArrayForEach, array, [callback]);
-}
-function privateArrayFilter(array, callback) {
-  return intrinsicReflectApply(intrinsicArrayFilter, array, [callback]);
-}
-function privateArrayMap(array, callback) {
-  return intrinsicReflectApply(intrinsicArrayMap, array, [callback]);
-}
-function privateArrayPush(array, ...values) {
-  return intrinsicReflectApply(intrinsicArrayPush, array, values);
-}
-function privateArraySlice(array, start, end) {
-  return intrinsicReflectApply(
-    intrinsicArraySlice,
-    array,
-    end === undefined ? [start] : [start, end],
-  );
-}
-function privateArraySort(array, compare) {
-  return intrinsicReflectApply(
-    intrinsicArraySort,
-    array,
-    compare === undefined ? [] : [compare],
-  );
-}
-function privateGetOwnPropertyDescriptor(value, property) {
-  return intrinsicReflectApply(intrinsicGetOwnPropertyDescriptor, IntrinsicObject, [
-    value,
-    property,
-  ]);
-}
-function privateGetOwnPropertyNames(value) {
-  return intrinsicReflectApply(intrinsicGetOwnPropertyNames, IntrinsicObject, [value]);
-}
-function privateGetOwnPropertySymbols(value) {
-  return intrinsicReflectApply(intrinsicGetOwnPropertySymbols, IntrinsicObject, [value]);
-}
-function privateGetPrototypeOf(value) {
-  return intrinsicReflectApply(intrinsicGetPrototypeOf, IntrinsicObject, [value]);
-}
-function privateObjectEntries(value) {
-  return intrinsicReflectApply(intrinsicObjectEntries, IntrinsicObject, [value]);
-}
-function privateObjectFromEntries(entries) {
-  return intrinsicReflectApply(intrinsicObjectFromEntries, IntrinsicObject, [entries]);
-}
-function privateObjectValues(value) {
-  return intrinsicReflectApply(intrinsicObjectValues, IntrinsicObject, [value]);
-}
-function privateSetAdd(set, value) {
-  return intrinsicReflectApply(intrinsicSetAdd, set, [value]);
-}
-function privateSetForEach(set, callback) {
-  return intrinsicReflectApply(intrinsicSetForEach, set, [callback]);
-}
-function privateSetHas(set, value) {
-  return intrinsicReflectApply(intrinsicSetHas, set, [value]);
-}
-function privateSetValues(set) {
-  const values = [];
-  privateSetForEach(set, (value) => privateArrayPush(values, value));
-  return values;
-}
-function privateWeakMapDelete(map, key) {
-  return intrinsicReflectApply(intrinsicWeakMapDelete, map, [key]);
-}
-function privateWeakMapGet(map, key) {
-  return intrinsicReflectApply(intrinsicWeakMapGet, map, [key]);
-}
-function privateWeakMapHas(map, key) {
-  return intrinsicReflectApply(intrinsicWeakMapHas, map, [key]);
-}
-function privateWeakMapSet(map, key, value) {
-  return intrinsicReflectApply(intrinsicWeakMapSet, map, [key, value]);
-}
-function privateWeakSetAdd(set, value) {
-  return intrinsicReflectApply(intrinsicWeakSetAdd, set, [value]);
-}
-function privateWeakSetDelete(set, value) {
-  return intrinsicReflectApply(intrinsicWeakSetDelete, set, [value]);
-}
-function privateWeakSetHas(set, value) {
-  return intrinsicReflectApply(intrinsicWeakSetHas, set, [value]);
-}
-function canonicalAuthorityJson(value) {
-  const active = new IntrinsicWeakSet();
-  const encode = (candidate) => {
-    if (candidate === null) return 'null';
-    if (typeof candidate === 'string') {
-      return intrinsicReflectApply(intrinsicJsonStringify, null, [candidate]);
-    }
-    if (typeof candidate === 'boolean') return candidate ? 'true' : 'false';
-    if (typeof candidate === 'number') {
-      return intrinsicNumberIsFinite(candidate)
-        ? intrinsicReflectApply(intrinsicJsonStringify, null, [candidate])
-        : 'null';
-    }
-    if (typeof candidate !== 'object') throw descendantError();
-    if (privateWeakSetHas(active, candidate)) throw descendantError();
-    privateWeakSetAdd(active, candidate);
-    try {
-      if (intrinsicArrayIsArray(candidate)) {
-        let serialized = '[';
-        for (let index = 0; index < candidate.length; index += 1) {
-          if (index > 0) serialized += ',';
-          const descriptor = privateGetOwnPropertyDescriptor(candidate, String(index));
-          if (!descriptor || !('value' in descriptor)) throw descendantError();
-          serialized += encode(descriptor.value);
-        }
-        return serialized + ']';
-      }
-      const prototype = privateGetPrototypeOf(candidate);
-      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
-        throw descendantError();
-      }
-      const names = privateGetOwnPropertyNames(candidate);
-      const enumerable = [];
-      for (let index = 0; index < names.length; index += 1) {
-        const name = names[index];
-        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
-        if (descriptor?.enumerable) privateArrayPush(enumerable, name);
-      }
-      privateArraySort(enumerable);
-      let serialized = '{';
-      for (let index = 0; index < enumerable.length; index += 1) {
-        if (index > 0) serialized += ',';
-        const name = enumerable[index];
-        const descriptor = privateGetOwnPropertyDescriptor(candidate, name);
-        if (!descriptor || !('value' in descriptor)) throw descendantError();
-        serialized +=
-          intrinsicReflectApply(intrinsicJsonStringify, null, [name]) +
-          ':' +
-          encode(descriptor.value);
-      }
-      return serialized + '}';
-    } finally {
-      privateWeakSetDelete(active, candidate);
-    }
-  };
-  return encode(value);
-}
-${parseNodeOptions.toString()}
-${hasNodeLoaderOption.toString()}
-${hasUnsupportedNodeOption.toString()}
-const accumulatedRuntimeInputs = new IntrinsicSet();
-const accumulatedViolations = new IntrinsicSet();
-const observedLoaderDigests = new IntrinsicMap();
-const metroPolicyCapability = process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
-const usesExternalEvidenceOwner = Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
-const authorityEnvironment = privateArrayFilter(privateObjectEntries(process.env),
-  ([key]) =>
-    (key === 'NODE_OPTIONS' || key.startsWith('RN_DEV_AGENT_')) &&
-    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_NONCE' &&
-    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS' &&
-    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY' &&
-    key !== 'RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE' &&
-    (!usesExternalEvidenceOwner ||
-      (key !== 'RN_DEV_AGENT_METRO_POLICY_CAPABILITY' &&
-        key !== 'RN_DEV_AGENT_METRO_RUNTIME_LOADS')),
-);
-let cachedSourceRoot;
-let sourceRootResolved = false;
-let lastPolicyPayload;
-let initialCacheCaptured = false;
-let loaderEpoch = 0;
-let runtimeLoadsDescriptor;
-let runtimeLoadsDescriptorOwned = false;
-const authoritySessionId = process.env.RN_DEV_AGENT_SESSION_ID;
-const authorityMetroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
-const authorityContentRoot =
-  process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT || fs.realpathSync(process.cwd());
-const authorityAppRoot =
-  process.env.RN_DEV_AGENT_METRO_APP_ROOT || fs.realpathSync(process.cwd());
-const authorityRootNonce =
-  process.env.RN_DEV_AGENT_METRO_AUTHORITY_ROOT_NONCE ||
-  createHash('sha256')
-    .update('reported-v1:' + authoritySessionId + ':' + authorityMetroInstanceId)
-    .digest('hex')
-    .slice(0, 32);
-const allowedCodeRootsSource = process.env.RN_DEV_AGENT_METRO_ALLOWED_CODE_ROOTS;
-let allowedCodeRoots = [];
-if (allowedCodeRootsSource) {
-  try {
-    const parsed = JSON.parse(allowedCodeRootsSource);
-    if (!Array.isArray(parsed) || parsed.length === 0) throw descendantError();
-    allowedCodeRoots = privateArraySort(
-      privateArrayMap(parsed, (entry) => {
-        if (typeof entry !== 'string') throw descendantError();
-        return fs.realpathSync(entry);
-      }),
-    );
-  } catch {
-    throw descendantError();
-  }
-}
-function isWithinAllowedCodeRoot(candidate) {
-  return allowedCodeRoots.length === 0 || allowedCodeRoots.some((root) => {
-    const relative = path.relative(root, candidate);
-    return relative === '' || (
-      relative !== '..' &&
-      !relative.startsWith('..' + path.sep) &&
-      !path.isAbsolute(relative)
-    );
-  });
-}
-function sanitizedNativeAddonBasename(candidate) {
-  const value = typeof candidate === 'string' ? candidate : '';
-  return path.basename(value || 'unknown.node');
-}
-function sanitizedNativeAddonPath(candidate) {
-  return 'outside:' + sanitizedNativeAddonBasename(candidate);
-}
-function writeRuntimeLoad(line, loadsPath) {
-  if (runtimeLoadsDescriptor === undefined) {
-    runtimeLoadsDescriptor =
-      typeof loadsPath === 'number' ? loadsPath : fs.openSync(loadsPath, 'a', 0o600);
-    runtimeLoadsDescriptorOwned = typeof loadsPath !== 'number';
-  }
-  const bytes = Buffer.from(line);
-  let offset = 0;
-  while (offset < bytes.length) {
-    offset += fs.writeSync(runtimeLoadsDescriptor, bytes, offset, bytes.length - offset);
-  }
-}
-process.once('exit', () => {
-  if (runtimeLoadsDescriptorOwned && runtimeLoadsDescriptor !== undefined) {
-    fs.closeSync(runtimeLoadsDescriptor);
-  }
-});
-function persistLoaderObservation(kind, value, digest = null) {
-  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
-  const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
-  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
-  const loadsPath = process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS;
-  if (!sessionId || !metroInstanceId) return;
-  const payload = {
-    version: 1,
-    runtimeEvidenceAuthority: 'reported-v1',
-    sessionId,
-    metroInstanceId,
-    kind,
-    value,
-    digest,
-  };
-  if (Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3) {
-    writeRuntimeLoad(canonicalAuthorityJson(payload) + '\\n', evidenceDescriptor);
-    return;
-  }
-  if (!metroPolicyCapability || !loadsPath) return;
-  const serializedPayload = canonicalAuthorityJson(payload);
-  const receipt = {
-    ...payload,
-    signature: createHmac('sha256', metroPolicyCapability)
-      .update(serializedPayload)
-      .digest('hex'),
-  };
-  writeRuntimeLoad(canonicalAuthorityJson(receipt) + '\\n', loadsPath);
-}
-const effectiveBaseNodeOptions = parseNodeOptions(
-  process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '',
-);
-persistLoaderObservation(
-  'semantics',
-  canonicalAuthorityJson({ mode: 'metro', nodeOptions: effectiveBaseNodeOptions }),
-);
-function recordLoaderViolation(value) {
-  if (privateSetHas(accumulatedViolations, value)) return;
-  privateSetAdd(accumulatedViolations, value);
-  loaderEpoch += 1;
-  persistLoaderObservation('violation', value);
-}
-const nativeChannelContexts = new IntrinsicWeakMap();
-const nativeProcessContexts = new IntrinsicWeakMap();
-const nativeProcessHandles = new IntrinsicWeakSet();
-const fencedNativeHandlePrototypes = new IntrinsicWeakSet();
-const nativeChannelControlNames = new IntrinsicSet([
-  'close',
-  'hasRef',
-  'readStart',
-  'readStop',
-  'ref',
-  'setBlocking',
-  'unref',
-]);
-const nativeProcessControlNames = new IntrinsicSet(['close', 'hasRef', 'ref', 'unref']);
-const descendantNonce = process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
-const descendantParentIdentity =
-  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
-const descendantParentNonce =
-  process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
-const currentIdentity = workerThreads.isMainThread
-  ? 'process:' + process.pid
-  : 'worker:' + workerThreads.threadId;
-const currentAuthorityNonce = descendantNonce || authorityRootNonce;
-function descendantExecutionRecord(nonce, identity, semantics, parentIdentity, parentNonce) {
-  return canonicalAuthorityJson({
-    version: 1,
-    nonce,
-    identity,
-    parent: {
-      identity: parentIdentity,
-      nonce: parentNonce,
-    },
-    semantics,
-    authority: {
-      sessionId: authoritySessionId,
-      metroInstanceId: authorityMetroInstanceId,
-      contentRoot: authorityContentRoot,
-      appRoot: authorityAppRoot,
-    },
-  });
-}
-const descendantMessageContext = descendantNonce
-  ? {
-      mode: workerThreads.isMainThread ? 'fork-message' : 'worker-message',
-      recipient: 'parent:' + descendantNonce,
-      sequence: 0,
-      sendDepth: 0,
-      nativeWriteDepth: 0,
-      nativeControlDepth: 0,
-      nativeControlContext: lifecycleContext(
-        'native-channel',
-        'parent:' + descendantNonce,
-      ),
-    }
-  : undefined;
-if (descendantNonce) {
-  const descendantSemantics = process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
-  const semanticsAvailable = /^[a-f0-9]{64}$/.test(descendantSemantics || '');
-  const parentIdentityAvailable = /^(?:process|worker):\\d+$/.test(
-    descendantParentIdentity || '',
-  );
-  const parentNonceAvailable = /^[a-f0-9]{32}$/.test(descendantParentNonce || '');
-  const parentAvailable = parentIdentityAvailable && parentNonceAvailable;
-  if (semanticsAvailable && parentAvailable) {
-    persistLoaderObservation(
-      'attestation',
-      descendantExecutionRecord(
-        descendantNonce,
-        currentIdentity,
-        descendantSemantics,
-        descendantParentIdentity,
-        descendantParentNonce,
-      ),
-    );
-  } else if (!semanticsAvailable) {
-    recordLoaderViolation('Metro descendant execution semantics are unavailable');
-  } else if (!parentIdentityAvailable) {
-    recordLoaderViolation('Metro descendant parent identity is unavailable');
-  } else {
-    recordLoaderViolation('Metro descendant parent nonce is unavailable');
-  }
-  if (workerThreads.isMainThread) {
-    const descendantLifecycleContext = lifecycleContext(
-      'descendant-lifecycle',
-      descendantNonce,
-    );
-    const processDisconnectImplementation =
-      typeof process.disconnect === 'function' ? process.disconnect : undefined;
-    if (processDisconnectImplementation) {
-      const processDisconnectDelegate = process._disconnect;
-      const processHandleQueue = process._handleQueue;
-      const processChannel = requireNativeChannelHandle(process);
-      const processChannelHandleSymbol = processChannel.symbol;
-      const processChannelHandle = processChannel.handle;
-      const processChannelClose = processChannelHandle?.close;
-      if (
-        typeof processDisconnectDelegate !== 'function' ||
-        processHandleQueue ||
-        typeof processChannelClose !== 'function'
-      ) {
-        throw descendantError();
-      }
-      const authenticatedChannelClose = () =>
-        authenticatedLifecycleResult(
-          descendantLifecycleContext,
-          'channel-close',
-          undefined,
-          () =>
-            withNativeChannelControl(descendantMessageContext, () =>
-              intrinsicReflectApply(processChannelClose, processChannelHandle, []),
-            ),
-        );
-      Object.defineProperty(processChannelHandle, 'close', {
-        configurable: false,
-        enumerable: false,
-        value: authenticatedChannelClose,
-        writable: false,
-      });
-      Object.defineProperty(process, '_disconnect', {
-        configurable: false,
-        enumerable: false,
-        value() {
-          if (descendantLifecycleContext.disconnectDepth > 0) {
-            return withNativeChannelControl(descendantMessageContext, () =>
-              intrinsicReflectApply(processDisconnectDelegate, process, []),
-            );
-          }
-          return authenticatedLifecycleResult(
-            descendantLifecycleContext,
-            'disconnect',
-            undefined,
-            () => {
-              descendantLifecycleContext.disconnectDepth += 1;
-              try {
-                process.connected = false;
-                return withNativeChannelControl(descendantMessageContext, () =>
-                  intrinsicReflectApply(processDisconnectDelegate, process, []),
-                );
-              } finally {
-                descendantLifecycleContext.disconnectDepth -= 1;
-              }
-            },
-          );
-        },
-        writable: false,
-      });
-      Object.defineProperty(process, '_handleQueue', {
-        configurable: false,
-        enumerable: false,
-        value: processHandleQueue,
-        writable: false,
-      });
-      Object.defineProperty(process, 'disconnect', {
-        configurable: false,
-        enumerable: true,
-        value() {
-          return authenticatedLifecycleResult(
-            descendantLifecycleContext,
-            'disconnect',
-            undefined,
-            () => {
-              descendantLifecycleContext.disconnectDepth += 1;
-              try {
-                return intrinsicReflectApply(
-                  processDisconnectImplementation,
-                  process,
-                  [],
-                );
-              } finally {
-                descendantLifecycleContext.disconnectDepth -= 1;
-              }
-            },
-          );
-        },
-        writable: false,
-      });
-      fenceNativeChannel(
-        processChannelHandle,
-        descendantMessageContext,
-        new IntrinsicSet(['close']),
-      );
-      process[processChannelHandleSymbol] = nativeHandleFacade(
-        processChannelHandle,
-        'onread',
-      );
-    } else {
-      Object.defineProperty(process, 'disconnect', {
-        configurable: false,
-        enumerable: true,
-        value: undefined,
-        writable: false,
-      });
-    }
-    if (typeof process._send === 'function') {
-      const processSendPrimitive = process._send;
-      Object.defineProperty(process, '_send', {
-        configurable: false,
-        enumerable: false,
-        value(message, sendHandle, options, callback) {
-          return authenticatedIpcSend(
-            processSendPrimitive,
-            process,
-            descendantMessageContext,
-            message,
-            sendHandle,
-            options,
-            callback,
-            true,
-          );
-        },
-        writable: false,
-      });
-    }
-  }
-  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_NONCE;
-  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS;
-  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY;
-  delete process.env.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE;
-}
-if (workerThreads.isMainThread && typeof process.send === 'function') {
-  process.on('message', (message) => {
-    if (
-      message?.type === 'rn-dev-agent:evidence-barrier' &&
-      typeof message.challenge === 'string' &&
-      /^[a-f0-9]{64}$/.test(message.challenge)
-    ) {
-      persistLoaderObservation('barrier', message.challenge);
-    }
-  });
-  process.channel?.unref();
-}
-if (metroPolicyCapability) delete process.env.RN_DEV_AGENT_METRO_POLICY_CAPABILITY;
-function normalizedInvocationEnvironment(environment) {
-  const entries = [];
-  privateArrayForEach(privateObjectEntries(environment || process.env), ([key, value]) => {
-    const normalizedKey = key.toUpperCase();
-    if (normalizedKey === 'NODE_OPTIONS' || normalizedKey.startsWith('RN_DEV_AGENT_')) return;
-    privateArrayPush(entries, [key, value]);
-  });
-  return privateArraySort(entries, ([left], [right]) => left.localeCompare(right));
-}
-function authenticatedChildEnvironment(entries, nonce, semantics) {
-  const nextEnvironment = privateObjectFromEntries(entries);
-  privateArrayForEach(authorityEnvironment, ([key, value]) => {
-    nextEnvironment[key] = value;
-  });
-  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_NONCE = nonce;
-  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_SEMANTICS = semantics;
-  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_IDENTITY = currentIdentity;
-  nextEnvironment.RN_DEV_AGENT_METRO_DESCENDANT_PARENT_NONCE = currentAuthorityNonce;
-  return nextEnvironment;
-}
-function snapshotInvocation(value) {
-  let bytes;
-  try {
-    bytes = serialize(value);
-  } catch {
-    throw descendantError();
-  }
-  if (bytes.byteLength > 1024 * 1024) throw descendantError();
-  const cloned = deserialize(bytes);
-  const pending = [cloned];
-  const seen = new IntrinsicWeakSet();
-  while (pending.length > 0) {
-    const candidate = pending.pop();
-    if (candidate instanceof SharedArrayBuffer) throw descendantError();
-    if (!candidate || typeof candidate !== 'object' || privateWeakSetHas(seen, candidate)) {
-      continue;
-    }
-    privateWeakSetAdd(seen, candidate);
-    if (candidate instanceof IntrinsicMap) {
-      privateMapForEach(candidate, (entry, key) =>
-        privateArrayPush(pending, key, entry)
-      );
-      continue;
-    }
-    if (candidate instanceof IntrinsicSet) {
-      privateSetForEach(candidate, (entry) => privateArrayPush(pending, entry));
-      continue;
-    }
-    privateArrayPush(pending, ...privateObjectValues(candidate));
-  }
-  return {
-    digest: createHash('sha256').update(bytes).digest('hex'),
-    value: cloned,
-  };
-}
-function digestInvocation(value) {
-  return snapshotInvocation(value).digest;
-}
-const childMessageContexts = new IntrinsicWeakMap();
-const childSendImplementations = new IntrinsicWeakMap();
-const childSendPrimitiveImplementations = new IntrinsicWeakMap();
-const childDisconnectImplementations = new IntrinsicWeakMap();
-const childLifecycleContexts = new IntrinsicWeakMap();
-const childLifecycleTargets = new IntrinsicWeakMap();
-const childNativeProcessHandles = new IntrinsicWeakMap();
-const nativeProcessHandleSlots = new IntrinsicWeakMap();
-const workerMessageContexts = new IntrinsicWeakMap();
-const workerLifecycleContexts = new IntrinsicWeakMap();
-const portMessageContexts = new IntrinsicWeakMap();
-const processLifecycleTargets = new IntrinsicMap();
-const authorizedChildSpawns = new IntrinsicWeakMap();
-const authorizedNativeProcessSpawns = new IntrinsicWeakMap();
-const fencedNativeProcessPrototypes = new IntrinsicWeakSet();
-let activeChildSpawnAuthorization;
-function authenticatedMessage(context, value) {
-  const snapshot = snapshotInvocation(value);
-  context.sequence += 1;
-  persistLoaderObservation(
-    'semantics',
-    canonicalAuthorityJson({
-      mode: context.mode,
-      recipient: context.recipient,
-      sequence: context.sequence,
-      invocationDigest: snapshot.digest,
-    }),
-  );
-  return snapshot.value;
-}
-function authenticatedPostMessage(original, receiver, context, message, transferList) {
-  if (!context || context.blocked) throw descendantError();
-  if (transferList !== undefined) {
-    if (!Array.isArray(transferList) || transferList.length > 0) throw descendantError();
-  }
-  return intrinsicReflectApply(original, receiver, [
-    authenticatedMessage(context, message),
-  ]);
-}
-function authenticatedIpcSend(
-  original,
-  receiver,
-  context,
-  message,
-  sendHandle,
-  options,
-  callback,
-  primitive = false,
-) {
-  if (!context) throw descendantError();
-  if (context.sendDepth > 0) {
-    if (!primitive) throw descendantError();
-    context.nativeWriteDepth += 1;
-    try {
-      return intrinsicReflectApply(original, receiver, [
-        message,
-        sendHandle,
-        options,
-        callback,
-      ]);
-    } finally {
-      context.nativeWriteDepth -= 1;
-    }
-  }
-  let nextCallback = callback;
-  let nextOptions = options;
-  if (typeof sendHandle === 'function') {
-    nextCallback = sendHandle;
-    sendHandle = undefined;
-    nextOptions = undefined;
-  } else if (typeof options === 'function') {
-    nextCallback = options;
-    nextOptions = undefined;
-  }
-  if (sendHandle !== undefined && sendHandle !== null) throw descendantError();
-  if (primitive && nextCallback === undefined && nextOptions?.swallowErrors !== false) {
-    throw descendantError();
-  }
-  const authenticated = authenticatedMessage(context, { message, options: nextOptions });
-  const completionId = randomBytes(16).toString('hex');
-  persistLoaderObservation('pending', completionId);
-  let completionRecorded = false;
-  const recordCompletion = (callbackArgs) => {
-    if (completionRecorded) throw descendantError();
-    const normalizedCallbackArgs = privateArrayMap(callbackArgs, (entry) => {
-      if (!(entry instanceof Error)) return snapshotInvocation(entry).value;
-      const normalized = {};
-      const errorFields = ['name', 'message', 'code', 'errno', 'syscall', 'path', 'dest'];
-      for (let index = 0; index < errorFields.length; index += 1) {
-        const name = errorFields[index];
-        const descriptor = privateGetOwnPropertyDescriptor(entry, name);
-        if (descriptor && 'value' in descriptor) normalized[name] = descriptor.value;
-      }
-      return normalized;
-    });
-    authenticatedMessage(context, {
-      status: 'completed',
-      callbackArgs: normalizedCallbackArgs,
-    });
-    persistLoaderObservation('completion', completionId);
-    completionRecorded = true;
-  };
-  const completionCallback =
-    nextCallback === undefined || typeof nextCallback === 'function'
-      ? function (...callbackArgs) {
-          recordCompletion(callbackArgs);
-          if (typeof nextCallback === 'function') {
-            return intrinsicReflectApply(nextCallback, this, callbackArgs);
-          }
-          if (callbackArgs[0] !== null && callbackArgs[0] !== undefined) {
-            return receiver.emit('error', callbackArgs[0]);
-          }
-        }
-      : nextCallback;
-  context.sendDepth += 1;
-  try {
-    if (primitive) context.nativeWriteDepth += 1;
-    let result;
-    try {
-      result = intrinsicReflectApply(original, receiver, [
-        authenticated.message,
-        undefined,
-        authenticated.options,
-        completionCallback,
-      ]);
-    } finally {
-      if (primitive) context.nativeWriteDepth -= 1;
-    }
-    return authenticatedMessage(context, {
-      status: 'fulfilled',
-      result,
-    }).result;
-  } catch (error) {
-    if (!completionRecorded) {
-      recordCompletion([error]);
-    }
-    authenticatedMessage(context, {
-      status: 'rejected',
-      error,
-    });
-    throw error;
-  } finally {
-    context.sendDepth -= 1;
-  }
-}
-function withNativeChannelControl(context, run) {
-  if (!context) throw descendantError();
-  context.nativeControlDepth += 1;
-  try {
-    return run();
-  } finally {
-    context.nativeControlDepth -= 1;
-  }
-}
-function nativeHandleFacade(handle, hiddenCallback, hiddenCallbackDelegate) {
-  const blockedCallback = function () {
-    throw descendantError();
-  };
-  return new IntrinsicProxy(new IntrinsicObject(), {
-    defineProperty() {
-      throw descendantError();
-    },
-    deleteProperty() {
-      throw descendantError();
-    },
-    get(_target, property) {
-      if (property === hiddenCallback) {
-        return hiddenCallbackDelegate || blockedCallback;
-      }
-      const value = intrinsicReflectGet(handle, property, handle);
-      if (typeof value !== 'function') return value;
-      return function (...args) {
-        return intrinsicReflectApply(value, handle, args);
-      };
-    },
-    getOwnPropertyDescriptor(_target, property) {
-      const descriptor = privateGetOwnPropertyDescriptor(handle, property);
-      if (!descriptor) return undefined;
-      if (property !== hiddenCallback) {
-        return {
-          configurable: true,
-          enumerable: descriptor.enumerable,
-          value: intrinsicReflectGet(handle, property, handle),
-          writable: false,
-        };
-      }
-      return {
-        configurable: true,
-        enumerable: descriptor.enumerable,
-        value: blockedCallback,
-        writable: false,
-      };
-    },
-    getPrototypeOf() {
-      return null;
-    },
-    preventExtensions() {
-      throw descendantError();
-    },
-    set() {
-      throw descendantError();
-    },
-    setPrototypeOf() {
-      throw descendantError();
-    },
-  });
-}
-function exposeNativeProcessHandle(child, handle) {
-  const originalOnExit = handle.onexit;
-  if (typeof originalOnExit !== 'function') throw descendantError();
-  const slot = {
-    deliveringSpawnError: false,
-    exitDepth: 0,
-    exposed: undefined,
-    invokeOnExit: undefined,
-    pendingSpawnError: undefined,
-    spawnDepth: 0,
-  };
-  const invokeOnExit = (...args) => {
-    slot.exitDepth += 1;
-    try {
-      return intrinsicReflectApply(originalOnExit, handle, args);
-    } finally {
-      slot.exitDepth -= 1;
-    }
-  };
-  slot.invokeOnExit = invokeOnExit;
-  intrinsicDefineProperty(handle, 'onexit', {
-    configurable: false,
-    enumerable: true,
-    value: invokeOnExit,
-    writable: false,
-  });
-  slot.exposed = nativeHandleFacade(handle, 'onexit');
-  privateWeakMapSet(nativeProcessHandleSlots, handle, slot);
-  intrinsicDefineProperty(child, '_handle', {
-    configurable: false,
-    enumerable: true,
-    get() {
-      return slot.exposed;
-    },
-    set(value) {
-      if (
-        value !== null ||
-        (slot.exitDepth <= 0 && slot.spawnDepth <= 0)
-      ) {
-        throw descendantError();
-      }
-      if (slot.deliveringSpawnError && slot.pendingSpawnError !== undefined) {
-        const deliveredSpawnError = slot.pendingSpawnError;
-        slot.exposed = nativeHandleFacade(handle, 'onexit', (...args) => {
-          if (args.length !== 1 || args[0] !== deliveredSpawnError) {
-            throw descendantError();
-          }
-          slot.exposed = null;
-        });
-      } else {
-        slot.exposed = null;
-      }
-    },
-  });
-}
-function requireNativeChannelHandle(owner) {
-  const candidates = [];
-  privateArrayForEach(privateGetOwnPropertySymbols(owner), (symbol) => {
-    if (
-      intrinsicReflectApply(intrinsicSymbolToString, symbol, []) ===
-      'Symbol(kChannelHandle)'
-    ) {
-      privateArrayPush(candidates, symbol);
-    }
-  });
-  if (candidates.length !== 1) throw descendantError();
-  const symbol = candidates[0];
-  const descriptor = privateGetOwnPropertyDescriptor(owner, symbol);
-  if (!descriptor || !descriptor.value || typeof descriptor.value !== 'object') {
-    throw descendantError();
-  }
-  return { handle: descriptor.value, symbol };
-}
-function fenceNativeReadCallback(handle, descriptor) {
-  const blockedRead = function () {
-    throw descendantError();
-  };
-  intrinsicDefineProperty(handle, 'onread', {
-    configurable: false,
-    enumerable: descriptor.enumerable,
-    get() {
-      return blockedRead;
-    },
-    set(value) {
-      if (typeof value !== 'function') throw descendantError();
-    },
-  });
-}
-function fenceNativeHandleOwner(owner, handle, allowedOwnControls) {
-  if (privateWeakSetHas(fencedNativeHandlePrototypes, owner)) return;
-  privateWeakSetAdd(fencedNativeHandlePrototypes, owner);
-  const names = privateGetOwnPropertyNames(owner);
-  for (let index = 0; index < names.length; index += 1) {
-    const name = names[index];
-    if (
-      name === 'constructor' ||
-      (owner === handle && privateSetHas(allowedOwnControls, name))
-    ) {
-      continue;
-    }
-    const descriptor = privateGetOwnPropertyDescriptor(owner, name);
-    if (typeof descriptor?.value !== 'function') continue;
-    const implementation = descriptor.value;
-    const isWrite = name.startsWith('write');
-    intrinsicDefineProperty(owner, name, {
-      configurable: false,
-      enumerable: false,
-      value(...args) {
-        if (privateWeakSetHas(nativeProcessHandles, this)) {
-          const processContext = privateWeakMapGet(nativeProcessContexts, this);
-          if (!processContext || !privateSetHas(nativeProcessControlNames, name)) {
-            throw descendantError();
-          }
-          return authenticatedLifecycleResult(
-            processContext,
-            name,
-            { args },
-            (authenticated) =>
-              intrinsicReflectApply(implementation, this, authenticated.args),
-          );
-        }
-        const channelContext = privateWeakMapGet(nativeChannelContexts, this);
-        if (channelContext && isWrite && channelContext.nativeWriteDepth <= 0) {
-          throw descendantError();
-        }
-        if (channelContext && !isWrite && channelContext.nativeControlDepth <= 0) {
-          if (!privateSetHas(nativeChannelControlNames, name)) throw descendantError();
-          return authenticatedLifecycleResult(
-            channelContext.nativeControlContext,
-            name,
-            { args },
-            (authenticated) =>
-              intrinsicReflectApply(implementation, this, authenticated.args),
-          );
-        }
-        return intrinsicReflectApply(implementation, this, args);
-      },
-      writable: false,
-    });
-  }
-}
-function fenceNativeChannel(
-  handle,
-  context,
-  allowedOwnControls = new IntrinsicSet(),
-) {
-  if (!handle || !context) throw descendantError();
-  privateWeakMapSet(nativeChannelContexts, handle, context);
-  const readDescriptor = privateGetOwnPropertyDescriptor(handle, 'onread');
-  const readCallback = handle.onread;
-  if (typeof readCallback === 'function') {
-    if (readDescriptor && !readDescriptor.configurable) throw descendantError();
-    fenceNativeReadCallback(handle, {
-      enumerable: readDescriptor?.enumerable ?? false,
-      value: readCallback,
-    });
-  }
-  for (
-    let owner = handle;
-    owner && owner !== Object.prototype;
-    owner = privateGetPrototypeOf(owner)
-  ) {
-    fenceNativeHandleOwner(owner, handle, allowedOwnControls);
-  }
-}
-function fenceNativeProcessHandle(handle, context) {
-  if (!handle) throw descendantError();
-  privateWeakSetAdd(nativeProcessHandles, handle);
-  if (context) privateWeakMapSet(nativeProcessContexts, handle, context);
-  const prototype = privateGetPrototypeOf(handle);
-  if (!privateWeakSetHas(fencedNativeProcessPrototypes, prototype)) {
-    const spawn = privateGetOwnPropertyDescriptor(prototype, 'spawn')?.value;
-    if (typeof spawn !== 'function') throw descendantError();
-    privateWeakSetAdd(fencedNativeProcessPrototypes, prototype);
-    intrinsicDefineProperty(prototype, 'spawn', {
-      configurable: false,
-      enumerable: false,
-      value(...args) {
-        const authorizedOptions = privateWeakMapGet(authorizedNativeProcessSpawns, this);
-        if (
-          authorizedOptions === undefined ||
-          args.length !== 1 ||
-          args[0] !== authorizedOptions
-        ) {
-          throw descendantError();
-        }
-        privateWeakMapDelete(authorizedNativeProcessSpawns, this);
-        const result = intrinsicReflectApply(spawn, this, args);
-        const slot = privateWeakMapGet(nativeProcessHandleSlots, this);
-        if (slot && isAsynchronousNativeSpawnError(result)) {
-          slot.pendingSpawnError = result;
-          intrinsicReflectApply(intrinsicProcessNextTick, process, [
-            () => {
-              if (slot.pendingSpawnError !== result) throw descendantError();
-              slot.deliveringSpawnError = true;
-              try {
-                slot.invokeOnExit(result);
-              } finally {
-                slot.deliveringSpawnError = false;
-                slot.pendingSpawnError = undefined;
-              }
-            },
-          ]);
-        } else if (slot) {
-          slot.pendingSpawnError = undefined;
-        }
-        return result;
-      },
-      writable: false,
-    });
-    intrinsicDefineProperty(prototype, 'kill', {
-      configurable: false,
-      enumerable: false,
-      value() {
-        throw descendantError();
-      },
-      writable: false,
-    });
-    intrinsicDefineProperty(prototype, 'constructor', {
-      configurable: false,
-      enumerable: false,
-      value: function FencedNativeProcess() {
-        throw descendantError();
-      },
-      writable: false,
-    });
-  }
-  for (
-    let owner = privateGetPrototypeOf(prototype);
-    owner && owner !== Object.prototype;
-    owner = privateGetPrototypeOf(owner)
-  ) {
-    fenceNativeHandleOwner(owner, handle, new IntrinsicSet());
-  }
-}
-function invocationCwd(cwd) {
-  try {
-    return fs.realpathSync(cwd || process.cwd());
-  } catch {
-    throw descendantError();
-  }
-}
-function authenticatedChildArguments(
-  args,
-  optionsIndex,
-  options,
-  environmentEntries,
-  nonce,
-  semantics,
-) {
-  const nextArgs = [...args];
-  const candidate = nextArgs[optionsIndex];
-  const authenticatedOptions = {
-    ...options,
-    env: authenticatedChildEnvironment(environmentEntries, nonce, semantics),
-  };
-  if (typeof candidate === 'function') {
-    nextArgs.splice(optionsIndex, 0, authenticatedOptions);
-  } else {
-    nextArgs[optionsIndex] = authenticatedOptions;
-  }
-  return nextArgs;
-}
-function authenticatedChildStdio(stdio, mode, silent, input) {
-  const evidenceDescriptor = Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD);
-  const hasEvidenceDescriptor =
-    Number.isInteger(evidenceDescriptor) && evidenceDescriptor >= 3;
-  const normalized =
-    Array.isArray(stdio)
-      ? [...stdio]
-      : stdio === 'inherit'
-        ? ['inherit', 'inherit', 'inherit']
-        : stdio === 'ignore'
-          ? ['ignore', 'ignore', 'ignore']
-          : mode === 'fork' && !silent
-            ? ['ignore', 'inherit', 'inherit']
-            : [mode === 'sync' ? 'pipe' : 'ignore', 'pipe', 'pipe'];
-  if (mode === 'sync') {
-    if (normalized[0] !== 'pipe' && normalized[0] !== 'ignore') throw descendantError();
-    if (input !== undefined && normalized[0] !== 'pipe') throw descendantError();
-  } else if (normalized[0] !== 'ignore') {
-    throw descendantError();
-  }
-  if (hasEvidenceDescriptor) {
-    while (normalized.length <= evidenceDescriptor) privateArrayPush(normalized, 'ignore');
-  }
-  for (let index = 3; index < normalized.length; index += 1) {
-    const value = normalized[index];
-    if (hasEvidenceDescriptor && index === evidenceDescriptor) continue;
-    if (mode === 'fork' && index === 3 && value === 'ipc') continue;
-    if (value !== undefined && value !== null && value !== 'ignore') throw descendantError();
-  }
-  if (mode === 'fork') normalized[3] = 'ipc';
-  if (hasEvidenceDescriptor) normalized[evidenceDescriptor] = evidenceDescriptor;
-  return normalized;
-}
-function descendantError() {
-  const error = new Error('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION');
-  error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
-  return error;
-}
-if (typeof process.execve === 'function') {
-  Object.defineProperty(process, 'execve', {
-    configurable: false,
-    enumerable: true,
-    value() {
-      throw descendantError();
-    },
-    writable: false,
-  });
-}
-const nodeExecutable = fs.realpathSync(process.execPath);
-function requireNodeExecutable(command, options) {
-  if (options.shell) throw descendantError();
-  try {
-    if (typeof command !== 'string' || fs.realpathSync(command) !== nodeExecutable) {
-      throw descendantError();
-    }
-  } catch (error) {
-    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
-    throw descendantError();
-  }
-}
-function isInlineNodeOption(value) {
-  if (typeof value !== 'string') return false;
-  const option = value.replaceAll('_', '-');
-  return (
-    /^-(?:e|p).*/.test(option) ||
-    option === '--eval' ||
-    option.startsWith('--eval=') ||
-    option === '--print' ||
-    option.startsWith('--print=') ||
-    option === '--input-type' ||
-    option.startsWith('--input-type=')
-  );
-}
-const safeBooleanNodeOptions = new IntrinsicSet([
-    '--enable-source-maps',
-    '--experimental-strip-types',
-    '--experimental-transform-types',
-    '--no-deprecation',
-    '--no-warnings',
-    '--preserve-symlinks',
-    '--preserve-symlinks-main',
-    '--trace-deprecation',
-    '--trace-uncaught',
-    '--trace-warnings',
-]);
-const safeValueNodeOptions = new IntrinsicSet(['--conditions', '--title']);
-function normalizeSafeNodeOption(args, index) {
-  const argument = args[index];
-  if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
-  const equals = argument.indexOf('=');
-  const option = (equals < 0 ? argument : argument.slice(0, equals)).replaceAll('_', '-');
-  if (privateSetHas(safeBooleanNodeOptions, option)) {
-    if (equals >= 0) throw descendantError();
-    return { index, value: option };
-  }
-  if (!privateSetHas(safeValueNodeOptions, option)) throw descendantError();
-  if (equals >= 0) {
-    const value = argument.slice(equals + 1);
-    if (value.length === 0) throw descendantError();
-    return { index, value: option + '=' + value };
-  }
-  const value = args[index + 1];
-  if (typeof value !== 'string' || value.length === 0) throw descendantError();
-  return { index: index + 1, value: option + '=' + value };
-}
-function requireFileBackedNodeArguments(args, cwd) {
-  if (!Array.isArray(args)) throw descendantError();
-  let entrypoint;
-  let entrypointIndex = -1;
-  const execArgv = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (typeof argument !== 'string' || isInlineNodeOption(argument)) throw descendantError();
-    if (argument === '--') {
-      entrypoint = args[index + 1];
-      entrypointIndex = index + 1;
-      break;
-    }
-    if (!argument.startsWith('-')) {
-      entrypoint = argument;
-      entrypointIndex = index;
-      break;
-    }
-    const normalized = normalizeSafeNodeOption(args, index);
-    privateArrayPush(execArgv, normalized.value);
-    index = normalized.index;
-  }
-  return {
-    entrypoint: requireFileBackedEntrypoint(entrypoint, cwd),
-    execArgv,
-    applicationArgs: privateArrayMap(
-      privateArraySlice(args, entrypointIndex + 1),
-      (value) => {
-      if (typeof value !== 'string') throw descendantError();
-      return value;
-      },
-    ),
-  };
-}
-function requireFileBackedEntrypoint(entrypoint, cwd) {
-  if (typeof entrypoint !== 'string' || entrypoint === '-' || entrypoint.startsWith('-')) {
-    throw descendantError();
-  }
-  try {
-    const candidate = path.resolve(cwd || process.cwd(), entrypoint);
-    const canonical = fs.realpathSync(candidate);
-    if (!fs.statSync(canonical).isFile()) throw descendantError();
-    if (!isWithinAllowedCodeRoot(canonical)) {
-      throw descendantError();
-    }
-    return canonical;
-  } catch (error) {
-    if (error && error.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') throw error;
-    throw descendantError();
-  }
-}
-function requireSafeExecArgv(execArgv) {
-  if (!Array.isArray(execArgv)) throw descendantError();
-  const normalized = [];
-  for (let index = 0; index < execArgv.length; index += 1) {
-    const option = normalizeSafeNodeOption(execArgv, index);
-    privateArrayPush(normalized, option.value);
-    index = option.index;
-  }
-  return normalized;
-}
-function executionSemantics(mode, entrypoint, execArgv, invocation) {
-  const value = canonicalAuthorityJson({
-    mode,
-    entrypoint,
-    entrypointDigest: digestRuntimeFile(entrypoint),
-    execArgv,
-    invocationDigest: digestInvocation(invocation),
-    allowedCodeRoots,
-    authority: {
-      sessionId: authoritySessionId,
-      metroInstanceId: authorityMetroInstanceId,
-      contentRoot: authorityContentRoot,
-      appRoot: authorityAppRoot,
-      parentIdentity: currentIdentity,
-      parentNonce: currentAuthorityNonce,
-    },
-  });
-  persistLoaderObservation('semantics', value);
-  return createHash('sha256').update(value).digest('hex');
-}
-function recordChildLaunch(nonce, child, semantics) {
-  if (!child || typeof child.pid !== 'number') return;
-  persistLoaderObservation(
-    'launch',
-    descendantExecutionRecord(
-      nonce,
-      'process:' + child.pid,
-      semantics,
-      currentIdentity,
-      currentAuthorityNonce,
-    ),
-  );
-}
-function lifecycleContext(mode, recipient) {
-  return { mode, recipient, sequence: 0, disconnectDepth: 0 };
-}
-function authenticatedLifecycle(context, action, value) {
-  if (!context) throw descendantError();
-  return authenticatedMessage(context, { action, value });
-}
-function authenticatedLifecycleResult(context, action, value, run) {
-  const authenticated = authenticatedLifecycle(context, action, value);
-  try {
-    const result = run(authenticated.value);
-    return authenticatedMessage(context, {
-      action,
-      status: 'fulfilled',
-      result,
-    }).result;
-  } catch (error) {
-    authenticatedMessage(context, {
-      action,
-      status: 'rejected',
-      error,
-    });
-    throw error;
-  }
-}
-function authenticatedLifecyclePromise(context, action, value, run) {
-  const authenticated = authenticatedLifecycle(context, action, value);
-  let result;
-  try {
-    result = run(authenticated.value);
-  } catch (error) {
-    authenticatedMessage(context, {
-      action,
-      status: 'rejected',
-      error,
-    });
-    throw error;
-  }
-  return Promise.resolve(result).then(
-    (resolved) =>
-      authenticatedMessage(context, {
-        action,
-        status: 'fulfilled',
-        result: resolved,
-      }).result,
-    (error) => {
-      authenticatedMessage(context, {
-        action,
-        status: 'rejected',
-        error,
-      });
-      throw error;
-    },
-  );
-}
-function installMessageFences() {
-  const childPrototype = childProcess.ChildProcess.prototype;
-  const originalChildSpawn = childPrototype.spawn;
-  const childProcessChannel = diagnosticsChannel.channel('child_process');
-  if (childProcessChannel.hasSubscribers) throw descendantError();
-  const channelPrototype = privateGetPrototypeOf(childProcessChannel);
-  const channelSubscribe = channelPrototype.subscribe;
-  intrinsicReflectApply(channelSubscribe, childProcessChannel, [({ process: spawnedProcess }) => {
-    const authorization = activeChildSpawnAuthorization;
-    const nativeHandle = spawnedProcess._handle;
-    fenceNativeProcessHandle(nativeHandle, authorization?.lifecycleContext);
-    privateWeakMapSet(childNativeProcessHandles, spawnedProcess, nativeHandle);
-    exposeNativeProcessHandle(spawnedProcess, nativeHandle);
-    if (!authorization || authorization.receiver) return;
-    authorization.receiver = spawnedProcess;
-    privateWeakMapSet(authorizedChildSpawns, spawnedProcess, authorization);
-    intrinsicDefineProperty(spawnedProcess, 'spawn', {
-      configurable: false,
-      enumerable: true,
-      value(options) {
-        return intrinsicReflectApply(childPrototype.spawn, spawnedProcess, [options]);
-      },
-      writable: false,
-    });
-  }]);
-  Object.defineProperty(childPrototype, 'spawn', {
-    configurable: false,
-    enumerable: true,
-    value(options) {
-      const authorization = privateWeakMapGet(authorizedChildSpawns, this);
-      if (
-        !authorization ||
-        authorization.environment !== options?.env ||
-        authorization.receiver !== this
-      ) {
-        throw descendantError();
-      }
-      privateWeakMapDelete(authorizedChildSpawns, this);
-      const nativeHandle = privateWeakMapGet(childNativeProcessHandles, this);
-      if (!nativeHandle) throw descendantError();
-      const slot = privateWeakMapGet(nativeProcessHandleSlots, nativeHandle);
-      if (!slot) throw descendantError();
-      privateWeakMapSet(authorizedNativeProcessSpawns, nativeHandle, options);
-      slot.spawnDepth += 1;
-      try {
-        return intrinsicReflectApply(originalChildSpawn, this, [options]);
-      } finally {
-        slot.spawnDepth -= 1;
-        privateWeakMapDelete(authorizedNativeProcessSpawns, nativeHandle);
-      }
-    },
-    writable: false,
-  });
-  const authenticatedChildSend = function (message, sendHandle, options, callback) {
-    const implementation = privateWeakMapGet(childSendImplementations, this);
-    if (!implementation || !privateWeakMapHas(childMessageContexts, this)) {
-      throw descendantError();
-    }
-    return authenticatedIpcSend(
-      implementation,
-      this,
-      privateWeakMapGet(childMessageContexts, this),
-      message,
-      sendHandle,
-      options,
-      callback,
-    );
-  };
-  Object.defineProperty(childPrototype, 'send', {
-    configurable: false,
-    enumerable: true,
-    get() {
-      if (
-        this !== childPrototype &&
-        (!privateWeakMapHas(childSendImplementations, this) ||
-          !privateWeakMapHas(childMessageContexts, this))
-      ) {
-        return undefined;
-      }
-      return authenticatedChildSend;
-    },
-    set(value) {
-      if (
-        typeof value !== 'function' ||
-        privateWeakMapHas(childSendImplementations, this)
-      ) {
-        throw descendantError();
-      }
-      privateWeakMapSet(childSendImplementations, this, value);
-    },
-  });
-  const authenticatedChildSendPrimitive = function (message, sendHandle, options, callback) {
-    return authenticatedIpcSend(
-      privateWeakMapGet(childSendPrimitiveImplementations, this),
-      this,
-      privateWeakMapGet(childMessageContexts, this),
-      message,
-      sendHandle,
-      options,
-      callback,
-      true,
-    );
-  };
-  Object.defineProperty(childPrototype, '_send', {
-    configurable: false,
-    enumerable: false,
-    get() {
-      if (
-        this !== childPrototype &&
-        (!privateWeakMapHas(childSendPrimitiveImplementations, this) ||
-          !privateWeakMapHas(childMessageContexts, this))
-      ) {
-        return undefined;
-      }
-      return authenticatedChildSendPrimitive;
-    },
-    set(value) {
-      if (
-        typeof value !== 'function' ||
-        privateWeakMapHas(childSendPrimitiveImplementations, this)
-      ) {
-        throw descendantError();
-      }
-      privateWeakMapSet(childSendPrimitiveImplementations, this, value);
-    },
-  });
-  const workerPrototype = workerThreads.Worker.prototype;
-  const originalWorkerPostMessage = workerPrototype.postMessage;
-  const originalWorkerTerminate = workerPrototype.terminate;
-  Object.defineProperty(workerPrototype, 'postMessage', {
-    configurable: false,
-    enumerable: true,
-    value(message, transferList) {
-      return authenticatedPostMessage(
-        originalWorkerPostMessage,
-        this,
-        privateWeakMapGet(workerMessageContexts, this),
-        message,
-        transferList,
-      );
-    },
-    writable: false,
-  });
-  Object.defineProperty(workerPrototype, 'terminate', {
-    configurable: false,
-    enumerable: true,
-    value() {
-      return authenticatedLifecyclePromise(
-        privateWeakMapGet(workerLifecycleContexts, this),
-        'terminate',
-        undefined,
-        () => intrinsicReflectApply(originalWorkerTerminate, this, []),
-      );
-    },
-    writable: false,
-  });
-  const originalChildKill = childPrototype.kill;
-  const originalProcessKill = process.kill;
-  const normalizeChildSignal = (signal) => {
-    let normalizedSignal;
-    intrinsicReflectApply(
-      originalChildKill,
-      {
-        _handle: {
-          kill(value) {
-            normalizedSignal = value;
-            return 0;
-          },
-        },
-        killed: false,
-      },
-      [signal],
-    );
-    return normalizedSignal;
-  };
-  Object.defineProperty(childPrototype, 'kill', {
-    configurable: false,
-    enumerable: true,
-    value(signal) {
-      const target = privateWeakMapGet(childLifecycleTargets, this);
-      return authenticatedLifecycleResult(
-        target?.context,
-        'kill',
-        signal,
-        (authenticatedSignal) => {
-          const normalizedSignal = normalizeChildSignal(authenticatedSignal);
-          if (target.pid === undefined) return false;
-          if (privateMapGet(processLifecycleTargets, target.pid) !== target) return false;
-          try {
-            const result = intrinsicReflectApply(originalProcessKill, process, [
-              target.pid,
-              normalizedSignal,
-            ]);
-            if (result) this.killed = true;
-            return result;
-          } catch (error) {
-            if (error?.code === 'ESRCH') return false;
-            if (error?.code === 'EINVAL' || error?.code === 'ENOSYS') throw error;
-            if (error?.code) {
-              this.emit('error', error);
-              return false;
-            }
-            throw error;
-          }
-        },
-      );
-    },
-    writable: false,
-  });
-  const authenticatedChildDisconnect = function () {
-    return authenticatedLifecycleResult(
-      privateWeakMapGet(childLifecycleContexts, this),
-      'disconnect',
-      undefined,
-      () =>
-        withNativeChannelControl(privateWeakMapGet(childMessageContexts, this), () =>
-          intrinsicReflectApply(
-            privateWeakMapGet(childDisconnectImplementations, this),
-            this,
-            [],
-          ),
-        ),
-    );
-  };
-  Object.defineProperty(childPrototype, 'disconnect', {
-    configurable: false,
-    enumerable: true,
-    get() {
-      if (
-        this !== childPrototype &&
-        (!privateWeakMapHas(childDisconnectImplementations, this) ||
-          !privateWeakMapHas(childLifecycleContexts, this))
-      ) {
-        return undefined;
-      }
-      return authenticatedChildDisconnect;
-    },
-    set(value) {
-      if (typeof value !== 'function') throw descendantError();
-      privateWeakMapSet(childDisconnectImplementations, this, value);
-    },
-  });
-  Object.defineProperty(process, 'kill', {
-    configurable: false,
-    enumerable: true,
-    value(pid, signal) {
-      const target = privateMapGet(processLifecycleTargets, pid);
-      if (!target) throw descendantError();
-      return authenticatedLifecycleResult(
-        target.context,
-        'kill',
-        { pid, signal },
-        (authenticated) =>
-          intrinsicReflectApply(originalProcessKill, process, [
-            authenticated.pid,
-            authenticated.signal,
-          ]),
-      );
-    },
-    writable: false,
-  });
-  const portPrototype = workerThreads.MessagePort.prototype;
-  const originalPortPostMessage = portPrototype.postMessage;
-  Object.defineProperty(portPrototype, 'postMessage', {
-    configurable: false,
-    enumerable: true,
-    value(message, transferList) {
-      const context = privateWeakMapGet(portMessageContexts, this);
-      if (!context) {
-        return intrinsicReflectApply(originalPortPostMessage, this, [
-          message,
-          transferList,
-        ]);
-      }
-      return authenticatedPostMessage(
-        originalPortPostMessage,
-        this,
-        context,
-        message,
-        transferList,
-      );
-    },
-    writable: false,
-  });
-  const OriginalMessageChannel = workerThreads.MessageChannel;
-  class FencedMessageChannel extends OriginalMessageChannel {
-    constructor() {
-      super();
-      privateWeakMapSet(portMessageContexts, this.port1, { blocked: true });
-      privateWeakMapSet(portMessageContexts, this.port2, { blocked: true });
-    }
-  }
-  Object.defineProperty(workerThreads, 'MessageChannel', {
-    configurable: false,
-    enumerable: true,
-    value: FencedMessageChannel,
-    writable: false,
-  });
-  if (typeof workerThreads.postMessageToThread === 'function') {
-    Object.defineProperty(workerThreads, 'postMessageToThread', {
-      configurable: false,
-      enumerable: true,
-      value() {
-        throw descendantError();
-      },
-      writable: false,
-    });
-  }
-  Object.defineProperty(workerThreads, 'setEnvironmentData', {
-    configurable: false,
-    enumerable: true,
-    value() {
-      throw descendantError();
-    },
-    writable: false,
-  });
-  if (workerThreads.BroadcastChannel) {
-    class FencedBroadcastChannel {
-      constructor() {
-        throw descendantError();
-      }
-    }
-    Object.defineProperty(workerThreads, 'BroadcastChannel', {
-      configurable: false,
-      enumerable: true,
-      value: FencedBroadcastChannel,
-      writable: false,
-    });
-    if (globalThis.BroadcastChannel) {
-      Object.defineProperty(globalThis, 'BroadcastChannel', {
-        configurable: false,
-        enumerable: true,
-        value: FencedBroadcastChannel,
-        writable: false,
-      });
-    }
-  }
-}
-function fenceChildProcessMethod(name, optionsIndex, mode) {
-  const original = childProcess[name];
-  Object.defineProperty(childProcess, name, {
-    configurable: false,
-    enumerable: true,
-    value(...receivedArgs) {
-      const args = [...receivedArgs];
-      if (Array.isArray(args[1])) args[1] = [...args[1]];
-      const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
-      const nonce = randomBytes(16).toString('hex');
-      const candidate = args[index];
-      const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
-      if (candidate && typeof candidate === 'object') args[index] = rawOptions;
-      if (rawOptions.signal !== undefined) throw descendantError();
-      const cwd = invocationCwd(rawOptions.cwd);
-      const environmentEntries = snapshotInvocation(
-        normalizedInvocationEnvironment(rawOptions.env),
-      ).value;
-      const stdio = authenticatedChildStdio(
-        rawOptions.stdio,
-        mode,
-        rawOptions.silent,
-        rawOptions.input,
-      );
-      let entrypoint;
-      let execArgv;
-      let applicationArgs;
-      if (mode === 'node' || mode === 'sync') {
-        requireNodeExecutable(args[0], rawOptions);
-        const invocation = requireFileBackedNodeArguments(args[1], cwd);
-        entrypoint = invocation.entrypoint;
-        execArgv = invocation.execArgv;
-        applicationArgs = invocation.applicationArgs;
-      }
-      if (mode === 'fork') {
-        if (rawOptions.execPath) requireNodeExecutable(rawOptions.execPath, rawOptions);
-        entrypoint = requireFileBackedEntrypoint(args[0], cwd);
-        execArgv = requireSafeExecArgv(
-          Array.isArray(rawOptions.execArgv) ? rawOptions.execArgv : process.execArgv,
-        );
-        applicationArgs = Array.isArray(args[1]) ? [...args[1]] : [];
-        if (applicationArgs.some((value) => typeof value !== 'string')) throw descendantError();
-      }
-      const authenticatedOptions = snapshotInvocation({
-        ...rawOptions,
-        cwd,
-        env: privateObjectFromEntries(environmentEntries),
-        stdio,
-      }).value;
-      const semantics = executionSemantics(mode, entrypoint, execArgv, {
-        applicationArgs,
-        options: authenticatedOptions,
-      });
-      const authenticatedArgs = authenticatedChildArguments(
-        args,
-        index,
-        authenticatedOptions,
-        environmentEntries,
-        nonce,
-        semantics,
-      );
-      const options = authenticatedArgs[index];
-      if (mode === 'fork') {
-        options.execPath = nodeExecutable;
-      }
-      if (mode !== 'sync' && activeChildSpawnAuthorization) throw descendantError();
-      const spawnAuthorization =
-        mode === 'sync'
-          ? undefined
-          : {
-              environment: options.env,
-              lifecycleContext: lifecycleContext('child-lifecycle', nonce),
-              receiver: undefined,
-            };
-      if (spawnAuthorization) {
-        activeChildSpawnAuthorization = spawnAuthorization;
-      }
-      let child;
-      try {
-        child = intrinsicReflectApply(original, this, authenticatedArgs);
-      } finally {
-        if (spawnAuthorization) {
-          activeChildSpawnAuthorization = undefined;
-          if (spawnAuthorization.receiver) {
-            privateWeakMapDelete(authorizedChildSpawns, spawnAuthorization.receiver);
-          }
-        }
-      }
-      if (mode === 'sync') {
-        recordChildLaunch(nonce, child, semantics);
-      } else if (typeof child?.once === 'function') {
-        child.once('spawn', () => recordChildLaunch(nonce, child, semantics));
-      }
-      if (mode !== 'sync') {
-        const context = spawnAuthorization.lifecycleContext;
-        const target = {
-          pid: typeof child?.pid === 'number' ? child.pid : undefined,
-          context,
-        };
-        privateWeakMapSet(childLifecycleContexts, child, context);
-        privateWeakMapSet(childLifecycleTargets, child, target);
-        if (target.pid !== undefined) {
-          const pid = target.pid;
-          privateMapSet(processLifecycleTargets, pid, target);
-          child.once?.('exit', () => {
-            if (privateMapGet(processLifecycleTargets, pid) === target) {
-              privateMapDelete(processLifecycleTargets, pid);
-            }
-          });
-        }
-      }
-      if (mode === 'fork') {
-        const messageContext = {
-          mode: 'fork-message',
-          recipient: nonce,
-          sequence: 0,
-          sendDepth: 0,
-          nativeWriteDepth: 0,
-          nativeControlDepth: 0,
-          nativeControlContext: lifecycleContext('native-channel', nonce),
-        };
-        privateWeakMapSet(childMessageContexts, child, messageContext);
-        let channel;
-        try {
-          channel = requireNativeChannelHandle(child);
-        } catch (error) {
-          child.kill();
-          throw error;
-        }
-        fenceNativeChannel(channel.handle, messageContext);
-        child[channel.symbol] = nativeHandleFacade(channel.handle, 'onread');
-      }
-      return child;
-    },
-    writable: false,
-  });
-}
-function rejectChildProcessMethod(name) {
-  Object.defineProperty(childProcess, name, {
-    configurable: false,
-    enumerable: true,
-    value() {
-      throw descendantError();
-    },
-    writable: false,
-  });
-}
-function fenceNativeProcessLaunchBindings() {
-  const originalBinding = process.binding;
-  Object.defineProperty(process, 'binding', {
-    configurable: false,
-    enumerable: false,
-    value(name) {
-      if (name === 'process_wrap' || name === 'spawn_sync') {
-        throw descendantError();
-      }
-      return intrinsicReflectApply(originalBinding, process, [name]);
-    },
-    writable: false,
-  });
-}
-function fenceWorkers() {
-  const OriginalWorker = workerThreads.Worker;
-  const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD;
-  function AuthenticatedWorker(filename, options = {}) {
-    if (!new.target) throw descendantError();
-    const capturedOptions = { ...options };
-    if (
-      capturedOptions.eval ||
-      (typeof filename === 'string' && filename.startsWith('data:')) ||
-      (filename instanceof URL && filename.protocol === 'data:')
-    ) {
-      throw descendantError();
-    }
-    const nonce = randomBytes(16).toString('hex');
-    const requestedExecArgv = Array.isArray(capturedOptions.execArgv)
-      ? [...capturedOptions.execArgv]
-      : [...process.execArgv];
-    const normalizedExecArgv = requireSafeExecArgv(requestedExecArgv);
-    if (Array.isArray(capturedOptions.transferList) && capturedOptions.transferList.length > 0) {
-      throw descendantError();
-    }
-    if (capturedOptions.stdin || capturedOptions.signal !== undefined) throw descendantError();
-    const entrypoint = requireFileBackedEntrypoint(
-      filename instanceof URL ? fileURLToPath(filename) : filename,
-    );
-    const invocationOptions = { ...capturedOptions };
-    delete invocationOptions.execArgv;
-    delete invocationOptions.transferList;
-    const environmentEntries = snapshotInvocation(
-      normalizedInvocationEnvironment(capturedOptions.env),
-    ).value;
-    invocationOptions.env = privateObjectFromEntries(environmentEntries);
-    const authenticatedInvocationOptions = snapshotInvocation(invocationOptions).value;
-    const semantics = executionSemantics(
-      'worker',
-      entrypoint,
-      normalizedExecArgv,
-      {
-        options: authenticatedInvocationOptions,
-      },
-    );
-    const workerNewTarget =
-      new.target === AuthenticatedWorker ? OriginalWorker : new.target;
-    const worker = intrinsicReflectConstruct(
-      OriginalWorker,
-      [
-        entrypoint,
-        {
-          ...authenticatedInvocationOptions,
-          env: authenticatedChildEnvironment(
-            environmentEntries,
-            nonce,
-            semantics,
-          ),
-          execArgv: ['--require', authorityPreload, ...requestedExecArgv],
-        },
-      ],
-      workerNewTarget,
-    );
-    privateWeakMapSet(workerMessageContexts, worker, {
-      mode: 'worker-message',
-      recipient: nonce,
-      sequence: 0,
-    });
-    privateWeakMapSet(
-      workerLifecycleContexts,
-      worker,
-      lifecycleContext('worker-lifecycle', nonce),
-    );
-    persistLoaderObservation(
-      'launch',
-      descendantExecutionRecord(
-        nonce,
-        'worker:' + worker.threadId,
-        semantics,
-        currentIdentity,
-        currentAuthorityNonce,
-      ),
-    );
-    return worker;
-  }
-  Object.defineProperty(AuthenticatedWorker, 'prototype', {
-    configurable: false,
-    value: OriginalWorker.prototype,
-    writable: false,
-  });
-  Object.setPrototypeOf(AuthenticatedWorker, Function.prototype);
-  Object.defineProperty(OriginalWorker.prototype, 'constructor', {
-    configurable: false,
-    enumerable: false,
-    value: AuthenticatedWorker,
-    writable: false,
-  });
-  Object.defineProperty(workerThreads, 'Worker', {
-    configurable: false,
-    enumerable: true,
-    value: AuthenticatedWorker,
-    writable: false,
-  });
-}
-const optionalArgsIndex = (args) => (Array.isArray(args[1]) ? 2 : 1);
-const canAuthenticateChildProcesses =
-  Boolean(process.env.NODE_OPTIONS) &&
-  Boolean(process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD) &&
-  (Boolean(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD) ||
-    (Boolean(metroPolicyCapability) && Boolean(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS)));
-if (canAuthenticateChildProcesses) {
-  fenceNativeProcessLaunchBindings();
-  installMessageFences();
-  if (descendantNonce) {
-    if (typeof process.send === 'function') {
-      const originalSend = process.send;
-      Object.defineProperty(process, 'send', {
-        configurable: false,
-        enumerable: true,
-        value(message, sendHandle, options, callback) {
-          return authenticatedIpcSend(
-            originalSend,
-            process,
-            descendantMessageContext,
-            message,
-            sendHandle,
-            options,
-            callback,
-          );
-        },
-        writable: false,
-      });
-    }
-    if (workerThreads.parentPort) {
-      privateWeakMapSet(
-        portMessageContexts,
-        workerThreads.parentPort,
-        descendantMessageContext,
-      );
-    }
-  }
-  fenceChildProcessMethod('spawn', optionalArgsIndex, 'node');
-  fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
-  fenceChildProcessMethod('fork', optionalArgsIndex, 'fork');
-  rejectChildProcessMethod('exec');
-  rejectChildProcessMethod('execFile');
-  rejectChildProcessMethod('execFileSync');
-  rejectChildProcessMethod('execSync');
-  fenceWorkers();
-}
-function digestRuntimeFile(file) {
-  const refusal = (message) => {
-    const error = new Error('METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + message);
-    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
-    return error;
-  };
-  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    const initial = fs.fstatSync(descriptor);
-    if (!initial.isFile()) {
-      throw refusal('native addon is not a regular file');
-    }
-    if (initial.size > 128 * 1024 * 1024) {
-      throw refusal('native addon exceeds the 128 MiB evidence limit');
-    }
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let position = 0;
-    while (position < initial.size) {
-      const bytesRead = fs.readSync(
-        descriptor,
-        buffer,
-        0,
-        Math.min(buffer.length, initial.size - position),
-        position,
-      );
-      if (bytesRead === 0 || position + bytesRead > 128 * 1024 * 1024) {
-        throw refusal('native addon changed while reading evidence');
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      position += bytesRead;
-    }
-    if (fs.readSync(descriptor, buffer, 0, 1, position) !== 0) {
-      throw refusal('native addon changed while reading evidence');
-    }
-    const final = fs.fstatSync(descriptor);
-    if (
-      final.dev !== initial.dev ||
-      final.ino !== initial.ino ||
-      final.size !== initial.size ||
-      final.mtimeMs !== initial.mtimeMs ||
-      final.ctimeMs !== initial.ctimeMs
-    ) {
-      throw refusal('native addon changed while reading evidence');
-    }
-    return hash.digest('hex');
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
-function waitForNativeAddonAcknowledgment(requestId, digest) {
-  const refusal = (message) => {
-    const error = new Error('METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + message);
-    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
-    return error;
-  };
-  const acknowledgmentRoot = process.env.RN_DEV_AGENT_METRO_NATIVE_ADDON_ACK_ROOT;
-  if (!usesExternalEvidenceOwner) return null;
-  if (!acknowledgmentRoot || !/^[a-f0-9]{32}$/.test(requestId)) {
-    throw refusal('launcher acknowledgment channel is unavailable');
-  }
-  const acknowledgmentPath = path.join(acknowledgmentRoot, requestId + '.json');
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try {
-      const acknowledgment = JSON.parse(fs.readFileSync(acknowledgmentPath, 'utf8'));
-      if (
-        acknowledgment.version !== 1 ||
-        acknowledgment.requestId !== requestId ||
-        acknowledgment.digest !== digest ||
-        acknowledgment.accepted !== true ||
-        typeof acknowledgment.path !== 'string'
-      ) {
-        throw refusal(
-          typeof acknowledgment.reason === 'string'
-            ? acknowledgment.reason
-            : 'launcher rejected the requested bytes',
-        );
-      }
-      return acknowledgment.path;
-    } catch (error) {
-      if (error && error.code !== 'ENOENT') throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  throw refusal('launcher acknowledgment timed out');
-}
-function nativeAddonEvidenceStageError(stage, caught) {
-  if (
-    caught &&
-    (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
-      caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
-  ) {
-    return caught;
-  }
-  const code =
-    caught && typeof caught.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(caught.code)
-      ? caught.code
-      : 'UNKNOWN';
-  const error = new Error(
-    'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: ' + stage + ' failed (' + code + ')',
-  );
-  error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
-  return error;
-}
-function prepareNativeAddonLoad(file) {
-  const requestedPath = path.resolve(String(file));
-  let resolved;
-  try {
-    resolved = fs.realpathSync(requestedPath);
-  } catch (caught) {
-    if (caught && (caught.code === 'ENOENT' || caught.code === 'ENOTDIR')) {
-      const error = new Error(
-        'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
-      );
-      error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
-      throw error;
-    }
-    throw nativeAddonEvidenceStageError('canonical-path', caught);
-  }
-  let regularFile;
-  try {
-    regularFile = fs.statSync(resolved).isFile();
-  } catch (caught) {
-    throw nativeAddonEvidenceStageError('file-metadata', caught);
-  }
-  if (!regularFile) {
-    const error = new Error(
-      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: not-regular:' +
-        sanitizedNativeAddonBasename(resolved),
-    );
-    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
-    throw error;
-  }
-  let withinAllowedRoot;
-  try {
-    withinAllowedRoot = isWithinAllowedCodeRoot(resolved);
-  } catch (caught) {
-    throw nativeAddonEvidenceStageError('root-containment', caught);
-  }
-  if (!withinAllowedRoot) {
-    const error = new Error(
-      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
-    );
-    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
-    throw error;
-  }
-  let digest;
-  try {
-    digest = digestRuntimeFile(resolved);
-  } catch (caught) {
-    throw nativeAddonEvidenceStageError('pre-load-digest', caught);
-  }
-  let requestId;
-  try {
-    requestId = randomBytes(16).toString('hex');
-  } catch (caught) {
-    throw nativeAddonEvidenceStageError('request-id', caught);
-  }
-  if (usesExternalEvidenceOwner) {
-    try {
-      persistLoaderObservation(
-        'native-addon-request',
-        canonicalAuthorityJson({ requestId, path: resolved, digest }),
-      );
-    } catch (caught) {
-      throw nativeAddonEvidenceStageError('request-publish', caught);
-    }
-    let acknowledgedPath;
-    try {
-      acknowledgedPath = waitForNativeAddonAcknowledgment(requestId, digest);
-    } catch (caught) {
-      throw nativeAddonEvidenceStageError('acknowledgment-read', caught);
-    }
-    if (acknowledgedPath !== resolved) {
-      throw new Error('native addon acknowledgment path changed');
-    }
-  } else {
-    persistLoaderObservation('input', resolved, digest);
-  }
-  if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
-    privateMapSet(observedLoaderDigests, resolved, digest);
-    privateSetAdd(accumulatedRuntimeInputs, resolved);
-    loaderEpoch += 1;
-  }
-  return { requestId, resolved, digest };
-}
-function recordRuntimeFileInput(file) {
-  const resolved = fs.realpathSync(file);
-  if (!fs.statSync(resolved).isFile() || !isWithinAllowedCodeRoot(resolved)) {
-    const error = new Error(
-      'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' + sanitizedNativeAddonPath(file),
-    );
-    error.code = 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON';
-    throw error;
-  }
-  const digest = digestRuntimeFile(resolved);
-  if (privateMapGet(observedLoaderDigests, resolved) !== digest) {
-    privateMapSet(observedLoaderDigests, resolved, digest);
-    privateSetAdd(accumulatedRuntimeInputs, resolved);
-    loaderEpoch += 1;
-    persistLoaderObservation('input', resolved, digest);
-  }
-  return resolved;
-}
-const originalDlopen = process.dlopen;
-function reportNativeAddonCompletion(prepared, outcome, digest) {
-  if (usesExternalEvidenceOwner) {
-    persistLoaderObservation(
-      'native-addon-completion',
-      canonicalAuthorityJson({
-        requestId: prepared.requestId,
-        path: prepared.resolved,
-        digest,
-        outcome,
-      }),
-    );
-  } else if (outcome === 'success') {
-    persistLoaderObservation('stability', prepared.resolved, digest);
-  } else {
-    recordLoaderViolation(
-      'METRO_NATIVE_ADDON_LOAD_FAILED: ' + sanitizedNativeAddonBasename(prepared.resolved),
-    );
-  }
-}
-const attestNativeAddonLoad = function(module, file) {
-  let prepared;
-  try {
-    prepared = prepareNativeAddonLoad(file);
-  } catch (caught) {
-    const sanitizedPath = sanitizedNativeAddonPath(file);
-    const preparationCode =
-      caught && typeof caught.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(caught.code)
-        ? caught.code
-        : 'UNKNOWN';
-    const message =
-      caught &&
-      (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
-        caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
-        ? caught.message
-        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: preparation failed (' +
-          preparationCode +
-          '): ' +
-          sanitizedPath;
-    recordLoaderViolation(message);
-    const error = new Error(message);
-    error.code =
-      caught && caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON'
-        ? caught.code
-        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
-    throw error;
-  }
-  const args = privateArraySlice(arguments);
-  args[1] = prepared.resolved;
-  let result;
-  try {
-    result = intrinsicReflectApply(originalDlopen, process, args);
-  } catch (caught) {
-    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
-    throw caught;
-  }
-  let postLoadDigest;
-  try {
-    postLoadDigest = digestRuntimeFile(prepared.resolved);
-  } catch (caught) {
-    const message =
-      caught && caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE'
-        ? caught.message
-        : 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon stability could not be verified';
-    reportNativeAddonCompletion(prepared, 'failure', prepared.digest);
-    recordLoaderViolation(message);
-    const error = new Error(message);
-    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
-    throw error;
-  }
-  if (postLoadDigest !== prepared.digest) {
-    const message =
-      'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE: native addon changed during load';
-    reportNativeAddonCompletion(prepared, 'failure', postLoadDigest);
-    recordLoaderViolation(message);
-    const error = new Error(message);
-    error.code = 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE';
-    throw error;
-  }
-  reportNativeAddonCompletion(prepared, 'success', postLoadDigest);
-  return result;
-};
-Object.defineProperty(process, 'dlopen', {
-  configurable: false,
-  enumerable: true,
-  value: attestNativeAddonLoad,
-  writable: false,
-});
-function digestRuntimeSource(source) {
-  const bytes =
-    typeof source === 'string'
-      ? Buffer.from(source)
-      : Buffer.isBuffer(source)
-        ? source
-        : source instanceof ArrayBuffer
-          ? Buffer.from(source)
-          : typeof SharedArrayBuffer !== 'undefined' && source instanceof SharedArrayBuffer
-            ? Buffer.from(source)
-          : ArrayBuffer.isView(source)
-            ? Buffer.from(source.buffer, source.byteOffset, source.byteLength)
-            : null;
-  if (!bytes || bytes.byteLength > 128 * 1024 * 1024) {
-    throw new Error('unsupported runtime module source');
-  }
-  return createHash('sha256').update(bytes).digest('hex');
-}
-function recordLoaderResult(url, result) {
-  if (url.startsWith('node:')) return;
-  if (!url.startsWith('file:')) {
-    recordLoaderViolation('Metro runtime module URL scheme is unsupported');
-    return;
-  }
-  if (result && result.format === 'addon') {
-    try {
-      recordRuntimeFileInput(fileURLToPath(url));
-    } catch (caught) {
-      const message =
-        caught &&
-        (caught.code === 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON' ||
-          caught.code === 'METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE')
-          ? caught.message
-          : 'RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON: ' +
-            sanitizedNativeAddonPath(fileURLToPath(url));
-      recordLoaderViolation(message);
-    }
-    return;
-  }
-  try {
-    const resolved = fs.realpathSync(fileURLToPath(url));
-    const digest = digestRuntimeSource(result && result.source);
-    if (privateMapGet(observedLoaderDigests, resolved) === digest) return;
-    privateMapSet(observedLoaderDigests, resolved, digest);
-    privateSetAdd(accumulatedRuntimeInputs, resolved);
-    loaderEpoch += 1;
-    persistLoaderObservation('input', resolved, digest);
-  } catch {
-    recordLoaderViolation('Metro runtime module cannot be resolved');
-  }
-}
-if (typeof registerHooks === 'function') {
-  registerHooks({
-    resolve(specifier, context, nextResolve) {
-      return nextResolve(specifier, context);
-    },
-    load(url, context, nextLoad) {
-      const result = nextLoad(url, context);
-      recordLoaderResult(url, result);
-      return result;
-    },
-  });
-  const rejectHookRegistration = () => {
-    recordLoaderViolation('additional Metro runtime loader hooks are unsupported');
-    throw new Error('RN_DEV_AGENT_UNSUPPORTED_MODULE_HOOK');
-  };
-  moduleApi.register = rejectHookRegistration;
-  moduleApi.registerHooks = rejectHookRegistration;
-  moduleApi.syncBuiltinESMExports();
-} else {
-  recordLoaderViolation('Metro runtime module loading requires Node.js 22.15 or newer');
-}
-const preloadPath = fs.realpathSync(__filename);
-const preloadDigest = digestRuntimeFile(preloadPath);
-privateMapSet(observedLoaderDigests, preloadPath, preloadDigest);
-privateSetAdd(accumulatedRuntimeInputs, preloadPath);
-loaderEpoch += 1;
-persistLoaderObservation('input', preloadPath, preloadDigest);
-function sourceRoot() {
-  if (sourceRootResolved) return cachedSourceRoot;
-  if (process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT) {
-    cachedSourceRoot = fs.realpathSync(process.env.RN_DEV_AGENT_METRO_CONTENT_ROOT);
-    sourceRootResolved = true;
-    return cachedSourceRoot;
-  }
-  try {
-    cachedSourceRoot = fs.realpathSync(execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim());
-    sourceRootResolved = true;
-    return cachedSourceRoot;
-  } catch (error) {
-    if (String(error && error.stderr || '').toLowerCase().includes('not a git repository')) {
-      sourceRootResolved = true;
-      cachedSourceRoot = null;
-      return cachedSourceRoot;
-    }
-    throw error;
-  }
-}
-function runtimePolicy(config, callbackRuntimeInputs = []) {
-  const root = sourceRoot();
-  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
-  const metroInstanceId = process.env.RN_DEV_AGENT_METRO_INSTANCE_ID;
-  if (root === null || !metroPolicyCapability || !sessionId || !metroInstanceId) return;
-  const runtimeInputs = new IntrinsicSet();
-  const violations = [];
-  const excludedRuntimeDirectories = [
-    '.gradle',
-    '.expo',
-    '.cache',
-    'ios/Pods',
-    'ios/build',
-    'ios/DerivedData',
-    'android/build',
-    'android/app/build',
-    'android/app/.cxx',
-  ];
-  const resolver = config.resolver || {};
-  const transformer = config.transformer || {};
-  const serializer = config.serializer || {};
-  function isContained(candidate) {
-    const child = path.relative(root, candidate);
-    return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
-  }
-  function isWithin(parent, candidate) {
-    const child = path.relative(parent, candidate);
-    return child !== '..' && !child.startsWith('..' + path.sep) && !path.isAbsolute(child);
-  }
-  function isExcluded(candidate) {
-    const entry = path.relative(root, candidate).split(path.sep).join('/');
-    return excludedRuntimeDirectories.some((excluded) =>
-      entry === excluded ||
-      entry.startsWith(excluded + '/') ||
-      entry.endsWith('/' + excluded) ||
-      entry.includes('/' + excluded + '/')
-    );
-  }
-  function addPath(value, field) {
-    if (value == null) return;
-    if (typeof value !== 'string') {
-      privateArrayPush(violations, field + ' must be a path');
-      return;
-    }
-    try {
-      privateSetAdd(runtimeInputs, fs.realpathSync(path.resolve(process.cwd(), value)));
-    } catch {
-      privateArrayPush(violations, field + ' cannot be resolved');
-    }
-  }
-  function addPaths(values, field) {
-    if (values == null) return;
-    if (!Array.isArray(values)) {
-      privateArrayPush(violations, field + ' must contain paths');
-      return;
-    }
-    privateArrayForEach(values, (value) => addPath(value, field));
-  }
-  function addModule(value, field) {
-    if (value == null) return null;
-    if (typeof value !== 'string') {
-      privateArrayPush(violations, field + ' must identify a module');
-      return null;
-    }
-    try {
-      const resolved = fs.realpathSync(require.resolve(value, { paths: [process.cwd()] }));
-      privateSetAdd(runtimeInputs, resolved);
-      if (!isContained(resolved) || isExcluded(resolved)) {
-        privateArrayPush(
-          violations,
-          field + ' must resolve to Git-authenticated source or a local dependency store',
-        );
-      }
-      return resolved;
-    } catch {
-      privateArrayPush(violations, field + ' cannot be resolved as an authenticated module');
-      return null;
-    }
-  }
-  function canonicalPackageRoot(packageName) {
-    const entry = fs.realpathSync(require.resolve(packageName, { paths: [process.cwd()] }));
-    let cursor = path.dirname(entry);
-    while (true) {
-      try {
-        const manifest = JSON.parse(fs.readFileSync(path.join(cursor, 'package.json'), 'utf8'));
-        if (manifest.name === packageName) return fs.realpathSync(cursor);
-      } catch {}
-      const parent = path.dirname(cursor);
-      if (parent === cursor) return null;
-      cursor = parent;
-    }
-  }
-  function addExecutableModule(value, field, supportedPackages) {
-    const resolved = addModule(value, field);
-    if (!resolved) return null;
-    const packageName =
-      supportedPackages.find((candidate) => {
-        try {
-          const packageRoot = canonicalPackageRoot(candidate);
-          return packageRoot !== null && isWithin(packageRoot, resolved);
-        } catch {
-          return false;
-        }
-      }) || null;
-    if (packageName === null) {
-      privateArrayPush(violations, field + ' is not a supported Metro executable module');
-    }
-    return { resolved, packageName };
-  }
-  addPath(config.projectRoot, 'projectRoot');
-  addPaths(config.watchFolders, 'watchFolders');
-  addPaths(resolver.nodeModulesPaths, 'nodeModulesPaths');
-  addPaths((process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean), 'NODE_PATH');
-  privateArrayForEach(callbackRuntimeInputs, (value) =>
-    addModule(value, 'Metro callback runtime input')
-  );
-  if (resolver.extraNodeModules !== undefined) {
-    if (!resolver.extraNodeModules || typeof resolver.extraNodeModules !== 'object' || Array.isArray(resolver.extraNodeModules)) {
-      privateArrayPush(violations, 'extraNodeModules must be a path map');
-    } else {
-      privateArrayForEach(privateObjectValues(resolver.extraNodeModules), (value) =>
-        addPath(value, 'extraNodeModules')
-      );
-    }
-  }
-  if (resolver.resolveRequest != null) {
-    privateArrayPush(violations, 'custom Metro resolvers are unsupported');
-  }
-  const transformerPath = addExecutableModule(
-    config.transformerPath,
-    'transformerPath',
-    ['metro-transform-worker', '@expo/metro-config'],
-  );
-  const babelTransformerPath = addExecutableModule(
-    transformer.babelTransformerPath,
-    'babelTransformerPath',
-    ['metro-babel-transformer', '@react-native/metro-babel-transformer', '@expo/metro-config'],
-  );
-  const expoSerializerSupported =
-    transformerPath?.packageName === '@expo/metro-config' ||
-    babelTransformerPath?.packageName === '@expo/metro-config';
-  const expoSerializer =
-    typeof serializer.customSerializer === 'function' &&
-    ('__originalSerializer' in serializer.customSerializer ||
-      serializer.customSerializer.__expoSerializer === true);
-  if (serializer.customSerializer != null && (!expoSerializerSupported || !expoSerializer)) {
-    privateArrayPush(violations, 'custom Metro serializers are unsupported');
-  }
-  addExecutableModule(resolver.dependencyExtractor, 'dependencyExtractor', []);
-  addExecutableModule(resolver.hasteImplModulePath, 'hasteImplModulePath', []);
-  addExecutableModule(resolver.emptyModulePath, 'emptyModulePath', ['metro-runtime']);
-  addExecutableModule(transformer.asyncRequireModulePath, 'asyncRequireModulePath', [
-    'metro-runtime',
-  ]);
-  addExecutableModule(transformer.assetRegistryPath, 'assetRegistryPath', [
-    '@react-native/assets-registry',
-    'expo-asset',
-  ]);
-  addExecutableModule(transformer.minifierPath, 'minifierPath', ['metro-minify-terser']);
-  if (transformer.assetPlugins != null) {
-    if (!Array.isArray(transformer.assetPlugins)) {
-      privateArrayPush(violations, 'assetPlugins must identify modules');
-    } else {
-      privateArrayForEach(transformer.assetPlugins, (value) =>
-        addExecutableModule(value, 'assetPlugins', ['expo-asset', '@expo/metro-config'])
-      );
-    }
-  }
-  if (serializer.polyfillModuleNames != null) {
-    if (!Array.isArray(serializer.polyfillModuleNames)) {
-      privateArrayPush(violations, 'polyfillModuleNames must identify modules');
-    } else {
-      privateArrayForEach(serializer.polyfillModuleNames, (value) =>
-        addModule(value, 'polyfillModuleNames')
-      );
-    }
-  }
-  const authorityPreload = process.env.RN_DEV_AGENT_METRO_AUTHORITY_PRELOAD || '';
-  const baseNodeOptions = process.env.RN_DEV_AGENT_METRO_BASE_NODE_OPTIONS || '';
-  const expectedNodeOptions = [baseNodeOptions, authorityPreload && '--require=' + canonicalAuthorityJson(authorityPreload)]
-    .filter(Boolean)
-    .join(' ');
-  let authorityPreloadMatches = false;
-  try {
-    authorityPreloadMatches =
-      fs.realpathSync(authorityPreload) === fs.realpathSync(__filename) &&
-      (Number.isInteger(Number(process.env.RN_DEV_AGENT_METRO_EVIDENCE_FD)) ||
-        fs.realpathSync(process.env.RN_DEV_AGENT_METRO_RUNTIME_LOADS) ===
-          fs.realpathSync(path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_LOADS)})));
-  } catch {}
-  if (
-    !authorityPreload ||
-    !authorityPreloadMatches ||
-    process.env.NODE_OPTIONS !== expectedNodeOptions ||
-    hasNodeLoaderOption(baseNodeOptions) ||
-    hasUnsupportedNodeOption(baseNodeOptions)
-  ) {
-    privateArrayPush(violations, 'NODE_OPTIONS contain unsupported execution inputs');
-  }
-  if (!initialCacheCaptured) {
-    privateArrayForEach(Object.keys(require.cache), (value) =>
-      addPath(value, 'loaded Metro config module')
-    );
-    initialCacheCaptured = true;
-  }
-  privateSetForEach(runtimeInputs, (value) =>
-    privateSetAdd(accumulatedRuntimeInputs, value),
-  );
-  privateArrayForEach(violations, (value) =>
-    privateSetAdd(accumulatedViolations, value)
-  );
-  const payload = {
-    version: 1,
-    runtimeEvidenceAuthority: 'reported-v1',
-    sessionId,
-    metroInstanceId,
-    contentRoot: root,
-    appRoot: fs.realpathSync(process.cwd()),
-    runtimeInputs: privateArraySort(privateSetValues(accumulatedRuntimeInputs)),
-    violations: privateArraySort(privateSetValues(accumulatedViolations)),
-  };
-  const serializedPayload = canonicalAuthorityJson(payload);
-  if (serializedPayload === lastPolicyPayload) return;
-  const receipt = {
-    ...payload,
-    signature: createHmac('sha256', metroPolicyCapability)
-      .update(serializedPayload)
-      .digest('hex'),
-  };
-  const policyPath = path.join(process.cwd(), ${JSON.stringify(METRO_RUNTIME_POLICY2)});
-  const temporary = policyPath + '.' + process.pid + '.tmp';
-  fs.writeFileSync(temporary, canonicalAuthorityJson(receipt) + '\\n', { mode: 0o600 });
-  fs.renameSync(temporary, policyPath);
-  lastPolicyPayload = serializedPayload;
-}
-function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
-  const wrapped = function (...args) {
-    const loaderEpochBefore = loaderEpoch;
-    const refresh = (returnedPaths) => {
-      if (returnedPaths.length > 0 || loaderEpoch !== loaderEpochBefore) {
-        runtimePolicy(getConfig(), returnedPaths);
-      }
-    };
-    const finish = (value) => {
-      const returnedPaths = includeReturnedPaths && Array.isArray(value) ? value : [];
-      refresh(returnedPaths);
-      return typeof value === 'function'
-        ? withPolicyRefresh(value, getConfig, false)
-        : value;
-    };
-    const fail = (error) => {
-      refresh([]);
-      throw error;
-    };
-    try {
-      const result = callback.apply(this, args);
-      return result && typeof result.then === 'function' ? result.then(finish, fail) : finish(result);
-    } catch (error) {
-      return fail(error);
-    }
-  };
-  return Object.assign(wrapped, callback);
-}
-function withPolicyCallbacks(config, names, getConfig) {
-  const callbacks = {};
-  for (let index = 0; index < names.length; index += 1) {
-    const name = names[index];
-    if (typeof config[name] === 'function') {
-      callbacks[name] = withPolicyRefresh(config[name], getConfig, false);
-    }
-  }
-  return callbacks;
-}
-module.exports = function withRnDevAgentAuthority(config) {
-  if (config && typeof config.then === 'function') {
-    return config.then(withRnDevAgentAuthority);
-  }
-  const current = config || {};
-  const resolver = current.resolver || {};
-  const transformer = current.transformer || {};
-  const serializer = current.serializer || {};
-  const original = serializer.getModulesRunBeforeMainModule;
-  const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
-  let finalConfig;
-  finalConfig = {
-    ...current,
-    ...(Array.isArray(current.watchFolders) ? { watchFolders: [...current.watchFolders] } : {}),
-    resolver: {
-      ...resolver,
-      ...(Array.isArray(resolver.nodeModulesPaths) ? { nodeModulesPaths: [...resolver.nodeModulesPaths] } : {}),
-      ...(resolver.extraNodeModules && typeof resolver.extraNodeModules === 'object'
-        ? { extraNodeModules: { ...resolver.extraNodeModules } }
-        : {}),
-    },
-    transformer: {
-      ...transformer,
-      ...(Array.isArray(transformer.assetPlugins) ? { assetPlugins: [...transformer.assetPlugins] } : {}),
-      ...(typeof transformer.getTransformOptions === 'function'
-        ? { getTransformOptions: withPolicyRefresh(transformer.getTransformOptions, () => finalConfig, false) }
-        : {}),
-    },
-    serializer: {
-      ...serializer,
-      ...(typeof serializer.customSerializer === 'function'
-        ? { customSerializer: withPolicyRefresh(serializer.customSerializer, () => finalConfig, false) }
-        : {}),
-      ...withPolicyCallbacks(
-        serializer,
-        [
-          'createModuleIdFactory',
-          'processModuleFilter',
-          'getRunModuleStatement',
-          'isThirdPartyModule',
-          'experimentalSerializerHook',
-        ],
-        () => finalConfig,
-      ),
-      ...(typeof serializer.getPolyfills === 'function'
-        ? { getPolyfills: withPolicyRefresh(serializer.getPolyfills, () => finalConfig, true) }
-        : {}),
-      getModulesRunBeforeMainModule(entryFile) {
-        const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
-        runtimePolicy(finalConfig, result);
-        return result;
-      },
-    },
-  };
-  runtimePolicy(finalConfig);
-  return finalConfig;
-};
-`;
-}
-function previewMetroIntegration(source) {
-  const hasStart = source.includes(METRO_START);
-  const hasEnd = source.includes(METRO_END);
-  if (hasStart !== hasEnd) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt");
-  }
-  if (hasStart)
-    return source;
-  return `${source.trimEnd()}
-
-${METRO_START}
-module.exports = require('./${METRO_ADAPTER}')(module.exports);
-${METRO_END}
-`;
-}
-function restoreMetroIntegration(source) {
-  const start = source.indexOf(METRO_START);
-  const end = source.indexOf(METRO_END);
-  if (start < 0 && end < 0)
-    return source;
-  if (start < 0 || end < start || source.indexOf(METRO_START, start + METRO_START.length) >= 0 || source.indexOf(METRO_END, end + METRO_END.length) >= 0) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: Metro integration sentinel is corrupt");
-  }
-  const blockEnd = end + METRO_END.length;
-  const prefix = source.slice(0, start).trimEnd();
-  const suffix = source.slice(blockEnd).replace(/^(?:\r?\n)+/, "");
-  return suffix ? `${prefix}
-${suffix}` : `${prefix}
-`;
-}
-function parseSupportedScript(script, platform) {
-  if (/[;&|`$<>()\\'"]/.test(script)) {
-    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: shell syntax cannot be wrapped safely");
-  }
-  const command = script.trim().split(/\s+/).filter(Boolean);
-  createBuildLaunchPlan({
-    platform,
-    command,
-    session: {
-      platform,
-      deviceId: platform === "android" ? "emulator-5554" : "preview-device",
-      metroPort: 8081,
-      sessionId: "preview-session"
-    }
-  });
-  return command;
-}
-function previewPackageIntegration(packageJson, existing, sessionCli) {
-  if (existing && packageJson.scripts?.ios === SENTINELS.ios && packageJson.scripts?.android === SENTINELS.android) {
-    return {
-      packageJson,
-      manifest: sessionCli ? { ...existing, sessionCli: resolve10(sessionCli) } : existing
-    };
-  }
-  const ios = packageJson.scripts?.ios;
-  const android = packageJson.scripts?.android;
-  if (typeof ios !== "string" || typeof android !== "string") {
-    throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: ios and android scripts are required");
-  }
-  const manifest = {
-    version: 1,
-    adapter: ADAPTER,
-    ...sessionCli ? { sessionCli: resolve10(sessionCli) } : {},
-    originalScripts: {
-      ios: parseSupportedScript(ios, "ios"),
-      android: parseSupportedScript(android, "android")
-    }
-  };
-  return {
-    packageJson: {
-      ...packageJson,
-      scripts: { ...packageJson.scripts, ...SENTINELS }
-    },
-    manifest
-  };
-}
-function restorePackageIntegration(packageJson, manifest) {
-  const restoredScripts = {
-    ios: manifest.originalScripts.ios.join(" "),
-    android: manifest.originalScripts.android.join(" ")
-  };
-  if (packageJson.scripts?.ios === restoredScripts.ios && packageJson.scripts?.android === restoredScripts.android) {
-    return packageJson;
-  }
-  if (packageJson.scripts?.ios !== SENTINELS.ios || packageJson.scripts?.android !== SENTINELS.android) {
-    throw new Error("SESSION_INTEGRATION_CONFLICT: package scripts changed after integration was installed");
-  }
-  return {
-    ...packageJson,
-    scripts: {
-      ...packageJson.scripts,
-      ...restoredScripts
-    }
-  };
-}
-function renderProjectAdapter() {
-  return String.raw`#!/usr/bin/env node
-'use strict';
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-
-const platform = process.argv[2];
-if (platform !== 'ios' && platform !== 'android') {
-  process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: expected ios or android\n');
-  process.exit(2);
-}
-const manifestPath = path.join(process.cwd(), '.rn-agent', 'integration', 'rn-session-integration.json');
-const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-const original = manifest.originalScripts && manifest.originalScripts[platform];
-if (!Array.isArray(original) || original.length === 0 || original.some((part) => typeof part !== 'string')) {
-  process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: integration manifest is invalid\n');
-  process.exit(2);
-}
-const command = [...original, ...process.argv.slice(3)];
-let session = null;
-let sessionCli = null;
-if (typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
-  process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
-  process.exit(2);
-}
-if (typeof manifest.sessionCli === 'string') {
-  sessionCli = manifest.sessionCli;
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
-    ? ['--experimental-sqlite']
-    : [];
-  let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
-    cwd: process.cwd(),
-    env: process.env,
-    encoding: 'utf8',
-  });
-  if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
-    const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
-      cwd: process.cwd(),
-      env: process.env,
-      encoding: 'utf8',
-    });
-    if (metro.status !== 0) {
-      process.stderr.write(String(metro.stderr) || 'METRO_START_UNAVAILABLE: managed Metro failed\n');
-      process.exit(2);
-    }
-    probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
-      cwd: process.cwd(),
-      env: process.env,
-      encoding: 'utf8',
-    });
-  }
-  if (probe.status === 0) {
-    try {
-      session = JSON.parse(probe.stdout);
-    } catch {
-      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON\n');
-      process.exit(2);
-    }
-  } else if (!String(probe.stderr).includes('no live session matches this canonical worktree')) {
-    process.stderr.write(String(probe.stderr) || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed\n');
-    process.exit(2);
-  }
-}
-function ensureValue(flag, value) {
-  const index = command.indexOf(flag);
-  if (index >= 0) {
-    if (command[index + 1] !== value) {
-      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
-      process.exit(2);
-    }
-    return;
-  }
-  command.push(flag, value);
-}
-function ensureFlag(flag) {
-  if (!command.includes(flag)) command.push(flag);
-}
-function removeValue(flag, value) {
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
-    if (command[index + 1] !== value) {
-      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
-      process.exit(2);
-    }
-    command.splice(index, 2);
-  }
-}
-function managedMetroProxyUrl(binding) {
-  if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
-  if (/^emulator-\\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
-  if (typeof binding.devClientUrl !== 'string') {
-    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL\n');
-    process.exit(2);
-  }
-  try {
-    const encodedMetroUrl = new URL(binding.devClientUrl).searchParams.get('url');
-    if (!encodedMetroUrl) throw new Error('missing url parameter');
-    const metroUrl = new URL(encodedMetroUrl);
-    if (!['http:', 'https:'].includes(metroUrl.protocol) || Number(metroUrl.port) !== binding.metroPort) {
-      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: Dev Client URL contradicts the active managed Metro\n');
-      process.exit(2);
-    }
-    return metroUrl.origin;
-  } catch {
-    process.stderr.write('DEV_CLIENT_ENDPOINT_NOT_FOUND: Dev Client URL does not contain an exact managed Metro endpoint\n');
-    process.exit(2);
-  }
-}
-let expoProxyUrl = null;
-if (session) {
-  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
-    process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete\n');
-    process.exit(2);
-  }
-  if (!sessionCli) {
-    process.stderr.write('SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI\n');
-    process.exit(2);
-  }
-  const offset = command[0] === 'npx' ? 1 : 0;
-  const executable = command[offset];
-  const subcommand = command[offset + 1];
-  if (executable === 'expo' && subcommand === 'run:' + platform) {
-    ensureValue('--device', session.deviceId);
-    removeValue('--port', String(session.metroPort));
-    ensureFlag('--no-bundler');
-    expoProxyUrl = managedMetroProxyUrl(session);
-  } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
-    ensureValue('--udid', session.deviceId);
-    ensureValue('--port', String(session.metroPort));
-    ensureFlag('--no-packager');
-  } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
-    ensureValue('--deviceId', session.deviceId);
-    ensureValue('--port', String(session.metroPort));
-    ensureFlag('--no-packager');
-  } else {
-    process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized\n');
-    process.exit(2);
-  }
-}
-
-const child = spawnSync(command[0], command.slice(1), {
-  cwd: process.cwd(),
-  env: session ? {
-    ...process.env,
-    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
-    RCT_METRO_PORT: String(session.metroPort),
-    RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
-  } : process.env,
-  stdio: 'inherit',
-});
-if (child.error) {
-  process.stderr.write('rn-session-adapter: ' + child.error.message + '\n');
-  process.exit(1);
-}
-if (child.status !== 0) process.exit(child.status === null ? 1 : child.status);
-if (session) {
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
-    ? ['--experimental-sqlite']
-    : [];
-  const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    },
-    encoding: 'utf8',
-  });
-  if (complete.status !== 0) {
-    process.stderr.write(String(complete.stderr) || 'APP_INSTALL_IDENTITY_CHANGED: build receipt could not be recorded\n');
-    process.exit(2);
-  }
-  process.stdout.write(String(complete.stdout));
-}
-process.exit(0);
-`;
-}
-function snapshotBoundFiles(directory, directoryPath, names) {
-  return readBoundDirectoryFiles(directory, names).map((snapshot) => ({
-    ...snapshot,
-    path: join54(directoryPath, snapshot.name)
-  }));
-}
-function casReplaceBoundBatch(directory, writes, dependencies = {}) {
-  return casBoundDirectoryFiles(directory, writes.map((write) => ({
-    expected: write.expected,
-    expectedMode: write.expectedMode ?? write.snapshot.mode,
-    mode: write.mode,
-    name: write.snapshot.name,
-    replacement: write.replacement
-  })), dependencies);
-}
-function assertBoundCleanup(result) {
-  if (result.cleanupPending) {
-    const transaction = result.cleanupObligation?.transactionId ?? "unknown transaction";
-    throw new Error(`SESSION_INTEGRATION_PATH_UNSAFE: committed cleanup remains pending: ${transaction}: ${result.cleanupError ?? "cleanup unavailable"}`);
-  }
-}
-function assertNoSymlinkPath(root, candidate) {
-  const child = relative5(root, candidate);
-  if (child === ".." || child.startsWith(`..${sep6}`) || isAbsolute7(child)) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
-  }
-  let current = root;
-  for (const component of [root, ...child.split(sep6).filter(Boolean)]) {
-    current = component === root ? root : join54(current, component);
-    try {
-      if (lstatSync13(current).isSymbolicLink()) {
-        throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
-      }
-    } catch (error2) {
-      if (error2.code === "ENOENT")
-        break;
-      throw error2;
-    }
-  }
-}
-function regularFileIdentity(root, candidate) {
-  assertNoSymlinkPath(root, candidate);
-  const identity2 = lstatSync13(candidate, { bigint: true });
-  if (!identity2.isFile()) {
-    throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file");
-  }
-  return { dev: identity2.dev, ino: identity2.ino };
-}
-function readRegularFile(root, candidate) {
-  const before = regularFileIdentity(root, candidate);
-  const descriptor = openSync10(candidate, constants6.O_RDONLY | (constants6.O_NOFOLLOW ?? 0) | (constants6.O_NONBLOCK ?? 0));
-  try {
-    const opened = fstatSync6(descriptor, { bigint: true });
-    const after = regularFileIdentity(root, candidate);
-    if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
-      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
-    }
-    return readFileSync38(descriptor, "utf8");
-  } finally {
-    closeSync10(descriptor);
-  }
-}
-function readOptionalRegularFile(root, candidate) {
-  try {
-    return readRegularFile(root, candidate);
-  } catch (error2) {
-    if (error2.code === "ENOENT")
-      return void 0;
-    throw error2;
-  }
-}
-function readOptionalRegularFileNoFollow(root, candidate) {
-  return readOptionalRegularFile(root, candidate);
-}
-function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
-  const appRoot = resolve10(appRootInput);
-  const app = openBoundDirectory(appRoot);
-  let agent = null;
-  let integration = null;
-  let primaryError;
-  try {
-    const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
-      "package.json",
-      "metro.config.js",
-      "metro.config.cjs"
-    ]);
-    if (!packageSnapshot?.contents) {
-      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: package.json is unavailable");
-    }
-    const metroSnapshot = metroJsSnapshot?.contents ? metroJsSnapshot : metroCjsSnapshot;
-    if (!metroSnapshot?.contents) {
-      throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
-    }
-    dependencies.afterAppRead?.();
-    agent = openOptionalBoundSubdirectory(app, ".rn-agent");
-    if (agent) {
-      integration = openOptionalBoundSubdirectory(agent, "integration");
-    }
-    const manifest = integration ? readBoundDirectoryFiles(integration, ["rn-session-integration.json"])[0]?.contents : null;
-    return {
-      packageJson: packageSnapshot.contents.toString("utf8"),
-      metroConfig: {
-        contents: metroSnapshot.contents.toString("utf8"),
-        path: join54(appRoot, metroSnapshot.name)
-      },
-      ...manifest ? { manifest: manifest.toString("utf8") } : {}
-    };
-  } catch (error2) {
-    primaryError = error2;
-    throw error2;
-  } finally {
-    closeBoundDirectories([integration, agent, app], primaryError);
-  }
-}
-function openIntegrationDirectories(appRoot) {
-  const app = openBoundDirectory(appRoot);
-  try {
-    const agent = openBoundSubdirectory(app, ".rn-agent", { create: true });
-    try {
-      const integration = openBoundSubdirectory(agent, "integration", { create: true });
-      return { app, agent, integration };
-    } catch (error2) {
-      closeBoundDirectories([agent], error2);
-      throw error2;
-    }
-  } catch (error2) {
-    closeBoundDirectories([app], error2);
-    throw error2;
-  }
-}
-function rollbackWrites(writes, dependencies) {
-  const errors = [];
-  for (const write of [...writes].reverse()) {
-    try {
-      const result = casReplaceBoundBatch(write.directory, [
-        {
-          snapshot: write.snapshot,
-          expected: write.written,
-          expectedMode: write.writtenMode,
-          replacement: write.snapshot.contents,
-          mode: write.snapshot.mode
-        }
-      ], dependencies);
-      assertBoundCleanup(result);
-    } catch (error2) {
-      errors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
-    }
-  }
-  return errors;
-}
-function applyPackageIntegration(input, dependencies = {}) {
-  const appRoot = resolve10(input.appRoot);
-  const packagePath = join54(appRoot, "package.json");
-  let metroConfigPath;
-  for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join54(appRoot, name))) {
-    if (readOptionalRegularFileNoFollow(appRoot, path) !== void 0) {
-      metroConfigPath = path;
-      break;
-    }
-  }
-  if (!metroConfigPath) {
-    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: metro.config.js or metro.config.cjs is required");
-  }
-  const directories = openIntegrationDirectories(appRoot);
-  const generatedNames = [
-    "rn-session-integration.json",
-    "rn-session-adapter.cjs",
-    "rn-session-metro.cjs",
-    "authority-marker.js",
-    "metro-runtime-policy.json",
-    basename6(METRO_RUNTIME_LOADS)
-  ];
-  const applied = [];
-  let primaryError;
-  try {
-    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
-      basename6(packagePath),
-      basename6(metroConfigPath)
-    ]);
-    const generated = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
-    if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
-      throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
-    }
-    const packageJson = JSON.parse(packageSnapshot.contents.toString("utf8"));
-    let existing;
-    if (generated[0]?.contents) {
-      try {
-        existing = JSON.parse(generated[0].contents.toString("utf8"));
-      } catch (error2) {
-        if (!(error2 instanceof SyntaxError))
-          throw error2;
-      }
-    }
-    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
-    const nextMetroSource = previewMetroIntegration(metroSnapshot.contents.toString("utf8"));
-    preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
-    dependencies.beforeCommit?.();
-    const outputs = [
-      {
-        snapshot: generated[0],
-        contents: Buffer.from(serializePackageIntegrationManifest(preview.manifest)),
-        mode: 384
-      },
-      { snapshot: generated[1], contents: Buffer.from(renderProjectAdapter()), mode: 493 },
-      {
-        snapshot: generated[2],
-        contents: Buffer.from(renderMetroIntegrationAdapter()),
-        mode: 420
-      },
-      {
-        snapshot: generated[3],
-        contents: Buffer.from("globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n"),
-        mode: 384
-      }
-    ];
-    assertBoundDirectoryCurrent(directories.agent);
-    assertBoundDirectoryCurrent(directories.integration);
-    const generatedResult = casReplaceBoundBatch(directories.integration, outputs.map((output) => ({
-      snapshot: output.snapshot,
-      expected: output.snapshot.contents,
-      replacement: output.contents,
-      mode: output.mode
-    })), dependencies.boundOperationDependencies);
-    for (const output of outputs) {
-      applied.push({
-        snapshot: output.snapshot,
-        written: output.contents,
-        writtenMode: output.mode,
-        directory: directories.integration
-      });
-      dependencies.afterWrite?.(output.snapshot.path);
-    }
-    assertBoundCleanup(generatedResult);
-    const metroOutput = Buffer.from(nextMetroSource);
-    const metroResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: metroSnapshot,
-        expected: metroSnapshot.contents,
-        replacement: metroOutput,
-        mode: metroSnapshot.mode
-      }
-    ], dependencies.boundOperationDependencies);
-    applied.push({
-      snapshot: metroSnapshot,
-      written: metroOutput,
-      writtenMode: metroSnapshot.mode,
-      directory: directories.app
-    });
-    dependencies.afterWrite?.(metroConfigPath);
-    assertBoundCleanup(metroResult);
-    const packageOutput = Buffer.from(`${JSON.stringify(preview.packageJson, null, 2)}
-`);
-    const packageResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: packageSnapshot,
-        expected: packageSnapshot.contents,
-        replacement: packageOutput,
-        mode: packageSnapshot.mode
-      }
-    ], dependencies.boundOperationDependencies);
-    applied.push({
-      snapshot: packageSnapshot,
-      written: packageOutput,
-      writtenMode: packageSnapshot.mode,
-      directory: directories.app
-    });
-    dependencies.afterWrite?.(packagePath);
-    assertBoundCleanup(packageResult);
-    assertBoundDirectoryCurrent(directories.agent);
-    assertBoundDirectoryCurrent(directories.integration);
-    return preview;
-  } catch (error2) {
-    const rollbackErrors = rollbackWrites(applied);
-    primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
-    throw primaryError;
-  } finally {
-    closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
-  }
-}
-function restorePackageIntegrationFiles(input, dependencies = {}) {
-  const appRoot = resolve10(input.appRoot);
-  const packagePath = join54(appRoot, "package.json");
-  const directories = openIntegrationDirectories(appRoot);
-  const generatedNames = [
-    "rn-session-integration.json",
-    "rn-session-adapter.cjs",
-    "rn-session-metro.cjs",
-    "authority-marker.js",
-    "metro-runtime-policy.json",
-    basename6(METRO_RUNTIME_LOADS)
-  ];
-  const applied = [];
-  let primaryError;
-  try {
-    const generatedSnapshots = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
-    const installedManifestSource = generatedSnapshots[0]?.contents?.toString("utf8");
-    if (installedManifestSource && input.manifestSource && installedManifestSource !== input.manifestSource) {
-      throw new Error("SESSION_INTEGRATION_CONFLICT: integration manifest changed before restore");
-    }
-    const manifestSource = installedManifestSource ?? input.manifestSource;
-    if (!manifestSource) {
-      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration manifest is missing");
-    }
-    const manifest = JSON.parse(manifestSource);
-    const metroConfig = manifest.metroConfig === void 0 ? "metro.config.js" : manifest.metroConfig;
-    if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
-      throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
-    }
-    const metroConfigPath = join54(appRoot, metroConfig);
-    const [packageSnapshot, metroSnapshot] = snapshotBoundFiles(directories.app, appRoot, [
-      basename6(packagePath),
-      basename6(metroConfigPath)
-    ]);
-    if (!packageSnapshot?.contents || !metroSnapshot?.contents) {
-      throw new Error("SESSION_INTEGRATION_CONFLICT: integration input changed before commit");
-    }
-    const packageJson = JSON.parse(packageSnapshot.contents.toString("utf8"));
-    const metroSource = metroSnapshot.contents.toString("utf8");
-    dependencies.beforeCommit?.();
-    const packageOutput = Buffer.from(`${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}
-`);
-    const packageResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: packageSnapshot,
-        expected: packageSnapshot.contents,
-        replacement: packageOutput,
-        mode: packageSnapshot.mode
-      }
-    ]);
-    applied.push({
-      snapshot: packageSnapshot,
-      written: packageOutput,
-      writtenMode: packageSnapshot.mode,
-      directory: directories.app
-    });
-    dependencies.afterWrite?.(packagePath);
-    assertBoundCleanup(packageResult);
-    const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
-    const metroResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: metroSnapshot,
-        expected: metroSnapshot.contents,
-        replacement: metroOutput,
-        mode: metroSnapshot.mode
-      }
-    ]);
-    applied.push({
-      snapshot: metroSnapshot,
-      written: metroOutput,
-      writtenMode: metroSnapshot.mode,
-      directory: directories.app
-    });
-    dependencies.afterWrite?.(metroConfigPath);
-    assertBoundCleanup(metroResult);
-    assertBoundDirectoryCurrent(directories.agent);
-    assertBoundDirectoryCurrent(directories.integration);
-    const generatedResult = casReplaceBoundBatch(directories.integration, generatedSnapshots.map((snapshot) => ({
-      snapshot,
-      expected: snapshot.contents,
-      replacement: null,
-      mode: snapshot.mode
-    })), dependencies.boundOperationDependencies);
-    for (const snapshot of generatedSnapshots) {
-      applied.push({
-        snapshot,
-        written: null,
-        directory: directories.integration
-      });
-    }
-    assertBoundCleanup(generatedResult);
-    assertBoundDirectoryCurrent(directories.agent);
-    assertBoundDirectoryCurrent(directories.integration);
-  } catch (error2) {
-    const rollbackErrors = rollbackWrites(applied);
-    primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
-    throw primaryError;
-  } finally {
-    closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
-  }
-}
-var ADAPTER, METRO_ADAPTER, AUTHORITY_MODULE, METRO_RUNTIME_POLICY2, METRO_RUNTIME_LOADS, METRO_START, METRO_END, SENTINELS;
-var init_package_integration = __esm({
-  "packages/rn-dev-agent-core/dist/session/package-integration.js"() {
-    "use strict";
-    init_build_adapter();
-    init_managed_metro();
-    init_bound_directory();
-    ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
-    METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
-    AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
-    METRO_RUNTIME_POLICY2 = ".rn-agent/integration/metro-runtime-policy.json";
-    METRO_RUNTIME_LOADS = ".rn-agent/integration/metro-runtime-loads.jsonl";
-    METRO_START = "// rn-dev-agent session integration: begin";
-    METRO_END = "// rn-dev-agent session integration: end";
-    SENTINELS = {
-      ios: `node ${ADAPTER} ios`,
-      android: `node ${ADAPTER} android`
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/device-existence.js
-import { execFileSync as execFileSync15 } from "node:child_process";
-function deviceExistsOnHost(platform, deviceId) {
-  if (platform === "ios") {
-    const output2 = execFileSync15("xcrun", ["simctl", "list", "devices", "--json"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5e3
-    });
-    const parsed = JSON.parse(output2);
-    return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
-  }
-  const output = execFileSync15("adb", ["devices"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5e3
-  });
-  return output.split("\n").some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
-}
-var init_device_existence = __esm({
-  "packages/rn-dev-agent-core/dist/session/device-existence.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname22, join as join55 } from "node:path";
-import { fileURLToPath as fileURLToPath5 } from "node:url";
-import { createHash as createHash18 } from "node:crypto";
-function sameMetroAuthority(current, next) {
-  return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
-}
-function assertPackageIntegrationInactive(bindings, action) {
-  const activeBindings = [
-    "metro",
-    "metroCleanup",
-    "runner",
-    "observe",
-    "recorder",
-    "proof",
-    "pendingBuild",
-    "handoffCleanup"
-  ].filter((binding) => bindings[binding] != null);
-  if (activeBindings.length > 0) {
-    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${action} requires releasing active ${activeBindings.join(", ")} authority`);
-  }
-}
-async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2e3) {
-  const stopRequestedAt = Number(binding.stopRequestedAt);
-  if (!Number.isFinite(stopRequestedAt)) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "source Observe cleanup authority is incomplete");
-  }
-  await stopBoundObserve(binding, listenerProbe, processProbe, timeoutMs);
-}
-async function stopHandoffRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3) {
-  const claimKey = String(binding.claimKey ?? "");
-  const stopRequestedAt = Number(binding.stopRequestedAt);
-  if (!claimKey || !Number.isFinite(stopRequestedAt)) {
-    throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "source runner cleanup identity is incomplete");
-  }
-  await stopBoundRunner(binding, processProbe, signalProcess, timeoutMs);
-}
-function authorityFailure2(error2) {
-  if (error2 instanceof SessionAuthorityError) {
-    return failResult(error2.message, error2.code, authorityErrorMeta(error2));
-  }
-  const message = error2 instanceof Error ? error2.message : String(error2);
-  const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? "SESSION_AUTHORITY_REQUIRED";
-  return failResult(message, code);
-}
-function required2(value, name) {
-  if (value === void 0 || value === "") {
-    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${name} is required for this session transition`);
-  }
-  return value;
-}
-function createSessionHandler(runtime, dependencies = {}) {
-  return async (input) => {
-    if (input.action === "status") {
-      const authority = runtime.status();
-      return okResult({
-        authoritative: false,
-        authority: projectPublicAuthorityStatus(authority, { includeSessionId: true })
-      });
-    }
-    try {
-      const isRecovery = input.action === "accept_handoff" || input.action === "adopt_stale";
-      const { registry: registry2, session } = isRecovery ? runtime.requireRecovery() : runtime.requireOperational();
-      if (input.action === "recover_arbiter") {
-        if (input.confirmed !== true) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "recover_arbiter requires confirmed=true");
-        }
-        const arbiterReset = (dependencies.resetArbiter ?? ((reason) => arbiter.reset(reason)))("manual via fenced rn_session");
-        return okResult({
-          arbiterReset,
-          session: projectPublicAuthorityStatus(runtime.status())
-        });
-      }
-      if (input.action === "bind_device") {
-        const platform = required2(input.platform, "platform");
-        const deviceId = required2(input.deviceId, "deviceId");
-        const appId = required2(input.appId, "appId");
-        const status2 = registry2.getSessionStatus(session.sessionId);
-        const signer = dependencies.getSignerCapability?.();
-        if (!status2) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before device binding");
-        }
-        if (status2.bindings.runner || status2.bindings.observe || status2.bindings.proof) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner, Observe, or proof authority to be released first");
-        }
-        let deviceExists;
-        try {
-          deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
-        } catch (error2) {
-          throw new SessionAuthorityError("DEVICE_DISCOVERY_UNAVAILABLE", `could not verify exact ${platform} device ${deviceId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
-        }
-        if (!deviceExists) {
-          throw new SessionAuthorityError("DEVICE_NOT_FOUND", `exact ${platform} device ${deviceId} does not exist or is unavailable`);
-        }
-        const currentInstall = status2.bindings.install;
-        if (!input.buildReceipt && currentInstall && (currentInstall.platform !== platform || currentInstall.deviceId !== deviceId || currentInstall.appId !== appId)) {
-          throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
-        }
-        if (!input.buildReceipt) {
-          registry2.replaceDeviceAuthority(session, {
-            resource: { type: "device", key: `${platform}:${deviceId}` },
-            device: {
-              platform,
-              deviceId,
-              appId,
-              ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
-            }
-          });
-          return okResult({
-            session: projectPublicAuthorityStatus(runtime.status()),
-            buildReceiptRequired: true
-          });
-        }
-        if (!signer) {
-          throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "the session signer is unavailable for build receipt verification");
-        }
-        const receipt2 = verifyBuildReceipt(input.buildReceipt, signer, {
-          sessionId: session.sessionId,
-          sourceKey: status2.sourceKey,
-          worktreeKey: status2.worktreeKey,
-          appRootKey: status2.appRootKey,
-          platform,
-          deviceId,
-          appId,
-          metroPort: Number(status2.bindings.metroPort)
-        });
-        const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
-          platform,
-          deviceId,
-          appId
-        });
-        if (observedGeneration !== receipt2.installGeneration) {
-          throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact generation does not match the signed build receipt");
-        }
-        registry2.replaceDeviceAuthority(session, {
-          resource: { type: "device", key: `${platform}:${deviceId}` },
-          device: { platform, deviceId, appId },
-          install: { ...receipt2 }
-        });
-        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
-      }
-      if (input.action === "bind_metro") {
-        if (input.mode === "managed") {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro authority can only be established by the verified managed launcher");
-        }
-        const port = required2(input.metroPort, "metroPort");
-        const pid = required2(input.metroPid, "metroPid");
-        const instanceId = required2(input.metroInstanceId, "metroInstanceId");
-        const buildGeneration = required2(input.buildGeneration, "buildGeneration");
-        const status2 = registry2.getSessionStatus(session.sessionId);
-        if (status2?.bindings.metroPort !== port) {
-          throw new SessionAuthorityError("METRO_PORT_CLAIM_CONFLICT", "requested Metro port does not match the session allocation");
-        }
-        const sourceRoot = String(status2.source.contentRoot ?? "");
-        const metro2 = await (dependencies.captureMetro ?? captureMetroBinding)({
-          port,
-          pid,
-          instanceId,
-          sourceRoot,
-          buildGeneration
-        });
-        const nextMetro = { ...metro2, mode: "external" };
-        const priorMetro = status2.bindings.metro;
-        const priorBundle = status2.bindings.bundle;
-        const priorTargetId = priorBundle?.targetId;
-        const metroUnchanged = sameMetroAuthority(priorMetro, nextMetro);
-        registry2.claimResources(session, [{ type: "metro-port", key: String(port) }]);
-        registry2.updateBindings(session, {
-          state: metroUnchanged ? status2.state : status2.bindings.install ? "device_bound" : "metro_bound",
-          bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
-          releaseResources: !metroUnchanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }] : []
-        });
-        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
-      }
-      if (input.action === "pin_dev_client") {
-        const status2 = registry2.getSessionStatus(session.sessionId);
-        if (!status2 || !dependencies.pinDevClient) {
-          throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "pinning integration is unavailable");
-        }
-        for (const requiredBinding of ["install", "metro", "device"]) {
-          if (!status2.bindings[requiredBinding]) {
-            throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", `${requiredBinding} must be bound before pinning`);
-          }
-        }
-        const priorTargetId = status2.bindings.bundle?.targetId;
-        if (input.force === true && typeof priorTargetId === "string") {
-          registry2.releaseResources(session, [
-            { type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }
-          ]);
-          registry2.updateBindings(session, {
-            state: "device_bound",
-            bindings: { bundle: null }
-          });
-        }
-        const bundle = await dependencies.pinDevClient(status2, {
-          force: input.force === true
-        });
-        registry2.claimResources(session, [
-          { type: "target", key: `${bundle.metroPort}:${bundle.targetId}` }
-        ]);
-        registry2.updateBindings(session, {
-          state: "ready",
-          bindings: { bundle }
-        });
-        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
-      }
-      if (input.action === "prepare_handoff") {
-        const targetHandle = required2(input.targetHandle, "targetHandle");
-        return okResult(registry2.prepareHandoffForHandle(session, {
-          targetHandle,
-          ...input.ttlMs === void 0 ? {} : { ttlMs: input.ttlMs }
-        }));
-      }
-      if (input.action === "cancel_handoff") {
-        const handoffId = required2(input.handoffId, "handoffId");
-        registry2.cancelHandoff(session, handoffId);
-        return okResult({
-          cancelled: true,
-          session: projectPublicAuthorityStatus(runtime.status())
-        });
-      }
-      if (input.action === "stop_metro") {
-        const status2 = registry2.getSessionStatus(session.sessionId);
-        if (!status2) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before managed Metro cleanup");
-        }
-        const metro2 = status2.bindings.metro;
-        if (!metro2) {
-          return okResult({
-            stopped: true,
-            alreadyStopped: true,
-            session: projectPublicAuthorityStatus(runtime.status())
-          });
-        }
-        if (metro2.mode !== "managed") {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stop_metro cannot terminate an externally managed Metro");
-        }
-        const signerCapability = dependencies.getSignerCapability?.();
-        if (!signerCapability) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro cleanup requires the session signer capability");
-        }
-        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro2, {
-          sessionId: session.sessionId,
-          signerCapability
-        });
-        if (!stopped) {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
-        }
-        const priorTargetId = status2.bindings.bundle?.targetId;
-        const metroPort = Number(status2.bindings.metroPort);
-        registry2.updateBindings(session, {
-          state: status2.bindings.install ? "device_bound" : status2.bindings.device ? "device_claimed" : "source_bound",
-          bindings: { metro: null, bundle: null },
-          releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
-        });
-        return okResult({
-          stopped: true,
-          alreadyStopped: false,
-          session: projectPublicAuthorityStatus(runtime.status()),
-          nextAction: "Restore package integration with confirmed=true, then release the exact session."
-        });
-      }
-      if (input.action === "preview_integration" || input.action === "apply_integration" || input.action === "restore_integration") {
-        const status2 = registry2.getSessionStatus(session.sessionId);
-        const appRoot = String(status2?.source.appRoot ?? "");
-        if (!status2 || !appRoot) {
-          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
-        }
-        const packagePath = join55(appRoot, "package.json");
-        const integrationInputs = readPackageIntegrationInputs(appRoot);
-        const manifestPath = join55(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
-        const packageJson = JSON.parse(integrationInputs.packageJson);
-        const integrationBinding = status2.bindings.packageIntegration;
-        const installationManifestSource = integrationBinding?.installation?.phase === "started" && typeof integrationBinding.installation.manifestSource === "string" ? integrationBinding.installation.manifestSource : void 0;
-        const restorationManifestSource = integrationBinding?.restoration?.phase === "started" && typeof integrationBinding.restoration.manifestSource === "string" ? integrationBinding.restoration.manifestSource : void 0;
-        const manifestSource = integrationInputs.manifest ?? restorationManifestSource ?? installationManifestSource;
-        let existing;
-        try {
-          existing = manifestSource === void 0 ? void 0 : JSON.parse(manifestSource);
-        } catch (error2) {
-          if (!(error2 instanceof SyntaxError))
-            throw error2;
-        }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join55(dirname22(fileURLToPath5(import.meta.url)), "..", "rn-session.js");
-        if (input.action === "restore_integration") {
-          if (input.confirmed !== true) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "restore_integration requires confirmed=true");
-          }
-          if (!existing) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration manifest is unavailable for restoration");
-          }
-          assertPackageIntegrationInactive(status2.bindings, input.action);
-          const manifestSha256 = createHash18("sha256").update(manifestSource ?? "").digest("hex");
-          if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
-          }
-          if (!restorationManifestSource) {
-            registry2.updateBindings(session, {
-              bindings: {
-                packageIntegration: {
-                  ...integrationBinding,
-                  restoration: { phase: "started", manifestSource }
-                }
-              }
-            });
-          }
-          restorePackageIntegrationFiles({ appRoot, manifestSource });
-          registry2.updateBindings(session, {
-            bindings: { packageIntegration: null }
-          });
-          return okResult({ restored: true, packagePath, manifestPath });
-        }
-        const preview = previewPackageIntegration(packageJson, existing, sessionCli);
-        const metroConfigPath = integrationInputs.metroConfig.path;
-        const metroBefore = integrationInputs.metroConfig.contents;
-        const metroAfter = previewMetroIntegration(metroBefore);
-        if (input.action === "preview_integration") {
-          return okResult({
-            confirmed: false,
-            packagePath,
-            before: packageJson,
-            after: preview.packageJson,
-            metroConfigPath,
-            metroBefore,
-            metroAfter,
-            manifest: preview.manifest
-          });
-        }
-        if (input.confirmed !== true) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "apply_integration requires confirmed=true after reviewing preview_integration");
-        }
-        assertPackageIntegrationInactive(status2.bindings, input.action);
-        if (integrationBinding && !installationManifestSource) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration is already owned by an active session lifecycle");
-        }
-        preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
-        const expectedManifestSource = installationManifestSource ?? serializePackageIntegrationManifest(preview.manifest);
-        const expectedManifestSha256 = createHash18("sha256").update(expectedManifestSource).digest("hex");
-        if (installationManifestSource && (integrationBinding?.version !== 1 || integrationBinding.installedBySessionId !== session.sessionId || integrationBinding.manifestSha256 !== expectedManifestSha256)) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration installation requires the original session manifest authority binding");
-        }
-        if (!installationManifestSource) {
-          registry2.updateBindings(session, {
-            bindings: {
-              packageIntegration: {
-                version: 1,
-                installedBySessionId: session.sessionId,
-                manifestSha256: expectedManifestSha256,
-                installation: { phase: "started", manifestSource: expectedManifestSource }
-              }
-            }
-          });
-        }
-        try {
-          applyPackageIntegration({ appRoot, sessionCli });
-          const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
-          if (!installedManifest) {
-            throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
-          }
-          if (createHash18("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "applied integration manifest no longer matches its durable installation authority");
-          }
-          registry2.updateBindings(session, {
-            bindings: {
-              packageIntegration: {
-                version: 1,
-                installedBySessionId: session.sessionId,
-                manifestSha256: expectedManifestSha256
-              }
-            }
-          });
-        } catch (error2) {
-          try {
-            restorePackageIntegrationFiles({
-              appRoot,
-              manifestSource: expectedManifestSource
-            });
-            registry2.updateBindings(session, {
-              bindings: { packageIntegration: null }
-            });
-          } catch (rollbackError) {
-            throw new AggregateError([error2, rollbackError]);
-          }
-          throw error2;
-        }
-        return okResult({ applied: true, packagePath, manifestPath });
-      }
-      if (input.action === "accept_handoff") {
-        const handoffId = required2(input.handoffId, "handoffId");
-        const token2 = required2(input.token, "token");
-        const status2 = registry2.getSessionStatus(session.sessionId);
-        if (!status2?.worker.instanceId) {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "target worker identity is unavailable");
-        }
-        let cleanup = status2.bindings.handoffCleanup;
-        const priorSessionId = registry2.getHandoffOwner(handoffId);
-        const priorStatus = priorSessionId ? registry2.getSessionStatus(priorSessionId) : null;
-        const priorRunner = cleanup?.runner ?? priorStatus?.bindings.runner;
-        if (status2.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
-          sessionId: priorSessionId ?? "unknown",
-          pid: priorRunner.pid,
-          token: priorRunner.processBirth
-        }) !== "match")) {
-          throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "prior runner process identity cannot be proven for capability rotation");
-        }
-        if (status2.state !== "handoff_cleanup") {
-          const priorManagedMetro = priorStatus?.bindings.metro && typeof priorStatus.bindings.metro === "object" && priorStatus.bindings.metro.mode === "managed" ? priorStatus.bindings.metro : null;
-          let signerCapability = null;
-          if (priorManagedMetro) {
-            if (!priorSessionId) {
-              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro handoff source authority is unavailable");
-            }
-            signerCapability = dependencies.getSignerCapability?.(priorSessionId) ?? null;
-            if (!signerCapability) {
-              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff requires the source session signer capability");
-            }
-          }
-          const reservation = registry2.reserveManagedMetroHandoffCleanup(session, {
-            handoffId,
-            token: token2,
-            targetInstance: status2.worker.instanceId
-          });
-          if (reservation && reservation.phase !== "shutdown_completed") {
-            const sourceSessionId = reservation.metro.sourceSessionId;
-            if (typeof sourceSessionId !== "string" || !signerCapability) {
-              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff reservation requires the source session signer capability");
-            }
-            const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(reservation.metro, {
-              sessionId: sourceSessionId,
-              signerCapability
-            });
-            if (!stopped) {
-              registry2.refuseManagedMetroHandoffCleanup(session, {
-                handoffId,
-                token: token2,
-                targetInstance: status2.worker.instanceId
-              });
-              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro shutdown was refused; the handoff was cancelled and donor authority was restored");
-            }
-            registry2.completeManagedMetroHandoffCleanup(session, {
-              handoffId,
-              token: token2,
-              targetInstance: status2.worker.instanceId
-            });
-          }
-          cleanup = registry2.acceptHandoffInto(session, {
-            handoffId,
-            token: token2,
-            targetInstance: status2.worker.instanceId
-          });
-        }
-        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
-          const recorderCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
-          if (!recorderCleanup) {
-            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup binding disappeared while fenced");
-          }
-          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
-          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "recorder");
-        }
-        const afterRecorder = registry2.getSessionStatus(session.sessionId);
-        cleanup = afterRecorder?.bindings.handoffCleanup;
-        if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
-          const runnerCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "runner");
-          if (!runnerCleanup) {
-            throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup binding disappeared while fenced");
-          }
-          if (dependencies.stopHandoffRunner) {
-            await dependencies.stopHandoffRunner(runnerCleanup);
-          } else {
-            await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
-          }
-          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "runner");
-        }
-        const afterRunner = registry2.getSessionStatus(session.sessionId);
-        cleanup = afterRunner?.bindings.handoffCleanup;
-        if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
-          const observeCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "observe");
-          if (!observeCleanup) {
-            throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup binding disappeared while fenced");
-          }
-          if (dependencies.stopHandoffObserve) {
-            await dependencies.stopHandoffObserve(observeCleanup);
-          } else {
-            await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
-          }
-          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "observe");
-        }
-        const afterObserve = registry2.getSessionStatus(session.sessionId);
-        cleanup = afterObserve?.bindings.handoffCleanup;
-        if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
-          const metroCleanup = registry2.beginHandoffCleanupResource(session, status2.worker.instanceId, "metro");
-          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
-            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro cleanup binding disappeared while fenced");
-          }
-          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
-          if (!signerCapability) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro handoff cleanup requires the source session signer capability");
-          }
-          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
-            sessionId: metroCleanup.sourceSessionId,
-            signerCapability
-          });
-          if (!stopped) {
-            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with its source session authority");
-          }
-          registry2.completeHandoffCleanupResource(session, status2.worker.instanceId, "metro");
-        }
-        registry2.finishHandoffCleanup(session, status2.worker.instanceId);
-        const acceptedStatus = registry2.getSessionStatus(session.sessionId);
-        const transferredIntegration = acceptedStatus?.bindings.packageIntegration;
-        return okResult({
-          accepted: true,
-          session: projectPublicAuthorityStatus(runtime.status()),
-          runnerCapabilityRotated: Boolean(priorRunner),
-          integrationRestoration: typeof transferredIntegration?.installedBySessionId === "string" ? {
-            required: true,
-            action: "restore_integration",
-            ownerSessionId: session.sessionId,
-            installedBySessionId: transferredIntegration.installedBySessionId
-          } : { required: false },
-          nextAction: typeof transferredIntegration?.installedBySessionId === "string" ? "The recipient now owns integration restoration; call restore_integration with confirmed=true before release." : "Reopen the exact device runner and pin the dev client before authoritative tools."
-        });
-      }
-      if (input.action === "adopt_stale") {
-        const adoptionHandle = required2(input.adoptionHandle, "adoptionHandle");
-        const current = registry2.getSessionStatus(session.sessionId);
-        if (!current?.worker.instanceId) {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "recovery worker identity is unavailable");
-        }
-        if (current.state !== "handoff_cleanup") {
-          registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
-        }
-        const adopted = registry2.getSessionStatus(session.sessionId);
-        const cleanup = adopted?.bindings.handoffCleanup;
-        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
-          const recorderCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "recorder");
-          if (!recorderCleanup) {
-            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup binding disappeared while fenced");
-          }
-          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
-          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "recorder");
-        }
-        if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
-          const runnerCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "runner");
-          if (!runnerCleanup) {
-            throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup binding disappeared while fenced");
-          }
-          if (dependencies.stopHandoffRunner) {
-            await dependencies.stopHandoffRunner(runnerCleanup);
-          } else {
-            await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
-          }
-          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "runner");
-        }
-        if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
-          const observeCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "observe");
-          if (!observeCleanup) {
-            throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup binding disappeared while fenced");
-          }
-          if (dependencies.stopHandoffObserve) {
-            await dependencies.stopHandoffObserve(observeCleanup);
-          } else {
-            await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
-          }
-          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "observe");
-        }
-        if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
-          const metroCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "metro");
-          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
-            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale Metro cleanup binding disappeared while fenced");
-          }
-          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
-          if (!signerCapability) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "stale Metro cleanup requires the source session signer capability");
-          }
-          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
-            sessionId: metroCleanup.sourceSessionId,
-            signerCapability
-          });
-          if (!stopped) {
-            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale managed Metro could not be stopped with exact process authority");
-          }
-          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "metro");
-        }
-        if (adopted?.state === "handoff_cleanup") {
-          registry2.finishHandoffCleanup(session, current.worker.instanceId);
-        }
-        return okResult({
-          adopted: true,
-          session: projectPublicAuthorityStatus(runtime.status()),
-          runner: {
-            adopted: false,
-            reason: "runner capability is never crash-adopted; reopen the exact device to bind a fresh runner"
-          }
-        });
-      }
-      const status = registry2.getSessionStatus(session.sessionId);
-      if (!status) {
-        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before release cleanup");
-      }
-      if (status.bindings.packageIntegration) {
-        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
-      }
-      const metro = status.bindings.metro;
-      const runner = status.bindings.runner;
-      const recorder2 = status.bindings.recorder;
-      if (recorder2) {
-        const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
-        if (!status.claims.some((claim) => claim.type === "recorder" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
-          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup claim no longer matches the authenticated binding");
-        }
-        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder2);
-      }
-      if (runner) {
-        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
-        if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
-          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
-        }
-        const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
-        if (dependencies.stopHandoffRunner) {
-          await dependencies.stopHandoffRunner(cleanup);
-        } else {
-          await stopBoundRunner(cleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
-        }
-      }
-      const observe2 = status.bindings.observe;
-      if (observe2) {
-        const port = String(observe2.port);
-        if (status.bindings.observePort !== observe2.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === session.sessionId && claim.claimEpoch === session.claimEpoch)) {
-          throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
-        }
-        const cleanup = { ...observe2, stopRequestedAt: Date.now() };
-        if (dependencies.stopHandoffObserve) {
-          await dependencies.stopHandoffObserve(cleanup);
-        } else {
-          await stopBoundObserve(cleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
-        }
-      }
-      if (metro?.mode === "managed") {
-        const signerCapability = dependencies.getSignerCapability?.();
-        if (!signerCapability) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro release requires the session signer capability");
-        }
-        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
-          sessionId: session.sessionId,
-          signerCapability
-        });
-        if (!stopped) {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
-        }
-      }
-      registry2.releaseSession(session);
-      return okResult({ released: true, sessionId: session.sessionId });
-    } catch (error2) {
-      return authorityFailure2(error2);
-    }
-  };
-}
-var init_session = __esm({
-  "packages/rn-dev-agent-core/dist/tools/session.js"() {
-    "use strict";
-    init_registry();
-    init_utils();
-    init_build_receipt();
-    init_install_authority();
-    init_metro_binding();
-    init_package_integration();
-    init_process_owner();
-    init_public_status();
-    init_process_birth();
-    init_managed_metro();
-    init_device_arbiter();
-    init_process_cleanup();
-    init_device_existence();
   }
 });
 
@@ -80232,7 +80386,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, setClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, authorityRuntime, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, sessionHandler, disconnectClientHandler, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, setClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, authorityRuntime, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, getSessionSignerCapability, sessionHandler, disconnectClientHandler, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -80665,16 +80819,17 @@ var init_index = __esm({
       },
       isMirrorActive: () => mirrorManager2?.isStreaming() ?? false
     });
+    getSessionSignerCapability = (sessionId) => {
+      const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
+      if (!currentSecretPath)
+        return null;
+      if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
+        return null;
+      const secretPath = sessionId ? join56(dirname23(dirname23(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
+      return readJsonStateFile(secretPath)?.signerCapability ?? null;
+    };
     sessionHandler = createSessionHandler(authorityRuntime, {
-      getSignerCapability: (sessionId) => {
-        const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
-        if (!currentSecretPath)
-          return null;
-        if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
-          return null;
-        const secretPath = sessionId ? join56(dirname23(dirname23(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
-        return readJsonStateFile(secretPath)?.signerCapability ?? null;
-      },
+      getSignerCapability: getSessionSignerCapability,
       pinDevClient: pinSessionDevClient
     });
     disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
@@ -80716,7 +80871,9 @@ var init_index = __esm({
     trackedTool("cdp_status", "Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.", {
       metroPort: external_exports.number().optional().describe("Diagnostic comparison only; cdp_status never changes the active Metro port"),
       platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups')
-    }, createPassiveStatusHandler(getClient, authorityRuntime));
+    }, createPassiveStatusHandler(getClient, authorityRuntime, {
+      getSignerCapability: getSessionSignerCapability
+    }));
     trackedTool("observe", "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.", observeSchema, observeHandler);
     trackedTool("cdp_diagnostic_renderers", 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {
       maxRendererId: external_exports.number().int().min(1).max(100).optional().describe("How many renderer IDs to scan. Default 20 (matches IIFE MAX_RENDERER_IDS).")
@@ -81915,6 +82072,9 @@ function createSupervisorAuthority(input, dependencies = {}) {
         clearInterval(heartbeat);
       try {
         let status = registry2.getSessionStatus(session.sessionId);
+        if (status?.bindings.packageIntegration && (status.bindings.metroCleanup ?? status.bindings.metro)) {
+          return;
+        }
         if (status && RELEASABLE_SESSION_STATES.has(status.state)) {
           status = registry2.beginSessionClose(session);
         }

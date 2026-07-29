@@ -16,6 +16,7 @@ import { storeMode } from '../domain/action-state-store.js';
 import { getEngineStatus } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
+import { reconcileManagedMetroStatus } from './session.js';
 export function sessionConnectFilters(session) {
     if (!session || (session.platform !== 'ios' && session.platform !== 'android'))
         return null;
@@ -43,13 +44,14 @@ export function targetMatchesSession(target, filters) {
     }
     return true;
 }
-export function createPassiveStatusHandler(getClient, authorityRuntime) {
+export function createPassiveStatusHandler(getClient, authorityRuntime, statusDependencies = {}) {
     return async (args) => {
         const client = getClient();
         const target = client.connectedTarget;
+        const authority = reconcileManagedMetroStatus(authorityRuntime, statusDependencies);
         return okResult({
             authoritative: false,
-            authority: projectPublicAuthorityStatus(authorityRuntime.status()),
+            authority: projectPublicAuthorityStatus(authority),
             metro: {
                 port: client.metroPort,
                 requestedPort: args.metroPort ?? null,

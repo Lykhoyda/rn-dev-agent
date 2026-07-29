@@ -1080,7 +1080,7 @@ function managementProof(sessionId, authority, signerCapability) {
         .digest('hex');
 }
 export function managedMetroChildEnvironment(environment) {
-    return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== undefined && !name.startsWith('RN_DEV_AGENT_')));
+    return Object.fromEntries(Object.entries(environment).filter(([name, value]) => value !== undefined && name !== 'CI' && !name.startsWith('RN_DEV_AGENT_')));
 }
 function verifyManagedMetroRuntimeAdmission(path, capability, expected) {
     try {
@@ -1162,6 +1162,77 @@ export function verifyManagedMetroManagementProof(binding, input) {
     const observedBuffer = Buffer.from(binding.managementProof, 'hex');
     return (expectedBuffer.length === observedBuffer.length &&
         timingSafeEqual(expectedBuffer, observedBuffer));
+}
+function exactManagedProcessInspection(role, pid, birth, probe) {
+    const prefix = role === 'launcher' ? 'METRO_LAUNCHER' : 'METRO_LISTENER';
+    if (probe.status === 'absent') {
+        return {
+            status: 'lost',
+            code: `${prefix}_EXITED`,
+            reason: `authenticated managed Metro ${role} exited`,
+        };
+    }
+    if (probe.status === 'unknown') {
+        return {
+            status: 'lost',
+            code: `${prefix}_UNVERIFIABLE`,
+            reason: `authenticated managed Metro ${role} process identity is unavailable`,
+        };
+    }
+    if (probe.birth.pid !== pid || probe.birth.token !== birth) {
+        return {
+            status: 'lost',
+            code: `${prefix}_IDENTITY_CHANGED`,
+            reason: `authenticated managed Metro ${role} process identity changed`,
+        };
+    }
+    return null;
+}
+export function inspectManagedMetroLifecycle(binding, input, dependencies = {}) {
+    if (!verifyManagedMetroManagementProof(binding, input)) {
+        return {
+            status: 'lost',
+            code: 'METRO_MANAGEMENT_PROOF_INVALID',
+            reason: 'managed Metro lifecycle evidence is not authenticated by this session',
+        };
+    }
+    const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+    const launcher = exactManagedProcessInspection('launcher', binding.launcherPid, binding.launcherBirth, probeBirth(binding.launcherPid));
+    if (launcher)
+        return launcher;
+    const listener = exactManagedProcessInspection('listener', binding.pid, binding.birth, probeBirth(binding.pid));
+    if (listener)
+        return listener;
+    const port = (dependencies.probeListener ?? probeManagedMetroListener)(binding.port);
+    if (port.status === 'absent') {
+        return {
+            status: 'lost',
+            code: 'METRO_PORT_RELEASED',
+            reason: 'authenticated managed Metro no longer owns its allocated listener port',
+        };
+    }
+    if (port.status === 'unknown') {
+        return {
+            status: 'lost',
+            code: 'METRO_PORT_UNVERIFIABLE',
+            reason: 'managed Metro listener port ownership is unavailable',
+        };
+    }
+    if (port.pid !== binding.pid) {
+        return {
+            status: 'lost',
+            code: 'METRO_PORT_OWNER_CHANGED',
+            reason: 'allocated managed Metro port is owned by a different process',
+        };
+    }
+    if (!(dependencies.exists ?? existsSync)(binding.runtimeEvidenceSocket)) {
+        return {
+            status: 'lost',
+            code: 'METRO_EVIDENCE_SOCKET_MISSING',
+            reason: 'managed Metro runtime evidence socket is missing',
+        };
+    }
+    return { status: 'live' };
 }
 export function refreshManagedMetroBuildGeneration(binding, input) {
     if (!Number.isSafeInteger(input.buildGeneration) ||

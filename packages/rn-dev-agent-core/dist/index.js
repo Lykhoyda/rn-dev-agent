@@ -700,18 +700,19 @@ async function rebindSessionRuntime(status) {
         connectionGeneration: client.connectionGeneration,
     });
 }
+const getSessionSignerCapability = (sessionId) => {
+    const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
+    if (!currentSecretPath)
+        return null;
+    if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
+        return null;
+    const secretPath = sessionId
+        ? join(dirname(dirname(currentSecretPath)), sessionId, 'secret.json')
+        : currentSecretPath;
+    return readJsonStateFile(secretPath)?.signerCapability ?? null;
+};
 const sessionHandler = createSessionHandler(authorityRuntime, {
-    getSignerCapability: (sessionId) => {
-        const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
-        if (!currentSecretPath)
-            return null;
-        if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
-            return null;
-        const secretPath = sessionId
-            ? join(dirname(dirname(currentSecretPath)), sessionId, 'secret.json')
-            : currentSecretPath;
-        return readJsonStateFile(secretPath)?.signerCapability ?? null;
-    },
+    getSignerCapability: getSessionSignerCapability,
     pinDevClient: pinSessionDevClient,
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
@@ -787,7 +788,9 @@ trackedTool('cdp_status', 'Passively report the current authority session, Metro
         .string()
         .optional()
         .describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups'),
-}, createPassiveStatusHandler(getClient, authorityRuntime));
+}, createPassiveStatusHandler(getClient, authorityRuntime, {
+    getSignerCapability: getSessionSignerCapability,
+}));
 trackedTool('observe', "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.", observeSchema, observeHandler);
 trackedTool('cdp_diagnostic_renderers', 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {
     maxRendererId: z
