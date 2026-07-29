@@ -8018,6 +8018,17 @@ var init_authority_store = __esm({
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash5, randomBytes, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+function referencesMetroEvidenceSocket(value, path) {
+  if (Array.isArray(value)) {
+    return value.some((entry) => referencesMetroEvidenceSocket(entry, path));
+  }
+  if (!value || typeof value !== "object")
+    return false;
+  const record = value;
+  if (record.runtimeEvidenceSocket === path)
+    return true;
+  return Object.values(record).some((entry) => referencesMetroEvidenceSocket(entry, path));
+}
 function asSession(row) {
   return row ? row : null;
 }
@@ -8523,6 +8534,17 @@ var init_registry = __esm({
         const rows = this.#database.prepare(`SELECT state FROM sessions
          WHERE session_id <> ?`).all(sessionId);
         return rows.filter((row) => typeof row.state === "string" && isOperationalState(row.state)).length;
+      }
+      isMetroEvidenceSocketReferencedByOtherSession(sessionId, path) {
+        const rows = this.#database.prepare(`SELECT bindings_json FROM sessions
+         WHERE session_id <> ? AND state <> 'released'`).all(sessionId);
+        return rows.some((row) => {
+          try {
+            return referencesMetroEvidenceSocket(JSON.parse(String(row.bindings_json)), path);
+          } catch {
+            return true;
+          }
+        });
       }
       findSessionsByWorktree(worktreeKey) {
         const rows = this.#database.prepare(`SELECT session_id FROM sessions
@@ -13491,6 +13513,9 @@ function removeManagedMetroEvidenceSocket(path) {
   rmSync2(path, { force: true });
 }
 function removeManagedMetroEvidenceSocketSafely(path, dependencies) {
+  if (process.platform === "win32" && !/^\\\\\.\\pipe\\rn-dev-agent-[a-f0-9]{32}$/.test(path) || process.platform !== "win32" && !/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path)) {
+    return false;
+  }
   try {
     (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(path);
     return true;

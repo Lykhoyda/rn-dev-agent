@@ -1431,6 +1431,8 @@ test('session stop_metro retains a live external Metro with owner recovery', asy
 });
 
 test('session stop_metro releases unverifiable cleanup only after listener absence', async () => {
+  let socketPresent = true;
+  let removedSocket: string | undefined;
   const status = {
     sessionId: 'session-a',
     authorityVersion: 10,
@@ -1458,6 +1460,7 @@ test('session stop_metro releases unverifiable cleanup only after listener absen
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          isMetroEvidenceSocketReferencedByOtherSession: () => false,
           updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
             status.bindings = { ...status.bindings, ...update.bindings };
           },
@@ -1469,14 +1472,23 @@ test('session stop_metro releases unverifiable cleanup only after listener absen
       getSignerCapability: () => 'signer',
       probeListener: () => ({ status: 'absent' }),
       probeProcessBirth: () => ({ status: 'absent' }),
-      evidenceSocketExists: () => false,
-      stopManagedMetro: async () => false,
+      evidenceSocketExists: () => socketPresent,
+      removeEvidenceSocket: (path) => {
+        removedSocket = path;
+        socketPresent = false;
+      },
     },
   );
+
+  const unconfirmed = await handler({ action: 'stop_metro' });
+  assert.equal(unconfirmed.isError, true);
+  assert.match(unconfirmed.content[0]!.text, /confirmed=true is required/);
+  assert.equal(socketPresent, true);
 
   const result = await handler({ action: 'stop_metro', confirmed: true });
 
   assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.equal(removedSocket, '/tmp/rn-dev-agent-00000000000000000000000000000000.sock');
   assert.equal(status.bindings.metroCleanup, null);
   assert.equal(status.bindings.metroTerminal, null);
 });

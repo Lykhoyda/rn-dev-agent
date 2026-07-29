@@ -70,6 +70,7 @@ interface ManagedMetroDependencies {
   probeListener?: (port: number) => ManagedMetroListenerProbe;
   signalTree?: (input: ManagedMetroSignal) => void;
   removeEvidenceSocket?: (path: string) => void;
+  authorizeEvidenceSocketRemoval?: (path: string) => boolean;
   verifyRuntimeAdmission?: (
     path: string,
     capability: string,
@@ -2248,6 +2249,12 @@ function removeManagedMetroEvidenceSocketSafely(
   path: string,
   dependencies: Pick<ManagedMetroDependencies, 'removeEvidenceSocket'>,
 ): boolean {
+  if (
+    (process.platform === 'win32' && !/^\\\\\.\\pipe\\rn-dev-agent-[a-f0-9]{32}$/.test(path)) ||
+    (process.platform !== 'win32' && !/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path))
+  ) {
+    return false;
+  }
   try {
     (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(path);
     return true;
@@ -2547,7 +2554,13 @@ export async function stopManagedMetroWithEvidence(
   input: { sessionId: string; signerCapability: string },
   dependencies: Pick<
     ManagedMetroDependencies,
-    'exists' | 'probeBirth' | 'probeListener' | 'removeEvidenceSocket' | 'signalTree' | 'wait'
+    | 'authorizeEvidenceSocketRemoval'
+    | 'exists'
+    | 'probeBirth'
+    | 'probeListener'
+    | 'removeEvidenceSocket'
+    | 'signalTree'
+    | 'wait'
   > = {},
 ): Promise<ManagedMetroCleanupResult> {
   const proofAuthenticated =
@@ -2560,8 +2573,15 @@ export async function stopManagedMetroWithEvidence(
     (binding ?? {}) as Record<string, unknown>,
     dependencies,
   );
+  let recoveryAuthorized = false;
+  if (!authenticated && typeof binding?.runtimeEvidenceSocket === 'string') {
+    try {
+      recoveryAuthorized =
+        dependencies.authorizeEvidenceSocketRemoval?.(binding.runtimeEvidenceSocket) === true;
+    } catch {}
+  }
   if (
-    authenticated &&
+    (authenticated || recoveryAuthorized) &&
     evidence.launcher === 'absent' &&
     evidence.listener === 'absent' &&
     evidence.port.status === 'absent' &&

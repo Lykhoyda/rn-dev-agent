@@ -99,6 +99,16 @@ interface HandoffIntoContext {
   reservation: ManagedMetroHandoffReservation | null;
 }
 
+function referencesMetroEvidenceSocket(value: unknown, path: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => referencesMetroEvidenceSocket(entry, path));
+  }
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  if (record.runtimeEvidenceSocket === path) return true;
+  return Object.values(record).some((entry) => referencesMetroEvidenceSocket(entry, path));
+}
+
 export interface SessionRegistryDependencies {
   now?: () => number;
   ownerStatus: (owner: SessionOwner) => OwnerStatus;
@@ -1194,6 +1204,22 @@ export class SessionRegistry {
       .all(sessionId) as Array<{ state?: unknown }>;
     return rows.filter((row) => typeof row.state === 'string' && isOperationalState(row.state))
       .length;
+  }
+
+  isMetroEvidenceSocketReferencedByOtherSession(sessionId: string, path: string): boolean {
+    const rows = this.#database
+      .prepare(
+        `SELECT bindings_json FROM sessions
+         WHERE session_id <> ? AND state <> 'released'`,
+      )
+      .all(sessionId) as Array<{ bindings_json?: unknown }>;
+    return rows.some((row) => {
+      try {
+        return referencesMetroEvidenceSocket(JSON.parse(String(row.bindings_json)), path);
+      } catch {
+        return true;
+      }
+    });
   }
 
   findSessionsByWorktree(worktreeKey: string): SessionStatus[] {

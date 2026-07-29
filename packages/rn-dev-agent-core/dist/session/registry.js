@@ -4,6 +4,17 @@ import { openAuthorityStore, } from './authority-store.js';
 import { probeMetroListener } from './metro-binding.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
+function referencesMetroEvidenceSocket(value, path) {
+    if (Array.isArray(value)) {
+        return value.some((entry) => referencesMetroEvidenceSocket(entry, path));
+    }
+    if (!value || typeof value !== 'object')
+        return false;
+    const record = value;
+    if (record.runtimeEvidenceSocket === path)
+        return true;
+    return Object.values(record).some((entry) => referencesMetroEvidenceSocket(entry, path));
+}
 export class SessionAuthorityError extends Error {
     code;
     holder;
@@ -643,6 +654,20 @@ export class SessionRegistry {
             .all(sessionId);
         return rows.filter((row) => typeof row.state === 'string' && isOperationalState(row.state))
             .length;
+    }
+    isMetroEvidenceSocketReferencedByOtherSession(sessionId, path) {
+        const rows = this.#database
+            .prepare(`SELECT bindings_json FROM sessions
+         WHERE session_id <> ? AND state <> 'released'`)
+            .all(sessionId);
+        return rows.some((row) => {
+            try {
+                return referencesMetroEvidenceSocket(JSON.parse(String(row.bindings_json)), path);
+            }
+            catch {
+                return true;
+            }
+        });
     }
     findSessionsByWorktree(worktreeKey) {
         const rows = this.#database

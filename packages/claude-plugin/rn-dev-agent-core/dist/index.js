@@ -26268,6 +26268,17 @@ var init_metro_binding = __esm({
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash6, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+function referencesMetroEvidenceSocket(value, path) {
+  if (Array.isArray(value)) {
+    return value.some((entry) => referencesMetroEvidenceSocket(entry, path));
+  }
+  if (!value || typeof value !== "object")
+    return false;
+  const record2 = value;
+  if (record2.runtimeEvidenceSocket === path)
+    return true;
+  return Object.values(record2).some((entry) => referencesMetroEvidenceSocket(entry, path));
+}
 function shortAuthorityIdentity(value) {
   return createHash6("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
@@ -26815,6 +26826,17 @@ var init_registry = __esm({
         const rows = this.#database.prepare(`SELECT state FROM sessions
          WHERE session_id <> ?`).all(sessionId);
         return rows.filter((row) => typeof row.state === "string" && isOperationalState(row.state)).length;
+      }
+      isMetroEvidenceSocketReferencedByOtherSession(sessionId, path) {
+        const rows = this.#database.prepare(`SELECT bindings_json FROM sessions
+         WHERE session_id <> ? AND state <> 'released'`).all(sessionId);
+        return rows.some((row) => {
+          try {
+            return referencesMetroEvidenceSocket(JSON.parse(String(row.bindings_json)), path);
+          } catch {
+            return true;
+          }
+        });
       }
       findSessionsByWorktree(worktreeKey) {
         const rows = this.#database.prepare(`SELECT session_id FROM sessions
@@ -57664,6 +57686,9 @@ function removeManagedMetroEvidenceSocket(path) {
   rmSync10(path, { force: true });
 }
 function removeManagedMetroEvidenceSocketSafely(path, dependencies) {
+  if (process.platform === "win32" && !/^\\\\\.\\pipe\\rn-dev-agent-[a-f0-9]{32}$/.test(path) || process.platform !== "win32" && !/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path)) {
+    return false;
+  }
   try {
     (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(path);
     return true;
@@ -57824,7 +57849,14 @@ async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
   const stopped = await stopManagedMetro(binding, input, dependencies);
   const authenticated = proofAuthenticated || stopped;
   let evidence = inspectManagedMetroCleanupEvidence(binding ?? {}, dependencies);
-  if (authenticated && evidence.launcher === "absent" && evidence.listener === "absent" && evidence.port.status === "absent" && evidence.evidenceSocket === "present" && typeof binding?.runtimeEvidenceSocket === "string") {
+  let recoveryAuthorized = false;
+  if (!authenticated && typeof binding?.runtimeEvidenceSocket === "string") {
+    try {
+      recoveryAuthorized = dependencies.authorizeEvidenceSocketRemoval?.(binding.runtimeEvidenceSocket) === true;
+    } catch {
+    }
+  }
+  if ((authenticated || recoveryAuthorized) && evidence.launcher === "absent" && evidence.listener === "absent" && evidence.port.status === "absent" && evidence.evidenceSocket === "present" && typeof binding?.runtimeEvidenceSocket === "string") {
     removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
     evidence = inspectManagedMetroCleanupEvidence(binding, dependencies);
   }
@@ -61901,19 +61933,29 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "Metro cleanup binding does not match the exact allocated session port");
         }
         const signerCapability = dependencies.getSignerCapability?.();
+        const runtimeEvidenceSocket = metro2.mode === "managed" && typeof metro2.runtimeEvidenceSocket === "string" ? metro2.runtimeEvidenceSocket : void 0;
+        let socketReferencedByOtherSession = true;
+        if (runtimeEvidenceSocket) {
+          try {
+            socketReferencedByOtherSession = registry2.isMetroEvidenceSocketReferencedByOtherSession(session.sessionId, runtimeEvidenceSocket);
+          } catch {
+          }
+        }
         const evidenceDependencies = {
+          authorizeEvidenceSocketRemoval: () => input.confirmed === true && !socketReferencedByOtherSession,
           ...dependencies.evidenceSocketExists ? { exists: dependencies.evidenceSocketExists } : {},
           ...dependencies.probeProcessBirth ? { probeBirth: dependencies.probeProcessBirth } : {},
-          ...dependencies.probeListener ? { probeListener: dependencies.probeListener } : {}
+          ...dependencies.probeListener ? { probeListener: dependencies.probeListener } : {},
+          ...dependencies.removeEvidenceSocket ? { removeEvidenceSocket: dependencies.removeEvidenceSocket } : {}
         };
         let cleanup;
-        if (metro2.mode === "managed" && signerCapability) {
+        if (metro2.mode === "managed") {
           if (dependencies.stopManagedMetroWithEvidence) {
             cleanup = await dependencies.stopManagedMetroWithEvidence(metro2, {
               sessionId: session.sessionId,
-              signerCapability
+              signerCapability: signerCapability ?? ""
             }, evidenceDependencies);
-          } else if (dependencies.stopManagedMetro) {
+          } else if (dependencies.stopManagedMetro && signerCapability) {
             const stopped = await dependencies.stopManagedMetro(metro2, {
               sessionId: session.sessionId,
               signerCapability
@@ -61929,15 +61971,23 @@ function createSessionHandler(runtime, dependencies = {}) {
           } else {
             cleanup = await stopManagedMetroWithEvidence(metro2, {
               sessionId: session.sessionId,
-              signerCapability
+              signerCapability: signerCapability ?? ""
             }, evidenceDependencies);
           }
         } else {
           const evidence = inspectManagedMetroCleanupEvidence(metro2, evidenceDependencies);
           cleanup = { authenticated: false, stopped: false, evidence };
         }
+        const onlySocketRemains = cleanup.evidence.launcher === "absent" && cleanup.evidence.listener === "absent" && cleanup.evidence.port.status === "absent" && cleanup.evidence.evidenceSocket === "present";
+        if (!cleanup.authenticated && onlySocketRemains && input.confirmed !== true) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "confirmed=true is required to remove the stale session-owned Metro evidence socket");
+        }
+        if (!cleanup.authenticated && onlySocketRemains && socketReferencedByOtherSession) {
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "the Metro evidence socket remains referenced by another session; recover that owning session before retrying rn_session stop_metro");
+        }
         if (!cleanup.evidence.complete) {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", `Metro cleanup is unresolved (${describeMetroCleanupEvidence(cleanup.evidence)}); stop the exact owning process and remove its evidence socket, then retry rn_session stop_metro`);
+          const socketRecovery = onlySocketRemains && runtimeEvidenceSocket ? `; remove the exact session-owned socket ${runtimeEvidenceSocket} through its filesystem owner, then retry rn_session stop_metro` : "; stop the exact owning process and retry rn_session stop_metro";
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", `Metro cleanup is unresolved (${describeMetroCleanupEvidence(cleanup.evidence)})${socketRecovery}`);
         }
         if (!cleanup.authenticated && input.confirmed !== true) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "non-signaling Metro authority release requires confirmed=true after exact process, listener, and socket absence is verified");

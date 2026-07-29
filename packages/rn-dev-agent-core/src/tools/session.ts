@@ -109,6 +109,7 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   stopManagedMetro?: typeof stopManagedMetro;
   stopManagedMetroWithEvidence?: typeof stopManagedMetroWithEvidence;
   evidenceSocketExists?: (path: string) => boolean;
+  removeEvidenceSocket?: (path: string) => void;
   resetArbiter?: (reason: string) => {
     clearedOps: number;
     hadFlow: boolean;
@@ -541,25 +542,43 @@ export function createSessionHandler(
           );
         }
         const signerCapability = dependencies.getSignerCapability?.();
+        const runtimeEvidenceSocket =
+          metro.mode === 'managed' && typeof metro.runtimeEvidenceSocket === 'string'
+            ? metro.runtimeEvidenceSocket
+            : undefined;
+        let socketReferencedByOtherSession = true;
+        if (runtimeEvidenceSocket) {
+          try {
+            socketReferencedByOtherSession = registry.isMetroEvidenceSocketReferencedByOtherSession(
+              session.sessionId,
+              runtimeEvidenceSocket,
+            );
+          } catch {}
+        }
         const evidenceDependencies = {
+          authorizeEvidenceSocketRemoval: () =>
+            input.confirmed === true && !socketReferencedByOtherSession,
           ...(dependencies.evidenceSocketExists
             ? { exists: dependencies.evidenceSocketExists }
             : {}),
           ...(dependencies.probeProcessBirth ? { probeBirth: dependencies.probeProcessBirth } : {}),
           ...(dependencies.probeListener ? { probeListener: dependencies.probeListener } : {}),
+          ...(dependencies.removeEvidenceSocket
+            ? { removeEvidenceSocket: dependencies.removeEvidenceSocket }
+            : {}),
         };
         let cleanup: ManagedMetroCleanupResult;
-        if (metro.mode === 'managed' && signerCapability) {
+        if (metro.mode === 'managed') {
           if (dependencies.stopManagedMetroWithEvidence) {
             cleanup = await dependencies.stopManagedMetroWithEvidence(
               metro,
               {
                 sessionId: session.sessionId,
-                signerCapability,
+                signerCapability: signerCapability ?? '',
               },
               evidenceDependencies,
             );
-          } else if (dependencies.stopManagedMetro) {
+          } else if (dependencies.stopManagedMetro && signerCapability) {
             const stopped = await dependencies.stopManagedMetro(metro, {
               sessionId: session.sessionId,
               signerCapability,
@@ -582,7 +601,7 @@ export function createSessionHandler(
               metro,
               {
                 sessionId: session.sessionId,
-                signerCapability,
+                signerCapability: signerCapability ?? '',
               },
               evidenceDependencies,
             );
@@ -594,10 +613,31 @@ export function createSessionHandler(
           );
           cleanup = { authenticated: false, stopped: false, evidence };
         }
-        if (!cleanup.evidence.complete) {
+        const onlySocketRemains =
+          cleanup.evidence.launcher === 'absent' &&
+          cleanup.evidence.listener === 'absent' &&
+          cleanup.evidence.port.status === 'absent' &&
+          cleanup.evidence.evidenceSocket === 'present';
+        if (!cleanup.authenticated && onlySocketRemains && input.confirmed !== true) {
+          throw new SessionAuthorityError(
+            'SESSION_AUTHORITY_REQUIRED',
+            'confirmed=true is required to remove the stale session-owned Metro evidence socket',
+          );
+        }
+        if (!cleanup.authenticated && onlySocketRemains && socketReferencedByOtherSession) {
           throw new SessionAuthorityError(
             'METRO_AUTHORITY_MISMATCH',
-            `Metro cleanup is unresolved (${describeMetroCleanupEvidence(cleanup.evidence)}); stop the exact owning process and remove its evidence socket, then retry rn_session stop_metro`,
+            'the Metro evidence socket remains referenced by another session; recover that owning session before retrying rn_session stop_metro',
+          );
+        }
+        if (!cleanup.evidence.complete) {
+          const socketRecovery =
+            onlySocketRemains && runtimeEvidenceSocket
+              ? `; remove the exact session-owned socket ${runtimeEvidenceSocket} through its filesystem owner, then retry rn_session stop_metro`
+              : '; stop the exact owning process and retry rn_session stop_metro';
+          throw new SessionAuthorityError(
+            'METRO_AUTHORITY_MISMATCH',
+            `Metro cleanup is unresolved (${describeMetroCleanupEvidence(cleanup.evidence)})${socketRecovery}`,
           );
         }
         if (!cleanup.authenticated && input.confirmed !== true) {

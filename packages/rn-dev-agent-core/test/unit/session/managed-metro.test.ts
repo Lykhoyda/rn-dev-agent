@@ -1173,6 +1173,41 @@ test('managed Metro cleanup evidence retains live processes and sockets', async 
     assert.equal(result.evidence.complete, false);
     assert.equal(result.evidence.evidenceSocket, 'present');
   });
+
+  await t.test('confirmed owner recovery removes only an authorized stale socket', async () => {
+    const invalidBinding = { ...binding, managementProof: '0'.repeat(64) };
+    let socketPresent = true;
+    let authorized = false;
+    const dependencies = {
+      authorizeEvidenceSocketRemoval: () => authorized,
+      exists: () => socketPresent,
+      probeBirth: () => ({ status: 'absent' as const }),
+      probeListener: () => ({ status: 'absent' as const }),
+      removeEvidenceSocket: () => {
+        socketPresent = false;
+      },
+    };
+
+    const blocked = await stopManagedMetroWithEvidence(
+      invalidBinding,
+      { sessionId: 'session-a', signerCapability: 'signer' },
+      dependencies,
+    );
+    assert.equal(blocked.authenticated, false);
+    assert.equal(blocked.evidence.complete, false);
+    assert.equal(socketPresent, true);
+
+    authorized = true;
+    const recovered = await stopManagedMetroWithEvidence(
+      invalidBinding,
+      { sessionId: 'session-a', signerCapability: 'signer' },
+      dependencies,
+    );
+    assert.equal(recovered.authenticated, false);
+    assert.equal(recovered.stopped, false);
+    assert.equal(recovered.evidence.complete, true);
+    assert.equal(socketPresent, false);
+  });
 });
 
 test('managed Metro stops an exact listener after transient post-signal uncertainty', async () => {

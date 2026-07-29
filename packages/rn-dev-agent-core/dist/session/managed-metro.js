@@ -1867,6 +1867,10 @@ function removeManagedMetroEvidenceSocket(path) {
     rmSync(path, { force: true });
 }
 function removeManagedMetroEvidenceSocketSafely(path, dependencies) {
+    if ((process.platform === 'win32' && !/^\\\\\.\\pipe\\rn-dev-agent-[a-f0-9]{32}$/.test(path)) ||
+        (process.platform !== 'win32' && !/^\/tmp\/rn-dev-agent-[a-f0-9]{32}\.sock$/.test(path))) {
+        return false;
+    }
     try {
         (dependencies.removeEvidenceSocket ?? removeManagedMetroEvidenceSocket)(path);
         return true;
@@ -2086,7 +2090,15 @@ export async function stopManagedMetroWithEvidence(binding, input, dependencies 
     const stopped = await stopManagedMetro(binding, input, dependencies);
     const authenticated = proofAuthenticated || stopped;
     let evidence = inspectManagedMetroCleanupEvidence((binding ?? {}), dependencies);
-    if (authenticated &&
+    let recoveryAuthorized = false;
+    if (!authenticated && typeof binding?.runtimeEvidenceSocket === 'string') {
+        try {
+            recoveryAuthorized =
+                dependencies.authorizeEvidenceSocketRemoval?.(binding.runtimeEvidenceSocket) === true;
+        }
+        catch { }
+    }
+    if ((authenticated || recoveryAuthorized) &&
         evidence.launcher === 'absent' &&
         evidence.listener === 'absent' &&
         evidence.port.status === 'absent' &&

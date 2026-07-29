@@ -96,6 +96,27 @@ test('a live owner cannot be force-stolen even after its wall-clock lease expire
   assert.doesNotThrow(() => registry.renewSession(a));
 });
 
+test('Metro evidence socket recovery detects references from another live session', () => {
+  const { registry, create } = fixture();
+  const a = create('a');
+  const b = create('b');
+  const socket = '/tmp/rn-dev-agent-00000000000000000000000000000000.sock';
+  registry.updateBindings(b, {
+    bindings: {
+      handoffCleanup: {
+        metro: { mode: 'managed', runtimeEvidenceSocket: socket },
+      },
+    },
+  });
+
+  assert.equal(registry.isMetroEvidenceSocketReferencedByOtherSession(a.sessionId, socket), true);
+  assert.equal(registry.isMetroEvidenceSocketReferencedByOtherSession(b.sessionId, socket), false);
+
+  registry.updateBindings(b, { bindings: { handoffCleanup: null } });
+
+  assert.equal(registry.isMetroEvidenceSocketReferencedByOtherSession(a.sessionId, socket), false);
+});
+
 test('a sole owner wakes after lease expiry and reasserts without silent eviction', () => {
   const { registry, create, advance } = fixture();
   const owner = create('a');
