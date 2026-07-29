@@ -107,20 +107,13 @@ interface SnapshotArgs {
   deviceId?: string;
   platform?: string;
   sessionName?: string;
-  /**
-   * B112 (D641): when true, skip launching the app — create a session that
-   * attaches to the already-running process. Requires the app to be running;
-   * returns an error if it isn't. Prevents the unwanted relaunch + bundle-race
-   * cascade observed during Phase 88 Round 1.
-   */
+  /** Attach to the exact already-running app process without relaunching it. */
   attachOnly?: boolean;
 }
 
 /**
- * B112 (D641): check whether a given bundleId is currently running on the
- * exact selected device. iOS uses that simulator UDID with `simctl spawn`;
- * Android uses that adb serial with `adb shell pidof`. Missing identity refuses
- * instead of consulting the ambiguous `booted` alias.
+ * Check app liveness on the exact selected device; never use an ambiguous
+ * simulator or adb target.
  */
 export async function isAppRunning(
   platform: string | undefined,
@@ -361,8 +354,8 @@ export function createDeviceSnapshotHandler(
           // GH #382: an upgrade note wins; otherwise surface the artifact note
           // (e.g. "downloaded prebuilt runner (~4 MB)").
           upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
-          // A bare simctl launch foregrounds a running PID without relaunch —
-          // safe whether or not attachOnly; ignore errors (app may be frontmost).
+          // Full-open foregrounding may be best-effort; attach-only activation
+          // is performed by XCTest under target process-identity checks.
           if (!args.attachOnly) {
             await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
               timeout: 10_000,
