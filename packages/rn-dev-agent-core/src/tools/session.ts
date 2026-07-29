@@ -566,7 +566,9 @@ export function createSessionHandler(
             );
           }
           assertPackageIntegrationInactive(status.bindings, input.action);
-          const manifestSha256 = createHash('sha256').update(manifestSource ?? '').digest('hex');
+          const manifestSha256 = createHash('sha256')
+            .update(manifestSource ?? '')
+            .digest('hex');
           if (
             integrationBinding?.version !== 1 ||
             typeof integrationBinding.installedBySessionId !== 'string' ||
@@ -658,8 +660,7 @@ export function createSessionHandler(
             throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable');
           }
           if (
-            createHash('sha256').update(installedManifest).digest('hex') !==
-            expectedManifestSha256
+            createHash('sha256').update(installedManifest).digest('hex') !== expectedManifestSha256
           ) {
             throw new SessionAuthorityError(
               'SESSION_AUTHORITY_REQUIRED',

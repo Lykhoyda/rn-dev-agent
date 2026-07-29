@@ -3,10 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { reacquireIosTargetApp } from '../../dist/tools/device-session.js';
 
-const source = readFileSync(
-  new URL('../../src/tools/device-session.ts', import.meta.url),
-  'utf8',
-);
+const source = readFileSync(new URL('../../src/tools/device-session.ts', import.meta.url), 'utf8');
 
 test('runner leak recovery unbinds stale authority and reuses production dependencies', () => {
   assert.match(

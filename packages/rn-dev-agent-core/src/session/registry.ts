@@ -3339,10 +3339,7 @@ export class SessionRegistry {
           'managed Metro cleanup reservation belongs to a different handoff recipient',
         );
       }
-      if (
-        handoff.expires_ms < this.#now() &&
-        !allowExactReservationAfterExpiry
-      ) {
+      if (handoff.expires_ms < this.#now() && !allowExactReservationAfterExpiry) {
         throw new SessionAuthorityError('HANDOFF_EXPIRED', 'handoff capability expired');
       }
       const rotatedReservation: ManagedMetroHandoffReservation = {

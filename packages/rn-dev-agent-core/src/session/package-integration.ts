@@ -47,9 +47,7 @@ export interface PackageIntegrationManifest {
   metroConfig?: string;
 }
 
-export function serializePackageIntegrationManifest(
-  manifest: PackageIntegrationManifest,
-): string {
+export function serializePackageIntegrationManifest(manifest: PackageIntegrationManifest): string {
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
