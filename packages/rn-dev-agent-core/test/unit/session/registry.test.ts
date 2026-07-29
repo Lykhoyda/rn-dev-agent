@@ -1134,6 +1134,86 @@ test('managed Metro handoff reservation follows an authenticated recovery worker
   assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'handoff_cleanup');
 });
 
+test('managed Metro handoff reservation follows an authenticated replacement supervisor', () => {
+  const { registry, create, ownerStates } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const priorTarget = create('b', 'shared-worktree');
+  const replacement = create('c', 'shared-worktree');
+  const priorCapability = 'prior-recovery-capability';
+  const replacementCapability = 'replacement-recovery-capability';
+  registry.updateBindings(priorTarget, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update(priorCapability).digest('hex'),
+      adoptionRequired: { sessionId: owner.sessionId, claimEpoch: owner.claimEpoch },
+    },
+  });
+  registry.bindRecoveryWorker(
+    priorTarget,
+    { instanceId: 'prior-worker', pid: 203, token: 'prior-worker-birth' },
+    priorCapability,
+  );
+  registry.updateBindings(replacement, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update(replacementCapability).digest('hex'),
+      adoptionRequired: { sessionId: owner.sessionId, claimEpoch: owner.claimEpoch },
+    },
+  });
+  registry.claimResources(owner, [
+    { type: 'source', key: 'shared-worktree' },
+    { type: 'metro-port', key: '8341' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      metro: {
+        mode: 'managed',
+        port: 8341,
+        pid: 301,
+        birth: 'metro-birth',
+        instanceId: 'metro-a',
+      },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'prior-worker' });
+  registry.reserveManagedMetroHandoffCleanup(priorTarget, {
+    ...handoff,
+    targetInstance: 'prior-worker',
+  });
+
+  registry.bindRecoveryWorker(
+    replacement,
+    { instanceId: 'replacement-waiting', pid: 204, token: 'replacement-waiting-birth' },
+    replacementCapability,
+  );
+  assert.equal(
+    registry.getSessionStatus(owner.sessionId)?.bindings.managedMetroHandoffReservation
+      .targetSessionId,
+    priorTarget.sessionId,
+  );
+
+  ownerStates.set(priorTarget.sessionId, 'mismatch');
+  registry.bindRecoveryWorker(
+    replacement,
+    { instanceId: 'replacement-worker', pid: 205, token: 'replacement-worker-birth' },
+    replacementCapability,
+  );
+
+  const reservation = registry.getSessionStatus(owner.sessionId)?.bindings
+    .managedMetroHandoffReservation;
+  assert.equal(reservation.targetSessionId, replacement.sessionId);
+  assert.equal(reservation.targetClaimEpoch, replacement.claimEpoch);
+  assert.equal(reservation.targetInstance, 'replacement-worker');
+  assert.equal(registry.getSessionStatus(priorTarget.sessionId)?.state, 'stale');
+  assert.doesNotThrow(() =>
+    registry.validateHandoffInto(replacement, {
+      ...handoff,
+      targetInstance: 'replacement-worker',
+    }),
+  );
+});
+
 test('managed Metro shutdown refusal restores coherent donor authority', () => {
   const { registry, create } = fixture();
   const owner = create('a', 'shared-worktree');

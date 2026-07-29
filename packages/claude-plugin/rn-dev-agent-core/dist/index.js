@@ -26425,16 +26425,46 @@ var init_registry = __esm({
              AND donor.source_key = ?
              AND donor.worktree_key = ?
              AND donor.app_root_key = ?`).all(row.source_key, row.worktree_key, row.app_root_key);
+          const adoptionRequired = bindings.adoptionRequired;
           const rotations = pendingHandoffs.flatMap((handoff) => {
             const donorBindings = JSON.parse(handoff.bindings_json);
             const reservation = managedMetroHandoffReservation(donorBindings);
-            if (!reservation || reservation.targetSessionId !== session.sessionId || reservation.targetClaimEpoch !== session.claimEpoch) {
+            if (!reservation)
               return [];
-            }
-            if (reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.sourceClaimEpoch !== handoff.donor_claim_epoch || reservation.targetInstance !== row.worker_instance || handoff.target_instance !== row.worker_instance || reservation.metro.sourceSessionId !== handoff.session_id) {
+            if (reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.sourceClaimEpoch !== handoff.donor_claim_epoch || reservation.metro.sourceSessionId !== handoff.session_id) {
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
             }
-            return [{ handoff, donorBindings, reservation }];
+            if (reservation.targetSessionId === session.sessionId && reservation.targetClaimEpoch === session.claimEpoch) {
+              if (reservation.targetInstance !== row.worker_instance || handoff.target_instance !== row.worker_instance) {
+                throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
+              }
+              return [{ handoff, donorBindings, reservation, priorTarget: null }];
+            }
+            if (adoptionRequired?.sessionId !== handoff.session_id || adoptionRequired.claimEpoch !== handoff.donor_claim_epoch) {
+              return [];
+            }
+            const priorTarget = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
+                      claim_epoch, supervisor_pid, supervisor_birth
+               FROM sessions WHERE session_id = ?`).get(reservation.targetSessionId));
+            if (!priorTarget || priorTarget.source_key !== row.source_key || priorTarget.worktree_key !== row.worktree_key || priorTarget.app_root_key !== row.app_root_key || reservation.targetInstance !== handoff.target_instance) {
+              return [];
+            }
+            const priorTargetTerminal = (priorTarget.state === "released" || priorTarget.state === "stale") && priorTarget.claim_epoch === reservation.targetClaimEpoch + 1;
+            let priorTargetDead = false;
+            if (priorTarget.state === "blocked" && priorTarget.claim_epoch === reservation.targetClaimEpoch) {
+              try {
+                priorTargetDead = this.#ownerStatus({
+                  sessionId: priorTarget.session_id,
+                  pid: priorTarget.supervisor_pid,
+                  token: priorTarget.supervisor_birth
+                }) === "mismatch";
+              } catch {
+                priorTargetDead = false;
+              }
+            }
+            if (!priorTargetTerminal && !priorTargetDead)
+              return [];
+            return [{ handoff, donorBindings, reservation, priorTarget }];
           });
           if (rotations.length > 1) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "multiple managed Metro handoffs target the same recovery session");
@@ -26443,10 +26473,12 @@ var init_registry = __esm({
           if (rotation) {
             const rotatedReservation = {
               ...rotation.reservation,
+              targetSessionId: session.sessionId,
+              targetClaimEpoch: session.claimEpoch,
               targetInstance: worker.instanceId
             };
             const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
-             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(worker.instanceId, rotation.handoff.handoff_id, row.worker_instance);
+             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(worker.instanceId, rotation.handoff.handoff_id, rotation.reservation.targetInstance);
             if (handoffChanged.changes !== 1) {
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recovery worker rotation");
             }
@@ -26459,8 +26491,10 @@ var init_registry = __esm({
             if (donorChanged.changes !== 1) {
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recovery worker rotation");
             }
+            if (rotation.priorTarget?.state === "blocked") {
+              this.#fenceSession(rotation.priorTarget.session_id, now);
+            }
           }
-          const adoptionRequired = bindings.adoptionRequired;
           const expiresMs = now + 5 * 6e4;
           const recoveryHandles = {
             handoffRecipient: {
@@ -31057,12 +31091,13 @@ function createDeviceSnapshotHandler(deps = {}) {
         openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
         resnapshot: () => rawSnapshot(),
         parseNodes: parseSnapshotNodes,
-        // GH #186: non-destructive reacquire tried before the destructive
-        // close/relaunch tiers. Only when we have the full iOS context
-        // (appId + deviceId) needed to re-foreground the app and restart the
-        // fast-runner; otherwise omitted so recovery falls back to the
-        // existing tiers.
-        reacquire: session?.platform === "ios" && session?.appId && session?.deviceId ? () => reacquireIosTargetApp(session.appId, session.deviceId) : void 0
+        reacquire: session?.platform === "ios" && session?.appId && session?.deviceId && deps.bindRunner && deps.unbindRunner ? () => reacquireIosTargetApp(session.appId, session.deviceId, {
+          bindRunner: deps.bindRunner,
+          ensureFastRunner,
+          launchApp,
+          stopFastRunner,
+          unbindRunner: deps.unbindRunner
+        }) : void 0
       });
       if (recovery.recovered) {
         cacheSnapshotIfPossible(recovery.result);
@@ -31094,20 +31129,17 @@ function runnerLeakFailureHint(reason, session) {
   }
   return "Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.";
 }
-async function reacquireIosTargetApp(appId, deviceId) {
+async function reacquireIosTargetApp(appId, deviceId, dependencies) {
   try {
-    await stopFastRunner(deviceId);
-  } catch {
+    await dependencies.stopFastRunner(deviceId);
+    await dependencies.unbindRunner();
+    await dependencies.launchApp(appId, "ios", deviceId);
+    await dependencies.ensureFastRunner(deviceId, appId);
+    await dependencies.bindRunner("ios", deviceId, appId);
+    return okResult({ reacquired: true, appId });
+  } catch (error2) {
+    return failResult(`Runner authority reacquire failed: ${error2 instanceof Error ? error2.message : String(error2)}`, "RUNNER_OWNERSHIP_MISMATCH");
   }
-  try {
-    await launchApp(appId, "ios", deviceId);
-  } catch {
-  }
-  try {
-    await ensureFastRunner(deviceId, appId);
-  } catch {
-  }
-  return okResult({ reacquired: true, appId });
 }
 async function rawSnapshot() {
   return runNative(["snapshot", "-i"]);
@@ -76095,10 +76127,15 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
   let primaryError;
   try {
     const generatedSnapshots = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
-    if (!generatedSnapshots[0]?.contents) {
+    const installedManifestSource = generatedSnapshots[0]?.contents?.toString("utf8");
+    if (installedManifestSource && input.manifestSource && installedManifestSource !== input.manifestSource) {
+      throw new Error("SESSION_INTEGRATION_CONFLICT: integration manifest changed before restore");
+    }
+    const manifestSource = installedManifestSource ?? input.manifestSource;
+    if (!manifestSource) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration manifest is missing");
     }
-    const manifest = JSON.parse(generatedSnapshots[0].contents.toString("utf8"));
+    const manifest = JSON.parse(manifestSource);
     const metroConfig = manifest.metroConfig === void 0 ? "metro.config.js" : manifest.metroConfig;
     if (metroConfig !== "metro.config.js" && metroConfig !== "metro.config.cjs") {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config");
@@ -76472,10 +76509,12 @@ function createSessionHandler(runtime, dependencies = {}) {
         const integrationInputs = readPackageIntegrationInputs(appRoot);
         const manifestPath = join52(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
         const packageJson = JSON.parse(integrationInputs.packageJson);
+        const integrationBinding = status2.bindings.packageIntegration;
+        const restorationManifestSource = integrationBinding?.restoration?.phase === "started" && typeof integrationBinding.restoration.manifestSource === "string" ? integrationBinding.restoration.manifestSource : void 0;
+        const manifestSource = integrationInputs.manifest ?? restorationManifestSource;
         let existing;
         try {
-          const manifest = integrationInputs.manifest;
-          existing = manifest === void 0 ? void 0 : JSON.parse(manifest);
+          existing = manifestSource === void 0 ? void 0 : JSON.parse(manifestSource);
         } catch (error2) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
@@ -76489,12 +76528,21 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration manifest is unavailable for restoration");
           }
           assertPackageIntegrationInactive(status2.bindings, input.action);
-          const integrationBinding = status2.bindings.packageIntegration;
-          const manifestSha256 = createHash16("sha256").update(integrationInputs.manifest ?? "").digest("hex");
+          const manifestSha256 = createHash16("sha256").update(manifestSource ?? "").digest("hex");
           if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
           }
-          restorePackageIntegrationFiles({ appRoot });
+          if (!restorationManifestSource) {
+            registry2.updateBindings(session, {
+              bindings: {
+                packageIntegration: {
+                  ...integrationBinding,
+                  restoration: { phase: "started", manifestSource }
+                }
+              }
+            });
+          }
+          restorePackageIntegrationFiles({ appRoot, manifestSource });
           registry2.updateBindings(session, {
             bindings: { packageIntegration: null }
           });

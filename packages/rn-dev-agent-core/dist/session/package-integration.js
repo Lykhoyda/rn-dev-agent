@@ -3349,10 +3349,17 @@ export function restorePackageIntegrationFiles(input, dependencies = {}) {
     let primaryError;
     try {
         const generatedSnapshots = snapshotBoundFiles(directories.integration, directories.integration.path, generatedNames);
-        if (!generatedSnapshots[0]?.contents) {
+        const installedManifestSource = generatedSnapshots[0]?.contents?.toString('utf8');
+        if (installedManifestSource &&
+            input.manifestSource &&
+            installedManifestSource !== input.manifestSource) {
+            throw new Error('SESSION_INTEGRATION_CONFLICT: integration manifest changed before restore');
+        }
+        const manifestSource = installedManifestSource ?? input.manifestSource;
+        if (!manifestSource) {
             throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration manifest is missing');
         }
-        const manifest = JSON.parse(generatedSnapshots[0].contents.toString('utf8'));
+        const manifest = JSON.parse(manifestSource);
         const metroConfig = manifest.metroConfig === undefined ? 'metro.config.js' : manifest.metroConfig;
         if (metroConfig !== 'metro.config.js' && metroConfig !== 'metro.config.cjs') {
             throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: manifest Metro config is not an expected app-root config');

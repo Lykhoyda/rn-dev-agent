@@ -311,13 +311,18 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const integrationInputs = readPackageIntegrationInputs(appRoot);
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
                 const packageJson = JSON.parse(integrationInputs.packageJson);
+                const integrationBinding = status.bindings.packageIntegration;
+                const restorationManifestSource = integrationBinding?.restoration?.phase === 'started' &&
+                    typeof integrationBinding.restoration.manifestSource === 'string'
+                    ? integrationBinding.restoration.manifestSource
+                    : undefined;
+                const manifestSource = integrationInputs.manifest ?? restorationManifestSource;
                 let existing;
                 try {
-                    const manifest = integrationInputs.manifest;
                     existing =
-                        manifest === undefined
+                        manifestSource === undefined
                             ? undefined
-                            : JSON.parse(manifest);
+                            : JSON.parse(manifestSource);
                 }
                 catch (error) {
                     if (!(error instanceof SyntaxError))
@@ -333,16 +338,23 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration manifest is unavailable for restoration');
                     }
                     assertPackageIntegrationInactive(status.bindings, input.action);
-                    const integrationBinding = status.bindings.packageIntegration;
-                    const manifestSha256 = createHash('sha256')
-                        .update(integrationInputs.manifest ?? '')
-                        .digest('hex');
+                    const manifestSha256 = createHash('sha256').update(manifestSource ?? '').digest('hex');
                     if (integrationBinding?.version !== 1 ||
                         typeof integrationBinding.installedBySessionId !== 'string' ||
                         integrationBinding.manifestSha256 !== manifestSha256) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration restoration requires the transferred manifest authority binding');
                     }
-                    restorePackageIntegrationFiles({ appRoot });
+                    if (!restorationManifestSource) {
+                        registry.updateBindings(session, {
+                            bindings: {
+                                packageIntegration: {
+                                    ...integrationBinding,
+                                    restoration: { phase: 'started', manifestSource },
+                                },
+                            },
+                        });
+                    }
+                    restorePackageIntegrationFiles({ appRoot, manifestSource });
                     registry.updateBindings(session, {
                         bindings: { packageIntegration: null },
                     });

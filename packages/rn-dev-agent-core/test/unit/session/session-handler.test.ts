@@ -1754,6 +1754,68 @@ test('handoff recipient restores donor-installed integration with transferred au
   }
 });
 
+test('integration restoration resumes after files commit before binding completion', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-completion-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const originalPackage = {
+      scripts: { ios: 'expo run:ios', android: 'expo run:android' },
+    };
+    writeFileSync(packagePath, `${JSON.stringify(originalPackage)}\n`);
+    const metroPath = join(root, 'metro.config.js');
+    const originalMetro = 'module.exports = {};\n';
+    writeFileSync(metroPath, originalMetro);
+    const status = {
+      sessionId: 'session-a',
+      source: { appRoot: root },
+      bindings: {} as Record<string, unknown>,
+    };
+    let failCompletion = true;
+    const registry = {
+      getSessionStatus: () => status,
+      updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
+        if (update.bindings.packageIntegration === null && failCompletion) {
+          failCompletion = false;
+          throw new Error('binding completion interrupted');
+        }
+        status.bindings = { ...status.bindings, ...update.bindings };
+      },
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry,
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    });
+
+    const applied = await handler({ action: 'apply_integration', confirmed: true });
+    assert.equal(applied.isError, undefined);
+    const interrupted = await handler({ action: 'restore_integration', confirmed: true });
+
+    assert.equal(interrupted.isError, true);
+    assert.match(interrupted.content[0].text, /binding completion interrupted/);
+    assert.equal(
+      existsSync(join(root, '.rn-agent/integration/rn-session-integration.json')),
+      false,
+    );
+    assert.equal(
+      (status.bindings.packageIntegration as { restoration?: { phase?: string } }).restoration
+        ?.phase,
+      'started',
+    );
+
+    const resumed = await handler({ action: 'restore_integration', confirmed: true });
+
+    assert.equal(resumed.isError, undefined);
+    assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), originalPackage);
+    assert.equal(readFileSync(metroPath, 'utf8'), originalMetro);
+    assert.equal(status.bindings.packageIntegration, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('transferred owner can stop Metro, restore integration, and release in order', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cleanup-lifecycle-'));
   const listener = createServer((socket) => socket.end());

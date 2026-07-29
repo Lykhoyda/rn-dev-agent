@@ -518,13 +518,26 @@ export function createSessionHandler(
           'rn-session-integration.json',
         );
         const packageJson = JSON.parse(integrationInputs.packageJson) as Record<string, unknown>;
+        const integrationBinding = status.bindings.packageIntegration as
+          | {
+              version?: unknown;
+              installedBySessionId?: unknown;
+              manifestSha256?: unknown;
+              restoration?: { phase?: unknown; manifestSource?: unknown };
+            }
+          | undefined;
+        const restorationManifestSource =
+          integrationBinding?.restoration?.phase === 'started' &&
+          typeof integrationBinding.restoration.manifestSource === 'string'
+            ? integrationBinding.restoration.manifestSource
+            : undefined;
+        const manifestSource = integrationInputs.manifest ?? restorationManifestSource;
         let existing: PackageIntegrationManifest | undefined;
         try {
-          const manifest = integrationInputs.manifest;
           existing =
-            manifest === undefined
+            manifestSource === undefined
               ? undefined
-              : (JSON.parse(manifest) as PackageIntegrationManifest);
+              : (JSON.parse(manifestSource) as PackageIntegrationManifest);
         } catch (error) {
           if (!(error instanceof SyntaxError)) throw error;
         }
@@ -545,16 +558,7 @@ export function createSessionHandler(
             );
           }
           assertPackageIntegrationInactive(status.bindings, input.action);
-          const integrationBinding = status.bindings.packageIntegration as
-            | {
-                version?: unknown;
-                installedBySessionId?: unknown;
-                manifestSha256?: unknown;
-              }
-            | undefined;
-          const manifestSha256 = createHash('sha256')
-            .update(integrationInputs.manifest ?? '')
-            .digest('hex');
+          const manifestSha256 = createHash('sha256').update(manifestSource ?? '').digest('hex');
           if (
             integrationBinding?.version !== 1 ||
             typeof integrationBinding.installedBySessionId !== 'string' ||
@@ -565,7 +569,17 @@ export function createSessionHandler(
               'integration restoration requires the transferred manifest authority binding',
             );
           }
-          restorePackageIntegrationFiles({ appRoot });
+          if (!restorationManifestSource) {
+            registry.updateBindings(session, {
+              bindings: {
+                packageIntegration: {
+                  ...integrationBinding,
+                  restoration: { phase: 'started', manifestSource },
+                },
+              },
+            });
+          }
+          restorePackageIntegrationFiles({ appRoot, manifestSource });
           registry.updateBindings(session, {
             bindings: { packageIntegration: null },
           });

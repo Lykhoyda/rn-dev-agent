@@ -3502,7 +3502,7 @@ export function applyPackageIntegration(
 }
 
 export function restorePackageIntegrationFiles(
-  input: { appRoot: string },
+  input: { appRoot: string; manifestSource?: string },
   dependencies: PackageIntegrationDependencies = {},
 ): void {
   const appRoot = resolve(input.appRoot);
@@ -3524,12 +3524,19 @@ export function restorePackageIntegrationFiles(
       directories.integration.path,
       generatedNames,
     );
-    if (!generatedSnapshots[0]?.contents) {
+    const installedManifestSource = generatedSnapshots[0]?.contents?.toString('utf8');
+    if (
+      installedManifestSource &&
+      input.manifestSource &&
+      installedManifestSource !== input.manifestSource
+    ) {
+      throw new Error('SESSION_INTEGRATION_CONFLICT: integration manifest changed before restore');
+    }
+    const manifestSource = installedManifestSource ?? input.manifestSource;
+    if (!manifestSource) {
       throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: integration manifest is missing');
     }
-    const manifest = JSON.parse(
-      generatedSnapshots[0].contents.toString('utf8'),
-    ) as PackageIntegrationManifest;
+    const manifest = JSON.parse(manifestSource) as PackageIntegrationManifest;
     const metroConfig =
       manifest.metroConfig === undefined ? 'metro.config.js' : manifest.metroConfig;
     if (metroConfig !== 'metro.config.js' && metroConfig !== 'metro.config.cjs') {
