@@ -2889,6 +2889,16 @@ export function restorePackageIntegration(
   packageJson: PackageJson,
   manifest: PackageIntegrationManifest,
 ): PackageJson {
+  const restoredScripts = {
+    ios: manifest.originalScripts.ios.join(' '),
+    android: manifest.originalScripts.android.join(' '),
+  };
+  if (
+    packageJson.scripts?.ios === restoredScripts.ios &&
+    packageJson.scripts?.android === restoredScripts.android
+  ) {
+    return packageJson;
+  }
   if (
     packageJson.scripts?.ios !== SENTINELS.ios ||
     packageJson.scripts?.android !== SENTINELS.android
@@ -2901,8 +2911,7 @@ export function restorePackageIntegration(
     ...packageJson,
     scripts: {
       ...packageJson.scripts,
-      ios: manifest.originalScripts.ios.join(' '),
-      android: manifest.originalScripts.android.join(' '),
+      ...restoredScripts,
     },
   };
 }

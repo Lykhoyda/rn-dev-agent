@@ -10,6 +10,7 @@ import {
   refreshManagedMetroBuildGeneration,
   startManagedMetro,
   stopManagedMetro,
+  verifyManagedMetroManagementProof,
   type ManagedMetroBinding,
 } from './session/managed-metro.js';
 import { inspectSessionOwner } from './session/process-owner.js';
@@ -176,6 +177,18 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
   let bindingCommitted = false;
   try {
     await status.registry.runWithOperation(operation, async () => {
+      if (
+        existing &&
+        !verifyManagedMetroManagementProof(existing as Record<string, unknown>, {
+          sessionId: status.sessionId,
+          signerCapability,
+        })
+      ) {
+        throw new SessionAuthorityError(
+          'METRO_AUTHORITY_MISMATCH',
+          'existing Metro binding is not authenticated managed authority',
+        );
+      }
       if (
         typeof existing?.pid === 'number' &&
         typeof existing.port === 'number' &&
@@ -633,6 +646,12 @@ async function main(): Promise<void> {
         }
       }
       const metro = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
+      if (status.bindings.packageIntegration) {
+        throw new SessionAuthorityError(
+          'SESSION_AUTHORITY_REQUIRED',
+          'package integration must be restored before session release',
+        );
+      }
       const operation = beginCliOperation(status, 'rn-session release', 'transition:release');
       let released = false;
       try {

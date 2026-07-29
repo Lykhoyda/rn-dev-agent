@@ -5,6 +5,7 @@ import {
   buildAndroidPidofArgs,
   createDeviceSnapshotHandler,
   isAppRunning,
+  reopenSessionForRecovery,
   releaseDeviceLockForSession,
 } from '../../dist/tools/device-session.js';
 import { clearActiveSession } from '../../dist/agent-device-wrapper.js';
@@ -105,6 +106,30 @@ test('GH-588 final Android validation: device_snapshot open follows the proven e
     ]);
     assert.equal(body.data?.deviceId, SERIAL);
     assert.equal(body.data?.appId, APP_ID);
+  } finally {
+    cleanup();
+  }
+});
+
+test('runner recovery rebinds durable authority through the production dependencies', async () => {
+  const calls: string[] = [];
+  try {
+    const result = await reopenSessionForRecovery(APP_ID, 'android', false, SERIAL, {
+      startAndroidRunner: async () => {
+        calls.push('start');
+      },
+      launchAndroidApp: async () => {
+        calls.push('launch');
+      },
+      probeAndroidUi: async () => okResult({ nodes: [] }),
+      probeReactNativeUi: async () => true,
+      bindRunner: async (platform, deviceId, appId) => {
+        calls.push(`bind:${platform}:${deviceId}:${appId}`);
+      },
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(calls, ['start', 'launch', `bind:android:${SERIAL}:${APP_ID}`]);
   } finally {
     cleanup();
   }

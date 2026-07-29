@@ -213,6 +213,95 @@ test('package-local CLI refuses marker writes through a replaced .rn-agent symli
   assert.equal(wroteExternalMarker, false);
 });
 
+test('package-local CLI refuses to reuse external Metro as managed authority', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-external-metro-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  let metro: ReturnType<typeof spawn> | undefined;
+  try {
+    execFileSync('git', ['init', '-q', appRoot]);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+    writeFileSync(join(appRoot, 'package.json'), '{}\n');
+    execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+    execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+    mkdirSync(join(appRoot, '.rn-agent', 'integration'), { recursive: true });
+    writeFileSync(
+      join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json'),
+      '{"version":1}\n',
+    );
+
+    metro = spawn(
+      process.execPath,
+      [
+        '-e',
+        "require('node:http').createServer((req,res)=>res.end('packager-status:running')).listen(0,'127.0.0.1',function(){process.stdout.write(String(this.address().port)+'\\n')})",
+      ],
+      { cwd: appRoot, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    const port = await new Promise<number>((resolve, reject) => {
+      metro!.once('error', reject);
+      metro!.stdout!.once('data', (chunk) => resolve(Number(String(chunk).trim())));
+    });
+    const metroPid = metro.pid;
+    assert.ok(metroPid);
+    const metroBirth = readProcessBirth(metroPid);
+    assert.ok(metroBirth);
+
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const session = registry.createSession({
+      sessionId: 'session-external-metro',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'fixture' },
+      source: { ...source },
+      bindings: {
+        metroPort: port,
+        device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
+        metro: {
+          mode: 'external',
+          port,
+          pid: metroPid,
+          birth: metroBirth.token,
+          instanceId: 'external-metro',
+          servingRoot: appRoot,
+          buildGeneration: 1,
+        },
+      },
+    });
+    registry.updateBindings(session, { state: 'device_claimed', bindings: {} });
+    registry.close();
+    writeSessionSecret(layout, session.sessionId, {
+      signerCapability: 'signer',
+      observeCapability: 'observe',
+      recoveryCapability: 'recovery',
+    });
+
+    const result = spawnSync(process.execPath, [cliPath, 'ensure-metro'], {
+      cwd: appRoot,
+      env: {
+        ...process.env,
+        XDG_STATE_HOME: stateHome,
+        RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      },
+      encoding: 'utf8',
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /existing Metro binding is not authenticated managed authority/);
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    metro?.kill('SIGKILL');
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('package-local CLI retains claims when managed Metro cleanup is unproven', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-release-'));
   const appRoot = join(root, 'app');

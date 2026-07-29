@@ -478,10 +478,11 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 closeSession: async () => {
                     await stopFastRunner(session?.deviceId);
                     await stopAndroidRunner(session?.deviceId);
+                    await deps.unbindRunner?.();
                     clearActiveSession();
                     return okResult({ closed: true });
                 },
-                openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId),
+                openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
                 resnapshot: () => rawSnapshot(),
                 parseNodes: parseSnapshotNodes,
                 // GH #186: non-destructive reacquire tried before the destructive
@@ -602,7 +603,7 @@ function wrapWithMeta(result, meta) {
         return result;
     }
 }
-export async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId) {
+export async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, dependencies = {}) {
     // Always mint a fresh recovery name (Gemini G3): reusing the original
     // session name risks silently re-attaching to the corrupted session.
     const recoveryName = `rn-agent-recovery-${Date.now()}`;
@@ -612,7 +613,7 @@ export async function reopenSessionForRecovery(appId, platform, attachOnly, devi
     // cleanly (acquireDeviceLockForSession releases any prior same-process lock
     // first), so there is no self-DEVICE_BUSY. This replaces the old
     // agent-device `open` RPC + envelope/UDID_RE parse.
-    return createDeviceSnapshotHandler()({
+    return createDeviceSnapshotHandler(dependencies)({
         action: 'open',
         appId,
         deviceId,

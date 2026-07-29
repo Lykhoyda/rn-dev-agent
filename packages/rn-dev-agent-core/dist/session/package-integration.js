@@ -2835,6 +2835,14 @@ export function previewPackageIntegration(packageJson, existing, sessionCli) {
     };
 }
 export function restorePackageIntegration(packageJson, manifest) {
+    const restoredScripts = {
+        ios: manifest.originalScripts.ios.join(' '),
+        android: manifest.originalScripts.android.join(' '),
+    };
+    if (packageJson.scripts?.ios === restoredScripts.ios &&
+        packageJson.scripts?.android === restoredScripts.android) {
+        return packageJson;
+    }
     if (packageJson.scripts?.ios !== SENTINELS.ios ||
         packageJson.scripts?.android !== SENTINELS.android) {
         throw new Error('SESSION_INTEGRATION_CONFLICT: package scripts changed after integration was installed');
@@ -2843,8 +2851,7 @@ export function restorePackageIntegration(packageJson, manifest) {
         ...packageJson,
         scripts: {
             ...packageJson.scripts,
-            ios: manifest.originalScripts.ios.join(' '),
-            android: manifest.originalScripts.android.join(' '),
+            ...restoredScripts,
         },
     };
 }

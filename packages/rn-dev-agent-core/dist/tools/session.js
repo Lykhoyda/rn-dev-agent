@@ -624,6 +624,9 @@ export function createSessionHandler(runtime, dependencies = {}) {
             if (!status) {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before release cleanup');
             }
+            if (status.bindings.packageIntegration) {
+                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration must be restored before session release');
+            }
             const metro = status.bindings.metro;
             const runner = status.bindings.runner;
             const recorder = status.bindings.recorder;

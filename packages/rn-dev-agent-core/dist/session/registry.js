@@ -675,6 +675,7 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`)
                 .get(session.sessionId, session.claimEpoch);
             const bindings = JSON.parse(current.bindings_json);
+            this.#requireIntegrationRestored(bindings);
             const metro = (bindings.metroCleanup ?? bindings.metro);
             if (active?.profile === 'transition:ensure-metro' && metro?.mode !== 'managed') {
                 throw new SessionAuthorityError('SESSION_OPERATION_ACTIVE', 'managed Metro transition has not published exact cleanup authority');
@@ -706,11 +707,12 @@ export class SessionRegistry {
         const now = this.#now();
         this.#transaction(() => {
             const row = asSession(this.#database
-                .prepare('SELECT state, claim_epoch FROM sessions WHERE session_id = ?')
+                .prepare('SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?')
                 .get(session.sessionId));
             if (!row || row.state !== 'closing' || row.claim_epoch !== session.claimEpoch) {
                 throw new SessionAuthorityError('SESSION_OWNER_LOST', 'only the unchanged closing session may be released');
             }
+            this.#requireIntegrationRestored(JSON.parse(String(row.bindings_json)));
             this.#database
                 .prepare('DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?')
                 .run(session.sessionId, session.claimEpoch);
@@ -725,7 +727,8 @@ export class SessionRegistry {
     releaseSession(session) {
         const now = this.#now();
         this.#transaction(() => {
-            this.#requireSession(session);
+            const current = this.#requireSession(session);
+            this.#requireIntegrationRestored(JSON.parse(current.bindings_json));
             const active = this.#database
                 .prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`)
@@ -1978,6 +1981,11 @@ export class SessionRegistry {
             throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session owner no longer matches the active claim epoch');
         }
         return row;
+    }
+    #requireIntegrationRestored(bindings) {
+        if (bindings.packageIntegration) {
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration must be restored before session release');
+        }
     }
     #requireFenceableSession(session) {
         const row = asSession(this.#database

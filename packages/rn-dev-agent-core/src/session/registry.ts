@@ -1225,6 +1225,7 @@ export class SessionRegistry {
         | { operation_id?: unknown; profile?: unknown }
         | undefined;
       const bindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
+      this.#requireIntegrationRestored(bindings);
       const metro = (bindings.metroCleanup ?? bindings.metro) as
         | Record<string, unknown>
         | undefined;
@@ -1270,7 +1271,7 @@ export class SessionRegistry {
     this.#transaction(() => {
       const row = asSession(
         this.#database
-          .prepare('SELECT state, claim_epoch FROM sessions WHERE session_id = ?')
+          .prepare('SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?')
           .get(session.sessionId),
       );
       if (!row || row.state !== 'closing' || row.claim_epoch !== session.claimEpoch) {
@@ -1279,6 +1280,9 @@ export class SessionRegistry {
           'only the unchanged closing session may be released',
         );
       }
+      this.#requireIntegrationRestored(
+        JSON.parse(String(row.bindings_json)) as Record<string, unknown>,
+      );
       this.#database
         .prepare('DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?')
         .run(session.sessionId, session.claimEpoch);
@@ -1296,7 +1300,10 @@ export class SessionRegistry {
   releaseSession(session: SessionRef): void {
     const now = this.#now();
     this.#transaction(() => {
-      this.#requireSession(session);
+      const current = this.#requireSession(session);
+      this.#requireIntegrationRestored(
+        JSON.parse(current.bindings_json) as Record<string, unknown>,
+      );
       const active = this.#database
         .prepare(
           `SELECT operation_id, profile FROM operations
@@ -3171,6 +3178,15 @@ export class SessionRegistry {
       );
     }
     return row;
+  }
+
+  #requireIntegrationRestored(bindings: Record<string, unknown>): void {
+    if (bindings.packageIntegration) {
+      throw new SessionAuthorityError(
+        'SESSION_AUTHORITY_REQUIRED',
+        'package integration must be restored before session release',
+      );
+    }
   }
 
   #requireFenceableSession(session: SessionRef): SessionRow {

@@ -1178,6 +1178,46 @@ test('session release stops its managed Metro before releasing claims', async ()
   assert.deepEqual(calls, ['stop-metro', 'release']);
 });
 
+test('session release refuses integration ownership before process cleanup', async () => {
+  const calls: string[] = [];
+  const status = {
+    sessionId: 'session-a',
+    bindings: {
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: 'session-a',
+        manifestSha256: 'a'.repeat(64),
+      },
+      metro: { mode: 'managed' },
+    },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => calls.push('release'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    },
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: async () => {
+        calls.push('stop-metro');
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'release' });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /package integration must be restored/);
+  assert.deepEqual(calls, []);
+});
+
 test('session stop_metro closes the live listener but preserves restoration ownership', async (t) => {
   const listener = createServer((socket) => socket.end());
   await new Promise<void>((resolve, reject) => {

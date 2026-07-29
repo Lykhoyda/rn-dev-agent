@@ -3547,6 +3547,37 @@ test(
   },
 );
 
+test('restoration resumes after package scripts were already restored', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-resume-'));
+  try {
+    const packagePath = join(root, 'package.json');
+    const metroPath = join(root, 'metro.config.js');
+    const metroBefore = 'module.exports = { serializer: {} };\n';
+    writeFileSync(packagePath, `${JSON.stringify(packageJson)}\n`);
+    writeFileSync(metroPath, metroBefore);
+
+    const preview = applyPackageIntegration({
+      appRoot: root,
+      sessionCli: join(root, 'rn-session.js'),
+    });
+    writeFileSync(
+      packagePath,
+      `${JSON.stringify(restorePackageIntegration(preview.packageJson, preview.manifest), null, 2)}\n`,
+    );
+
+    restorePackageIntegrationFiles({ appRoot: root });
+
+    assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), packageJson);
+    assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
+    assert.equal(
+      existsSync(join(root, '.rn-agent/integration/rn-session-integration.json')),
+      false,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('restoration refuses package scripts edited after integration', () => {
   const preview = previewPackageIntegration(packageJson);
   const edited = {

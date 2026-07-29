@@ -391,6 +391,27 @@ test('only the active operation context may advance transition authority', async
   registry.endOperation(operation);
 });
 
+test('session release requires package integration restoration at every registry boundary', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  registry.updateBindings(owner, {
+    bindings: {
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: owner.sessionId,
+        manifestSha256: 'a'.repeat(64),
+      },
+    },
+  });
+
+  assert.throws(() => registry.beginSessionClose(owner), /package integration must be restored/);
+  assert.throws(() => registry.releaseSession(owner), /package integration must be restored/);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, 'active');
+
+  registry.updateBindings(owner, { bindings: { packageIntegration: null } });
+  assert.doesNotThrow(() => registry.releaseSession(owner));
+});
+
 test('blocked recovery atomically adopts only a proven-stale exact source owner', () => {
   const { registry, create, ownerStates } = fixture();
   const prior = create('a', 'shared-worktree');

@@ -16031,6 +16031,7 @@ var init_registry = __esm({
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
           const bindings = JSON.parse(current.bindings_json);
+          this.#requireIntegrationRestored(bindings);
           const metro = bindings.metroCleanup ?? bindings.metro;
           if (active?.profile === "transition:ensure-metro" && metro?.mode !== "managed") {
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "managed Metro transition has not published exact cleanup authority");
@@ -16055,10 +16056,11 @@ var init_registry = __esm({
       completeSessionClose(session) {
         const now = this.#now();
         this.#transaction(() => {
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session.sessionId));
           if (!row || row.state !== "closing" || row.claim_epoch !== session.claimEpoch) {
             throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may be released");
           }
+          this.#requireIntegrationRestored(JSON.parse(String(row.bindings_json)));
           this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
@@ -16069,7 +16071,8 @@ var init_registry = __esm({
       releaseSession(session) {
         const now = this.#now();
         this.#transaction(() => {
-          this.#requireSession(session);
+          const current = this.#requireSession(session);
+          this.#requireIntegrationRestored(JSON.parse(current.bindings_json));
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
           if (active && !String(active.profile).startsWith("transition:")) {
@@ -17040,6 +17043,11 @@ var init_registry = __esm({
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
         }
         return row;
+      }
+      #requireIntegrationRestored(bindings) {
+        if (bindings.packageIntegration) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
+        }
       }
       #requireFenceableSession(session) {
         const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
@@ -20781,10 +20789,11 @@ function createDeviceSnapshotHandler(deps = {}) {
         closeSession: async () => {
           await stopFastRunner(session?.deviceId);
           await stopAndroidRunner(session?.deviceId);
+          await deps.unbindRunner?.();
           clearActiveSession();
           return okResult({ closed: true });
         },
-        openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId),
+        openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
         resnapshot: () => rawSnapshot(),
         parseNodes: parseSnapshotNodes,
         // GH #186: non-destructive reacquire tried before the destructive
@@ -20877,9 +20886,9 @@ function wrapWithMeta(result, meta) {
     return result;
   }
 }
-async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId) {
+async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, dependencies = {}) {
   const recoveryName = `rn-agent-recovery-${Date.now()}`;
-  return createDeviceSnapshotHandler()({
+  return createDeviceSnapshotHandler(dependencies)({
     action: "open",
     appId,
     deviceId,
@@ -78052,6 +78061,13 @@ function previewPackageIntegration(packageJson, existing, sessionCli) {
   };
 }
 function restorePackageIntegration(packageJson, manifest) {
+  const restoredScripts = {
+    ios: manifest.originalScripts.ios.join(" "),
+    android: manifest.originalScripts.android.join(" ")
+  };
+  if (packageJson.scripts?.ios === restoredScripts.ios && packageJson.scripts?.android === restoredScripts.android) {
+    return packageJson;
+  }
   if (packageJson.scripts?.ios !== SENTINELS.ios || packageJson.scripts?.android !== SENTINELS.android) {
     throw new Error("SESSION_INTEGRATION_CONFLICT: package scripts changed after integration was installed");
   }
@@ -78059,8 +78075,7 @@ function restorePackageIntegration(packageJson, manifest) {
     ...packageJson,
     scripts: {
       ...packageJson.scripts,
-      ios: manifest.originalScripts.ios.join(" "),
-      android: manifest.originalScripts.android.join(" ")
+      ...restoredScripts
     }
   };
 }
@@ -79222,6 +79237,9 @@ function createSessionHandler(runtime, dependencies = {}) {
       const status = registry2.getSessionStatus(session.sessionId);
       if (!status) {
         throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before release cleanup");
+      }
+      if (status.bindings.packageIntegration) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
       }
       const metro = status.bindings.metro;
       const runner = status.bindings.runner;

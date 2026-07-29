@@ -8432,6 +8432,7 @@ var init_registry = __esm({
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
           const bindings = JSON.parse(current.bindings_json);
+          this.#requireIntegrationRestored(bindings);
           const metro = bindings.metroCleanup ?? bindings.metro;
           if (active?.profile === "transition:ensure-metro" && metro?.mode !== "managed") {
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "managed Metro transition has not published exact cleanup authority");
@@ -8456,10 +8457,11 @@ var init_registry = __esm({
       completeSessionClose(session) {
         const now = this.#now();
         this.#transaction(() => {
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session.sessionId));
           if (!row || row.state !== "closing" || row.claim_epoch !== session.claimEpoch) {
             throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may be released");
           }
+          this.#requireIntegrationRestored(JSON.parse(String(row.bindings_json)));
           this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
@@ -8470,7 +8472,8 @@ var init_registry = __esm({
       releaseSession(session) {
         const now = this.#now();
         this.#transaction(() => {
-          this.#requireSession(session);
+          const current = this.#requireSession(session);
+          this.#requireIntegrationRestored(JSON.parse(current.bindings_json));
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
           if (active && !String(active.profile).startsWith("transition:")) {
@@ -9441,6 +9444,11 @@ var init_registry = __esm({
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
         }
         return row;
+      }
+      #requireIntegrationRestored(bindings) {
+        if (bindings.packageIntegration) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
+        }
       }
       #requireFenceableSession(session) {
         const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
@@ -15874,6 +15882,12 @@ async function ensureManagedMetro(status) {
   let bindingCommitted = false;
   try {
     await status.registry.runWithOperation(operation, async () => {
+      if (existing && !verifyManagedMetroManagementProof(existing, {
+        sessionId: status.sessionId,
+        signerCapability
+      })) {
+        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "existing Metro binding is not authenticated managed authority");
+      }
       if (typeof existing?.pid === "number" && typeof existing.port === "number" && typeof existing.instanceId === "string" && typeof existing.buildGeneration === "number") {
         let isCurrent = false;
         try {
@@ -16167,6 +16181,9 @@ async function main() {
         }
       }
       const metro = status.bindings.metro;
+      if (status.bindings.packageIntegration) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
+      }
       const operation = beginCliOperation(status, "rn-session release", "transition:release");
       let released = false;
       try {

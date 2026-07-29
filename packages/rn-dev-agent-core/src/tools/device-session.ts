@@ -199,24 +199,26 @@ class AndroidAppLaunchError extends Error {
   }
 }
 
+interface DeviceSnapshotDependencies {
+  probeAndroidUi?: (deviceId: string, appId: string) => Promise<ToolResult>;
+  probeReactNativeUi?: (
+    platform: 'ios' | 'android',
+    deviceId: string,
+    appId: string,
+  ) => Promise<boolean>;
+  isAppRunning?: (platform: string, appId: string, deviceId: string) => Promise<boolean>;
+  startAndroidRunner?: (deviceId: string, appId: string) => Promise<unknown>;
+  launchAndroidApp?: (deviceId: string, appId: string) => Promise<void>;
+  bindRunner?: (
+    platform: 'ios' | 'android',
+    deviceId: string,
+    appId: string,
+  ) => Promise<void> | void;
+  unbindRunner?: () => Promise<void> | void;
+}
+
 export function createDeviceSnapshotHandler(
-  deps: {
-    probeAndroidUi?: (deviceId: string, appId: string) => Promise<ToolResult>;
-    probeReactNativeUi?: (
-      platform: 'ios' | 'android',
-      deviceId: string,
-      appId: string,
-    ) => Promise<boolean>;
-    isAppRunning?: (platform: string, appId: string, deviceId: string) => Promise<boolean>;
-    startAndroidRunner?: (deviceId: string, appId: string) => Promise<unknown>;
-    launchAndroidApp?: (deviceId: string, appId: string) => Promise<void>;
-    bindRunner?: (
-      platform: 'ios' | 'android',
-      deviceId: string,
-      appId: string,
-    ) => Promise<void> | void;
-    unbindRunner?: () => Promise<void> | void;
-  } = {},
+  deps: DeviceSnapshotDependencies = {},
 ): (args: SnapshotArgs) => Promise<ToolResult> {
   const probeAndroidUi =
     deps.probeAndroidUi ??
@@ -622,11 +624,12 @@ export function createDeviceSnapshotHandler(
           closeSession: async () => {
             await stopFastRunner(session?.deviceId);
             await stopAndroidRunner(session?.deviceId);
+            await deps.unbindRunner?.();
             clearActiveSession();
             return okResult({ closed: true });
           },
           openSession: ({ appId, platform, deviceId, attachOnly }) =>
-            reopenSessionForRecovery(appId, platform, attachOnly, deviceId),
+            reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
           resnapshot: () => rawSnapshot(),
           parseNodes: parseSnapshotNodes,
           // GH #186: non-destructive reacquire tried before the destructive
@@ -779,6 +782,7 @@ export async function reopenSessionForRecovery(
   platform: string,
   attachOnly: boolean,
   deviceId?: string,
+  dependencies: DeviceSnapshotDependencies = {},
 ): Promise<ToolResult> {
   // Always mint a fresh recovery name (Gemini G3): reusing the original
   // session name risks silently re-attaching to the corrupted session.
@@ -790,7 +794,7 @@ export async function reopenSessionForRecovery(
   // cleanly (acquireDeviceLockForSession releases any prior same-process lock
   // first), so there is no self-DEVICE_BUSY. This replaces the old
   // agent-device `open` RPC + envelope/UDID_RE parse.
-  return createDeviceSnapshotHandler()({
+  return createDeviceSnapshotHandler(dependencies)({
     action: 'open',
     appId,
     deviceId,

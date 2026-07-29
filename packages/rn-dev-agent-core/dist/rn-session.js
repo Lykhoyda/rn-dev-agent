@@ -6,7 +6,7 @@ import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
-import { refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, } from './session/managed-metro.js';
+import { refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
@@ -106,6 +106,13 @@ async function ensureManagedMetro(status) {
     let bindingCommitted = false;
     try {
         await status.registry.runWithOperation(operation, async () => {
+            if (existing &&
+                !verifyManagedMetroManagementProof(existing, {
+                    sessionId: status.sessionId,
+                    signerCapability,
+                })) {
+                throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'existing Metro binding is not authenticated managed authority');
+            }
             if (typeof existing?.pid === 'number' &&
                 typeof existing.port === 'number' &&
                 typeof existing.instanceId === 'string' &&
@@ -431,6 +438,9 @@ async function main() {
                 }
             }
             const metro = status.bindings.metro;
+            if (status.bindings.packageIntegration) {
+                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration must be restored before session release');
+            }
             const operation = beginCliOperation(status, 'rn-session release', 'transition:release');
             let released = false;
             try {
