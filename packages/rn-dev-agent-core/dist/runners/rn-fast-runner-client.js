@@ -369,7 +369,23 @@ export const runnerRebuildBudget = {
             /* fail-open */
         }
     },
+    reset(pluginVersion) {
+        try {
+            const parsed = JSON.parse(readFileSync(REBUILD_BUDGET_FILE, 'utf8'));
+            if (parsed.pluginVersion === pluginVersion) {
+                rmSync(REBUILD_BUDGET_FILE, { force: true });
+            }
+        }
+        catch {
+            /* already absent or unreadable */
+        }
+    },
 };
+export function resetRunnerRebuildBudgetForCurrentPlugin() {
+    const pluginVersion = getPluginVersion();
+    if (pluginVersion !== null)
+        runnerRebuildBudget.reset(pluginVersion);
+}
 // GH #382: a one-line note ("downloaded prebuilt runner (~4 MB)" / "prebuilt
 // runner unavailable ...; building locally") set while startFastRunner resolves
 // artifacts. Consumed by the open / mid-flow dispatch paths and attached as a

@@ -22,6 +22,7 @@ export interface MetroAuthorityMarker {
 
 interface MetroSerializer {
   customSerializer?: (...args: unknown[]) => unknown;
+  getPolyfills?: (...args: unknown[]) => string[] | Promise<string[]>;
   getModulesRunBeforeMainModule?: (entryFile: string) => string[];
   [key: string]: unknown;
 }
@@ -81,10 +82,19 @@ export function withMetroAuthorityModule<T extends MetroConfig>(
 ): T {
   const serializer = config.serializer ?? {};
   const original = serializer.getModulesRunBeforeMainModule;
+  const originalPolyfills = serializer.getPolyfills;
+  const prependMarker = (paths: string[]): string[] => [
+    markerModulePath,
+    ...paths.filter((path) => path !== markerModulePath),
+  ];
   return {
     ...config,
     serializer: {
       ...serializer,
+      getPolyfills(...args: unknown[]): string[] | Promise<string[]> {
+        const paths = originalPolyfills?.(...args) ?? [];
+        return paths instanceof Promise ? paths.then(prependMarker) : prependMarker(paths);
+      },
       getModulesRunBeforeMainModule(entryFile: string): string[] {
         return [markerModulePath, ...(original?.(entryFile) ?? [])];
       },

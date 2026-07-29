@@ -1124,7 +1124,7 @@ export function createAuthorityGate(
               },
             });
           }
-          if (tool === 'maestro_run' || tool === 'maestro_test_all') {
+          if (tool === 'maestro_run' || tool === 'maestro_test_all' || tool === 'cdp_run_action') {
             Object.defineProperty(args, managedRunnerPark, {
               configurable: true,
               value: async () => {

@@ -149,15 +149,33 @@ test('Metro integration composes object and promise configs and is reversible', 
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     const compose = await import(`${pathToFileURL(adapterPath).href}?v=${Date.now()}`);
     const prior = () => ['/existing-before-main.js'];
-    const object = compose.default({ serializer: { getModulesRunBeforeMainModule: prior } });
+    const object = compose.default({
+      serializer: {
+        getPolyfills: () => ['/existing-polyfill.js'],
+        getModulesRunBeforeMainModule: prior,
+      },
+    });
+    const polyfills = object.serializer.getPolyfills();
+    assert.match(polyfills[0], /[\\/]\.rn-agent[\\/]integration[\\/]authority-marker\.js$/);
+    assert.deepEqual(polyfills.slice(1), ['/existing-polyfill.js']);
     assert.deepEqual(object.serializer.getModulesRunBeforeMainModule('index.js').slice(1), [
       '/existing-before-main.js',
     ]);
     const promised = await compose.default(Promise.resolve({ serializer: {} }));
     assert.match(
+      promised.serializer.getPolyfills()[0],
+      /[\\/]\.rn-agent[\\/]integration[\\/]authority-marker\.js$/,
+    );
+    assert.match(
       promised.serializer.getModulesRunBeforeMainModule('index.js')[0],
       /authority-marker/,
     );
+    const asynchronous = compose.default({
+      serializer: { getPolyfills: async () => ['/async-polyfill.js'] },
+    });
+    const asyncPolyfills = await asynchronous.serializer.getPolyfills();
+    assert.match(asyncPolyfills[0], /[\\/]\.rn-agent[\\/]integration[\\/]authority-marker\.js$/);
+    assert.deepEqual(asyncPolyfills.slice(1), ['/async-polyfill.js']);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

@@ -9177,6 +9177,7 @@ var init_registry = __esm({
               metroCleanup: resumesMetroCleanup ? null : priorBindings.metroCleanup ?? null,
               device: priorBindings.device ?? null,
               install: priorBindings.install ?? null,
+              packageIntegration: priorBindings.packageIntegration ?? null,
               bundle: null,
               runner: null,
               recorder: null,
@@ -9238,6 +9239,7 @@ var init_registry = __esm({
             metroCleanup: null,
             device: priorBindings.device ?? null,
             install: priorBindings.install ?? null,
+            packageIntegration: priorBindings.packageIntegration ?? null,
             bundle: null,
             runner: null,
             recorder: null,
@@ -15686,6 +15688,9 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
     const [manifest] = readBoundDirectoryFiles(integration, ["rn-session-integration.json"]);
     return manifest?.contents?.toString("utf8");
   } catch (error) {
+    if (error instanceof Error && error.message.includes("SESSION_INTEGRATION_PATH_UNSAFE") && error.message.includes("ENOENT") && error.message.includes("lstat 'integration'")) {
+      return void 0;
+    }
     primaryError = error;
     throw error;
   } finally {

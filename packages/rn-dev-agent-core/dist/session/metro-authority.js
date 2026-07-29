@@ -35,10 +35,19 @@ export function verifyMetroAuthorityMarker(marker, signerCapability, expected = 
 export function withMetroAuthorityModule(config, markerModulePath) {
     const serializer = config.serializer ?? {};
     const original = serializer.getModulesRunBeforeMainModule;
+    const originalPolyfills = serializer.getPolyfills;
+    const prependMarker = (paths) => [
+        markerModulePath,
+        ...paths.filter((path) => path !== markerModulePath),
+    ];
     return {
         ...config,
         serializer: {
             ...serializer,
+            getPolyfills(...args) {
+                const paths = originalPolyfills?.(...args) ?? [];
+                return paths instanceof Promise ? paths.then(prependMarker) : prependMarker(paths);
+            },
             getModulesRunBeforeMainModule(entryFile) {
                 return [markerModulePath, ...(original?.(entryFile) ?? [])];
             },

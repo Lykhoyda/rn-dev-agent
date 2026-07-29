@@ -20930,6 +20930,7 @@ __export(rn_fast_runner_client_exports, {
   probeFastRunnerLivenessDetailed: () => probeFastRunnerLivenessDetailed,
   reapStaleFastRunner: () => reapStaleFastRunner,
   releaseRunnerRebuildLock: () => releaseRunnerRebuildLock,
+  resetRunnerRebuildBudgetForCurrentPlugin: () => resetRunnerRebuildBudgetForCurrentPlugin,
   resolveReadyTimeoutMs: () => resolveReadyTimeoutMs,
   resolveRunnerRequestedPort: () => resolveRunnerRequestedPort,
   resolveRunnerStartPlan: () => resolveRunnerStartPlan,
@@ -21179,6 +21180,11 @@ function releaseRunnerRebuildLock() {
     rmSync2(REBUILD_LOCK_DIR, { recursive: true, force: true });
   } catch {
   }
+}
+function resetRunnerRebuildBudgetForCurrentPlugin() {
+  const pluginVersion = getPluginVersion();
+  if (pluginVersion !== null)
+    runnerRebuildBudget.reset(pluginVersion);
 }
 function consumePendingFastRunnerArtifactNote() {
   const note = pendingFastRunnerArtifactNote;
@@ -22206,6 +22212,15 @@ var init_rn_fast_runner_client = __esm({
         try {
           mkdirSync5(join11(FAST_RUNNER_PROJECT, "build"), { recursive: true });
           writeFileSync5(REBUILD_BUDGET_FILE, JSON.stringify({ pluginVersion, at: (/* @__PURE__ */ new Date()).toISOString() }));
+        } catch {
+        }
+      },
+      reset(pluginVersion) {
+        try {
+          const parsed = JSON.parse(readFileSync9(REBUILD_BUDGET_FILE, "utf8"));
+          if (parsed.pluginVersion === pluginVersion) {
+            rmSync2(REBUILD_BUDGET_FILE, { force: true });
+          }
         } catch {
         }
       }
@@ -27521,6 +27536,7 @@ var init_registry = __esm({
               metroCleanup: resumesMetroCleanup ? null : priorBindings.metroCleanup ?? null,
               device: priorBindings.device ?? null,
               install: priorBindings.install ?? null,
+              packageIntegration: priorBindings.packageIntegration ?? null,
               bundle: null,
               runner: null,
               recorder: null,
@@ -27582,6 +27598,7 @@ var init_registry = __esm({
             metroCleanup: null,
             device: priorBindings.device ?? null,
             install: priorBindings.install ?? null,
+            packageIntegration: priorBindings.packageIntegration ?? null,
             bundle: null,
             runner: null,
             recorder: null,
@@ -29169,7 +29186,7 @@ function createAuthorityGate(runtime, dependencies) {
             }
           });
         }
-        if (tool === "maestro_run" || tool === "maestro_test_all") {
+        if (tool === "maestro_run" || tool === "maestro_test_all" || tool === "cdp_run_action") {
           Object.defineProperty(args, managedRunnerPark, {
             configurable: true,
             value: async () => {
@@ -29642,7 +29659,7 @@ function createMaestroRunHandler(deps = {}) {
       }, claimOrigin, completeOrigin), {
         platform,
         deviceId: requestedDeviceId,
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
+        completeRunnerPark: args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args))
       });
       const stdout = stageResults.map((result) => result.stdout).join("\n");
       const stderr = stageResults.map((result) => result.stderr).join("\n");
@@ -31321,6 +31338,7 @@ function createDeviceSnapshotHandler(deps = {}) {
       return upgradeNote ? attachMetaNote(result2, upgradeNote) : result2;
     }
     if (action === "close") {
+      const closingPlatform = getActiveSession()?.platform;
       const result2 = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -31334,8 +31352,12 @@ function createDeviceSnapshotHandler(deps = {}) {
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId
       });
-      if (!result2.isError)
+      if (!result2.isError) {
+        if (closingPlatform === "ios") {
+          (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+        }
         await deps.unbindRunner?.();
+      }
       return result2;
     }
     if (!getActiveSession()) {
@@ -55747,6 +55769,9 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
     const [manifest] = readBoundDirectoryFiles(integration, ["rn-session-integration.json"]);
     return manifest?.contents?.toString("utf8");
   } catch (error2) {
+    if (error2 instanceof Error && error2.message.includes("SESSION_INTEGRATION_PATH_UNSAFE") && error2.message.includes("ENOENT") && error2.message.includes("lstat 'integration'")) {
+      return void 0;
+    }
     primaryError = error2;
     throw error2;
   } finally {
@@ -60833,6 +60858,16 @@ function withPolicyCallbacks(config, names, getConfig) {
   }
   return callbacks;
 }
+function withAuthorityPolyfill(callback, marker) {
+  const prepend = (value) => [
+    marker,
+    ...(Array.isArray(value) ? value.filter((candidate) => candidate !== marker) : []),
+  ];
+  return function (...args) {
+    const result = typeof callback === 'function' ? callback.apply(this, args) : [];
+    return result && typeof result.then === 'function' ? result.then(prepend) : prepend(result);
+  };
+}
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
@@ -60842,6 +60877,7 @@ module.exports = function withRnDevAgentAuthority(config) {
   const transformer = current.transformer || {};
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
+  const originalPolyfills = serializer.getPolyfills;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
   let finalConfig;
   finalConfig = {
@@ -60877,9 +60913,11 @@ module.exports = function withRnDevAgentAuthority(config) {
         ],
         () => finalConfig,
       ),
-      ...(typeof serializer.getPolyfills === 'function'
-        ? { getPolyfills: withPolicyRefresh(serializer.getPolyfills, () => finalConfig, true) }
-        : {}),
+      getPolyfills: withPolicyRefresh(
+        withAuthorityPolyfill(originalPolyfills, marker),
+        () => finalConfig,
+        true,
+      ),
       getModulesRunBeforeMainModule(entryFile) {
         const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
         runtimePolicy(finalConfig, result);
@@ -67651,7 +67689,8 @@ function createRunActionHandler(deps = {}) {
         timeoutMs,
         params: args.params,
         claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-        completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected)
+        completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+        completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
       });
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, "maestro_run");
@@ -67908,7 +67947,8 @@ function createRunActionHandler(deps = {}) {
         timeoutMs,
         params: args.params,
         claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-        completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected)
+        completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+        completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
       });
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, "maestro_run");

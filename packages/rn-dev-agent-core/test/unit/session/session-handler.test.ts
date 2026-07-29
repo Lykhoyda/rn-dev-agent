@@ -698,6 +698,51 @@ test('stale adoption stops every durable cleanup resource before becoming operat
   ]);
 });
 
+test('stale adoption reports its committed outcome for a never-integrated app', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-adoption-'));
+  const appRoot = join(root, 'app');
+  mkdirSync(join(appRoot, '.rn-agent', 'actions'), { recursive: true });
+  const status = {
+    sessionId: 'target',
+    sourceKey: 'source',
+    worktreeKey: 'worktree',
+    appRootKey: 'app',
+    state: 'blocked',
+    claimEpoch: 1,
+    authorityVersion: 2,
+    leaseUntilMs: 100,
+    source: { kind: 'git', appRoot },
+    bindings: {} as Record<string, unknown>,
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const registry = {
+    getSessionStatus: () => status,
+    adoptStaleWithHandle: () => {
+      status.state = 'source_bound';
+      status.authorityVersion += 1;
+    },
+  };
+  const handler = createSessionHandler({
+    status: () => ({ available: true, ...status }),
+    requireRecovery: () => ({
+      registry,
+      session: { sessionId: 'target', claimEpoch: 1 },
+    }),
+  } as never);
+
+  try {
+    const result = await handler({ action: 'adopt_stale', adoptionHandle: 'handle' });
+    const envelope = JSON.parse(result.content[0]!.text);
+
+    assert.equal(envelope.ok, true);
+    assert.equal(status.state, 'source_bound');
+    assert.equal(envelope.data.session.migration.packageIntegration.installed, false);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('Metro rebinding clears the prior bundle and releases its target claim', async () => {
   let update;
   const status = {

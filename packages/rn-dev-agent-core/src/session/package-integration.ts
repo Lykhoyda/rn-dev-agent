@@ -2794,6 +2794,16 @@ function withPolicyCallbacks(config, names, getConfig) {
   }
   return callbacks;
 }
+function withAuthorityPolyfill(callback, marker) {
+  const prepend = (value) => [
+    marker,
+    ...(Array.isArray(value) ? value.filter((candidate) => candidate !== marker) : []),
+  ];
+  return function (...args) {
+    const result = typeof callback === 'function' ? callback.apply(this, args) : [];
+    return result && typeof result.then === 'function' ? result.then(prepend) : prepend(result);
+  };
+}
 module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
@@ -2803,6 +2813,7 @@ module.exports = function withRnDevAgentAuthority(config) {
   const transformer = current.transformer || {};
   const serializer = current.serializer || {};
   const original = serializer.getModulesRunBeforeMainModule;
+  const originalPolyfills = serializer.getPolyfills;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
   let finalConfig;
   finalConfig = {
@@ -2838,9 +2849,11 @@ module.exports = function withRnDevAgentAuthority(config) {
         ],
         () => finalConfig,
       ),
-      ...(typeof serializer.getPolyfills === 'function'
-        ? { getPolyfills: withPolicyRefresh(serializer.getPolyfills, () => finalConfig, true) }
-        : {}),
+      getPolyfills: withPolicyRefresh(
+        withAuthorityPolyfill(originalPolyfills, marker),
+        () => finalConfig,
+        true,
+      ),
       getModulesRunBeforeMainModule(entryFile) {
         const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
         runtimePolicy(finalConfig, result);

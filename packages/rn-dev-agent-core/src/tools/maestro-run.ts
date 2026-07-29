@@ -122,6 +122,7 @@ interface MaestroRunArgs {
   params?: Record<string, string>;
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+  completeRunnerPark?: () => Promise<void>;
 }
 
 interface AuthorityStage {
@@ -512,7 +513,8 @@ export function createMaestroRunHandler(
         {
           platform,
           deviceId: requestedDeviceId,
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          completeRunnerPark:
+            args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args)),
         },
       );
       const stdout = stageResults.map((result) => result.stdout).join('\n');

@@ -340,7 +340,7 @@ export function createMaestroRunHandler(deps = {}) {
             }, claimOrigin, completeOrigin), {
                 platform,
                 deviceId: requestedDeviceId,
-                completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+                completeRunnerPark: args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args)),
             });
             const stdout = stageResults.map((result) => result.stdout).join('\n');
             const stderr = stageResults.map((result) => result.stderr).join('\n');

@@ -486,7 +486,24 @@ export const runnerRebuildBudget = {
       /* fail-open */
     }
   },
+  reset(pluginVersion: string): void {
+    try {
+      const parsed = JSON.parse(readFileSync(REBUILD_BUDGET_FILE, 'utf8')) as {
+        pluginVersion?: string;
+      };
+      if (parsed.pluginVersion === pluginVersion) {
+        rmSync(REBUILD_BUDGET_FILE, { force: true });
+      }
+    } catch {
+      /* already absent or unreadable */
+    }
+  },
 };
+
+export function resetRunnerRebuildBudgetForCurrentPlugin(): void {
+  const pluginVersion = getPluginVersion();
+  if (pluginVersion !== null) runnerRebuildBudget.reset(pluginVersion);
+}
 
 // GH #382: a one-line note ("downloaded prebuilt runner (~4 MB)" / "prebuilt
 // runner unavailable ...; building locally") set while startFastRunner resolves

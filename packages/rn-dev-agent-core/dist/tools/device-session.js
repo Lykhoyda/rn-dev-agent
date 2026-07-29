@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, attachMetaNote, cacheSnapshot, markSnapshotDirty, getAdbSerial, } from '../agent-device-wrapper.js';
-import { consumePendingFastRunnerArtifactNote, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
+import { consumePendingFastRunnerArtifactNote, resetRunnerRebuildBudgetForCurrentPlugin, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner, reapActiveAndroidRunner, startAndroidRunner, runAndroid, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
 import { launchApp } from './app-lifecycle.js';
 import { markCdpStale } from '../cdp/recovery.js';
@@ -434,6 +434,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
             return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
         }
         if (action === 'close') {
+            const closingPlatform = getActiveSession()?.platform;
             const result = await closeDeviceSession({
                 hasActiveSession: () => getActiveSession() !== null,
                 closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -447,8 +448,12 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 releaseDeviceLock: releaseDeviceLockForSession,
                 getDeviceId: () => getActiveSession()?.deviceId,
             });
-            if (!result.isError)
+            if (!result.isError) {
+                if (closingPlatform === 'ios') {
+                    (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+                }
                 await deps.unbindRunner?.();
+            }
             return result;
         }
         // action === 'snapshot'

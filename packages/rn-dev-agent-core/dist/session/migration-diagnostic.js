@@ -20,6 +20,12 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
         return manifest?.contents?.toString('utf8');
     }
     catch (error) {
+        if (error instanceof Error &&
+            error.message.includes('SESSION_INTEGRATION_PATH_UNSAFE') &&
+            error.message.includes('ENOENT') &&
+            error.message.includes("lstat 'integration'")) {
+            return undefined;
+        }
         primaryError = error;
         throw error;
     }

@@ -14,6 +14,7 @@ import {
 } from '../agent-device-wrapper.js';
 import {
   consumePendingFastRunnerArtifactNote,
+  resetRunnerRebuildBudgetForCurrentPlugin,
   stopFastRunner,
 } from '../runners/rn-fast-runner-client.js';
 import {
@@ -208,6 +209,7 @@ interface DeviceSnapshotDependencies {
     appId: string,
   ) => Promise<void> | void;
   unbindRunner?: () => Promise<void> | void;
+  resetIosRunnerRebuildBudget?: () => void;
 }
 
 export function createDeviceSnapshotHandler(
@@ -571,6 +573,7 @@ export function createDeviceSnapshotHandler(
     }
 
     if (action === 'close') {
+      const closingPlatform = getActiveSession()?.platform;
       const result = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -584,7 +587,12 @@ export function createDeviceSnapshotHandler(
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId,
       });
-      if (!result.isError) await deps.unbindRunner?.();
+      if (!result.isError) {
+        if (closingPlatform === 'ios') {
+          (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+        }
+        await deps.unbindRunner?.();
+      }
       return result;
     }
 

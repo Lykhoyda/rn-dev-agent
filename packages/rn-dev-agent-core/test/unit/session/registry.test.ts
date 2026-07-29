@@ -221,6 +221,19 @@ test('session close reservation atomically blocks new operations while retaining
   assert.equal(registry.getClaim('metro-port', '8341'), null);
 });
 
+test('released authority is terminal and a new supervisor can claim the successor session', () => {
+  const { registry, create } = fixture();
+  const released = create('a', 'shared-worktree');
+  registry.claimResources(released, [{ type: 'source', key: 'shared-worktree' }]);
+
+  registry.releaseSession(released);
+
+  assert.throws(() => registry.renewSession(released), /SESSION_OWNER_LOST/);
+  const successor = create('b', 'shared-worktree');
+  registry.claimResources(successor, [{ type: 'source', key: 'shared-worktree' }]);
+  assert.equal(registry.getClaim('source', 'shared-worktree')?.sessionId, successor.sessionId);
+});
+
 test('deterministic port allocation persists collision resolution per worktree', () => {
   const { registry } = fixture();
   const first = registry.allocatePort({
@@ -473,6 +486,11 @@ test('blocked recovery atomically adopts only a proven-stale exact source owner'
       metroPort: 8341,
       device: { platform: 'ios', deviceId: 'device-a' },
       install: { installGeneration: 'install-a' },
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: prior.sessionId,
+        manifestSha256: 'a'.repeat(64),
+      },
     },
   });
   registry.bindWorker(target, {
@@ -490,6 +508,11 @@ test('blocked recovery atomically adopts only a proven-stale exact source owner'
 
   assert.equal(registry.getSessionStatus(target.sessionId)?.state, 'source_bound');
   assert.equal(registry.getClaim('source', 'shared-worktree')?.sessionId, target.sessionId);
+  assert.deepEqual(registry.getSessionStatus(target.sessionId)?.bindings.packageIntegration, {
+    version: 1,
+    installedBySessionId: prior.sessionId,
+    manifestSha256: 'a'.repeat(64),
+  });
   assert.equal(registry.getSessionStatus(prior.sessionId)?.state, 'stale');
 });
 

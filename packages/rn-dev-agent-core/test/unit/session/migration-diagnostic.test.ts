@@ -44,6 +44,24 @@ test('legacy files are diagnostic only and never disable strict enforcement', ()
   assert.equal(diagnostic.strictEnforcement, true);
 });
 
+test('an existing .rn-agent directory without integration is a normal never-integrated app', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-migration-diagnostic-'));
+  const appRoot = join(root, 'app');
+  try {
+    mkdirSync(join(appRoot, '.rn-agent', 'actions'), { recursive: true });
+
+    const diagnostic = inspectAuthorityMigration({
+      ...status,
+      source: { appRoot },
+    });
+
+    assert.equal(diagnostic.packageIntegration.installed, false);
+    assert.equal(diagnostic.strictEnforcement, true);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('migration diagnostic rejects redirected integration ancestors', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-migration-diagnostic-'));
   const appRoot = join(root, 'app');

@@ -322,6 +322,39 @@ test('Maestro parking transactionally releases runner authority before dispatch'
   assert.equal(envelope.meta.authorityReceipt.axes.includes('R'), false);
 });
 
+test('nested action replay can park runner authority without stranding a stale R binding', async () => {
+  const { runtime, registry, status, calls } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push(`release:${input.releaseResources?.[0]?.key}`);
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    await completeManagedRunnerParkAuthority(args);
+    return failResult('selector refused', 'SELECTOR_NOT_FOUND');
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(status.bindings.runner, null);
+  assert.ok(calls.includes('release:ios:device:9100'));
+  assert.equal(calls.includes('postflight:R'), false);
+});
+
 test('contained runner timeout atomically releases authority and preserves its typed result', async () => {
   const { runtime, registry, status, calls } = fixture();
   status.bindings.runner = {

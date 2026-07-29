@@ -68,6 +68,7 @@ import type { BlindProbeAtRisk } from '../domain/blind-probe-gate.js';
 import type { MaestroDeviceAuthority } from '../domain/maestro-device-authority.js';
 import {
   claimManagedNativeOriginAuthority,
+  completeManagedRunnerParkAuthority,
   completeManagedNativeOriginAuthority,
 } from '../session/authority-gate.js';
 
@@ -622,6 +623,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
         completeNativeOrigin: (targetExpected) =>
           completeManagedNativeOriginAuthority(args, targetExpected),
+        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
       });
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, 'maestro_run');
@@ -975,6 +977,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
         completeNativeOrigin: (targetExpected) =>
           completeManagedNativeOriginAuthority(args, targetExpected),
+        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
       });
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, 'maestro_run');

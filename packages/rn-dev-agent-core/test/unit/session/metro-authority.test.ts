@@ -73,6 +73,7 @@ test('Metro config composition preserves Expo and bare custom serializer behavio
         resolver: { sourceExts: ['js', 'tsx'] },
         serializer: {
           customSerializer: () => 'expo-custom-output',
+          getPolyfills: () => ['expo:polyfill'],
           getModulesRunBeforeMainModule: (entry) => [`expo:${entry}`],
         },
       },
@@ -91,6 +92,10 @@ test('Metro config composition preserves Expo and bare custom serializer behavio
     const composed = withMetroAuthorityModule(config, '/authority/marker.js');
 
     assert.equal(composed.serializer.customSerializer(), `${kind}-custom-output`);
+    assert.deepEqual(composed.serializer.getPolyfills(), [
+      '/authority/marker.js',
+      ...(kind === 'expo' ? ['expo:polyfill'] : []),
+    ]);
     assert.deepEqual(composed.serializer.getModulesRunBeforeMainModule('index.js'), [
       '/authority/marker.js',
       `${kind}:index.js`,

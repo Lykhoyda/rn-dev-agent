@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import vm from 'node:vm';
 import {
   buildSignedMetroMarker,
   createMetroAuthorityModule,
@@ -188,6 +189,24 @@ for (const transport of [
           );
           const prefix = bundle.body.subarray(0, 512).toString('utf8');
           assert.match(prefix, /__DEV__=true/);
+          const bundleText = bundle.body.toString('utf8');
+          assert.match(
+            bundleText,
+            /__RN_DEV_AGENT_AUTHORITY__/,
+            'served product bundle must contain authority marker',
+          );
+          const context = {} as Record<string, unknown>;
+          try {
+            vm.runInNewContext(bundleText, context, { timeout: 5_000 });
+          } catch {}
+          const runtimeAuthority = context.__RN_DEV_AGENT_AUTHORITY__ as
+            | {
+                status?: unknown;
+                marker?: { payload?: { sessionId?: unknown } };
+              }
+            | undefined;
+          assert.equal(runtimeAuthority?.status, 'signed');
+          assert.equal(runtimeAuthority.marker?.payload?.sessionId, sessionId);
         }
 
         const evidence = readFileSync(binding.runtimeEvidencePath, 'utf8')

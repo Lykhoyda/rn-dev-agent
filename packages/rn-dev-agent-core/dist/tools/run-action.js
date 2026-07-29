@@ -40,7 +40,7 @@ import { SessionAuthorityError } from '../session/registry.js';
 import { isExactPresent, runCdpReplay, firstReplayTestId, } from './cdp-replay-dispatch.js';
 import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
 import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
-import { claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
+import { claimManagedNativeOriginAuthority, completeManagedRunnerParkAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
  * RunRecord telemetry) and a `ToolErrorCode` (for the failResult
@@ -392,6 +392,7 @@ export function createRunActionHandler(deps = {}) {
                 params: args.params,
                 claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
                 completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+                completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
             });
             const firstAttemptMs = Date.now() - tBeforeFirst;
             const firstEnv = parseEnvelope(firstResult, 'maestro_run');
@@ -702,6 +703,7 @@ export function createRunActionHandler(deps = {}) {
                 params: args.params,
                 claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
                 completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+                completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
             });
             const retryMs = Date.now() - tBeforeRetry;
             const retryEnv = parseEnvelope(retryResult, 'maestro_run');
