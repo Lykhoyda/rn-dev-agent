@@ -235,6 +235,7 @@ test(
     const sessionId = 'installed-expo-session';
     const instanceId = 'installed-expo-metro';
     const appId = 'com.rndevagent.testapp';
+    const evidencePath = process.env.RN_DEV_AGENT_INSTALLED_EXPO_EVIDENCE_PATH?.trim();
     const port = await availablePort();
     const foreignMetro = await bindForeignDefaultMetro();
     let foreignPid: number | undefined;
@@ -472,7 +473,8 @@ async function writeMarker(buildGeneration) {
         { signal: AbortSignal.timeout(300_000) },
       );
       assert.equal(bundleResponse.ok, true);
-      assert.ok((await bundleResponse.arrayBuffer()).byteLength > 1024 * 1024);
+      const bundleByteLength = (await bundleResponse.arrayBuffer()).byteLength;
+      assert.ok(bundleByteLength > 1024 * 1024);
 
       const target = await waitFor(
         async () => {
@@ -599,6 +601,28 @@ async function writeMarker(buildGeneration) {
 
       assert.equal(metroListenerPid(8081), foreignPid);
       assert.equal(readProcessBirth(foreignPid)?.token, foreignBirth.token);
+      if (evidencePath) {
+        writeFileSync(
+          evidencePath,
+          `${JSON.stringify(
+            {
+              appId,
+              bundleByteLength,
+              evidenceKinds: [...new Set(evidence.map((entry) => entry.kind))].sort(),
+              foreignMetroPreserved: true,
+              installedArtifactDigest: completion.installed.artifactDigest,
+              installedDeviceId: completion.installed.deviceId,
+              liveAuthority: liveAuthority.authority.marker.payload,
+              managedMetroPort: port,
+              runtime: liveAuthority.runtime,
+              simulatorName,
+            },
+            null,
+            2,
+          )}\n`,
+          { mode: 0o600 },
+        );
+      }
     } finally {
       await client?.disconnect().catch(() => {});
       if (binding) {
