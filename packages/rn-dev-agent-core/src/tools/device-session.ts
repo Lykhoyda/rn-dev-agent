@@ -208,7 +208,9 @@ interface DeviceSnapshotDependencies {
     deviceId: string,
     appId: string,
   ) => Promise<void> | void;
-  unbindRunner?: () => Promise<void> | void;
+  unbindRunner?: (
+    beforeRelease?: (platform: 'ios' | 'android') => void,
+  ) => Promise<void> | void;
   resetIosRunnerRebuildBudget?: () => void;
 }
 
@@ -573,7 +575,6 @@ export function createDeviceSnapshotHandler(
     }
 
     if (action === 'close') {
-      const closingPlatform = getActiveSession()?.platform ?? args.platform;
       const result = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -585,10 +586,11 @@ export function createDeviceSnapshotHandler(
           }
         },
         finalizeSuccessfulClose: async () => {
-          if (closingPlatform === 'ios') {
-            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-          }
-          await deps.unbindRunner?.();
+          await deps.unbindRunner?.((platform) => {
+            if (platform === 'ios') {
+              (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+            }
+          });
         },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId,

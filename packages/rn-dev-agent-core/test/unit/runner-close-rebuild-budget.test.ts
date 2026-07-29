@@ -19,8 +19,9 @@ test('supported iOS runner close restores the cold-rebuild recovery credit', asy
     resetIosRunnerRebuildBudget: () => {
       resets += 1;
     },
-    unbindRunner: async () => {
+    unbindRunner: async (beforeRelease) => {
       unbinds += 1;
+      beforeRelease?.('ios');
     },
   });
 
@@ -32,7 +33,28 @@ test('supported iOS runner close restores the cold-rebuild recovery credit', asy
   assert.equal(unbinds, 1);
 });
 
-test('idempotent iOS close finalizes authority without local session state', async () => {
+test('idempotent close resets iOS recovery credit for stranded runner authority', async () => {
+  let resets = 0;
+  let unbinds = 0;
+  const handler = createDeviceSnapshotHandler({
+    resetIosRunnerRebuildBudget: () => {
+      resets += 1;
+    },
+    unbindRunner: async (beforeRelease) => {
+      unbinds += 1;
+      beforeRelease?.('ios');
+    },
+  });
+
+  const result = await handler({ action: 'close', platform: 'ios' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(resets, 1);
+  assert.equal(unbinds, 1);
+});
+
+test('idempotent close preserves iOS rebuild guard without runner authority', async () => {
   let resets = 0;
   let unbinds = 0;
   const handler = createDeviceSnapshotHandler({
@@ -48,6 +70,6 @@ test('idempotent iOS close finalizes authority without local session state', asy
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
-  assert.equal(resets, 1);
+  assert.equal(resets, 0);
   assert.equal(unbinds, 1);
 });

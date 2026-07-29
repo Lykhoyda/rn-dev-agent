@@ -1336,7 +1336,7 @@ trackedTool('device_snapshot', 'Manage device sessions and capture UI snapshots.
         .describe('action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.'),
 }, createDeviceSnapshotHandler({
     bindRunner: (platform, deviceId, appId) => bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
-    unbindRunner: () => unbindNativeRunner(authorityRuntime),
+    unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
     probeReactNativeUi: async (platform, deviceId, appId) => {
         const client = getClient();
         const filters = {

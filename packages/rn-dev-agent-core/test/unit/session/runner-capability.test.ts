@@ -16,7 +16,10 @@ import {
   androidHealthMatchesAuthority,
   buildInstrumentAuthorityArgs,
 } from '../../../dist/runners/rn-android-runner-client.js';
-import { bindNativeRunner } from '../../../dist/session/runner-binding.js';
+import {
+  bindNativeRunner,
+  unbindNativeRunner,
+} from '../../../dist/session/runner-binding.js';
 
 afterEach(() => {
   _setFetchForTest(globalThis.fetch);
@@ -232,4 +235,46 @@ test('runner binding commits its claim and binding in one registry transaction',
 
   assert.deepEqual(update.claimResources, [{ type: 'runner', key: 'ios:device-1:9100' }]);
   assert.equal(update.bindings.runner.instanceId, 'runner-1');
+});
+
+test('runner unbind finalizes the bound platform before releasing authority', () => {
+  const calls: string[] = [];
+  const status = {
+    bindings: {
+      bundle: null,
+      runner: { platform: 'ios', deviceId: 'device-1', port: 9100 },
+    },
+  };
+  const runtime = {
+    requireAvailable: () => ({
+      registry: {
+        getSessionStatus: () => status,
+        releaseResources: () => calls.push('release'),
+        updateBindings: () => calls.push('unbind'),
+      },
+      session: { sessionId: 'session-1', claimEpoch: 9 },
+    }),
+  };
+
+  unbindNativeRunner(runtime, (platform) => calls.push(`finalize:${platform}`));
+
+  assert.deepEqual(calls, ['finalize:ios', 'release', 'unbind']);
+});
+
+test('runner unbind skips finalization when authority is absent', () => {
+  let finalized = false;
+  const runtime = {
+    requireAvailable: () => ({
+      registry: {
+        getSessionStatus: () => ({ bindings: { bundle: null, runner: null } }),
+      },
+      session: { sessionId: 'session-1', claimEpoch: 9 },
+    }),
+  };
+
+  unbindNativeRunner(runtime, () => {
+    finalized = true;
+  });
+
+  assert.equal(finalized, false);
 });

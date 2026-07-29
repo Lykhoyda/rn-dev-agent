@@ -434,7 +434,6 @@ export function createDeviceSnapshotHandler(deps = {}) {
             return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
         }
         if (action === 'close') {
-            const closingPlatform = getActiveSession()?.platform ?? args.platform;
             const result = await closeDeviceSession({
                 hasActiveSession: () => getActiveSession() !== null,
                 closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -446,10 +445,11 @@ export function createDeviceSnapshotHandler(deps = {}) {
                     }
                 },
                 finalizeSuccessfulClose: async () => {
-                    if (closingPlatform === 'ios') {
-                        (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-                    }
-                    await deps.unbindRunner?.();
+                    await deps.unbindRunner?.((platform) => {
+                        if (platform === 'ios') {
+                            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+                        }
+                    });
                 },
                 releaseDeviceLock: releaseDeviceLockForSession,
                 getDeviceId: () => getActiveSession()?.deviceId,

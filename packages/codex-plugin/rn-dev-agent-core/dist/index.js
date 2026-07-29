@@ -31341,7 +31341,6 @@ function createDeviceSnapshotHandler(deps = {}) {
       return upgradeNote ? attachMetaNote(result2, upgradeNote) : result2;
     }
     if (action === "close") {
-      const closingPlatform = getActiveSession()?.platform ?? args.platform;
       const result2 = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -31353,10 +31352,11 @@ function createDeviceSnapshotHandler(deps = {}) {
           }
         },
         finalizeSuccessfulClose: async () => {
-          if (closingPlatform === "ios") {
-            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-          }
-          await deps.unbindRunner?.();
+          await deps.unbindRunner?.((platform) => {
+            if (platform === "ios") {
+              (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+            }
+          });
         },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId
@@ -77595,12 +77595,15 @@ function bindNativeRunner(runtime, target) {
     }
   });
 }
-function unbindNativeRunner(runtime) {
+function unbindNativeRunner(runtime, beforeRelease) {
   const { registry: registry2, session } = runtime.requireAvailable();
   const status = registry2.getSessionStatus(session.sessionId);
   const runner = status?.bindings.runner;
   if (!status || !runner)
     return;
+  if (runner.platform === "ios" || runner.platform === "android") {
+    beforeRelease?.(runner.platform);
+  }
   registry2.releaseResources(session, [
     {
       type: "runner",
@@ -79637,7 +79640,7 @@ trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots.
   attachOnly: external_exports.boolean().optional().describe("action=open only: skip launching the app. Requires the app to be already running. Use when connecting to an already-active dev session to avoid bundle-load races.")
 }, createDeviceSnapshotHandler({
   bindRunner: (platform, deviceId, appId) => bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
-  unbindRunner: () => unbindNativeRunner(authorityRuntime),
+  unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
   probeReactNativeUi: async (platform, deviceId, appId) => {
     const client2 = getClient();
     const filters = {

@@ -68,13 +68,19 @@ export function bindNativeRunner(
   });
 }
 
-export function unbindNativeRunner(runtime: WorkerAuthorityRuntime): void {
+export function unbindNativeRunner(
+  runtime: WorkerAuthorityRuntime,
+  beforeRelease?: (platform: 'ios' | 'android') => void,
+): void {
   const { registry, session } = runtime.requireAvailable();
   const status = registry.getSessionStatus(session.sessionId);
   const runner = status?.bindings.runner as
     | { platform?: unknown; deviceId?: unknown; port?: unknown }
     | undefined;
   if (!status || !runner) return;
+  if (runner.platform === 'ios' || runner.platform === 'android') {
+    beforeRelease?.(runner.platform);
+  }
   registry.releaseResources(session, [
     {
       type: 'runner',

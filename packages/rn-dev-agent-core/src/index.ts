@@ -1806,7 +1806,7 @@ trackedTool(
   createDeviceSnapshotHandler({
     bindRunner: (platform, deviceId, appId) =>
       bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
-    unbindRunner: () => unbindNativeRunner(authorityRuntime),
+    unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
     probeReactNativeUi: async (platform, deviceId, appId) => {
       const client = getClient();
       const filters = {

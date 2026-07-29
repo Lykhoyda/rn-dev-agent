@@ -48,12 +48,15 @@ export function bindNativeRunner(runtime, target) {
         },
     });
 }
-export function unbindNativeRunner(runtime) {
+export function unbindNativeRunner(runtime, beforeRelease) {
     const { registry, session } = runtime.requireAvailable();
     const status = registry.getSessionStatus(session.sessionId);
     const runner = status?.bindings.runner;
     if (!status || !runner)
         return;
+    if (runner.platform === 'ios' || runner.platform === 'android') {
+        beforeRelease?.(runner.platform);
+    }
     registry.releaseResources(session, [
         {
             type: 'runner',
