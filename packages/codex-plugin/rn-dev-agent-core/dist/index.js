@@ -61845,19 +61845,30 @@ function createSessionHandler(runtime, dependencies = {}) {
             session: projectPublicAuthorityStatus(runtime.status())
           });
         }
-        if (metro2.mode !== "managed") {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stop_metro cannot terminate an externally managed Metro");
-        }
         const signerCapability = dependencies.getSignerCapability?.();
-        if (!signerCapability) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro cleanup requires the session signer capability");
-        }
-        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro2, {
+        const stopped = metro2.mode === "managed" && signerCapability ? await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro2, {
           sessionId: session.sessionId,
           signerCapability
-        });
+        }) : false;
         if (!stopped) {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+          const metroPort2 = Number(status2.bindings.metroPort);
+          if (!Number.isSafeInteger(metroPort2)) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "Metro binding lacks an allocated port for safe non-signaling release");
+          }
+          let listener;
+          try {
+            listener = (dependencies.probeListener ?? probeManagedMetroListener)(metroPort2);
+          } catch {
+            listener = { status: "unknown" };
+          }
+          if (listener.status !== "absent") {
+            const ownership = metro2.mode === "external" ? "externally managed Metro" : "Metro without authenticated managed process authority";
+            const observation = listener.status === "listening" ? `still owns allocated port ${metroPort2} with process ${listener.pid}` : `listener absence on allocated port ${metroPort2} could not be verified`;
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", `${ownership} ${observation}; stop it through its owning process, then retry rn_session stop_metro`);
+          }
+          if (input.confirmed !== true) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "non-signaling Metro authority release requires confirmed=true after listener absence is verified");
+          }
         }
         const priorTargetId = status2.bindings.bundle?.targetId;
         const metroPort = Number(status2.bindings.metroPort);
@@ -61872,8 +61883,9 @@ function createSessionHandler(runtime, dependencies = {}) {
           releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
         });
         return okResult({
-          stopped: true,
-          alreadyStopped: false,
+          stopped,
+          alreadyStopped: !stopped,
+          bindingReleased: !stopped,
           session: projectPublicAuthorityStatus(runtime.status()),
           nextAction: "Restore package integration with confirmed=true, then release the exact session."
         });

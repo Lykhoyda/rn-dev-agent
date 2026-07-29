@@ -1321,6 +1321,140 @@ test('session stop_metro is idempotent when managed Metro is already absent', as
   assert.equal(released, false);
 });
 
+test('session stop_metro releases an absent external Metro without signaling it', async () => {
+  let signaled = false;
+  const updates: Array<Record<string, unknown>> = [];
+  const status = {
+    sessionId: 'session-a',
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: {
+      metroPort: 8341,
+      metro: { mode: 'external', port: 8341 },
+      bundle: { targetId: 'target-a' },
+    } as Record<string, unknown>,
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session: unknown, update: Record<string, unknown>) => {
+            updates.push(update);
+            status.bindings = {
+              ...status.bindings,
+              ...(update.bindings as Record<string, unknown>),
+            };
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      probeListener: () => ({ status: 'absent' }),
+      stopManagedMetro: async () => {
+        signaled = true;
+        return true;
+      },
+    },
+  );
+
+  const unconfirmed = await handler({ action: 'stop_metro' });
+  assert.equal(unconfirmed.isError, true);
+  assert.match(unconfirmed.content[0]!.text, /requires confirmed=true/);
+  assert.equal(status.bindings.metro?.mode, 'external');
+
+  const result = await handler({ action: 'stop_metro', confirmed: true });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.equal(envelope.data.stopped, false);
+  assert.equal(envelope.data.alreadyStopped, true);
+  assert.equal(envelope.data.bindingReleased, true);
+  assert.equal(signaled, false);
+  assert.equal(status.bindings.metro, null);
+  assert.equal(status.bindings.bundle, null);
+  assert.deepEqual(updates[0]?.releaseResources, [{ type: 'target', key: '8341:target-a' }]);
+});
+
+test('session stop_metro retains a live external Metro with owner recovery', async () => {
+  let mutated = false;
+  const status = {
+    sessionId: 'session-a',
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: { metroPort: 8341, metro: { mode: 'external', port: 8341 } },
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => {
+            mutated = true;
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      probeListener: () => ({ status: 'listening', pid: 4321 }),
+    },
+  );
+
+  const result = await handler({ action: 'stop_metro', confirmed: true });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /stop it through its owning process/);
+  assert.match(result.content[0]!.text, /retry rn_session stop_metro/);
+  assert.equal(mutated, false);
+  assert.ok(status.bindings.metro);
+});
+
+test('session stop_metro releases unverifiable cleanup only after listener absence', async () => {
+  const status = {
+    sessionId: 'session-a',
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: {
+      metroPort: 8341,
+      metro: null,
+      metroCleanup: { mode: 'managed', port: 8341 },
+      metroTerminal: { code: 'METRO_MANAGEMENT_PROOF_INVALID' },
+    } as Record<string, unknown>,
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
+            status.bindings = { ...status.bindings, ...update.bindings };
+          },
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      getSignerCapability: () => 'signer',
+      probeListener: () => ({ status: 'absent' }),
+      stopManagedMetro: async () => false,
+    },
+  );
+
+  const result = await handler({ action: 'stop_metro', confirmed: true });
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.equal(status.bindings.metroCleanup, null);
+  assert.equal(status.bindings.metroTerminal, null);
+});
+
 test('session status atomically invalidates lost managed Metro before and after bundle bind', async (t) => {
   for (const bundleBound of [false, true]) {
     await t.test(bundleBound ? 'after bundle bind' : 'before bundle bind', async () => {

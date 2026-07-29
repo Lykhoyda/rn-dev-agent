@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
-import { captureMetroBinding } from './session/metro-binding.js';
+import { captureMetroBinding, type MetroBinding } from './session/metro-binding.js';
 import {
   inspectManagedMetroLifecycle,
   refreshManagedMetroBuildGeneration,
@@ -32,6 +32,10 @@ import {
   openBoundSubdirectory,
   writeBoundDirectoryFile,
 } from './session/bound-directory.js';
+
+type SessionMetroBinding =
+  | Partial<ManagedMetroBinding>
+  | (Partial<MetroBinding> & { mode: 'external' });
 
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -243,7 +247,7 @@ async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Pro
         ) {
           throw new SessionAuthorityError(
             'METRO_AUTHORITY_MISMATCH',
-            'retained Metro cleanup is not authenticated managed authority; run rn_session stop_metro',
+            'retained Metro cleanup is not authenticated managed authority; run rn_session stop_metro with confirmed=true for safe release or exact owner recovery',
           );
         }
         if (
@@ -473,7 +477,7 @@ async function main(): Promise<void> {
             devClientUrl?: unknown;
           }
         | undefined;
-      const metro = status.bindings.metro as Partial<ManagedMetroBinding> | undefined;
+      const metro = status.bindings.metro as SessionMetroBinding | undefined;
       if (
         (platform !== 'ios' && platform !== 'android') ||
         device?.platform !== platform ||
@@ -494,10 +498,14 @@ async function main(): Promise<void> {
         signerCapability,
       });
       if (metro.mode !== 'managed' || metroInspection.status !== 'live') {
+        const recovery =
+          metro.mode === 'external'
+            ? 'stop external Metro through its owning process, then run rn_session stop_metro with confirmed=true'
+            : 'run rn_session stop_metro with confirmed=true for safe release or exact owner recovery';
         throw new SessionAuthorityError(
           'METRO_AUTHORITY_MISMATCH',
           metroInspection.status === 'lost'
-            ? `${metroInspection.reason}; run rn_session stop_metro before retrying`
+            ? `${metroInspection.reason}; ${recovery} before retrying`
             : 'build requires authenticated managed Metro authority',
         );
       }

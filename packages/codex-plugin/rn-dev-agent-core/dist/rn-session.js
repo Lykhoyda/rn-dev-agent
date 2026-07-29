@@ -16108,7 +16108,7 @@ async function ensureManagedMetro(status) {
           sessionId: status.sessionId,
           signerCapability
         })) {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "retained Metro cleanup is not authenticated managed authority; run rn_session stop_metro");
+          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "retained Metro cleanup is not authenticated managed authority; run rn_session stop_metro with confirmed=true for safe release or exact owner recovery");
         }
         if (!await stopManagedMetro(retainedCleanup, {
           sessionId: status.sessionId,
@@ -16292,7 +16292,8 @@ async function main() {
         signerCapability
       });
       if (metro.mode !== "managed" || metroInspection.status !== "live") {
-        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", metroInspection.status === "lost" ? `${metroInspection.reason}; run rn_session stop_metro before retrying` : "build requires authenticated managed Metro authority");
+        const recovery = metro.mode === "external" ? "stop external Metro through its owning process, then run rn_session stop_metro with confirmed=true" : "run rn_session stop_metro with confirmed=true for safe release or exact owner recovery";
+        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", metroInspection.status === "lost" ? `${metroInspection.reason}; ${recovery} before retrying` : "build requires authenticated managed Metro authority");
       }
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
       const buildToken = randomUUID3();

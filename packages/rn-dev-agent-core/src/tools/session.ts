@@ -27,6 +27,7 @@ import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
   inspectManagedMetroLifecycle,
+  probeManagedMetroListener,
   stopManagedMetro,
   type ManagedMetroBinding,
   type ManagedMetroLifecycleInspection,
@@ -111,6 +112,10 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   cleanupTimeoutMs?: number;
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
 }
+
+type SessionMetroBinding =
+  | Partial<ManagedMetroBinding>
+  | (Partial<MetroBinding> & { mode: 'external' });
 
 function sameMetroAuthority(
   current: Record<string, unknown> | undefined,
@@ -507,7 +512,7 @@ export function createSessionHandler(
           );
         }
         const metro = (status.bindings.metroCleanup ?? status.bindings.metro) as
-          | Partial<ManagedMetroBinding>
+          | SessionMetroBinding
           | null
           | undefined;
         if (!metro) {
@@ -517,28 +522,48 @@ export function createSessionHandler(
             session: projectPublicAuthorityStatus(runtime.status()),
           });
         }
-        if (metro.mode !== 'managed') {
-          throw new SessionAuthorityError(
-            'METRO_AUTHORITY_MISMATCH',
-            'stop_metro cannot terminate an externally managed Metro',
-          );
-        }
         const signerCapability = dependencies.getSignerCapability?.();
-        if (!signerCapability) {
-          throw new SessionAuthorityError(
-            'SESSION_AUTHORITY_REQUIRED',
-            'managed Metro cleanup requires the session signer capability',
-          );
-        }
-        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
-          sessionId: session.sessionId,
-          signerCapability,
-        });
+        const stopped =
+          metro.mode === 'managed' && signerCapability
+            ? await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+                sessionId: session.sessionId,
+                signerCapability,
+              })
+            : false;
         if (!stopped) {
-          throw new SessionAuthorityError(
-            'METRO_AUTHORITY_MISMATCH',
-            'managed Metro could not be stopped with exact process authority',
-          );
+          const metroPort = Number(status.bindings.metroPort);
+          if (!Number.isSafeInteger(metroPort)) {
+            throw new SessionAuthorityError(
+              'METRO_AUTHORITY_MISMATCH',
+              'Metro binding lacks an allocated port for safe non-signaling release',
+            );
+          }
+          let listener: ManagedMetroListenerProbe;
+          try {
+            listener = (dependencies.probeListener ?? probeManagedMetroListener)(metroPort);
+          } catch {
+            listener = { status: 'unknown' };
+          }
+          if (listener.status !== 'absent') {
+            const ownership =
+              metro.mode === 'external'
+                ? 'externally managed Metro'
+                : 'Metro without authenticated managed process authority';
+            const observation =
+              listener.status === 'listening'
+                ? `still owns allocated port ${metroPort} with process ${listener.pid}`
+                : `listener absence on allocated port ${metroPort} could not be verified`;
+            throw new SessionAuthorityError(
+              'METRO_AUTHORITY_MISMATCH',
+              `${ownership} ${observation}; stop it through its owning process, then retry rn_session stop_metro`,
+            );
+          }
+          if (input.confirmed !== true) {
+            throw new SessionAuthorityError(
+              'SESSION_AUTHORITY_REQUIRED',
+              'non-signaling Metro authority release requires confirmed=true after listener absence is verified',
+            );
+          }
         }
         const priorTargetId = (status.bindings.bundle as { targetId?: unknown } | null | undefined)
           ?.targetId;
@@ -561,8 +586,9 @@ export function createSessionHandler(
               : [],
         });
         return okResult({
-          stopped: true,
-          alreadyStopped: false,
+          stopped,
+          alreadyStopped: !stopped,
+          bindingReleased: !stopped,
           session: projectPublicAuthorityStatus(runtime.status()),
           nextAction:
             'Restore package integration with confirmed=true, then release the exact session.',
