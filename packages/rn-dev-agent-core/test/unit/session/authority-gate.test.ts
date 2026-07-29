@@ -8,7 +8,7 @@ import {
   createAuthorityGate,
 } from '../../../dist/session/authority-gate.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
-import { okResult } from '../../../dist/utils.js';
+import { failResult, okResult } from '../../../dist/utils.js';
 
 function fixture() {
   const calls = [];
@@ -320,6 +320,51 @@ test('Maestro parking transactionally releases runner authority before dispatch'
   assert.ok(calls.includes('release:ios:device:9100'));
   assert.equal(calls.includes('postflight:R'), false);
   assert.equal(envelope.meta.authorityReceipt.axes.includes('R'), false);
+});
+
+test('contained runner timeout atomically releases authority and preserves its typed result', async () => {
+  const { runtime, registry, status, calls } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    pid: 4321,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    calls.push(`release:${input.releaseResources?.[0]?.key}`);
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      if (axis === 'R' && phase === 'postflight') {
+        throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'runner was reaped');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('device_press', async () =>
+    failResult('runner timed out', 'RUNNER_TIMEOUT', {
+      runnerTimeoutRecovery: {
+        poisoned: true,
+        reapDisposition: 'reaped',
+        runner: {
+          before: { pid: 4321, port: 9100, deviceId: 'device' },
+          stateCleared: true,
+        },
+      },
+    }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'RUNNER_TIMEOUT');
+  assert.equal(status.bindings.runner, null);
+  assert.ok(calls.includes('release:ios:device:9100'));
+  assert.equal(calls.includes('postflight:R'), false);
 });
 
 test('failed managed origin proof invalidates prior bundle authority', async () => {
@@ -1224,7 +1269,35 @@ test('runner close remains authoritative after managed Metro is already absent',
   assert.equal(envelope.ok, true);
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:D', 'preflight:R'],
+    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:D'],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('postflight:')),
+    ['postflight:C', 'postflight:S', 'postflight:I', 'postflight:D'],
+  );
+});
+
+test('runner close is idempotent after timeout containment released its binding', async () => {
+  const { runtime, calls, status } = fixture();
+  status.bindings.runner = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('device_snapshot', async () => okResult({ closed: true }))({
+    action: 'close',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityTransition, true);
+  assert.equal(status.authorityVersion, 9);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:D'],
   );
   assert.deepEqual(
     calls.filter((call) => call.startsWith('postflight:')),

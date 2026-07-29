@@ -91,6 +91,51 @@ function isAuthenticatedIdempotentMetroStop(tool, args, result) {
         return false;
     }
 }
+function isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus) {
+    if (tool !== 'device_snapshot' || args.action !== 'close' || initialStatus.bindings.runner) {
+        return false;
+    }
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        return envelope.ok === true && envelope.data?.closed === true;
+    }
+    catch {
+        return false;
+    }
+}
+function containedRunnerClaim(result, runner) {
+    if (!runner)
+        return null;
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        const recovery = envelope.meta?.runnerTimeoutRecovery;
+        const before = recovery?.runner?.before;
+        const typedOutcome = envelope.code === 'RUNNER_TIMEOUT' ||
+            (envelope.ok === true && recovery?.verification === 'exact-readback');
+        if (!typedOutcome ||
+            recovery?.poisoned !== true ||
+            !['reaped', 'already-absent', 'replacement-preserved'].includes(String(recovery.reapDisposition)) ||
+            !before ||
+            before.pid !== runner.pid ||
+            before.port !== runner.port ||
+            before.deviceId !== runner.deviceId) {
+            return null;
+        }
+        const platform = runner.platform;
+        const deviceId = runner.deviceId;
+        const port = runner.port;
+        if ((platform !== 'ios' && platform !== 'android') ||
+            typeof deviceId !== 'string' ||
+            typeof port !== 'number' ||
+            !Number.isSafeInteger(port)) {
+            return null;
+        }
+        return { type: 'runner', key: `${platform}:${deviceId}:${String(port)}` };
+    }
+    catch {
+        return null;
+    }
+}
 function requireDeviceTransition(status, args) {
     const action = args.action ?? 'snapshot';
     if (action === 'open') {
@@ -445,7 +490,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                 after: ['C', 'S', 'I', 'M', 'D', 'R'],
                             }
                             : {
-                                before: ['C', 'S', 'I', 'D', 'R'],
+                                before: ['C', 'S', 'I', 'D'],
                                 after: ['C', 'S', 'I', 'D'],
                             }
                         : tool === 'observe'
@@ -499,7 +544,8 @@ export function createAuthorityGate(runtime, dependencies) {
                         });
                     }
                     const idempotentMetroStop = isAuthenticatedIdempotentMetroStop(tool, args, result);
-                    if (!gateCommitsProof && !idempotentMetroStop) {
+                    const idempotentRunnerClose = isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus);
+                    if (!gateCommitsProof && !idempotentMetroStop && !idempotentRunnerClose) {
                         registry.verifyOperation(operation);
                         const nextStatus = runtime.status();
                         if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
@@ -621,6 +667,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 let optionalBundleClaimed = false;
                 let optionalBundleRecoveryFailed = false;
                 let managedRunnerParked = false;
+                let containedRunnerReleased = false;
                 if (profile.optionalAxes?.includes('B')) {
                     Object.defineProperty(args, optionalBundleAdmission, {
                         configurable: true,
@@ -853,6 +900,21 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 registry.verifyOperation(operation);
                 const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+                const containedClaim = containedRunnerClaim(result, status.bindings.runner);
+                if (containedClaim) {
+                    registry.verifyOperation(operation);
+                    operation = registry.replaceBindingsDuringOperation(operation, {
+                        state: status.bindings.bundle ? 'ready' : 'device_bound',
+                        bindings: { runner: null },
+                        releaseResources: [containedClaim],
+                    });
+                    const containedStatus = runtime.status();
+                    if (!containedStatus.available) {
+                        throw new SessionAuthorityError(containedStatus.code, containedStatus.reason);
+                    }
+                    status = containedStatus;
+                    containedRunnerReleased = true;
+                }
                 publishedProofFinalize =
                     tool === 'proof_capture' &&
                         args.action === 'finalize' &&
@@ -923,7 +985,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 const postflightAxes = [
                     ...(profile.postflightAxes ?? profile.axes),
                     ...optionalPostflightAxes,
-                ];
+                ].filter((axis) => !(containedRunnerReleased && axis === 'R'));
                 const after = await Promise.all(postflightAxes.map((axis) => dependencies.probe({
                     axis,
                     phase: 'postflight',
@@ -947,7 +1009,7 @@ export function createAuthorityGate(runtime, dependencies) {
                         axes: effectiveProfile.axes.filter((axis) => axis !== 'B'),
                     }
                     : effectiveProfile;
-                const runnerAwareReceiptProfile = managedRunnerParked
+                const runnerAwareReceiptProfile = managedRunnerParked || containedRunnerReleased
                     ? {
                         ...receiptBaseProfile,
                         axes: receiptBaseProfile.axes.filter((axis) => axis !== 'R'),
