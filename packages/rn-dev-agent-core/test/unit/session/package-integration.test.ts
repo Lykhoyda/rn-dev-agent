@@ -3906,8 +3906,6 @@ test('authenticated descendants receive an open stdin instead of an EOF stream',
     const adapterPath = join(integration, 'rn-session-metro.cjs');
     writeFileSync(adapterPath, renderMetroIntegrationAdapter());
     const childEntry = join(root, 'stdin-child.cjs');
-    // Tailwind's watcher (used by NativeWind) exits on stdin 'end'; a /dev/null stdin ends
-    // immediately and silently strands every caller awaiting the child's first message.
     writeFileSync(
       childEntry,
       "process.stdin.on('end', () => { if (process.send) process.send({ stdin: 'ended' }); process.exit(0); }); process.stdin.resume(); setTimeout(() => { if (process.send) process.send({ stdin: 'open' }); process.exit(0); }, 1500);",
@@ -3926,6 +3924,56 @@ test('authenticated descendants receive an open stdin instead of an EOF stream',
         cwd: root,
         env: environment,
         encoding: 'utf8',
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          'ignore',
+          evidenceDescriptor,
+        ],
+      },
+    );
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('non-IPC descendants retain EOF stdin behavior', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-metro-spawn-stdin-'));
+  let evidenceDescriptor: number | undefined;
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const integration = join(root, '.rn-agent', 'integration');
+    mkdirSync(integration, { recursive: true });
+    const adapterPath = join(integration, 'rn-session-metro.cjs');
+    writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+    const childEntry = join(root, 'stdin-child.cjs');
+    writeFileSync(
+      childEntry,
+      "process.stdin.once('end', () => process.exit(0)); process.stdin.resume(); setTimeout(() => process.exit(9), 3000);",
+    );
+    const environment = metroPolicyEnvironment(adapterPath);
+    const runtimeLoads = join(integration, 'metro-runtime-loads.jsonl');
+    evidenceDescriptor = openSync(runtimeLoads, 'a');
+    environment.RN_DEV_AGENT_METRO_EVIDENCE_FD = '9';
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const child = childProcess.spawn(process.execPath, [${JSON.stringify(childEntry)}]); await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('spawn child exit ' + code))); }); })().catch((error) => { console.error(error); process.exit(1); });`,
+      ],
+      {
+        cwd: root,
+        env: environment,
+        encoding: 'utf8',
+        timeout: 10_000,
         stdio: [
           'pipe',
           'pipe',
@@ -3967,7 +4015,7 @@ test('a first authenticated child exchange that never completes fails typed inst
       process.execPath,
       [
         '-e',
-        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'] }); const exit = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); setTimeout(() => reject(new Error('stalled child was never reaped')), 30000); }); if (exit.signal !== 'SIGKILL') { console.error('unexpected stalled child exit ' + JSON.stringify(exit)); process.exit(3); } })().catch((error) => { console.error(error); process.exit(1); });`,
+        `(async () => { const compose = require(${JSON.stringify(adapterPath)}); compose({}); const childProcess = require('node:child_process'); const child = childProcess.fork(${JSON.stringify(childEntry)}, [], { execArgv: ['--no-warnings'] }); const exit = await new Promise((resolve, reject) => { child.once('error', reject); const timeout = setTimeout(() => reject(new Error('stalled child was never reaped')), 30000); child.once('exit', (code, signal) => { clearTimeout(timeout); resolve({ code, signal }); }); }); if (exit.signal !== 'SIGKILL') { console.error('unexpected stalled child exit ' + JSON.stringify(exit)); process.exit(3); } })().catch((error) => { console.error(error); process.exit(1); });`,
       ],
       {
         cwd: root,
@@ -3989,15 +4037,31 @@ test('a first authenticated child exchange that never completes fails typed inst
     );
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stderr, /MANAGED_TRANSFORM_CHANNEL_STALLED/);
-    const violations = readFileSync(runtimeLoads, 'utf8')
+    const observations = readFileSync(runtimeLoads, 'utf8')
       .trim()
       .split('\n')
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as { kind: string; value: string })
-      .filter((entry) => entry.kind === 'violation');
+      .map((line) => JSON.parse(line) as { kind: string; value: string });
+    const violations = observations.filter((entry) => entry.kind === 'violation');
     assert.ok(
-      violations.some((entry) => entry.value.includes('MANAGED_TRANSFORM_CHANNEL_STALLED')),
+      violations.some(
+        (entry) =>
+          entry.value.includes('MANAGED_TRANSFORM_CHANNEL_STALLED') &&
+          entry.value.includes('"cleanup":"signal-accepted"'),
+      ),
       'the stalled first exchange was not journaled',
+    );
+    const lifecycle = observations
+      .filter((entry) => entry.kind === 'semantics')
+      .map((entry) => JSON.parse(entry.value))
+      .filter((entry) => entry.mode === 'child-lifecycle');
+    const lifecycleByRecipient = Map.groupBy(lifecycle, (entry) => entry.recipient);
+    assert.equal(lifecycleByRecipient.size, 1);
+    const [lifecycleChain] = lifecycleByRecipient.values();
+    assert.ok(lifecycleChain.length >= 2);
+    assert.deepEqual(
+      lifecycleChain.map((entry) => entry.sequence),
+      Array.from({ length: lifecycleChain.length }, (_, index) => index + 1),
     );
   } finally {
     if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);

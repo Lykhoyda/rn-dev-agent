@@ -56734,9 +56734,9 @@ function verifyManagedMetroEnforcementReceipt(input, receipt2, dependencies = {}
 var METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');
-const { chmodSync, closeSync, constants, fstatSync, fsyncSync, openSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
-const { basename, isAbsolute, relative, sep } = require('node:path');
+const { basename, dirname, isAbsolute, relative, sep } = require('node:path');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
@@ -56889,6 +56889,77 @@ if (missingEnvironment) {
     'environment',
     missingEnvironment[1],
   );
+}
+const policyDirectoryPath = dirname(policyPath);
+const policyName = basename(policyPath);
+const launcherWorkingDirectory = process.cwd();
+let policyDirectoryDescriptor;
+let policyDescriptor;
+let policyDirectoryIdentity;
+let policyIdentity;
+try {
+  policyDirectoryDescriptor = openSync(
+    policyDirectoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  policyDirectoryIdentity = fstatSync(policyDirectoryDescriptor, { bigint: true });
+  if (!policyDirectoryIdentity.isDirectory()) throw new Error('policy-directory-not-regular');
+  process.chdir(policyDirectoryPath);
+  const boundDirectory = statSync('.', { bigint: true });
+  if (
+    boundDirectory.dev !== policyDirectoryIdentity.dev ||
+    boundDirectory.ino !== policyDirectoryIdentity.ino
+  ) {
+    throw new Error('policy-directory-identity-mismatch');
+  }
+  policyDescriptor = openSync(
+    policyName,
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
+    0o600,
+  );
+  policyIdentity = fstatSync(policyDescriptor, { bigint: true });
+  const publishedPolicy = lstatSync(policyPath, { bigint: true });
+  if (
+    !policyIdentity.isFile() ||
+    policyIdentity.nlink !== 1n ||
+    publishedPolicy.dev !== policyIdentity.dev ||
+    publishedPolicy.ino !== policyIdentity.ino
+  ) {
+    throw new Error('policy-file-identity-mismatch');
+  }
+  fchmodSync(policyDescriptor, 0o600);
+  process.chdir(launcherWorkingDirectory);
+} catch (error) {
+  try {
+    process.chdir(launcherWorkingDirectory);
+  } catch {}
+  const detail =
+    error instanceof Error && /^policy-[a-z-]+$/.test(error.message)
+      ? error.message
+      : 'policy-binding-failed';
+  failLauncher(
+    'METRO_LAUNCHER_POLICY_UNAVAILABLE',
+    'policy-binding',
+    detail,
+  );
+}
+function assertPolicyIdentity() {
+  const retainedDirectory = fstatSync(policyDirectoryDescriptor, { bigint: true });
+  const retainedPolicy = fstatSync(policyDescriptor, { bigint: true });
+  const publishedPolicy = lstatSync(policyPath, { bigint: true });
+  if (
+    !retainedDirectory.isDirectory() ||
+    retainedDirectory.dev !== policyDirectoryIdentity.dev ||
+    retainedDirectory.ino !== policyDirectoryIdentity.ino ||
+    !retainedPolicy.isFile() ||
+    retainedPolicy.nlink !== 1n ||
+    retainedPolicy.dev !== policyIdentity.dev ||
+    retainedPolicy.ino !== policyIdentity.ino ||
+    publishedPolicy.dev !== policyIdentity.dev ||
+    publishedPolicy.ino !== policyIdentity.ino
+  ) {
+    throw new Error('policy-publication-identity-mismatch');
+  }
 }
 let runtimeManifest;
 let runtimeEnforcement;
@@ -57065,10 +57136,24 @@ function publishPolicy() {
   const signature = createHmac('sha256', capability)
     .update(canonicalAuthorityJson(payload))
     .digest('hex');
-  writeFileSync(policyPath, canonicalAuthorityJson({ ...payload, signature }) + '\n', {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
+  const publication = Buffer.from(
+    canonicalAuthorityJson({ ...payload, signature }) + '\n',
+    'utf8',
+  );
+  assertPolicyIdentity();
+  ftruncateSync(policyDescriptor, 0);
+  let offset = 0;
+  while (offset < publication.length) {
+    offset += writeSync(
+      policyDescriptor,
+      publication,
+      offset,
+      publication.length - offset,
+      offset,
+    );
+  }
+  fsyncSync(policyDescriptor);
+  assertPolicyIdentity();
 }
 function appendViolation(value) {
   if (!violations.includes(value)) violations.push(value);
@@ -58744,7 +58829,7 @@ function authenticatedIpcSend(
   const completionId = randomBytes(16).toString('hex');
   persistLoaderObservation('pending', completionId);
   let completionRecorded = false;
-  const recordCompletion = (callbackArgs) => {
+  const recordCompletion = (callbackArgs, exchangeCompleted) => {
     if (completionRecorded) throw descendantError();
     const normalizedCallbackArgs = privateArrayMap(callbackArgs, (entry) => {
       if (!(entry instanceof Error)) return snapshotInvocation(entry).value;
@@ -58763,11 +58848,12 @@ function authenticatedIpcSend(
     });
     persistLoaderObservation('completion', completionId);
     completionRecorded = true;
+    if (exchangeCompleted && context.observeExchange) context.observeExchange();
   };
   const completionCallback =
     nextCallback === undefined || typeof nextCallback === 'function'
       ? function (...callbackArgs) {
-          recordCompletion(callbackArgs);
+          recordCompletion(callbackArgs, true);
           if (typeof nextCallback === 'function') {
             return intrinsicReflectApply(nextCallback, this, callbackArgs);
           }
@@ -58796,7 +58882,7 @@ function authenticatedIpcSend(
     }).result;
   } catch (error) {
     if (!completionRecorded) {
-      recordCompletion([error]);
+      recordCompletion([error], false);
     }
     authenticatedMessage(context, {
       status: 'rejected',
@@ -59144,12 +59230,15 @@ function authenticatedChildStdio(stdio, mode, silent, input) {
         : stdio === 'ignore'
           ? ['ignore', 'ignore', 'ignore']
           : mode === 'fork' && !silent
-            ? ['ignore', 'inherit', 'inherit']
+            ? ['pipe', 'inherit', 'inherit']
             : [mode === 'sync' ? 'pipe' : 'ignore', 'pipe', 'pipe'];
   if (mode === 'sync') {
     if (normalized[0] !== 'pipe' && normalized[0] !== 'ignore') throw descendantError();
     if (input !== undefined && normalized[0] !== 'pipe') throw descendantError();
-  } else if (normalized[0] !== 'ignore') {
+  } else if (
+    normalized[0] !== 'ignore' &&
+    (mode !== 'fork' || normalized[0] !== 'pipe')
+  ) {
     throw descendantError();
   }
   if (hasEvidenceDescriptor) {
@@ -59169,6 +59258,51 @@ function descendantError() {
   const error = new Error('RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION');
   error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
   return error;
+}
+const CHILD_EXCHANGE_STALL_CODE = 'MANAGED_TRANSFORM_CHANNEL_STALLED';
+function childExchangeStallBound() {
+  const configured = Number(process.env.RN_DEV_AGENT_METRO_CHILD_STALL_MS);
+  if (Number.isInteger(configured) && configured > 0) return configured;
+  return 120_000;
+}
+function watchFirstChildExchange(child, context, nonce) {
+  let settled = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+  };
+  const stalled = (reason) => {
+    if (settled) return;
+    settle();
+    let cleanup = 'not-required';
+    if (reason === 'timeout') {
+      try {
+        cleanup = child.kill('SIGKILL') === true ? 'signal-accepted' : 'target-retired';
+      } catch {
+        cleanup = 'signal-refused';
+      }
+    }
+    const detail = canonicalAuthorityJson({
+      cleanup,
+      code: CHILD_EXCHANGE_STALL_CODE,
+      pid: typeof child.pid === 'number' ? child.pid : null,
+      reason,
+      recipient: nonce,
+    });
+    persistLoaderObservation('violation', detail);
+    try {
+      fs.writeSync(2, CHILD_EXCHANGE_STALL_CODE + ': ' + detail + '\\n');
+    } catch {}
+  };
+  const timer = setTimeout(() => stalled('timeout'), childExchangeStallBound());
+  if (typeof timer.unref === 'function') timer.unref();
+  context.observeExchange = settle;
+  child.once?.('message', settle);
+  child.once?.('exit', () => {
+    if (settled) return;
+    stalled('exit-before-first-exchange');
+  });
 }
 if (typeof process.execve === 'function') {
   Object.defineProperty(process, 'execve', {
@@ -59855,6 +59989,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
         }
         fenceNativeChannel(channel.handle, messageContext);
         child[channel.symbol] = nativeHandleFacade(channel.handle, 'onread');
+        watchFirstChildExchange(child, messageContext, nonce);
       }
       return child;
     },

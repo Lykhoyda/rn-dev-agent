@@ -105,9 +105,9 @@ interface ManagedMetroRuntimeAdmissionExpectation {
 const METRO_LAUNCHER_SOURCE = String.raw`
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac } = require('node:crypto');
-const { chmodSync, closeSync, constants, fstatSync, fsyncSync, openSync, readFileSync, readSync, realpathSync, rmSync, writeFileSync, writeSync } = require('node:fs');
+const { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } = require('node:fs');
 const { createServer } = require('node:net');
-const { basename, isAbsolute, relative, sep } = require('node:path');
+const { basename, dirname, isAbsolute, relative, sep } = require('node:path');
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const intrinsicGetOwnPropertyNames = Object.getOwnPropertyNames;
@@ -260,6 +260,77 @@ if (missingEnvironment) {
     'environment',
     missingEnvironment[1],
   );
+}
+const policyDirectoryPath = dirname(policyPath);
+const policyName = basename(policyPath);
+const launcherWorkingDirectory = process.cwd();
+let policyDirectoryDescriptor;
+let policyDescriptor;
+let policyDirectoryIdentity;
+let policyIdentity;
+try {
+  policyDirectoryDescriptor = openSync(
+    policyDirectoryPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  policyDirectoryIdentity = fstatSync(policyDirectoryDescriptor, { bigint: true });
+  if (!policyDirectoryIdentity.isDirectory()) throw new Error('policy-directory-not-regular');
+  process.chdir(policyDirectoryPath);
+  const boundDirectory = statSync('.', { bigint: true });
+  if (
+    boundDirectory.dev !== policyDirectoryIdentity.dev ||
+    boundDirectory.ino !== policyDirectoryIdentity.ino
+  ) {
+    throw new Error('policy-directory-identity-mismatch');
+  }
+  policyDescriptor = openSync(
+    policyName,
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
+    0o600,
+  );
+  policyIdentity = fstatSync(policyDescriptor, { bigint: true });
+  const publishedPolicy = lstatSync(policyPath, { bigint: true });
+  if (
+    !policyIdentity.isFile() ||
+    policyIdentity.nlink !== 1n ||
+    publishedPolicy.dev !== policyIdentity.dev ||
+    publishedPolicy.ino !== policyIdentity.ino
+  ) {
+    throw new Error('policy-file-identity-mismatch');
+  }
+  fchmodSync(policyDescriptor, 0o600);
+  process.chdir(launcherWorkingDirectory);
+} catch (error) {
+  try {
+    process.chdir(launcherWorkingDirectory);
+  } catch {}
+  const detail =
+    error instanceof Error && /^policy-[a-z-]+$/.test(error.message)
+      ? error.message
+      : 'policy-binding-failed';
+  failLauncher(
+    'METRO_LAUNCHER_POLICY_UNAVAILABLE',
+    'policy-binding',
+    detail,
+  );
+}
+function assertPolicyIdentity() {
+  const retainedDirectory = fstatSync(policyDirectoryDescriptor, { bigint: true });
+  const retainedPolicy = fstatSync(policyDescriptor, { bigint: true });
+  const publishedPolicy = lstatSync(policyPath, { bigint: true });
+  if (
+    !retainedDirectory.isDirectory() ||
+    retainedDirectory.dev !== policyDirectoryIdentity.dev ||
+    retainedDirectory.ino !== policyDirectoryIdentity.ino ||
+    !retainedPolicy.isFile() ||
+    retainedPolicy.nlink !== 1n ||
+    retainedPolicy.dev !== policyIdentity.dev ||
+    retainedPolicy.ino !== policyIdentity.ino ||
+    publishedPolicy.dev !== policyIdentity.dev ||
+    publishedPolicy.ino !== policyIdentity.ino
+  ) {
+    throw new Error('policy-publication-identity-mismatch');
+  }
 }
 let runtimeManifest;
 let runtimeEnforcement;
@@ -436,10 +507,24 @@ function publishPolicy() {
   const signature = createHmac('sha256', capability)
     .update(canonicalAuthorityJson(payload))
     .digest('hex');
-  writeFileSync(policyPath, canonicalAuthorityJson({ ...payload, signature }) + '\n', {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
+  const publication = Buffer.from(
+    canonicalAuthorityJson({ ...payload, signature }) + '\n',
+    'utf8',
+  );
+  assertPolicyIdentity();
+  ftruncateSync(policyDescriptor, 0);
+  let offset = 0;
+  while (offset < publication.length) {
+    offset += writeSync(
+      policyDescriptor,
+      publication,
+      offset,
+      publication.length - offset,
+      offset,
+    );
+  }
+  fsyncSync(policyDescriptor);
+  assertPolicyIdentity();
 }
 function appendViolation(value) {
   if (!violations.includes(value)) violations.push(value);

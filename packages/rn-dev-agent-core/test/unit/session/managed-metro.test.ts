@@ -79,6 +79,19 @@ test('managed Metro ancestry and cleanup fail closed without trusted executables
   assert.equal(executed, false);
 });
 
+test('managed Metro policy publication retains no-follow file authority', () => {
+  const source = readFileSync(
+    new URL('../../../src/session/managed-metro.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.doesNotMatch(source, /writeFileSync\(policyPath/);
+  assert.match(source, /constants\.O_RDWR \| constants\.O_CREAT \| constants\.O_NOFOLLOW/);
+  assert.match(source, /ftruncateSync\(policyDescriptor, 0\)/);
+  assert.match(source, /retainedDirectory\.ino !== policyDirectoryIdentity\.ino/);
+  assert.match(source, /publishedPolicy\.ino !== policyIdentity\.ino/);
+});
+
 test('shipping artifacts omit retired runtime-authority claims', () => {
   for (const retiredClaim of [
     ['broker', 'v2'].join('-'),

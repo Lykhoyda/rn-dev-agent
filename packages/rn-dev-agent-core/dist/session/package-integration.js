@@ -693,7 +693,6 @@ let activeChildSpawnAuthorization;
 function authenticatedMessage(context, value) {
   const snapshot = snapshotInvocation(value);
   context.sequence += 1;
-  if (context.observeExchange) context.observeExchange();
   persistLoaderObservation(
     'semantics',
     canonicalAuthorityJson({
@@ -757,7 +756,7 @@ function authenticatedIpcSend(
   const completionId = randomBytes(16).toString('hex');
   persistLoaderObservation('pending', completionId);
   let completionRecorded = false;
-  const recordCompletion = (callbackArgs) => {
+  const recordCompletion = (callbackArgs, exchangeCompleted) => {
     if (completionRecorded) throw descendantError();
     const normalizedCallbackArgs = privateArrayMap(callbackArgs, (entry) => {
       if (!(entry instanceof Error)) return snapshotInvocation(entry).value;
@@ -776,11 +775,12 @@ function authenticatedIpcSend(
     });
     persistLoaderObservation('completion', completionId);
     completionRecorded = true;
+    if (exchangeCompleted && context.observeExchange) context.observeExchange();
   };
   const completionCallback =
     nextCallback === undefined || typeof nextCallback === 'function'
       ? function (...callbackArgs) {
-          recordCompletion(callbackArgs);
+          recordCompletion(callbackArgs, true);
           if (typeof nextCallback === 'function') {
             return intrinsicReflectApply(nextCallback, this, callbackArgs);
           }
@@ -809,7 +809,7 @@ function authenticatedIpcSend(
     }).result;
   } catch (error) {
     if (!completionRecorded) {
-      recordCompletion([error]);
+      recordCompletion([error], false);
     }
     authenticatedMessage(context, {
       status: 'rejected',
@@ -1158,11 +1158,14 @@ function authenticatedChildStdio(stdio, mode, silent, input) {
           ? ['ignore', 'ignore', 'ignore']
           : mode === 'fork' && !silent
             ? ['pipe', 'inherit', 'inherit']
-            : ['pipe', 'pipe', 'pipe'];
+            : [mode === 'sync' ? 'pipe' : 'ignore', 'pipe', 'pipe'];
   if (mode === 'sync') {
     if (normalized[0] !== 'pipe' && normalized[0] !== 'ignore') throw descendantError();
     if (input !== undefined && normalized[0] !== 'pipe') throw descendantError();
-  } else if (normalized[0] !== 'ignore' && normalized[0] !== 'pipe') {
+  } else if (
+    normalized[0] !== 'ignore' &&
+    (mode !== 'fork' || normalized[0] !== 'pipe')
+  ) {
     throw descendantError();
   }
   if (hasEvidenceDescriptor) {
@@ -1184,7 +1187,6 @@ function descendantError() {
   return error;
 }
 const CHILD_EXCHANGE_STALL_CODE = 'MANAGED_TRANSFORM_CHANNEL_STALLED';
-const intrinsicProcessKill = process.kill;
 function childExchangeStallBound() {
   const configured = Number(process.env.RN_DEV_AGENT_METRO_CHILD_STALL_MS);
   if (Number.isInteger(configured) && configured > 0) return configured;
@@ -1200,7 +1202,16 @@ function watchFirstChildExchange(child, context, nonce) {
   const stalled = (reason) => {
     if (settled) return;
     settle();
+    let cleanup = 'not-required';
+    if (reason === 'timeout') {
+      try {
+        cleanup = child.kill('SIGKILL') === true ? 'signal-accepted' : 'target-retired';
+      } catch {
+        cleanup = 'signal-refused';
+      }
+    }
     const detail = canonicalAuthorityJson({
+      cleanup,
       code: CHILD_EXCHANGE_STALL_CODE,
       pid: typeof child.pid === 'number' ? child.pid : null,
       reason,
@@ -1210,11 +1221,6 @@ function watchFirstChildExchange(child, context, nonce) {
     try {
       fs.writeSync(2, CHILD_EXCHANGE_STALL_CODE + ': ' + detail + '\\n');
     } catch {}
-    if (reason === 'timeout' && typeof child.pid === 'number') {
-      try {
-        intrinsicReflectApply(intrinsicProcessKill, process, [child.pid, 'SIGKILL']);
-      } catch {}
-    }
   };
   const timer = setTimeout(() => stalled('timeout'), childExchangeStallBound());
   if (typeof timer.unref === 'function') timer.unref();
