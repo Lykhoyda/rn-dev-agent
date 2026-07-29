@@ -852,7 +852,8 @@ parentPort.on('message', (message) => {
       label: 'ordinary',
       values: Array.from({ length: 150000 }, (_, index) => index & 255),
     };
-    assert.deepEqual(JSON.parse(result.stdout), [
+    const responses = JSON.parse(result.stdout);
+    assert.deepEqual(responses, [
       {
         digest: createHash('sha256')
           .update(Buffer.alloc(256 * 1024, 0xa5))
@@ -896,6 +897,12 @@ parentPort.on('message', (message) => {
     );
     assert.ok(semantics.every((entry) => /^[a-f0-9]{64}$/.test(entry.invocationDigest)));
     assert.equal(new Set(semantics.map((entry) => entry.invocationDigest)).size, 6);
+    if (process.env.RN_DEV_AGENT_LARGE_MESSAGE_EVIDENCE) {
+      writeFileSync(
+        process.env.RN_DEV_AGENT_LARGE_MESSAGE_EVIDENCE,
+        `${JSON.stringify({ responses, semantics }, null, 2)}\n`,
+      );
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
