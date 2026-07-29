@@ -943,7 +943,7 @@ async function disconnectBoundSession() {
 
 trackedTool(
   'rn_session',
-  'Inspect and transition the fenced rn-dev-agent authority session. Status is passive; bind, handoff, adoption, recovery, managed Metro cleanup, and release actions are fail-closed.',
+  'Inspect and transition the fenced rn-dev-agent authority session. Status reconciles lost managed Metro authority without touching the app; bind, handoff, adoption, recovery, managed Metro cleanup, and release actions are fail-closed.',
   {
     action: z.enum([
       'status',
