@@ -113,6 +113,151 @@ async function fetchBounded(url: string, timeoutMs: number, headers: Record<stri
   }
 }
 
+function productRuntimeContext(bundleUrl: string): {
+  context: Record<string, unknown>;
+  errors: string[];
+} {
+  const constants: Record<string, Record<string, unknown>> = {
+    Appearance: { colorScheme: 'light' },
+    DeviceInfo: {
+      Dimensions: {
+        screenPhysicalPixels: {
+          width: 1179,
+          height: 2556,
+          scale: 3,
+          fontScale: 1,
+          densityDpi: 460,
+        },
+        windowPhysicalPixels: {
+          width: 1179,
+          height: 2556,
+          scale: 3,
+          fontScale: 1,
+          densityDpi: 460,
+        },
+      },
+    },
+    I18nManager: {
+      doLeftAndRightSwapInRTL: true,
+      isRTL: false,
+      swapLeftAndRightInRTL: true,
+    },
+    PlatformConstants: {
+      forceTouchAvailable: false,
+      interfaceIdiom: 'phone',
+      isTesting: true,
+      osVersion: '18.0',
+      reactNativeVersion: { major: 0, minor: 85, patch: 3 },
+      systemName: 'iOS',
+    },
+    SettingsManager: { settings: { AppleLocale: 'en_US', AppleLanguages: ['en-US'] } },
+    SourceCode: { scriptURL: bundleUrl },
+  };
+  const modules = new Map<PropertyKey, object>();
+  const nativeModuleProxy = new Proxy(
+    {},
+    {
+      get: (_target, moduleName) => {
+        if (moduleName === 'EXDevLauncher') return undefined;
+        const cached = modules.get(moduleName);
+        if (cached) return cached;
+        const module = new Proxy(
+          {
+            getConstants: () => constants[String(moduleName)] ?? {},
+          },
+          {
+            get: (target, property) => {
+              if (property in target) return target[property as keyof typeof target];
+              return () => null;
+            },
+          },
+        );
+        modules.set(moduleName, module);
+        return module;
+      },
+    },
+  );
+  class ExpoEventEmitter {
+    readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+
+    addListener(eventName: string, listener: (...args: unknown[]) => void) {
+      const listeners = this.listeners.get(eventName) ?? new Set();
+      listeners.add(listener);
+      this.listeners.set(eventName, listeners);
+      return { remove: () => this.removeListener(eventName, listener) };
+    }
+
+    removeListener(eventName: string, listener: (...args: unknown[]) => void) {
+      this.listeners.get(eventName)?.delete(listener);
+    }
+
+    removeAllListeners(eventName: string) {
+      this.listeners.delete(eventName);
+    }
+
+    emit(eventName: string, ...args: unknown[]) {
+      for (const listener of this.listeners.get(eventName) ?? []) listener(...args);
+    }
+
+    listenerCount(eventName: string) {
+      return this.listeners.get(eventName)?.size ?? 0;
+    }
+  }
+  class ExpoNativeModule extends ExpoEventEmitter {}
+  class ExpoSharedObject extends ExpoEventEmitter {
+    release() {}
+  }
+  class ExpoSharedRef extends ExpoSharedObject {
+    nativeRefType = 'unknown';
+  }
+  const errors: string[] = [];
+  const runtimeConsole = Object.create(console) as Console;
+  runtimeConsole.error = (...values: unknown[]) => {
+    errors.push(
+      values
+        .map((value) =>
+          value && typeof value === 'object' && 'stack' in value
+            ? String(value.stack)
+            : String(value),
+        )
+        .join(' '),
+    );
+  };
+  const context: Record<string, unknown> = {
+    AbortController,
+    TextDecoder,
+    TextEncoder,
+    URL,
+    URLSearchParams,
+    cancelAnimationFrame: clearTimeout,
+    clearImmediate,
+    clearInterval,
+    clearTimeout,
+    console: runtimeConsole,
+    expo: {
+      EventEmitter: ExpoEventEmitter,
+      NativeModule: ExpoNativeModule,
+      SharedObject: ExpoSharedObject,
+      SharedRef: ExpoSharedRef,
+      modules: new Proxy(
+        {},
+        { get: (_target, moduleName) => Reflect.get(nativeModuleProxy, moduleName) },
+      ),
+    },
+    nativeLoggingHook: () => {},
+    nativeModuleProxy,
+    navigator: { product: 'ReactNative' },
+    performance,
+    queueMicrotask,
+    requestAnimationFrame: (callback: () => void) => setTimeout(callback, 0),
+    setImmediate,
+    setInterval,
+    setTimeout,
+  };
+  context.window = context;
+  return { context, errors };
+}
+
 // The managed product bundle must complete for the real installed-Expo fixture, which depends on
 // NativeWind's Tailwind CLI child. That child exits on stdin EOF, so a descendant fence that maps
 // child stdin to /dev/null stalls every bundle request without any simulator involved.
@@ -178,10 +323,12 @@ for (const transport of [
           JSON.parse(manifest.body.toString('utf8')) as { launchAsset: { url: string } }
         ).launchAsset.url;
         assert.equal(new URL(bundleUrl).port, String(port));
+        const devClientBundleUrl = new URL(bundleUrl);
+        devClientBundleUrl.searchParams.set('lazy', 'true');
 
         // Repeat so a lucky first pass cannot hide the race this regression exists to catch.
         for (let attempt = 0; attempt < 2; attempt += 1) {
-          const bundle = await fetchBounded(bundleUrl, 300_000);
+          const bundle = await fetchBounded(devClientBundleUrl.toString(), 300_000);
           assert.equal(bundle.status, 200);
           assert.ok(
             bundle.body.length > 1024 * 1024,
@@ -195,10 +342,33 @@ for (const transport of [
             /__RN_DEV_AGENT_AUTHORITY__/,
             'served product bundle must contain authority marker',
           );
-          const context = {} as Record<string, unknown>;
-          try {
-            vm.runInNewContext(bundleText, context, { timeout: 5_000 });
-          } catch {}
+          const definedModuleIds = new Set(
+            [...bundleText.matchAll(/__d\([^]*?,\s*(\d+),\s*\[/g)].map((match) => match[1]),
+          );
+          const runModuleIds = [...bundleText.matchAll(/__r\((\d+)\);/g)].map((match) => match[1]);
+          assert.ok(runModuleIds.length > 0, 'served product bundle must run its main module');
+          for (const moduleId of runModuleIds) {
+            assert.equal(
+              definedModuleIds.has(moduleId),
+              true,
+              `bundle must not require phantom module ${moduleId}`,
+            );
+          }
+          const runtime = productRuntimeContext(devClientBundleUrl.toString());
+          vm.runInNewContext(bundleText, runtime.context, { timeout: 5_000 });
+          const errorLine = /hermes-stable:(\d+):\d+/.exec(runtime.errors[0] ?? '')?.[1];
+          const bundleLines = bundleText.split('\n');
+          const errorContext = errorLine
+            ? bundleLines
+                .slice(Math.max(0, Number(errorLine) - 4), Number(errorLine) + 2)
+                .join('\n')
+            : '';
+          assert.deepEqual(
+            runtime.errors,
+            [],
+            `product runtime emitted an error${errorContext ? `:\n${errorContext}` : ''}`,
+          );
+          const context = runtime.context;
           const runtimeAuthority = context.__RN_DEV_AGENT_AUTHORITY__ as
             | {
                 status?: unknown;

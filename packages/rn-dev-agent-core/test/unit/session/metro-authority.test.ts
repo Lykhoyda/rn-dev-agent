@@ -3,6 +3,7 @@ import vm from 'node:vm';
 import { test } from 'node:test';
 import {
   buildSignedMetroMarker,
+  createBootErrorCaptureModule,
   createMetroAuthorityModule,
   verifyMetroAuthorityMarker,
   withMetroAuthorityModule,
@@ -97,7 +98,6 @@ test('Metro config composition preserves Expo and bare custom serializer behavio
       ...(kind === 'expo' ? ['expo:polyfill'] : []),
     ]);
     assert.deepEqual(composed.serializer.getModulesRunBeforeMainModule('index.js'), [
-      '/authority/marker.js',
       `${kind}:index.js`,
     ]);
     assert.deepEqual(
@@ -132,4 +132,47 @@ test('signed module is runtime-neutral for Hermes and bridgeless globals', () =>
     context.globalThis.__RN_DEV_AGENT_AUTHORITY__.marker.payload.metroInstanceId,
     'metro-a',
   );
+});
+
+test('boot error capture records only bounded fatal errors before helpers load', () => {
+  const forwarded: Array<{ message: string; fatal: boolean }> = [];
+  let handler = (error: Error, fatal: boolean) => {
+    forwarded.push({ message: error.message, fatal });
+  };
+  const runtime: {
+    ErrorUtils: {
+      getGlobalHandler: () => typeof handler;
+      setGlobalHandler: (next: typeof handler) => void;
+    };
+    __RN_AGENT?: object;
+    __RN_DEV_AGENT_BOOT_ERRORS__?: Array<{
+      message: string;
+      isFatal: boolean;
+      type: string;
+    }>;
+  } = {
+    ErrorUtils: {
+      getGlobalHandler: () => handler,
+      setGlobalHandler: (next) => {
+        handler = next;
+      },
+    },
+  };
+  vm.runInNewContext(createBootErrorCaptureModule(), { globalThis: runtime });
+
+  const longMessage = `Requiring unknown module "5481"\n${'x'.repeat(2_000)}`;
+  handler(new Error(longMessage), true);
+  const errors = runtime.__RN_DEV_AGENT_BOOT_ERRORS__;
+  assert.ok(errors);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.type, 'startup');
+  assert.equal(errors[0]?.isFatal, true);
+  assert.ok((errors[0]?.message.length ?? 0) <= 512);
+  assert.equal(errors[0]?.message.includes('\n'), false);
+  assert.deepEqual(forwarded, [{ message: longMessage, fatal: true }]);
+
+  runtime.__RN_AGENT = {};
+  handler(new Error('after helpers'), true);
+  assert.equal(errors.length, 1);
+  assert.equal(forwarded.length, 2);
 });

@@ -96,7 +96,7 @@ export function withMetroAuthorityModule<T extends MetroConfig>(
         return paths instanceof Promise ? paths.then(prependMarker) : prependMarker(paths);
       },
       getModulesRunBeforeMainModule(entryFile: string): string[] {
-        return [markerModulePath, ...(original?.(entryFile) ?? [])];
+        return (original?.(entryFile) ?? []).filter((path) => path !== markerModulePath);
       },
     },
   };
@@ -111,4 +111,35 @@ export function createMetroAuthorityModule(marker: MetroAuthorityMarker | null):
         sourceFidelity: 'not-proven',
       };
   return `globalThis.__RN_DEV_AGENT_AUTHORITY__=${JSON.stringify(value)};\n`;
+}
+
+export function createBootErrorCaptureModule(): string {
+  return `(function(){
+  try {
+    var root = globalThis;
+    if (root.__RN_DEV_AGENT_BOOT_ERROR_CAPTURE_INSTALLED__) return;
+    var errorUtils = root.ErrorUtils;
+    if (!errorUtils || typeof errorUtils.getGlobalHandler !== 'function' || typeof errorUtils.setGlobalHandler !== 'function') return;
+    var errors = Array.isArray(root.__RN_DEV_AGENT_BOOT_ERRORS__) ? root.__RN_DEV_AGENT_BOOT_ERRORS__ : [];
+    root.__RN_DEV_AGENT_BOOT_ERRORS__ = errors;
+    var previous = errorUtils.getGlobalHandler();
+    var bounded = function(value, limit) {
+      return String(value == null ? '' : value).replace(/[\\u0000-\\u001f\\u007f]+/g, ' ').slice(0, limit);
+    };
+    errorUtils.setGlobalHandler(function(error, isFatal) {
+      if (isFatal === true && !root.__RN_AGENT) {
+        errors.push({
+          message: bounded(error && error.message ? error.message : error, 512),
+          stack: bounded(error && error.stack ? error.stack : '', 2048),
+          isFatal: true,
+          type: 'startup',
+          timestamp: new Date().toISOString()
+        });
+        if (errors.length > 8) errors.shift();
+      }
+      if (typeof previous === 'function') previous(error, isFatal);
+    });
+    root.__RN_DEV_AGENT_BOOT_ERROR_CAPTURE_INSTALLED__ = true;
+  } catch (error) {}
+})();\n`;
 }

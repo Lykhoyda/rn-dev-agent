@@ -150,6 +150,28 @@ test('gh-418: at open, rebuild budget already spent for this plugin version → 
   assert.match(res.message, /already cold-rebuilt/i);
 });
 
+test('gh-418: authority mismatch after a prior rebuild exposes supported marker recovery', async () => {
+  const budget = freshBudget();
+  budget.recordRebuild('0.99.0');
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    allowArtifactRebuild: true,
+    rebuildBudget: budget,
+    probe: async () => ({
+      liveness: 'stale',
+      staleReason: 'authority-mismatch',
+      runnerVersion: '0.1.0',
+    }),
+    ensure: async () => {},
+    invalidateArtifact: () => assert.fail('must not invalidate while the guard is present'),
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'RUNNER_OWNERSHIP_MISMATCH');
+  assert.match(res.message, /delete the runner build\/commands-rebuild\.json marker/);
+  assert.match(res.message, /re-open to retry/);
+});
+
 test('gh-418: at open, build lock held by another session → refuse, no invalidation', async () => {
   let invalidated = 0;
   const res = await ensureRunnerForCommand('U1', 'com.example', {

@@ -28,6 +28,7 @@ import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-bi
 import {
   inspectManagedMetroCleanupEvidence,
   inspectManagedMetroLifecycle,
+  probeManagedMetroListener,
   stopManagedMetro,
   stopManagedMetroWithEvidence,
   type ManagedMetroBinding,
@@ -534,6 +535,23 @@ export function createSessionHandler(
           | null
           | undefined;
         if (!metro) {
+          const metroPort = Number(status.bindings.metroPort);
+          if (Number.isSafeInteger(metroPort)) {
+            let listener: ManagedMetroListenerProbe = { status: 'unknown' };
+            try {
+              listener = (dependencies.probeListener ?? probeManagedMetroListener)(metroPort);
+            } catch {}
+            if (listener.status !== 'absent') {
+              const listenerIdentity =
+                listener.status === 'listening' && typeof listener.pid === 'number'
+                  ? ` by listener pid ${listener.pid}`
+                  : '';
+              throw new SessionAuthorityError(
+                'METRO_CLEANUP_PENDING',
+                `allocated Metro port ${metroPort} is still ${listener.status}${listenerIdentity} after cleanup authority was invalidated; do not signal an unbound process, wait for managed launcher cleanup, then retry rn_session stop_metro`,
+              );
+            }
+          }
           return okResult({
             stopped: false,
             alreadyStopped: true,

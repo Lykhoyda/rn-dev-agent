@@ -14,6 +14,68 @@ export interface TargetDeviceAuthorityDependencies {
   execute(file: string, args: string[]): Promise<{ stdout: string }>;
 }
 
+export interface ExactDeviceTargetInput<T extends { deviceName?: string | null }> {
+  platform: 'ios' | 'android';
+  deviceId: string;
+  targets: readonly T[];
+}
+
+export async function filterTargetsForExactDevice<T extends { deviceName?: string | null }>(
+  input: ExactDeviceTargetInput<T>,
+  dependencies: TargetDeviceAuthorityDependencies,
+): Promise<T[]> {
+  if (input.platform === 'ios') {
+    const output = await dependencies.execute('xcrun', ['simctl', 'list', 'devices', '--json']);
+    const parsed = JSON.parse(output.stdout) as {
+      devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
+    };
+    const booted = Object.values(parsed.devices ?? {})
+      .flat()
+      .filter(
+        (device): device is { udid: string; name: string; state: string } =>
+          device.state === 'Booted' &&
+          typeof device.udid === 'string' &&
+          typeof device.name === 'string',
+      );
+    const exact = booted.find((device) => device.udid === input.deviceId);
+    if (!exact || booted.filter((device) => device.name === exact.name).length !== 1) {
+      throw new Error(
+        'CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign',
+      );
+    }
+    return input.targets.filter((target) => target.deviceName?.trim() === exact.name);
+  }
+
+  const devices = (await dependencies.execute('adb', ['devices'])).stdout
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts[0] && parts[1] === 'device')
+    .map((parts) => parts[0]!);
+  if (!devices.includes(input.deviceId)) {
+    throw new Error(
+      'CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign',
+    );
+  }
+  const models = await Promise.all(
+    devices.map(async (serial) => ({
+      serial,
+      model: (
+        await dependencies.execute('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
+      ).stdout.trim(),
+    })),
+  );
+  const exact = models.find((entry) => entry.serial === input.deviceId);
+  if (!exact?.model || models.filter((entry) => entry.model === exact.model).length !== 1) {
+    throw new Error(
+      'CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign',
+    );
+  }
+  return input.targets.filter((target) => {
+    const name = target.deviceName?.trim();
+    return name === exact.model || name?.startsWith(`${exact.model} -`) === true;
+  });
+}
+
 export async function proveTargetDeviceAssociation(
   input: TargetDeviceAssociation,
   dependencies: TargetDeviceAuthorityDependencies,

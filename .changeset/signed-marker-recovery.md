@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Guarantee signed Metro marker execution and keep migration, runner, and stale-adoption recovery paths authoritative and retryable.
+Guarantee single-emission signed Metro startup with pre-helper error evidence, exact-device reconnects, and authoritative migration, runner, and stale-Metro recovery.

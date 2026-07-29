@@ -688,7 +688,9 @@ async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
             ok: false,
             code,
             message: authorityMismatch
-                ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch.`
+                ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch. ` +
+                    `If that rebuild failed transiently, delete the runner build/commands-rebuild.json marker and re-open to retry; ` +
+                    `otherwise update or reinstall the plugin.`
                 : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
                     `required commands (missing: ${missing}). If that rebuild failed transiently (sim ` +
                     `not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker ` +

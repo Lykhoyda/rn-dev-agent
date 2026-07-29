@@ -24705,7 +24705,7 @@ async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
     return {
       ok: false,
       code,
-      message: authorityMismatch ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch.` : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks required commands (missing: ${missing}). If that rebuild failed transiently (sim not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker and re-open to retry; otherwise update or reinstall the plugin.`
+      message: authorityMismatch ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch. If that rebuild failed transiently, delete the runner build/commands-rebuild.json marker and re-open to retry; otherwise update or reinstall the plugin.` : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks required commands (missing: ${missing}). If that rebuild failed transiently (sim not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker and re-open to retry; otherwise update or reinstall the plugin.`
     };
   }
   const acquire = deps.acquireBuildLock ?? acquireRunnerRebuildLock;
@@ -29211,6 +29211,7 @@ function createAuthorityGate(runtime, dependencies) {
                   }
                 ]
               });
+              await dependencies.onRunnerReleased?.(runner);
               const parkedStatus = runtime.status();
               if (!parkedStatus.available) {
                 throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);
@@ -29230,6 +29231,7 @@ function createAuthorityGate(runtime, dependencies) {
             bindings: { runner: null },
             releaseResources: [containedRunner.claim]
           });
+          await dependencies.onRunnerReleased?.(status.bindings.runner);
           const containedStatus = runtime.status();
           if (!containedStatus.available) {
             throw new SessionAuthorityError(containedStatus.code, containedStatus.reason);
@@ -31133,6 +31135,8 @@ function createDeviceSnapshotHandler(deps = {}) {
       encoding: "utf8"
     });
   });
+  const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
+  const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
   return async (args) => {
     const action = args.action ?? "snapshot";
     if (action === "open") {
@@ -31183,11 +31187,12 @@ function createDeviceSnapshotHandler(deps = {}) {
       let upgradeNote;
       try {
         if (lockPlatform === "ios") {
-          const ready = await ensureRunnerForCommand(deviceId, appId, {
+          const ready = await ensureIosRunner(deviceId, appId, {
             allowArtifactRebuild: true,
             attachOnly: args.attachOnly === true
           });
           if (!ready.ok) {
+            await stopIosRunner(deviceId);
             consumePendingFastRunnerArtifactNote();
             releaseDeviceLockForSession();
             return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN");
@@ -31218,6 +31223,8 @@ function createDeviceSnapshotHandler(deps = {}) {
           reactNativeUiReady = deps.probeReactNativeUi ? await deps.probeReactNativeUi("android", deviceId, appId).catch(() => false) : null;
         }
       } catch (err) {
+        if (lockPlatform === "ios")
+          await stopIosRunner(deviceId);
         releaseDeviceLockForSession();
         consumePendingAndroidUpgradeNote();
         const msg3 = err instanceof Error ? err.message : String(err);
@@ -31247,7 +31254,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error2) {
         if (lockPlatform === "ios")
-          await stopFastRunner(deviceId);
+          await stopIosRunner(deviceId);
         else
           await stopAndroidRunner(deviceId);
         clearActiveSession();
@@ -31341,6 +31348,7 @@ function createDeviceSnapshotHandler(deps = {}) {
       return upgradeNote ? attachMetaNote(result2, upgradeNote) : result2;
     }
     if (action === "close") {
+      const closingPlatform = getActiveSession()?.platform ?? args.platform;
       const result2 = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -31352,11 +31360,10 @@ function createDeviceSnapshotHandler(deps = {}) {
           }
         },
         finalizeSuccessfulClose: async () => {
-          await deps.unbindRunner?.((platform) => {
-            if (platform === "ios") {
-              (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-            }
-          });
+          await deps.unbindRunner?.();
+          if (closingPlatform === "ios") {
+            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+          }
         },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId
@@ -53138,6 +53145,71 @@ async function autoDismissDevMenuMeta(client2) {
 
 // packages/rn-dev-agent-core/dist/tools/reload.js
 init_maestro_validator();
+
+// packages/rn-dev-agent-core/dist/session/target-device-authority.js
+async function filterTargetsForExactDevice(input, dependencies) {
+  if (input.platform === "ios") {
+    const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
+    const parsed = JSON.parse(output.stdout);
+    const booted = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.udid === "string" && typeof device.name === "string");
+    const exact2 = booted.find((device) => device.udid === input.deviceId);
+    if (!exact2 || booted.filter((device) => device.name === exact2.name).length !== 1) {
+      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
+    }
+    return input.targets.filter((target) => target.deviceName?.trim() === exact2.name);
+  }
+  const devices = (await dependencies.execute("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  if (!devices.includes(input.deviceId)) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+  const models = await Promise.all(devices.map(async (serial) => ({
+    serial,
+    model: (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim()
+  })));
+  const exact = models.find((entry) => entry.serial === input.deviceId);
+  if (!exact?.model || models.filter((entry) => entry.model === exact.model).length !== 1) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+  return input.targets.filter((target) => {
+    const name = target.deviceName?.trim();
+    return name === exact.model || name?.startsWith(`${exact.model} -`) === true;
+  });
+}
+async function proveTargetDeviceAssociation(input, dependencies) {
+  return proveTargetDeviceAssociations({
+    platform: input.platform,
+    deviceId: input.deviceId,
+    targetDeviceNames: [input.targetDeviceName]
+  }, dependencies);
+}
+async function proveTargetDeviceAssociations(input, dependencies) {
+  const targetDeviceNames = new Set(input.targetDeviceNames.map((name) => name?.trim()).filter((name) => Boolean(name)));
+  if (targetDeviceNames.size === 0) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
+  }
+  if (input.platform === "ios") {
+    const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
+    const parsed = JSON.parse(output.stdout);
+    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.name === "string" && targetDeviceNames.has(device.name));
+    if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
+      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
+    }
+    return;
+  }
+  const devices = (await dependencies.execute("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  const matching = [];
+  for (const serial of devices) {
+    const model = (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim();
+    if (model && [...targetDeviceNames].some((targetDeviceName) => targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
+      matching.push(serial);
+    }
+  }
+  if (matching.length !== 1 || matching[0] !== input.deviceId) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+}
+
+// packages/rn-dev-agent-core/dist/tools/reload.js
 var defaultExecFile2 = promisify16(execFileCb13);
 var sessionReloadCount = 0;
 var SOFT_RECONNECT_DEADLINE_MS = 3e4;
@@ -53167,17 +53239,18 @@ async function raceWithTimeout(promise, timeoutMs, errorLabel) {
       clearTimeout(timer);
   }
 }
-async function forceReconnect(oldClient, setClient2, createClient2, captured) {
+async function forceReconnect(oldClient, setClient2, createClient2, captured, authorityTarget, resolveExactTargetId) {
   const swallow = () => void 0;
   const disconnectPromise = oldClient.disconnect().catch(swallow);
   await raceWithTimeout(disconnectPromise, DISCONNECT_TIMEOUT_MS, "disconnect").catch(swallow);
   const newClient = createClient2(captured.port);
   setClient2(newClient);
-  const filters = {
-    platform: captured.platform,
-    bundleId: captured.bundleId
-  };
   try {
+    const filters = {
+      platform: authorityTarget?.platform ?? captured.platform,
+      bundleId: authorityTarget?.appId ?? captured.bundleId,
+      ...authorityTarget && resolveExactTargetId ? { targetId: await resolveExactTargetId(newClient, captured, authorityTarget) } : {}
+    };
     await raceWithTimeout(newClient.autoConnect(captured.port, filters), FORCE_FALLBACK_TIMEOUT_MS, "force_reconnect");
   } catch (err) {
     newClient.disconnect().catch(swallow);
@@ -53188,10 +53261,35 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured) {
   const platformMatched = !captured.platform || captured.platform === finalPlatform;
   return { ok: true, platformMatched, finalPlatform };
 }
+async function resolveExactReloadTargetId(client2, captured, authorityTarget, execute) {
+  const listed = await client2.listTargets(captured.port);
+  if (listed.port !== captured.port) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: reload target discovery escaped the allocated Metro port");
+  }
+  const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, {
+    platform: authorityTarget.platform,
+    bundleId: authorityTarget.appId
+  }));
+  const exactCandidates = await filterTargetsForExactDevice({
+    platform: authorityTarget.platform,
+    deviceId: authorityTarget.deviceId,
+    targets: sessionCandidates
+  }, {
+    execute: async (file, args) => {
+      const result = await execute(file, args, { timeout: 5e3 });
+      return { stdout: result.stdout };
+    }
+  });
+  if (exactCandidates.length !== 1) {
+    throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one reload target on the exact device, found ${exactCandidates.length}`);
+  }
+  return exactCandidates[0].id;
+}
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
   const execFile28 = deps.execFile ?? defaultExecFile2;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const first = await forceReconnect(getClient2(), setClient2, createClient2, captured);
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile28));
+  const first = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, authorityTarget ? resolveExactTargetId : void 0);
   if (first.ok) {
     return {
       ok: true,
@@ -53257,7 +53355,7 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
     };
   }
   await sleep6(3e3);
-  const second = await forceReconnect(getClient2(), setClient2, createClient2, captured);
+  const second = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, resolveExactTargetId);
   if (second.ok) {
     return {
       ok: true,
@@ -58103,9 +58201,71 @@ async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/package-integration.js
 import { closeSync as closeSync6, constants as constants4, fstatSync as fstatSync4, lstatSync as lstatSync9, openSync as openSync6, readFileSync as readFileSync25 } from "node:fs";
 import { basename as basename4, isAbsolute as isAbsolute4, join as join31, relative as relative3, resolve as resolve5, sep as sep4 } from "node:path";
+
+// packages/rn-dev-agent-core/dist/session/metro-authority.js
+import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+function serializePayload(payload) {
+  return JSON.stringify(payload);
+}
+function signPayload(payload, signerCapability) {
+  const signingKey = createSecretKey(Buffer.from(signerCapability, "base64url"));
+  return createHmac3("sha256", signingKey).update(serializePayload(payload)).digest("hex");
+}
+function mismatch() {
+  return new Error("BUNDLE_IDENTITY_MISMATCH: signed initial-bundle binding did not match");
+}
+function verifyMetroAuthorityMarker(marker, signerCapability, expected = {}) {
+  if (marker.version !== 1 || !marker.payload || typeof marker.signature !== "string") {
+    throw mismatch();
+  }
+  const signature = Buffer.from(marker.signature, "hex");
+  const actual = Buffer.from(signPayload(marker.payload, signerCapability), "hex");
+  if (signature.length !== actual.length || !timingSafeEqual5(signature, actual)) {
+    throw mismatch();
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (marker.payload[key] !== value)
+      throw mismatch();
+  }
+  return marker.payload;
+}
+function createBootErrorCaptureModule() {
+  return `(function(){
+  try {
+    var root = globalThis;
+    if (root.__RN_DEV_AGENT_BOOT_ERROR_CAPTURE_INSTALLED__) return;
+    var errorUtils = root.ErrorUtils;
+    if (!errorUtils || typeof errorUtils.getGlobalHandler !== 'function' || typeof errorUtils.setGlobalHandler !== 'function') return;
+    var errors = Array.isArray(root.__RN_DEV_AGENT_BOOT_ERRORS__) ? root.__RN_DEV_AGENT_BOOT_ERRORS__ : [];
+    root.__RN_DEV_AGENT_BOOT_ERRORS__ = errors;
+    var previous = errorUtils.getGlobalHandler();
+    var bounded = function(value, limit) {
+      return String(value == null ? '' : value).replace(/[\\u0000-\\u001f\\u007f]+/g, ' ').slice(0, limit);
+    };
+    errorUtils.setGlobalHandler(function(error, isFatal) {
+      if (isFatal === true && !root.__RN_AGENT) {
+        errors.push({
+          message: bounded(error && error.message ? error.message : error, 512),
+          stack: bounded(error && error.stack ? error.stack : '', 2048),
+          isFatal: true,
+          type: 'startup',
+          timestamp: new Date().toISOString()
+        });
+        if (errors.length > 8) errors.shift();
+      }
+      if (typeof previous === 'function') previous(error, isFatal);
+    });
+    root.__RN_DEV_AGENT_BOOT_ERROR_CAPTURE_INSTALLED__ = true;
+  } catch (error) {}
+})();
+`;
+}
+
+// packages/rn-dev-agent-core/dist/session/package-integration.js
 var ADAPTER = ".rn-agent/integration/rn-session-adapter.cjs";
 var METRO_ADAPTER = ".rn-agent/integration/rn-session-metro.cjs";
 var AUTHORITY_MODULE = ".rn-agent/integration/authority-marker.js";
+var BOOT_ERROR_MODULE = ".rn-agent/integration/boot-error-capture.js";
 var METRO_RUNTIME_POLICY = ".rn-agent/integration/metro-runtime-policy.json";
 var METRO_RUNTIME_LOADS = ".rn-agent/integration/metro-runtime-loads.jsonl";
 var METRO_START = "// rn-dev-agent session integration: begin";
@@ -60861,10 +61021,15 @@ function withPolicyCallbacks(config, names, getConfig) {
   }
   return callbacks;
 }
-function withAuthorityPolyfill(callback, marker) {
+function withAuthorityPolyfills(callback, marker, bootErrorCapture) {
   const prepend = (value) => [
     marker,
-    ...(Array.isArray(value) ? value.filter((candidate) => candidate !== marker) : []),
+    ...(Array.isArray(value)
+      ? value.filter(
+          (candidate) => candidate !== marker && candidate !== bootErrorCapture,
+        )
+      : []),
+    bootErrorCapture,
   ];
   return function (...args) {
     const result = typeof callback === 'function' ? callback.apply(this, args) : [];
@@ -60882,6 +61047,7 @@ module.exports = function withRnDevAgentAuthority(config) {
   const original = serializer.getModulesRunBeforeMainModule;
   const originalPolyfills = serializer.getPolyfills;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
+  const bootErrorCapture = path.join(process.cwd(), ${JSON.stringify(BOOT_ERROR_MODULE)});
   let finalConfig;
   finalConfig = {
     ...current,
@@ -60917,12 +61083,14 @@ module.exports = function withRnDevAgentAuthority(config) {
         () => finalConfig,
       ),
       getPolyfills: withPolicyRefresh(
-        withAuthorityPolyfill(originalPolyfills, marker),
+        withAuthorityPolyfills(originalPolyfills, marker, bootErrorCapture),
         () => finalConfig,
         true,
       ),
       getModulesRunBeforeMainModule(entryFile) {
-        const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+        const result = (typeof original === 'function' ? original(entryFile) : []).filter(
+          (candidate) => candidate !== marker && candidate !== bootErrorCapture,
+        );
         runtimePolicy(finalConfig, result);
         return result;
       },
@@ -61412,6 +61580,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     "rn-session-adapter.cjs",
     "rn-session-metro.cjs",
     "authority-marker.js",
+    "boot-error-capture.js",
     "metro-runtime-policy.json",
     basename4(METRO_RUNTIME_LOADS)
   ];
@@ -61455,6 +61624,11 @@ function applyPackageIntegration(input, dependencies = {}) {
       {
         snapshot: generated[3],
         contents: Buffer.from("globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n"),
+        mode: 384
+      },
+      {
+        snapshot: generated[4],
+        contents: Buffer.from(createBootErrorCaptureModule()),
         mode: 384
       }
     ];
@@ -61531,6 +61705,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     "rn-session-adapter.cjs",
     "rn-session-metro.cjs",
     "authority-marker.js",
+    "boot-error-capture.js",
     "metro-runtime-policy.json",
     basename4(METRO_RUNTIME_LOADS)
   ];
@@ -62268,6 +62443,18 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         const metro2 = status2.bindings.metroCleanup ?? status2.bindings.metro;
         if (!metro2) {
+          const metroPort2 = Number(status2.bindings.metroPort);
+          if (Number.isSafeInteger(metroPort2)) {
+            let listener = { status: "unknown" };
+            try {
+              listener = (dependencies.probeListener ?? probeManagedMetroListener)(metroPort2);
+            } catch {
+            }
+            if (listener.status !== "absent") {
+              const listenerIdentity = listener.status === "listening" && typeof listener.pid === "number" ? ` by listener pid ${listener.pid}` : "";
+              throw new SessionAuthorityError("METRO_CLEANUP_PENDING", `allocated Metro port ${metroPort2} is still ${listener.status}${listenerIdentity} after cleanup authority was invalidated; do not signal an unbound process, wait for managed launcher cleanup, then retry rn_session stop_metro`);
+            }
+          }
           return okResult({
             stopped: false,
             alreadyStopped: true,
@@ -62978,16 +63165,31 @@ async function symbolicateErrors(errors, metroPort) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/error-log.js
+var READ_ERRORS_EXPRESSION = `(function() {
+  var startup = Array.isArray(globalThis.__RN_DEV_AGENT_BOOT_ERRORS__) ? globalThis.__RN_DEV_AGENT_BOOT_ERRORS__ : [];
+  var helper = [];
+  try {
+    if (globalThis.__RN_AGENT) helper = JSON.parse(globalThis.__RN_AGENT.getErrors());
+  } catch (error) {}
+  return JSON.stringify(startup.concat(Array.isArray(helper) ? helper : []));
+})()`;
+var CLEAR_ERRORS_EXPRESSION = `(function() {
+  if (Array.isArray(globalThis.__RN_DEV_AGENT_BOOT_ERRORS__)) globalThis.__RN_DEV_AGENT_BOOT_ERRORS__.length = 0;
+  try {
+    if (globalThis.__RN_AGENT) globalThis.__RN_AGENT.clearErrors();
+  } catch (error) {}
+  return 'cleared';
+})()`;
 function createErrorLogHandler(getClient2) {
   return withConnection(getClient2, async (args, client2) => {
     if (args.clear) {
-      const clearResult = await client2.evaluate(client2.helperExpr("clearErrors()"));
+      const clearResult = await client2.evaluate(CLEAR_ERRORS_EXPRESSION);
       if (clearResult.error) {
         return failResult(`Failed to clear errors: ${clearResult.error}`);
       }
       return okResult({ cleared: true });
     }
-    const result = await client2.evaluate(client2.helperExpr("getErrors()"));
+    const result = await client2.evaluate(READ_ERRORS_EXPRESSION);
     if (result.error) {
       return failResult(`Error log error: ${result.error}`);
     }
@@ -63012,7 +63214,7 @@ function createErrorLogHandler(getClient2) {
     }
     const symbolicated = await symbolicateErrors(parsed, client2.metroPort);
     return okResult({ errors: symbolicated, count: symbolicated.length });
-  });
+  }, { requireHelpers: false });
 }
 
 // packages/rn-dev-agent-core/dist/tools/native-errors.js
@@ -75577,7 +75779,7 @@ import { fileURLToPath as fileURLToPath5 } from "node:url";
 import { dirname as dirname19, join as join45 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
-import { randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
 function makeCsrfToken() {
   return randomBytes6(24).toString("hex");
 }
@@ -75590,7 +75792,7 @@ function isPostAllowed(req, token2) {
     const got = String(gotRaw);
     const a = Buffer.from(got);
     const b = Buffer.from(token2);
-    if (a.length !== b.length || !timingSafeEqual5(a, b)) {
+    if (a.length !== b.length || !timingSafeEqual6(a, b)) {
       return { ok: false, status: 403, reason: "bad csrf token" };
     }
   }
@@ -77624,36 +77826,6 @@ init_discovery();
 init_metro_cwd();
 import { execFileSync as execFileSync16 } from "node:child_process";
 import { createHash as createHash18 } from "node:crypto";
-
-// packages/rn-dev-agent-core/dist/session/metro-authority.js
-import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
-function serializePayload(payload) {
-  return JSON.stringify(payload);
-}
-function signPayload(payload, signerCapability) {
-  const signingKey = createSecretKey(Buffer.from(signerCapability, "base64url"));
-  return createHmac3("sha256", signingKey).update(serializePayload(payload)).digest("hex");
-}
-function mismatch() {
-  return new Error("BUNDLE_IDENTITY_MISMATCH: signed initial-bundle binding did not match");
-}
-function verifyMetroAuthorityMarker(marker, signerCapability, expected = {}) {
-  if (marker.version !== 1 || !marker.payload || typeof marker.signature !== "string") {
-    throw mismatch();
-  }
-  const signature = Buffer.from(marker.signature, "hex");
-  const actual = Buffer.from(signPayload(marker.payload, signerCapability), "hex");
-  if (signature.length !== actual.length || !timingSafeEqual6(signature, actual)) {
-    throw mismatch();
-  }
-  for (const [key, value] of Object.entries(expected)) {
-    if (marker.payload[key] !== value)
-      throw mismatch();
-  }
-  return marker.payload;
-}
-
-// packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 init_metro_binding();
 init_process_birth();
 init_registry();
@@ -78387,41 +78559,6 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   };
 }
 
-// packages/rn-dev-agent-core/dist/session/target-device-authority.js
-async function proveTargetDeviceAssociation(input, dependencies) {
-  return proveTargetDeviceAssociations({
-    platform: input.platform,
-    deviceId: input.deviceId,
-    targetDeviceNames: [input.targetDeviceName]
-  }, dependencies);
-}
-async function proveTargetDeviceAssociations(input, dependencies) {
-  const targetDeviceNames = new Set(input.targetDeviceNames.map((name) => name?.trim()).filter((name) => Boolean(name)));
-  if (targetDeviceNames.size === 0) {
-    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
-  }
-  if (input.platform === "ios") {
-    const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
-    const parsed = JSON.parse(output.stdout);
-    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.name === "string" && targetDeviceNames.has(device.name));
-    if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
-      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
-    }
-    return;
-  }
-  const devices = (await dependencies.execute("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
-  const matching = [];
-  for (const serial of devices) {
-    const model = (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim();
-    if (model && [...targetDeviceNames].some((targetDeviceName) => targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
-      matching.push(serial);
-    }
-  }
-  if (matching.length !== 1 || matching[0] !== input.deviceId) {
-    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
-  }
-}
-
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 function identity(value) {
   return createHash18("sha256").update(JSON.stringify(value)).digest("hex");
@@ -79019,7 +79156,14 @@ var localAuthorityProbe = createLocalAuthorityProbe({
 });
 var authorityGate = createAuthorityGate(authorityRuntime, {
   probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
-  refreshRuntimeBinding: rebindSessionRuntime
+  refreshRuntimeBinding: rebindSessionRuntime,
+  onRunnerReleased: async (runner) => {
+    if (runner.platform !== "ios")
+      return;
+    const deviceId = typeof runner.deviceId === "string" ? runner.deviceId : void 0;
+    await stopFastRunner(deviceId);
+    resetRunnerRebuildBudgetForCurrentPlugin();
+  }
 });
 setObserveAuthorityDeps({
   resolve: () => {
@@ -79223,7 +79367,20 @@ async function pinSessionDevClient(status, options) {
         exactClient = createClient(metroPort);
         setClient(exactClient);
       }
-      await exactClient.autoConnect(metroPort, { platform, bundleId: appId });
+      const listed = await exactClient.listTargets(metroPort);
+      if (listed.port !== metroPort) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port");
+      }
+      const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, { platform, bundleId: appId }));
+      const exactCandidates = await filterTargetsForExactDevice({ platform, deviceId, targets: sessionCandidates }, { execute: execFileP });
+      if (exactCandidates.length !== 1) {
+        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+      }
+      await exactClient.autoConnect(metroPort, {
+        platform,
+        bundleId: appId,
+        targetId: exactCandidates[0].id
+      });
       const target = exactClient.connectedTarget;
       if (!target || exactClient.metroPort !== metroPort || !targetMatchesSession(target, { platform, bundleId: appId })) {
         throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");

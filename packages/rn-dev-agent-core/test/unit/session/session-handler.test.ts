@@ -1392,18 +1392,23 @@ test('session stop_metro is idempotent when managed Metro is already absent', as
     bindings: { metroPort: 8341, metro: null, packageIntegration: { version: 1 } },
     claims: [],
   };
-  const handler = createSessionHandler({
-    status: () => ({ available: true, ...status }),
-    requireOperational: () => ({
-      registry: {
-        getSessionStatus: () => status,
-        releaseSession: () => {
-          released = true;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => {
+            released = true;
+          },
         },
-      },
-      session: { sessionId: 'session-a', claimEpoch: 1 },
-    }),
-  } as never);
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      probeListener: () => ({ status: 'absent' }),
+    },
+  );
 
   const result = await handler({ action: 'stop_metro' });
   const envelope = JSON.parse(result.content[0]!.text);
@@ -1412,6 +1417,44 @@ test('session stop_metro is idempotent when managed Metro is already absent', as
   assert.equal(envelope.data.stopped, false);
   assert.equal(envelope.data.alreadyStopped, true);
   assert.equal(released, false);
+});
+
+test('session stop_metro reports typed pending cleanup while an orphan listener remains', async () => {
+  const status = {
+    sessionId: 'session-a',
+    state: 'device_bound',
+    source: { kind: 'git' },
+    bindings: { metroPort: 8341, metro: null, metroCleanup: null },
+    claims: [],
+  };
+  let listening = true;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      probeListener: () => (listening ? { status: 'listening', pid: 4321 } : { status: 'absent' }),
+    },
+  );
+
+  const pending = await handler({ action: 'stop_metro' });
+  const pendingEnvelope = JSON.parse(pending.content[0]!.text);
+  assert.equal(pending.isError, true);
+  assert.equal(pendingEnvelope.code, 'METRO_CLEANUP_PENDING');
+  assert.match(pendingEnvelope.error, /port 8341/);
+  assert.match(pendingEnvelope.error, /retry rn_session stop_metro/);
+
+  listening = false;
+  const stopped = await handler({ action: 'stop_metro' });
+  const stoppedEnvelope = JSON.parse(stopped.content[0]!.text);
+  assert.equal(stopped.isError, undefined);
+  assert.equal(stoppedEnvelope.data.alreadyStopped, true);
 });
 
 test('session stop_metro releases an absent external Metro without signaling it', async () => {

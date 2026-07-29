@@ -119,6 +119,7 @@ export interface StatusResult {
     hasRedBox: boolean;
     isPaused: boolean;
     errorCount: number;
+    bootErrorCount?: number;
     /** M10 / Phase 110: RN architecture — 'new' (Fabric), 'old' (classic bridge), 'unknown' (probe failed or non-RN). Optional for older callers. */
     architecture?: 'new' | 'old' | 'unknown';
   };
@@ -231,6 +232,7 @@ export type ToolErrorCode =
   | 'METRO_PORT_CLAIM_CONFLICT'
   | 'PORT_OCCUPIED_UNOWNED'
   | 'METRO_AUTHORITY_MISMATCH'
+  | 'METRO_CLEANUP_PENDING'
   | 'METRO_ORIGIN_MISMATCH'
   | 'METRO_INSTANCE_CHANGED'
   | 'DEVICE_CLAIM_CONFLICT'

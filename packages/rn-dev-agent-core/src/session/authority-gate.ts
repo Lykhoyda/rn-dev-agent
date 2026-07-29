@@ -31,6 +31,7 @@ interface AuthorityGateRuntime {
 interface AuthorityGateDependencies {
   probe(input: AuthorityProbeInput): Promise<AuthorityObservation>;
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
+  onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
@@ -1153,6 +1154,7 @@ export function createAuthorityGate(
                     },
                   ],
                 });
+                await dependencies.onRunnerReleased?.(runner);
                 const parkedStatus = runtime.status();
                 if (!parkedStatus.available) {
                   throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);
@@ -1175,6 +1177,9 @@ export function createAuthorityGate(
               bindings: { runner: null },
               releaseResources: [containedRunner.claim],
             });
+            await dependencies.onRunnerReleased?.(
+              status.bindings.runner as Record<string, unknown>,
+            );
             const containedStatus = runtime.status();
             if (!containedStatus.available) {
               throw new SessionAuthorityError(containedStatus.code, containedStatus.reason);

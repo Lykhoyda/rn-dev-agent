@@ -73,7 +73,7 @@ import { createRecordTestStartHandler, createRecordTestStopHandler, createRecord
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
-import { clearFastRunnerAfterVerifiedStop, probeFastRunnerAuthority, stopFastRunner, } from './runners/rn-fast-runner-client.js';
+import { clearFastRunnerAfterVerifiedStop, probeFastRunnerAuthority, resetRunnerRebuildBudgetForCurrentPlugin, stopFastRunner, } from './runners/rn-fast-runner-client.js';
 import { androidHealthMatchesAuthority, probeAndroidRunnerHealthInfo, } from './runners/rn-android-runner-client.js';
 import { captureInstalledArtifact, captureInstallGeneration, verifyInstalledArtifact, } from './session/install-authority.js';
 import { readProcessBirth } from './session/process-birth.js';
@@ -113,7 +113,7 @@ import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import { boundConnectConflict, buildBundleAuthorityBinding, pinExactDevClient, } from './session/dev-client-authority.js';
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
-import { proveTargetDeviceAssociation } from './session/target-device-authority.js';
+import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './session/target-device-authority.js';
 import { strictProofSourceIdentity } from './session/source-identity.js';
 import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
 import { stopBoundRunner } from './session/process-cleanup.js';
@@ -375,6 +375,13 @@ const localAuthorityProbe = createLocalAuthorityProbe({
 const authorityGate = createAuthorityGate(authorityRuntime, {
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
     refreshRuntimeBinding: rebindSessionRuntime,
+    onRunnerReleased: async (runner) => {
+        if (runner.platform !== 'ios')
+            return;
+        const deviceId = typeof runner.deviceId === 'string' ? runner.deviceId : undefined;
+        await stopFastRunner(deviceId);
+        resetRunnerRebuildBudgetForCurrentPlugin();
+    },
 });
 setObserveAuthorityDeps({
     resolve: () => {
@@ -623,7 +630,20 @@ async function pinSessionDevClient(status, options) {
                 exactClient = createClient(metroPort);
                 setClient(exactClient);
             }
-            await exactClient.autoConnect(metroPort, { platform, bundleId: appId });
+            const listed = await exactClient.listTargets(metroPort);
+            if (listed.port !== metroPort) {
+                throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port');
+            }
+            const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, { platform, bundleId: appId }));
+            const exactCandidates = await filterTargetsForExactDevice({ platform, deviceId, targets: sessionCandidates }, { execute: execFileP });
+            if (exactCandidates.length !== 1) {
+                throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+            }
+            await exactClient.autoConnect(metroPort, {
+                platform,
+                bundleId: appId,
+                targetId: exactCandidates[0].id,
+            });
             const target = exactClient.connectedTarget;
             if (!target ||
                 exactClient.metroPort !== metroPort ||

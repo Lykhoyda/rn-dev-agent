@@ -210,6 +210,8 @@ interface DeviceSnapshotDependencies {
   ) => Promise<void> | void;
   unbindRunner?: (beforeRelease?: (platform: 'ios' | 'android') => void) => Promise<void> | void;
   resetIosRunnerRebuildBudget?: () => void;
+  ensureIosRunner?: typeof ensureRunnerForCommand;
+  stopIosRunner?: typeof stopFastRunner;
 }
 
 export function createDeviceSnapshotHandler(
@@ -235,6 +237,8 @@ export function createDeviceSnapshotHandler(
         encoding: 'utf8',
       });
     });
+  const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
+  const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
   return async (args) => {
     const action = args.action ?? 'snapshot';
 
@@ -342,11 +346,12 @@ export function createDeviceSnapshotHandler(
           // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
           // GH #418: open is the only entry allowed to invalidate a stale
           // runner artifact and pay the cold rebuild (mid-flow refuses fast).
-          const ready = await ensureRunnerForCommand(deviceId, appId, {
+          const ready = await ensureIosRunner(deviceId, appId, {
             allowArtifactRebuild: true,
             attachOnly: args.attachOnly === true,
           });
           if (!ready.ok) {
+            await stopIosRunner(deviceId);
             // GH #382: a failed start may have left a pending artifact note —
             // discard it so it never leaks onto a later successful result.
             consumePendingFastRunnerArtifactNote();
@@ -394,6 +399,7 @@ export function createDeviceSnapshotHandler(
             : null;
         }
       } catch (err) {
+        if (lockPlatform === 'ios') await stopIosRunner(deviceId);
         releaseDeviceLockForSession();
         // GH #383: startAndroidRunner may have set a pending upgrade note (reap
         // on protocol mismatch) before throwing for an unrelated reason (adb
@@ -432,7 +438,7 @@ export function createDeviceSnapshotHandler(
       try {
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error) {
-        if (lockPlatform === 'ios') await stopFastRunner(deviceId);
+        if (lockPlatform === 'ios') await stopIosRunner(deviceId);
         else await stopAndroidRunner(deviceId);
         clearActiveSession();
         releaseDeviceLockForSession();
@@ -573,6 +579,7 @@ export function createDeviceSnapshotHandler(
     }
 
     if (action === 'close') {
+      const closingPlatform = getActiveSession()?.platform ?? args.platform;
       const result = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
@@ -584,11 +591,10 @@ export function createDeviceSnapshotHandler(
           }
         },
         finalizeSuccessfulClose: async () => {
-          await deps.unbindRunner?.((platform) => {
-            if (platform === 'ios') {
-              (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
-            }
-          });
+          await deps.unbindRunner?.();
+          if (closingPlatform === 'ios') {
+            (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+          }
         },
         releaseDeviceLock: releaseDeviceLockForSession,
         getDeviceId: () => getActiveSession()?.deviceId,

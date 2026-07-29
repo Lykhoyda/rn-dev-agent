@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  filterTargetsForExactDevice,
   proveTargetDeviceAssociation,
   proveTargetDeviceAssociations,
 } from '../../../dist/session/target-device-authority.js';
@@ -74,6 +75,59 @@ test('target association rejects an Android model belonging to another serial', 
           }
           return { stdout: args[1] === 'serial-b' ? 'Pixel 9\n' : 'Pixel 8\n' };
         },
+      },
+    ),
+    /ambiguous or foreign/,
+  );
+});
+
+test('exact iOS target filtering excludes foreign candidates before selection', async () => {
+  const targets = [
+    { id: 'foreign', deviceName: 'iPhone Foreign' },
+    { id: 'exact', deviceName: 'iPhone Exact' },
+  ];
+  const filtered = await filterTargetsForExactDevice(
+    {
+      platform: 'ios',
+      deviceId: 'device-exact',
+      targets,
+    },
+    {
+      execute: async () => ({
+        stdout: JSON.stringify({
+          devices: {
+            runtime: [
+              { udid: 'device-foreign', name: 'iPhone Foreign', state: 'Booted' },
+              { udid: 'device-exact', name: 'iPhone Exact', state: 'Booted' },
+            ],
+          },
+        }),
+      }),
+    },
+  );
+
+  assert.deepEqual(filtered, [targets[1]]);
+});
+
+test('exact target filtering refuses duplicate native names instead of guessing', async () => {
+  await assert.rejects(
+    filterTargetsForExactDevice(
+      {
+        platform: 'ios',
+        deviceId: 'device-exact',
+        targets: [{ id: 'candidate', deviceName: 'Duplicated iPhone' }],
+      },
+      {
+        execute: async () => ({
+          stdout: JSON.stringify({
+            devices: {
+              runtime: [
+                { udid: 'device-exact', name: 'Duplicated iPhone', state: 'Booted' },
+                { udid: 'device-foreign', name: 'Duplicated iPhone', state: 'Booted' },
+              ],
+            },
+          }),
+        }),
       },
     ),
     /ambiguous or foreign/,

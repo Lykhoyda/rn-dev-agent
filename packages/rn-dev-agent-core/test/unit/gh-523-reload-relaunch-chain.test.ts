@@ -53,6 +53,8 @@ const captured = (platform = 'ios') => ({
   proxyWasActive: false,
 });
 
+const resolveExactTargetId = async () => 'target';
+
 test('force reconnect success does not invoke native recovery', async () => {
   const h = harness([() => mockClient()]);
   const calls = [];
@@ -66,6 +68,7 @@ test('force reconnect success does not invoke native recovery', async () => {
         calls.push([command, ...args]);
         return { stdout: '', stderr: '' };
       },
+      resolveExactTargetId,
     },
     {
       platform: 'ios',
@@ -97,6 +100,7 @@ test('iOS recovery uses only the exact authority target before reconnecting', as
         return { stdout: '', stderr: '' };
       },
       sleep: async () => {},
+      resolveExactTargetId,
     },
     {
       platform: 'ios',
@@ -131,8 +135,9 @@ test('Android recovery uses adb -s with the exact authority target', async () =>
         return { stdout: '', stderr: '' };
       },
       sleep: async () => {},
+      resolveExactTargetId,
     },
-    { deviceId: 'emulator-5556', appId: 'com.example.app' },
+    { platform: 'android', deviceId: 'emulator-5556', appId: 'com.example.app' },
   );
 
   assert.equal(result.ok, true);
@@ -167,6 +172,7 @@ test('Android recovery keeps the authority-bound platform after the client targe
         return { stdout: '', stderr: '' };
       },
       sleep: async () => {},
+      resolveExactTargetId,
     },
     { platform: 'android', deviceId: 'emulator-5556', appId: 'com.example.app' },
   );
@@ -214,6 +220,7 @@ test('reload recovery failure is a typed error rather than reconnected:false suc
       return { stdout: '', stderr: '' };
     },
     sleep: async () => {},
+    resolveExactTargetId,
   });
 
   const result = await handler({

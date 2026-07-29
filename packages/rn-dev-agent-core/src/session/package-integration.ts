@@ -18,10 +18,12 @@ import {
   type BoundDirectory,
   type BoundOperationDependencies,
 } from './bound-directory.js';
+import { createBootErrorCaptureModule } from './metro-authority.js';
 
 const ADAPTER = '.rn-agent/integration/rn-session-adapter.cjs';
 const METRO_ADAPTER = '.rn-agent/integration/rn-session-metro.cjs';
 const AUTHORITY_MODULE = '.rn-agent/integration/authority-marker.js';
+const BOOT_ERROR_MODULE = '.rn-agent/integration/boot-error-capture.js';
 const METRO_RUNTIME_POLICY = '.rn-agent/integration/metro-runtime-policy.json';
 const METRO_RUNTIME_LOADS = '.rn-agent/integration/metro-runtime-loads.jsonl';
 const METRO_START = '// rn-dev-agent session integration: begin';
@@ -2794,10 +2796,15 @@ function withPolicyCallbacks(config, names, getConfig) {
   }
   return callbacks;
 }
-function withAuthorityPolyfill(callback, marker) {
+function withAuthorityPolyfills(callback, marker, bootErrorCapture) {
   const prepend = (value) => [
     marker,
-    ...(Array.isArray(value) ? value.filter((candidate) => candidate !== marker) : []),
+    ...(Array.isArray(value)
+      ? value.filter(
+          (candidate) => candidate !== marker && candidate !== bootErrorCapture,
+        )
+      : []),
+    bootErrorCapture,
   ];
   return function (...args) {
     const result = typeof callback === 'function' ? callback.apply(this, args) : [];
@@ -2815,6 +2822,7 @@ module.exports = function withRnDevAgentAuthority(config) {
   const original = serializer.getModulesRunBeforeMainModule;
   const originalPolyfills = serializer.getPolyfills;
   const marker = path.join(process.cwd(), ${JSON.stringify(AUTHORITY_MODULE)});
+  const bootErrorCapture = path.join(process.cwd(), ${JSON.stringify(BOOT_ERROR_MODULE)});
   let finalConfig;
   finalConfig = {
     ...current,
@@ -2850,12 +2858,14 @@ module.exports = function withRnDevAgentAuthority(config) {
         () => finalConfig,
       ),
       getPolyfills: withPolicyRefresh(
-        withAuthorityPolyfill(originalPolyfills, marker),
+        withAuthorityPolyfills(originalPolyfills, marker, bootErrorCapture),
         () => finalConfig,
         true,
       ),
       getModulesRunBeforeMainModule(entryFile) {
-        const result = [marker, ...(typeof original === 'function' ? original(entryFile) : [])];
+        const result = (typeof original === 'function' ? original(entryFile) : []).filter(
+          (candidate) => candidate !== marker && candidate !== bootErrorCapture,
+        );
         runtimePolicy(finalConfig, result);
         return result;
       },
@@ -3480,6 +3490,7 @@ export function applyPackageIntegration(
     'rn-session-adapter.cjs',
     'rn-session-metro.cjs',
     'authority-marker.js',
+    'boot-error-capture.js',
     'metro-runtime-policy.json',
     basename(METRO_RUNTIME_LOADS),
   ] as const;
@@ -3532,6 +3543,11 @@ export function applyPackageIntegration(
         contents: Buffer.from(
           "globalThis.__RN_DEV_AGENT_AUTHORITY__={status:'unavailable',authorityScope:'initial-bundle',sourceFidelity:'not-proven'};\n",
         ),
+        mode: 0o600,
+      },
+      {
+        snapshot: generated[4]!,
+        contents: Buffer.from(createBootErrorCaptureModule()),
         mode: 0o600,
       },
     ];
@@ -3627,6 +3643,7 @@ export function restorePackageIntegrationFiles(
     'rn-session-adapter.cjs',
     'rn-session-metro.cjs',
     'authority-marker.js',
+    'boot-error-capture.js',
     'metro-runtime-policy.json',
     basename(METRO_RUNTIME_LOADS),
   ] as const;

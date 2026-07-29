@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
-import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, stopManagedMetro, stopManagedMetroWithEvidence, } from '../session/managed-metro.js';
+import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, probeManagedMetroListener, stopManagedMetro, stopManagedMetroWithEvidence, } from '../session/managed-metro.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
@@ -320,6 +320,20 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const metro = (status.bindings.metroCleanup ?? status.bindings.metro);
                 if (!metro) {
+                    const metroPort = Number(status.bindings.metroPort);
+                    if (Number.isSafeInteger(metroPort)) {
+                        let listener = { status: 'unknown' };
+                        try {
+                            listener = (dependencies.probeListener ?? probeManagedMetroListener)(metroPort);
+                        }
+                        catch { }
+                        if (listener.status !== 'absent') {
+                            const listenerIdentity = listener.status === 'listening' && typeof listener.pid === 'number'
+                                ? ` by listener pid ${listener.pid}`
+                                : '';
+                            throw new SessionAuthorityError('METRO_CLEANUP_PENDING', `allocated Metro port ${metroPort} is still ${listener.status}${listenerIdentity} after cleanup authority was invalidated; do not signal an unbound process, wait for managed launcher cleanup, then retry rn_session stop_metro`);
+                        }
+                    }
                     return okResult({
                         stopped: false,
                         alreadyStopped: true,

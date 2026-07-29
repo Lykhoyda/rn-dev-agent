@@ -4,6 +4,8 @@ import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 import { autoDismissDevMenuMeta } from './expo-dev-menu.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
+import { targetMatchesSession } from './status.js';
+import { filterTargetsForExactDevice } from '../session/target-device-authority.js';
 
 const defaultExecFile = promisify(execFileCb);
 
@@ -23,6 +25,18 @@ interface CapturedClientState {
   bundleId: string | undefined;
   proxyWasActive: boolean;
 }
+
+interface ReloadAuthorityTarget {
+  platform: 'ios' | 'android';
+  deviceId: string;
+  appId: string;
+}
+
+type ResolveExactTargetId = (
+  client: CDPClient,
+  captured: CapturedClientState,
+  authorityTarget: ReloadAuthorityTarget,
+) => Promise<string>;
 
 export function captureClientState(client: CDPClient): CapturedClientState {
   const target = client.connectedTarget;
@@ -67,6 +81,8 @@ export async function forceReconnect(
   setClient: (c: CDPClient) => void,
   createClient: (port: number) => CDPClient,
   captured: CapturedClientState,
+  authorityTarget?: ReloadAuthorityTarget,
+  resolveExactTargetId?: ResolveExactTargetId,
 ): Promise<ForceReconnectResult> {
   const swallow = (): undefined => undefined;
 
@@ -76,12 +92,14 @@ export async function forceReconnect(
   const newClient = createClient(captured.port);
   setClient(newClient);
 
-  const filters = {
-    platform: captured.platform,
-    bundleId: captured.bundleId,
-  };
-
   try {
+    const filters = {
+      platform: authorityTarget?.platform ?? captured.platform,
+      bundleId: authorityTarget?.appId ?? captured.bundleId,
+      ...(authorityTarget && resolveExactTargetId
+        ? { targetId: await resolveExactTargetId(newClient, captured, authorityTarget) }
+        : {}),
+    };
     await raceWithTimeout(
       newClient.autoConnect(captured.port, filters),
       FORCE_FALLBACK_TIMEOUT_MS,
@@ -109,6 +127,46 @@ export interface ReloadHandlerDeps {
     opts?: { timeout?: number },
   ) => Promise<{ stdout: string; stderr: string }>;
   sleep?: (ms: number) => Promise<void>;
+  resolveExactTargetId?: ResolveExactTargetId;
+}
+
+async function resolveExactReloadTargetId(
+  client: CDPClient,
+  captured: CapturedClientState,
+  authorityTarget: ReloadAuthorityTarget,
+  execute: NonNullable<ReloadHandlerDeps['execFile']>,
+): Promise<string> {
+  const listed = await client.listTargets(captured.port);
+  if (listed.port !== captured.port) {
+    throw new Error(
+      'CDP_TARGET_AUTHORITY_MISMATCH: reload target discovery escaped the allocated Metro port',
+    );
+  }
+  const sessionCandidates = listed.targets.filter((candidate) =>
+    targetMatchesSession(candidate, {
+      platform: authorityTarget.platform,
+      bundleId: authorityTarget.appId,
+    }),
+  );
+  const exactCandidates = await filterTargetsForExactDevice(
+    {
+      platform: authorityTarget.platform,
+      deviceId: authorityTarget.deviceId,
+      targets: sessionCandidates,
+    },
+    {
+      execute: async (file, args) => {
+        const result = await execute(file, args, { timeout: 5_000 });
+        return { stdout: result.stdout };
+      },
+    },
+  );
+  if (exactCandidates.length !== 1) {
+    throw new Error(
+      `CDP_TARGET_AUTHORITY_MISMATCH: expected one reload target on the exact device, found ${exactCandidates.length}`,
+    );
+  }
+  return exactCandidates[0]!.id;
 }
 
 export interface RelaunchRecoveryResult {
@@ -144,8 +202,18 @@ export async function recoverAfterFailedReconnect(
 ): Promise<RelaunchRecoveryResult> {
   const execFile = deps.execFile ?? defaultExecFile;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const resolveExactTargetId =
+    deps.resolveExactTargetId ??
+    ((client, state, target) => resolveExactReloadTargetId(client, state, target, execFile));
 
-  const first = await forceReconnect(getClient(), setClient, createClient, captured);
+  const first = await forceReconnect(
+    getClient(),
+    setClient,
+    createClient,
+    captured,
+    authorityTarget,
+    authorityTarget ? resolveExactTargetId : undefined,
+  );
   if (first.ok) {
     return {
       ok: true,
@@ -220,7 +288,14 @@ export async function recoverAfterFailedReconnect(
   // Give Hermes time to re-register on Metro (same budget as cdp_restart).
   await sleep(3000);
 
-  const second = await forceReconnect(getClient(), setClient, createClient, captured);
+  const second = await forceReconnect(
+    getClient(),
+    setClient,
+    createClient,
+    captured,
+    authorityTarget,
+    resolveExactTargetId,
+  );
   if (second.ok) {
     return {
       ok: true,

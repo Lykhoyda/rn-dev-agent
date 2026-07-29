@@ -98,14 +98,15 @@ export function computeMetroMismatch(args) {
 }
 const STATUS_PROBE_EXPRESSION = `
 (function() {
-  var result = { appInfo: null, errorCount: 0, fiberTree: false, hasRedBox: false, helpersLoaded: false };
+  var startupErrors = Array.isArray(globalThis.__RN_DEV_AGENT_BOOT_ERRORS__) ? globalThis.__RN_DEV_AGENT_BOOT_ERRORS__ : [];
+  var result = { appInfo: null, errorCount: startupErrors.length, bootErrorCount: startupErrors.length, fiberTree: false, hasRedBox: startupErrors.length > 0, helpersLoaded: false };
   var agent = globalThis.__RN_AGENT;
   if (!agent) return JSON.stringify(result);
   result.helpersLoaded = true;
   try { result.appInfo = JSON.parse(agent.getAppInfo()); } catch(e) {}
-  try { result.errorCount = JSON.parse(agent.getErrors()).length; } catch(e) {}
+  try { result.errorCount += JSON.parse(agent.getErrors()).length; } catch(e) {}
   try { result.fiberTree = agent.isReady(); } catch(e) {}
-  try { result.hasRedBox = JSON.parse(agent.getTree({maxDepth:1})).warning === 'APP_HAS_REDBOX'; } catch(e) {}
+  try { result.hasRedBox = result.hasRedBox || JSON.parse(agent.getTree({maxDepth:1})).warning === 'APP_HAS_REDBOX'; } catch(e) {}
   return JSON.stringify(result);
 })()
 `;
@@ -114,21 +115,21 @@ async function buildStatusResult(client) {
     let errorCount = 0;
     let fiberTree = false;
     let hasRedBox = false;
-    if (client.helpersInjected) {
-        const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
-        if (probeResult.value && typeof probeResult.value === 'string') {
-            try {
-                const probe = JSON.parse(probeResult.value);
-                if (probe.helpersLoaded) {
-                    appInfo = probe.appInfo;
-                    errorCount = probe.errorCount;
-                    fiberTree = probe.fiberTree;
-                    hasRedBox = probe.hasRedBox;
-                }
+    let bootErrorCount = 0;
+    const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
+    if (probeResult.value && typeof probeResult.value === 'string') {
+        try {
+            const probe = JSON.parse(probeResult.value);
+            if (probe.helpersLoaded || probe.bootErrorCount > 0) {
+                appInfo = probe.appInfo;
+                errorCount = probe.errorCount;
+                bootErrorCount = probe.bootErrorCount;
+                fiberTree = probe.fiberTree;
+                hasRedBox = probe.hasRedBox || probe.bootErrorCount > 0;
             }
-            catch {
-                /* probe failed */
-            }
+        }
+        catch {
+            /* probe failed */
         }
     }
     const metroEvents = client.metroEventsClient;
@@ -194,6 +195,7 @@ async function buildStatusResult(client) {
             hasRedBox,
             isPaused: client.isPaused,
             errorCount,
+            bootErrorCount,
             architecture: narrowArchitecture(appInfo?.architecture),
         },
         capabilities: {
@@ -321,8 +323,9 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                                         : null;
                                     status.app.dimensions =
                                         retryProbe.appInfo?.dimensions ?? null;
-                                    status.app.hasRedBox = retryProbe.hasRedBox;
+                                    status.app.hasRedBox = retryProbe.hasRedBox || retryProbe.bootErrorCount > 0;
                                     status.app.errorCount = retryProbe.errorCount;
+                                    status.app.bootErrorCount = retryProbe.bootErrorCount;
                                     status.app.isPaused = client.isPaused;
                                     status.app.architecture = narrowArchitecture(retryProbe.appInfo?.architecture);
                                     status.cdp.device = client.connectedTarget?.title ?? null;
@@ -388,6 +391,9 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
             const reloadCount = getSessionReloadCount();
             if (reloadCount >= 5) {
                 return warnResult(status, `${reloadCount} full reloads in this session. NativeWind stylesheet may be corrupted — if the screen appears blank, restart Metro and relaunch the app.`);
+            }
+            if ((status.app.bootErrorCount ?? 0) > 0) {
+                return warnResult(status, 'Fatal startup JS errors were captured before the helper boundary. Call cdp_error_log for bounded product error evidence before retrying the launch.');
             }
             // B114 (D642): suspicion hint. When we're CDP-connected but the app didn't
             // inject helpers and has no JS errors to show, the visible app state

@@ -324,6 +324,7 @@ test('Maestro parking transactionally releases runner authority before dispatch'
 
 test('nested action replay can park runner authority without stranding a stale R binding', async () => {
   const { runtime, registry, status, calls } = fixture();
+  const released: Array<Record<string, unknown>> = [];
   status.bindings.runner = {
     platform: 'ios',
     deviceId: 'device',
@@ -341,6 +342,9 @@ test('nested action replay can park runner authority without stranding a stale R
       calls.push(`${phase}:${axis}`);
       return { axis, identity: `${axis}-identity` };
     },
+    onRunnerReleased: async (runner) => {
+      released.push(runner);
+    },
   });
 
   const result = await gate.wrap('cdp_run_action', async (args) => {
@@ -353,6 +357,14 @@ test('nested action replay can park runner authority without stranding a stale R
   assert.equal(status.bindings.runner, null);
   assert.ok(calls.includes('release:ios:device:9100'));
   assert.equal(calls.includes('postflight:R'), false);
+  assert.deepEqual(released, [
+    {
+      platform: 'ios',
+      deviceId: 'device',
+      port: 9100,
+      instanceId: 'runner',
+    },
+  ]);
 });
 
 test('contained runner timeout atomically releases authority and preserves its typed result', async () => {

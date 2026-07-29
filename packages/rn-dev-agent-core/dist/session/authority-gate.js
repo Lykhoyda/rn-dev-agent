@@ -891,6 +891,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                     },
                                 ],
                             });
+                            await dependencies.onRunnerReleased?.(runner);
                             const parkedStatus = runtime.status();
                             if (!parkedStatus.available) {
                                 throw new SessionAuthorityError(parkedStatus.code, parkedStatus.reason);
@@ -910,6 +911,7 @@ export function createAuthorityGate(runtime, dependencies) {
                         bindings: { runner: null },
                         releaseResources: [containedRunner.claim],
                     });
+                    await dependencies.onRunnerReleased?.(status.bindings.runner);
                     const containedStatus = runtime.status();
                     if (!containedStatus.available) {
                         throw new SessionAuthorityError(containedStatus.code, containedStatus.reason);

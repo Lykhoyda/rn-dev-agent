@@ -144,6 +144,42 @@ test('forceReconnect: passes { platform, bundleId } and NO targetId to autoConne
   );
 });
 
+test('forceReconnect: authority-scoped discovery supplies only the exact-device targetId', async () => {
+  const { client: oldClient } = makeMockClient({
+    port: 8081,
+    target: { id: 'stale-target-id', platform: 'ios', description: 'com.example' },
+  });
+  const { client: newClient, calls: newCalls } = makeMockClient({
+    autoConnectImpl: async () => ({
+      connectedTarget: { id: 'exact-target', platform: 'ios', description: 'com.example' },
+    }),
+  });
+  let resolverClient;
+
+  await forceReconnect(
+    oldClient,
+    () => {},
+    () => newClient,
+    captureClientState(oldClient),
+    {
+      platform: 'ios',
+      deviceId: 'exact-device',
+      appId: 'com.example',
+    },
+    async (client) => {
+      resolverClient = client;
+      return 'exact-target';
+    },
+  );
+
+  assert.equal(resolverClient, newClient);
+  assert.deepEqual(newCalls.lastFilters, {
+    platform: 'ios',
+    bundleId: 'com.example',
+    targetId: 'exact-target',
+  });
+});
+
 test('forceReconnect: autoConnect rejects → returns ok:false with reason and orphan-replaces', async () => {
   const { client: oldClient } = makeMockClient({
     port: 8081,
