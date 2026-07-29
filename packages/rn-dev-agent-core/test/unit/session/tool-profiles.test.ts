@@ -27,6 +27,17 @@ test('native runner mutations prove app origin without requiring a live CDP bund
   assert.ok(authorityProfileFor('cdp_interact').axes.includes('B'));
 });
 
+test('native runner reads prove the app origin on the claimed device', () => {
+  for (const tool of [
+    'cross_platform_verify',
+    'device_find',
+    'device_screenshot',
+    'device_snapshot',
+  ]) {
+    assert.deepEqual(authorityProfileFor(tool).axes, ['C', 'S', 'I', 'M', 'A', 'D', 'R']);
+  }
+});
+
 test('device_find click and lifecycle tools use mutation-aware origin authority', () => {
   assert.deepEqual(authorityProfileFor('device_find', { action: 'click' }).axes, [
     'C',

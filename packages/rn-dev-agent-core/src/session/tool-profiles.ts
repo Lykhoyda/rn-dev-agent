@@ -133,7 +133,7 @@ add(sourceState, {
 });
 add(nativeRead, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'D', 'R'],
+  axes: ['C', 'S', 'I', 'M', 'A', 'D', 'R'],
   mutation: false,
   liveBundleProbe: false,
 });
