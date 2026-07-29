@@ -17820,7 +17820,7 @@ function isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus)
     return false;
   }
 }
-function containedRunnerClaim(result, runner) {
+function containedRunnerAuthority(result, runner) {
   if (!runner)
     return null;
   try {
@@ -17837,7 +17837,10 @@ function containedRunnerClaim(result, runner) {
     if (platform !== "ios" && platform !== "android" || typeof deviceId !== "string" || typeof port !== "number" || !Number.isSafeInteger(port)) {
       return null;
     }
-    return { type: "runner", key: `${platform}:${deviceId}:${String(port)}` };
+    return {
+      claim: { type: "runner", key: `${platform}:${deviceId}:${String(port)}` },
+      runnerAbsent: recovery.reapDisposition === "reaped" || recovery.reapDisposition === "already-absent"
+    };
   } catch {
     return null;
   }
@@ -18289,7 +18292,6 @@ function createAuthorityGate(runtime, dependencies) {
         let optionalBundleClaimed = false;
         let optionalBundleRecoveryFailed = false;
         let managedRunnerParked = false;
-        let containedRunnerReleased = false;
         if (profile.optionalAxes?.includes("B")) {
           Object.defineProperty(args, optionalBundleAdmission, {
             configurable: true,
@@ -18510,20 +18512,19 @@ function createAuthorityGate(runtime, dependencies) {
         }
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
-        const containedClaim = containedRunnerClaim(result, status.bindings.runner);
-        if (containedClaim) {
+        const containedRunner = containedRunnerAuthority(result, status.bindings.runner);
+        if (containedRunner?.runnerAbsent) {
           registry2.verifyOperation(operation);
           operation = registry2.replaceBindingsDuringOperation(operation, {
             state: status.bindings.bundle ? "ready" : "device_bound",
             bindings: { runner: null },
-            releaseResources: [containedClaim]
+            releaseResources: [containedRunner.claim]
           });
           const containedStatus = runtime.status();
           if (!containedStatus.available) {
             throw new SessionAuthorityError(containedStatus.code, containedStatus.reason);
           }
           status = containedStatus;
-          containedRunnerReleased = true;
         }
         publishedProofFinalize = tool === "proof_capture" && args.action === "finalize" && resultIsCanonicalSuccess(result);
         const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
@@ -18583,7 +18584,7 @@ function createAuthorityGate(runtime, dependencies) {
         const postflightAxes = [
           ...profile.postflightAxes ?? profile.axes,
           ...optionalPostflightAxes
-        ].filter((axis) => !(containedRunnerReleased && axis === "R"));
+        ].filter((axis) => !(containedRunner && axis === "R"));
         const after = await Promise.all(postflightAxes.map((axis) => dependencies.probe({
           axis,
           phase: "postflight",
@@ -18599,7 +18600,7 @@ function createAuthorityGate(runtime, dependencies) {
           ...effectiveProfile,
           axes: effectiveProfile.axes.filter((axis) => axis !== "B")
         } : effectiveProfile;
-        const runnerAwareReceiptProfile = managedRunnerParked || containedRunnerReleased ? {
+        const runnerAwareReceiptProfile = managedRunnerParked || containedRunner !== null ? {
           ...receiptBaseProfile,
           axes: receiptBaseProfile.axes.filter((axis) => axis !== "R")
         } : receiptBaseProfile;

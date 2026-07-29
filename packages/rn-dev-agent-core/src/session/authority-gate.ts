@@ -180,10 +180,13 @@ function isAuthenticatedIdempotentRunnerClose(
   }
 }
 
-function containedRunnerClaim(
+function containedRunnerAuthority(
   result: unknown,
   runner: Record<string, unknown> | null | undefined,
-): { type: 'runner'; key: string } | null {
+): {
+  claim: { type: 'runner'; key: string };
+  runnerAbsent: boolean;
+} | null {
   if (!runner) return null;
   try {
     const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
@@ -233,7 +236,11 @@ function containedRunnerClaim(
     ) {
       return null;
     }
-    return { type: 'runner', key: `${platform}:${deviceId}:${String(port)}` };
+    return {
+      claim: { type: 'runner', key: `${platform}:${deviceId}:${String(port)}` },
+      runnerAbsent:
+        recovery.reapDisposition === 'reaped' || recovery.reapDisposition === 'already-absent',
+    };
   } catch {
     return null;
   }
@@ -911,7 +918,6 @@ export function createAuthorityGate(
           let optionalBundleClaimed = false;
           let optionalBundleRecoveryFailed = false;
           let managedRunnerParked = false;
-          let containedRunnerReleased = false;
           if (profile.optionalAxes?.includes('B')) {
             Object.defineProperty(args, optionalBundleAdmission, {
               configurable: true,
@@ -1158,23 +1164,22 @@ export function createAuthorityGate(
           }
           registry.verifyOperation(operation);
           const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
-          const containedClaim = containedRunnerClaim(
+          const containedRunner = containedRunnerAuthority(
             result,
             status.bindings.runner as Record<string, unknown> | null | undefined,
           );
-          if (containedClaim) {
+          if (containedRunner?.runnerAbsent) {
             registry.verifyOperation(operation);
             operation = registry.replaceBindingsDuringOperation(operation, {
               state: status.bindings.bundle ? 'ready' : 'device_bound',
               bindings: { runner: null },
-              releaseResources: [containedClaim],
+              releaseResources: [containedRunner.claim],
             });
             const containedStatus = runtime.status();
             if (!containedStatus.available) {
               throw new SessionAuthorityError(containedStatus.code, containedStatus.reason);
             }
             status = containedStatus;
-            containedRunnerReleased = true;
           }
           publishedProofFinalize =
             tool === 'proof_capture' &&
@@ -1261,7 +1266,7 @@ export function createAuthorityGate(
           const postflightAxes = [
             ...(profile.postflightAxes ?? profile.axes),
             ...optionalPostflightAxes,
-          ].filter((axis) => !(containedRunnerReleased && axis === 'R'));
+          ].filter((axis) => !(containedRunner && axis === 'R'));
           const after = await Promise.all(
             postflightAxes.map((axis) =>
               dependencies.probe({
@@ -1290,7 +1295,7 @@ export function createAuthorityGate(
               }
             : effectiveProfile;
           const runnerAwareReceiptProfile =
-            managedRunnerParked || containedRunnerReleased
+            managedRunnerParked || containedRunner !== null
               ? {
                   ...receiptBaseProfile,
                   axes: receiptBaseProfile.axes.filter((axis) => axis !== 'R'),

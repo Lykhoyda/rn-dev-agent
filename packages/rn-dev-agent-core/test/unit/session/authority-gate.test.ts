@@ -367,6 +367,48 @@ test('contained runner timeout atomically releases authority and preserves its t
   assert.equal(calls.includes('postflight:R'), false);
 });
 
+test('contained timeout retains the cleanup fence for a preserved replacement runner', async () => {
+  const { runtime, registry, status, calls } = fixture();
+  const runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    pid: 4321,
+    instanceId: 'runner',
+  };
+  status.bindings.runner = runner;
+  registry.replaceBindingsDuringOperation = () => {
+    throw new Error('replacement runner must retain the cleanup fence');
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      if (axis === 'R' && phase === 'postflight') {
+        throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'runner was replaced');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('device_press', async () =>
+    failResult('runner timed out', 'RUNNER_TIMEOUT', {
+      runnerTimeoutRecovery: {
+        poisoned: true,
+        reapDisposition: 'replacement-preserved',
+        runner: {
+          before: { pid: 4321, port: 9100, deviceId: 'device' },
+          stateCleared: false,
+        },
+      },
+    }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'RUNNER_TIMEOUT');
+  assert.equal(status.bindings.runner, runner);
+  assert.equal(calls.includes('postflight:R'), false);
+});
+
 test('failed managed origin proof invalidates prior bundle authority', async () => {
   const { runtime, registry, status } = fixture();
   registry.replaceBindingsDuringOperation = (operation, input) => {
