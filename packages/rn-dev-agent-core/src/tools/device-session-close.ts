@@ -45,6 +45,7 @@ export function isBenignSessionGoneError(result: ToolResult): boolean {
 
 export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<ToolResult> {
   if (!deps.hasActiveSession()) {
+    await deps.finalizeSuccessfulClose();
     return okResult({ closed: true, message: 'No active session to close' });
   }
 

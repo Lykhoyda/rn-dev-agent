@@ -573,7 +573,7 @@ export function createDeviceSnapshotHandler(
     }
 
     if (action === 'close') {
-      const closingPlatform = getActiveSession()?.platform;
+      const closingPlatform = getActiveSession()?.platform ?? args.platform;
       const result = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),

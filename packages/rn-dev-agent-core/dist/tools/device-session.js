@@ -434,7 +434,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
             return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
         }
         if (action === 'close') {
-            const closingPlatform = getActiveSession()?.platform;
+            const closingPlatform = getActiveSession()?.platform ?? args.platform;
             const result = await closeDeviceSession({
                 hasActiveSession: () => getActiveSession() !== null,
                 closeUnderlyingSession: async () => okResult({ closed: true }),

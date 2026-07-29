@@ -30,6 +30,7 @@ export function isBenignSessionGoneError(result) {
 }
 export async function closeDeviceSession(deps) {
     if (!deps.hasActiveSession()) {
+        await deps.finalizeSuccessfulClose();
         return okResult({ closed: true, message: 'No active session to close' });
     }
     // GH #383: read the closing session's deviceId before clearActiveSession()

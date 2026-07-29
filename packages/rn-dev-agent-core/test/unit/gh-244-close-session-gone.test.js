@@ -49,12 +49,13 @@ function makeDeps(overrides = {}) {
   return { deps, calls };
 }
 
-test('#244 no in-memory session → ok no-op; underlying close NOT called', async () => {
+test('#244 no in-memory session → finalizes authority without underlying close', async () => {
   const { deps, calls } = makeDeps({ hasActiveSession: () => false });
   const r = await closeDeviceSession(deps);
   assert.equal(r.isError, undefined);
   assert.match(r.content[0].text, /No active session to close/);
   assert.equal(calls.close, 0);
+  assert.equal(calls.finalize, 1);
 });
 
 test('#244 close succeeds → ok; cleanup all called once', async () => {

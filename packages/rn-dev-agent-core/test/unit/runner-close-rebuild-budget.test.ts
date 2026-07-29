@@ -31,3 +31,23 @@ test('supported iOS runner close restores the cold-rebuild recovery credit', asy
   assert.equal(resets, 1);
   assert.equal(unbinds, 1);
 });
+
+test('idempotent iOS close finalizes authority without local session state', async () => {
+  let resets = 0;
+  let unbinds = 0;
+  const handler = createDeviceSnapshotHandler({
+    resetIosRunnerRebuildBudget: () => {
+      resets += 1;
+    },
+    unbindRunner: async () => {
+      unbinds += 1;
+    },
+  });
+
+  const result = await handler({ action: 'close', platform: 'ios' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(resets, 1);
+  assert.equal(unbinds, 1);
+});

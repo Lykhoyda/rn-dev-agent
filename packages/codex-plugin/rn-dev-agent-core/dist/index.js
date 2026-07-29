@@ -31009,6 +31009,7 @@ function isBenignSessionGoneError(result) {
 }
 async function closeDeviceSession(deps) {
   if (!deps.hasActiveSession()) {
+    await deps.finalizeSuccessfulClose();
     return okResult({ closed: true, message: "No active session to close" });
   }
   const deviceId = deps.getDeviceId?.();
@@ -31340,7 +31341,7 @@ function createDeviceSnapshotHandler(deps = {}) {
       return upgradeNote ? attachMetaNote(result2, upgradeNote) : result2;
     }
     if (action === "close") {
-      const closingPlatform = getActiveSession()?.platform;
+      const closingPlatform = getActiveSession()?.platform ?? args.platform;
       const result2 = await closeDeviceSession({
         hasActiveSession: () => getActiveSession() !== null,
         closeUnderlyingSession: async () => okResult({ closed: true }),
