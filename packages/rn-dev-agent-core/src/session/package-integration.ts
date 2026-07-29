@@ -3042,7 +3042,7 @@ function managedMetroProxyUrl(binding) {
 }
 let expoProxyUrl = null;
 if (session) {
-  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
+  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
     process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete\n');
     process.exit(2);
   }
@@ -3088,6 +3088,42 @@ if (child.error) {
   process.exit(1);
 }
 if (child.status !== 0) process.exit(child.status === null ? 1 : child.status);
+if (session && platform === 'ios' && expoProxyUrl && session.simulator === true) {
+  const installed = spawnSync('xcrun', ['simctl', 'get_app_container', session.deviceId, session.appId, 'app'], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
+    process.stderr.write('DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven\n');
+    process.exit(2);
+  }
+  process.stdout.write(
+    'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
+    ' with --initialUrl ' + expoProxyUrl + '\n'
+  );
+  const startup = spawnSync('xcrun', [
+    'simctl',
+    'launch',
+    '--terminate-running-process',
+    session.deviceId,
+    session.appId,
+    '--initialUrl',
+    expoProxyUrl,
+  ], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (startup.error || startup.status !== 0) {
+    const detail = startup.error?.message || String(startup.stderr).trim() || 'simulator launch failed';
+    process.stderr.write('DEV_CLIENT_STARTUP_UNCONFIRMED: ' + detail + '\n');
+    process.exit(2);
+  }
+  process.stdout.write(String(startup.stdout));
+}
 if (session) {
   const [major, minor] = process.versions.node.split('.').map(Number);
   const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)

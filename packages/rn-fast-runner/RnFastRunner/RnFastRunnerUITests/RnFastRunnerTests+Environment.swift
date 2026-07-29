@@ -44,6 +44,7 @@ enum RunnerEnv {
   static func claimEpoch() -> Int? { value("RN_RUNNER_CLAIM_EPOCH").flatMap(Int.init) }
   static func deviceId() -> String? { value("RN_RUNNER_DEVICE_ID") }
   static func appId() -> String? { value("RN_RUNNER_APP_ID") }
+  static func attachOnly() -> Bool { isTruthy("RN_RUNNER_ATTACH_ONLY") }
 
   static func isTruthy(_ name: String) -> Bool {
     guard let raw = ProcessInfo.processInfo.environment[name] else {

@@ -445,8 +445,8 @@ export function createAuthorityGate(runtime, dependencies) {
                                 after: ['C', 'S', 'I', 'M', 'D', 'R'],
                             }
                             : {
-                                before: ['C', 'S', 'I', 'M', 'D', 'R'],
-                                after: ['C', 'S', 'I', 'M', 'D'],
+                                before: ['C', 'S', 'I', 'D', 'R'],
+                                after: ['C', 'S', 'I', 'D'],
                             }
                         : tool === 'observe'
                             ? args.action === 'stop'

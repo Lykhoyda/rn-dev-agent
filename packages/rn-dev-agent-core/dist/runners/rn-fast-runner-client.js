@@ -476,6 +476,13 @@ export function buildRunnerPortEnv(port) {
         TEST_RUNNER_RN_FAST_RUNNER_PORT: value,
     };
 }
+export function buildRunnerAttachOnlyEnv(attachOnly) {
+    const value = attachOnly ? '1' : '0';
+    return {
+        RN_RUNNER_ATTACH_ONLY: value,
+        TEST_RUNNER_RN_RUNNER_ATTACH_ONLY: value,
+    };
+}
 /**
  * xcodebuild strips TEST_RUNNER_ while forwarding values to XCUITest. Mirror
  * the compile-gated deterministic fault onto that launch contract; released
@@ -576,6 +583,7 @@ opts = {}) {
                 ...process.env,
                 ...buildRunnerPortEnv(desired),
                 ...buildRunnerVersionEnv(getPluginVersion()),
+                ...buildRunnerAttachOnlyEnv(opts.attachOnly === true),
                 ...buildRunnerQuiescenceEnv(process.env),
                 ...buildRunnerAuthorityEnv(authority),
                 ...buildRunnerTargetEnv(deviceId, bundleId),
@@ -1213,6 +1221,45 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
         ? 'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation.'
         : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.', 'RUNNER_TIMEOUT', { runnerTimeoutRecovery });
 }
+async function containRunnerTimeout(command, message, authorityBefore = captureFastRunnerCommandAuthority()) {
+    runnerPoisoned = true;
+    poisonHolders++;
+    let reapDisposition;
+    try {
+        if (authorityBefore && runnerState?.pid === authorityBefore.pid) {
+            poisonReap ??= reapStaleFastRunner();
+            await poisonReap;
+            reapDisposition = 'reaped';
+        }
+        else {
+            reapDisposition = runnerState ? 'replacement-preserved' : 'already-absent';
+        }
+    }
+    finally {
+        poisonHolders--;
+        if (poisonHolders <= 0) {
+            poisonHolders = 0;
+            poisonReap = null;
+            runnerPoisoned = false;
+        }
+    }
+    return failResult(message, 'RUNNER_TIMEOUT', {
+        runnerTimeoutRecovery: {
+            trigger: 'main-thread-timeout',
+            command: String(command),
+            poisoned: true,
+            reaped: reapDisposition === 'reaped',
+            reapDisposition,
+            runner: {
+                before: authorityBefore,
+                afterReapPid: runnerState?.pid ?? null,
+                stateCleared: runnerState === null,
+                nextMutationRequiresRespawn: runnerState === null,
+            },
+            containmentOrder: ['poison', 'reap', 'result'],
+        },
+    });
+}
 function hasRunnerTimeoutRecovery(result) {
     try {
         const envelope = JSON.parse(result.content[0]?.text ?? '{}');
@@ -1482,6 +1529,11 @@ export async function runIOS(args) {
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;
+        if (code === 'RUNNER_TIMEOUT') {
+            return args.command === 'type'
+                ? containTypeTimeout(args)
+                : containRunnerTimeout(args.command, message);
+        }
         if (args.command === 'type' &&
             typeof message === 'string' &&
             message.includes('main thread execution timed out')) {

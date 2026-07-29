@@ -6,6 +6,7 @@ import {
   _setFastRunnerStateForTest,
   _setFetchForTest,
   buildRunnerAuthorityEnv,
+  buildRunnerAttachOnlyEnv,
   getFastRunnerState,
   probeFastRunnerAuthority,
   stopFastRunner,
@@ -38,6 +39,17 @@ test('iOS forwards one runner capability and fenced identity through xcodebuild'
   ]) {
     assert.equal(env[`TEST_RUNNER_${key}`], env[key]);
   }
+});
+
+test('iOS forwards attach-only through both direct and xcodebuild environments', () => {
+  assert.deepEqual(buildRunnerAttachOnlyEnv(true), {
+    RN_RUNNER_ATTACH_ONLY: '1',
+    TEST_RUNNER_RN_RUNNER_ATTACH_ONLY: '1',
+  });
+  assert.deepEqual(buildRunnerAttachOnlyEnv(false), {
+    RN_RUNNER_ATTACH_ONLY: '0',
+    TEST_RUNNER_RN_RUNNER_ATTACH_ONLY: '0',
+  });
 });
 
 test('Android instrumentation receives the complete runner authority tuple', () => {

@@ -1934,6 +1934,7 @@ export async function startManagedMetro(
     TEMP: metroTemporaryRoot,
     XDG_CACHE_HOME: metroCacheRoot,
     EXPO_OFFLINE: '1',
+    EXPO_UNSTABLE_HEADLESS: '1',
     RCT_METRO_PORT: String(input.port),
   });
   const childEnvironment = {

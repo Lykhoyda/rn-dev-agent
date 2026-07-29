@@ -315,6 +315,9 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before managed Metro cleanup');
                 }
+                if (status.bindings.runner) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'stop_metro requires device_snapshot action=close before releasing active runner authority');
+                }
                 const metro = (status.bindings.metroCleanup ?? status.bindings.metro);
                 if (!metro) {
                     return okResult({

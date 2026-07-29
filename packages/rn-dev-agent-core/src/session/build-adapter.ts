@@ -1,15 +1,21 @@
 export interface SessionBuildBinding {
   platform: 'ios' | 'android';
   deviceId: string;
+  appId?: string;
   metroPort: number;
   sessionId: string;
   devClientUrl?: string;
+  simulator?: boolean;
 }
 
 interface BuildLaunchPlan {
   mode: 'passthrough' | 'session';
   command: string[];
   env: Record<string, string>;
+  postInstall?: {
+    command: string[];
+    timeoutMs: number;
+  };
 }
 
 function conflict(flag: string): never {
@@ -118,10 +124,27 @@ export function createBuildLaunchPlan(input: {
     RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
     ...(kind === 'expo' ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}),
   };
+  const postInstall =
+    kind === 'expo' && input.platform === 'ios' && input.session.simulator === true
+      ? {
+          command: [
+            'xcrun',
+            'simctl',
+            'launch',
+            '--terminate-running-process',
+            input.session.deviceId,
+            input.session.appId ?? conflict('appId is required for simulator Dev Client startup'),
+            '--initialUrl',
+            managedMetroProxyUrl(input.session),
+          ],
+          timeoutMs: 30_000,
+        }
+      : undefined;
 
   return {
     mode: 'session',
     command,
     env,
+    ...(postInstall ? { postInstall } : {}),
   };
 }

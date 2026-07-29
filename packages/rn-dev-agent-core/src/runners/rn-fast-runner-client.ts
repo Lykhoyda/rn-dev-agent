@@ -615,6 +615,14 @@ export function buildRunnerPortEnv(port: number): Record<string, string> {
   };
 }
 
+export function buildRunnerAttachOnlyEnv(attachOnly: boolean): Record<string, string> {
+  const value = attachOnly ? '1' : '0';
+  return {
+    RN_RUNNER_ATTACH_ONLY: value,
+    TEST_RUNNER_RN_RUNNER_ATTACH_ONLY: value,
+  };
+}
+
 /**
  * xcodebuild strips TEST_RUNNER_ while forwarding values to XCUITest. Mirror
  * the compile-gated deterministic fault onto that launch contract; released
@@ -685,7 +693,7 @@ export async function startFastRunner(
   port?: number,
   // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
   // by bypassing the prebuilt artifact tier.
-  opts: { forceLocalBuild?: boolean } = {},
+  opts: { forceLocalBuild?: boolean; attachOnly?: boolean } = {},
 ): Promise<FastRunnerState> {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
@@ -738,6 +746,7 @@ export async function startFastRunner(
         ...process.env,
         ...buildRunnerPortEnv(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
+        ...buildRunnerAttachOnlyEnv(opts.attachOnly === true),
         ...buildRunnerQuiescenceEnv(process.env),
         ...buildRunnerAuthorityEnv(authority),
         ...buildRunnerTargetEnv(deviceId, bundleId),
@@ -1662,6 +1671,48 @@ async function containTypeTimeout(
   );
 }
 
+async function containRunnerTimeout(
+  command: unknown,
+  message: string,
+  authorityBefore: FastRunnerCommandAuthority | null = captureFastRunnerCommandAuthority(),
+): Promise<ToolResult> {
+  runnerPoisoned = true;
+  poisonHolders++;
+  let reapDisposition: 'reaped' | 'already-absent' | 'replacement-preserved';
+  try {
+    if (authorityBefore && runnerState?.pid === authorityBefore.pid) {
+      poisonReap ??= reapStaleFastRunner();
+      await poisonReap;
+      reapDisposition = 'reaped';
+    } else {
+      reapDisposition = runnerState ? 'replacement-preserved' : 'already-absent';
+    }
+  } finally {
+    poisonHolders--;
+    if (poisonHolders <= 0) {
+      poisonHolders = 0;
+      poisonReap = null;
+      runnerPoisoned = false;
+    }
+  }
+  return failResult(message, 'RUNNER_TIMEOUT', {
+    runnerTimeoutRecovery: {
+      trigger: 'main-thread-timeout',
+      command: String(command),
+      poisoned: true,
+      reaped: reapDisposition === 'reaped',
+      reapDisposition,
+      runner: {
+        before: authorityBefore,
+        afterReapPid: runnerState?.pid ?? null,
+        stateCleared: runnerState === null,
+        nextMutationRequiresRespawn: runnerState === null,
+      },
+      containmentOrder: ['poison', 'reap', 'result'],
+    },
+  });
+}
+
 function hasRunnerTimeoutRecovery(result: ToolResult): boolean {
   try {
     const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
@@ -1942,6 +1993,11 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
+    if (code === 'RUNNER_TIMEOUT') {
+      return args.command === 'type'
+        ? containTypeTimeout(args)
+        : containRunnerTimeout(args.command, message);
+    }
     if (
       args.command === 'type' &&
       typeof message === 'string' &&

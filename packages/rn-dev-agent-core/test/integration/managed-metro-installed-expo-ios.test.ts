@@ -17,7 +17,14 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { CDPClient } from '../../dist/cdp-client.js';
+import {
+  getFastRunnerState,
+  runIOS,
+  startFastRunner,
+  stopFastRunner,
+} from '../../dist/runners/rn-fast-runner-client.js';
 import { pinExactDevClient } from '../../dist/session/dev-client-authority.js';
+import { createLocalAuthorityProbe } from '../../dist/session/local-authority-probe.js';
 import {
   applyPackageIntegration,
   restorePackageIntegrationFiles,
@@ -229,6 +236,7 @@ test(
     const runtimeRoot = join(root, '.rn-agent', 'runtime');
     const bindingPath = join(runtimeRoot, 'binding.json');
     const completionPath = join(runtimeRoot, 'completion.json');
+    const requestLogPath = join(runtimeRoot, 'metro-requests.jsonl');
     const sessionCliPath = join(root, 'rn-session-installed-expo.cjs');
     const simulatorName = `RNDA-installed-expo-${process.pid}-${Date.now()}`;
     const signerCapability = randomBytes(32).toString('base64url');
@@ -244,6 +252,7 @@ test(
     let binding: ManagedMetroBinding | undefined;
     let client: CDPClient | undefined;
     let integrationApplied = false;
+    let runnerStarted = false;
 
     try {
       foreignPid = await waitFor(
@@ -257,9 +266,47 @@ test(
       writeFileSync(join(root, '.gitignore'), 'node_modules/\nios/\n.expo/\n.rn-agent/runtime/\n');
       writeFileSync(
         join(root, 'metro.config.js'),
-        `const { getDefaultConfig } = require('expo/metro-config');
+        `const fs = require('node:fs');
+const { getDefaultConfig } = require('expo/metro-config');
 const { withNativeWind } = require('nativewind/metro');
-module.exports = withNativeWind(getDefaultConfig(__dirname), { input: './global.css' });
+const config = withNativeWind(getDefaultConfig(__dirname), { input: './global.css' });
+const originalEnhanceMiddleware = config.server && config.server.enhanceMiddleware;
+config.server = {
+  ...config.server,
+  enhanceMiddleware(middleware, server) {
+    const enhanced = typeof originalEnhanceMiddleware === 'function'
+      ? originalEnhanceMiddleware(middleware, server)
+      : middleware;
+    return (request, response, next) => {
+      let responseBytes = 0;
+      const write = response.write.bind(response);
+      const end = response.end.bind(response);
+      response.write = (chunk, encoding, callback) => {
+        if (chunk) responseBytes += Buffer.isBuffer(chunk)
+          ? chunk.length
+          : Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined);
+        return write(chunk, encoding, callback);
+      };
+      response.end = (chunk, encoding, callback) => {
+        if (chunk) responseBytes += Buffer.isBuffer(chunk)
+          ? chunk.length
+          : Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined);
+        return end(chunk, encoding, callback);
+      };
+      response.once('finish', () => fs.appendFileSync(
+        ${JSON.stringify(requestLogPath)},
+        JSON.stringify({
+          method: request.method,
+          url: request.url,
+          status: response.statusCode,
+          responseBytes,
+        }) + '\\n',
+      ));
+      return enhanced(request, response, next);
+    };
+  },
+};
+module.exports = config;
 `,
       );
       writeFileSync(
@@ -365,6 +412,7 @@ async function writeMarker(buildGeneration) {
       metroPort: port,
       sessionId,
       buildToken: 'installed-expo-build',
+      simulator: true,
     }));
     return;
   }
@@ -433,6 +481,12 @@ async function writeMarker(buildGeneration) {
         new RegExp(`(?:127\\.0\\.0\\.1|localhost)(?::|%3A)${port}`),
         'the literal Expo command did not report the allocated managed Metro URL',
       );
+      assert.match(
+        nativeOutput,
+        new RegExp(
+          `starting ${appId} on simulator ${simulatorId} with --initialUrl http://127\\.0\\.0\\.1:${port}`,
+        ),
+      );
 
       binding = JSON.parse(readFileSync(bindingPath, 'utf8')) as ManagedMetroBinding;
       assert.equal(binding.port, port);
@@ -468,12 +522,48 @@ async function writeMarker(buildGeneration) {
       assert.ok(Number(evidenceHead.sequence) > 0);
       assert.match(String(evidenceHead.signature), /^[a-f0-9]{64}$/);
 
-      const bundleResponse = await fetch(
-        `http://127.0.0.1:${port}/index.bundle?platform=ios&dev=true&minify=false&modulesOnly=false&runModule=true`,
-        { signal: AbortSignal.timeout(300_000) },
+      const productRequests = await waitFor(
+        () => {
+          if (!existsSync(requestLogPath)) return null;
+          const requests = readFileSync(requestLogPath, 'utf8')
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .map(
+              (line) =>
+                JSON.parse(line) as {
+                  method: string;
+                  responseBytes: number;
+                  status: number;
+                  url: string;
+                },
+            );
+          const headIndex = requests.findIndex(
+            (request) => request.method === 'HEAD' && request.url === '/' && request.status === 200,
+          );
+          const manifestIndex = requests.findIndex(
+            (request, index) =>
+              index > headIndex &&
+              request.method === 'GET' &&
+              request.url === '/' &&
+              request.status === 200,
+          );
+          const bundleIndex = requests.findIndex(
+            (request, index) =>
+              index > manifestIndex &&
+              request.method === 'GET' &&
+              /\.bundle(?:\?|$)/.test(request.url) &&
+              request.status === 200 &&
+              request.responseBytes > 1024 * 1024,
+          );
+          return headIndex >= 0 && manifestIndex > headIndex && bundleIndex > manifestIndex
+            ? { bundle: requests[bundleIndex]!, requests }
+            : null;
+        },
+        300_000,
+        'the installed product manifest and greater-than-1-MiB bundle request',
       );
-      assert.equal(bundleResponse.ok, true);
-      const bundleByteLength = (await bundleResponse.arrayBuffer()).byteLength;
+      const bundleByteLength = productRequests.bundle.responseBytes;
       assert.ok(bundleByteLength > 1024 * 1024);
 
       const target = await waitFor(
@@ -550,16 +640,90 @@ async function writeMarker(buildGeneration) {
       );
       assert.equal(bundle.targetId, target.id);
       const evaluated = await client.evaluate(
-        'JSON.stringify({authority:globalThis.__RN_DEV_AGENT_AUTHORITY__,runtime:globalThis.HermesInternal ? "Hermes" : "unknown"})',
+        'JSON.stringify({authority:globalThis.__RN_DEV_AGENT_AUTHORITY__,development:__DEV__,runtime:globalThis.HermesInternal ? "Hermes" : "unknown"})',
       );
       assert.equal(typeof evaluated.value, 'string');
       const liveAuthority = JSON.parse(evaluated.value as string) as {
         authority: { marker: { payload: { metroInstanceId: string; sessionId: string } } };
+        development: boolean;
         runtime: string;
       };
       assert.equal(liveAuthority.runtime, 'Hermes');
+      assert.equal(liveAuthority.development, true);
       assert.equal(liveAuthority.authority.marker.payload.sessionId, sessionId);
       assert.equal(liveAuthority.authority.marker.payload.metroInstanceId, instanceId);
+
+      const priorSessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+      const priorClaimEpoch = process.env.RN_DEV_AGENT_CLAIM_EPOCH;
+      process.env.RN_DEV_AGENT_SESSION_ID = sessionId;
+      process.env.RN_DEV_AGENT_CLAIM_EPOCH = '1';
+      try {
+        const runner = await startFastRunner(simulatorId, appId, undefined, { attachOnly: true });
+        runnerStarted = true;
+        assert.equal(readProcessBirth(runner.pid)?.token, runner.processBirth);
+        const runnerBinding = {
+          platform: 'ios',
+          port: runner.port,
+          pid: runner.pid,
+          processBirth: runner.processBirth,
+          capability: runner.capability,
+          instanceId: runner.instanceId,
+          sessionId: runner.sessionId,
+          claimEpoch: runner.claimEpoch,
+          deviceId: runner.deviceId,
+          appId,
+          protocolVersion: runner.protocolVersion,
+        };
+        const authorityStatus = {
+          sessionId,
+          sourceKey: source.sourceKey,
+          worktreeKey: source.worktreeKey,
+          appRootKey: source.appRootKey,
+          state: 'ready',
+          claimEpoch: 1,
+          authorityVersion: 9,
+          leaseUntilMs: Date.now() + 60_000,
+          source,
+          bindings: { runner: runnerBinding },
+          claims: [],
+          worker: { instanceId: 'installed-expo-worker', pid: process.pid, birthAvailable: true },
+        };
+        const runnerProbe = createLocalAuthorityProbe({
+          runtime: {
+            requireAvailable: () => {
+              throw new Error('controller authority is not part of this focused runner probe');
+            },
+          },
+          getClient: () => client!,
+          getSecret: () => null,
+          inspectOwner: () => 'match',
+        });
+        const runnerBefore = await runnerProbe({
+          axis: 'R',
+          phase: 'preflight',
+          status: authorityStatus as never,
+        });
+        for (let index = 0; index < 2; index += 1) {
+          const snapshot = await runIOS({ command: 'snapshot', bundleId: appId });
+          const snapshotEnvelope = JSON.parse(snapshot.content[0]!.text) as {
+            ok: boolean;
+            code?: string;
+          };
+          assert.equal(snapshotEnvelope.ok, true, snapshot.content[0]!.text);
+        }
+        const runnerAfter = await runnerProbe({
+          axis: 'R',
+          phase: 'postflight',
+          status: authorityStatus as never,
+        });
+        assert.equal(runnerAfter.identity, runnerBefore.identity);
+        assert.equal(authorityStatus.authorityVersion, 9);
+      } finally {
+        if (priorSessionId === undefined) delete process.env.RN_DEV_AGENT_SESSION_ID;
+        else process.env.RN_DEV_AGENT_SESSION_ID = priorSessionId;
+        if (priorClaimEpoch === undefined) delete process.env.RN_DEV_AGENT_CLAIM_EPOCH;
+        else process.env.RN_DEV_AGENT_CLAIM_EPOCH = priorClaimEpoch;
+      }
 
       const completion = JSON.parse(readFileSync(completionPath, 'utf8')) as {
         dirtyDigest: string;
@@ -623,8 +787,29 @@ async function writeMarker(buildGeneration) {
           { mode: 0o600 },
         );
       }
+
+      await stopFastRunner(simulatorId);
+      runnerStarted = false;
+      assert.equal(getFastRunnerState(), null);
+      await stopManagedMetro(binding, { sessionId, signerCapability });
+      await stopManagedMetro(binding, { sessionId, signerCapability });
+      assert.equal(metroListenerPid(port), undefined);
+      assert.equal(existsSync(binding.runtimeEvidenceSocket), false);
+      binding = undefined;
+      restorePackageIntegrationFiles({ appRoot: root });
+      integrationApplied = false;
+      const restoredPackage = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+        scripts?: { android?: string; ios?: string };
+      };
+      assert.equal(restoredPackage.scripts?.ios, 'expo run:ios');
+      assert.equal(restoredPackage.scripts?.android, 'expo run:android');
+      assert.equal(metroListenerPid(8081), foreignPid);
+      assert.equal(readProcessBirth(foreignPid)?.token, foreignBirth.token);
     } finally {
       await client?.disconnect().catch(() => {});
+      if (runnerStarted && simulatorId) {
+        await stopFastRunner(simulatorId).catch(() => {});
+      }
       if (binding) {
         await stopManagedMetro(binding, { sessionId, signerCapability }).catch(() => false);
       } else if (existsSync(bindingPath)) {

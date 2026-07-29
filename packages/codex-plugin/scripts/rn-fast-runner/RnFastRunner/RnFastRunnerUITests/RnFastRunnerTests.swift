@@ -38,6 +38,7 @@ class RnFastRunnerTests: XCTestCase {
     static let noResponseFromMainThread = 1
     static let commandReturnedNoResponse = 2
     static let mainThreadExecutionTimedOut = 3
+    static let attachOnlyTargetUnavailable = 4
     static let objcException = 1
   }
 
@@ -129,8 +130,23 @@ class RnFastRunnerTests: XCTestCase {
   @MainActor
   func testCommand() throws {
     doneExpectation = expectation(description: "rn-fast-runner command handled")
-    app.launch()
-    currentApp = app
+    if RunnerEnv.attachOnly() {
+      guard let bundleId = RunnerEnv.appId(), !bundleId.isEmpty else {
+        throw NSError(
+          domain: RunnerErrorDomain.general,
+          code: RunnerErrorCode.attachOnlyTargetUnavailable,
+          userInfo: [
+            NSLocalizedDescriptionKey:
+              "RUNNER_OWNERSHIP_MISMATCH: attach-only runner target is unavailable"
+          ]
+        )
+      }
+      currentApp = try activateAttachOnlyTarget(bundleId: bundleId)
+      currentBundleId = bundleId
+    } else {
+      app.launch()
+      currentApp = app
+    }
     let queue = DispatchQueue(label: "rn-fast-runner.runner")
     let desiredPort = RunnerEnv.resolvePort()
     NSLog("RN_FAST_RUNNER_DESIRED_PORT=%d", desiredPort)

@@ -1295,6 +1295,49 @@ test('session stop_metro closes the live listener but preserves restoration owne
   assert.match(envelope.data.alternativeAction, /restore package integration/);
 });
 
+test('session stop_metro refuses before signaling while exact runner authority is bound', async () => {
+  let stopCalled = false;
+  const status = {
+    sessionId: 'session-a',
+    authorityVersion: 7,
+    state: 'ready',
+    source: { kind: 'git' },
+    bindings: {
+      metroPort: 8341,
+      metro: { mode: 'managed', port: 8341 },
+      runner: { instanceId: 'runner-a', deviceId: 'SIM-A', port: 9100 },
+    },
+    claims: [],
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => assert.fail('runner-bound stop must not update Metro authority'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      getSignerCapability: () => 'signer',
+      stopManagedMetro: async () => {
+        stopCalled = true;
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'stop_metro', confirmed: true });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, true);
+  assert.equal(envelope.code, 'SESSION_AUTHORITY_REQUIRED');
+  assert.match(envelope.error, /device_snapshot action=close/);
+  assert.equal(stopCalled, false);
+});
+
 test('session stop_metro is idempotent when managed Metro is already absent', async () => {
   let released = false;
   const status = {

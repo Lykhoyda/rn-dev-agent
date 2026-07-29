@@ -618,8 +618,8 @@ export function createAuthorityGate(
                       after: ['C', 'S', 'I', 'M', 'D', 'R'] as AuthorityAxis[],
                     }
                   : {
-                      before: ['C', 'S', 'I', 'M', 'D', 'R'] as AuthorityAxis[],
-                      after: ['C', 'S', 'I', 'M', 'D'] as AuthorityAxis[],
+                      before: ['C', 'S', 'I', 'D', 'R'] as AuthorityAxis[],
+                      after: ['C', 'S', 'I', 'D'] as AuthorityAxis[],
                     }
                 : tool === 'observe'
                   ? args.action === 'stop'

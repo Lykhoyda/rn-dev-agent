@@ -213,6 +213,16 @@ struct ErrorPayload: Codable {
   }
 }
 
+func runnerErrorPayload(_ error: Error) -> ErrorPayload {
+  let nativeError = error as NSError
+  if nativeError.domain == RnFastRunnerTests.RunnerErrorDomain.general,
+     nativeError.code == RnFastRunnerTests.RunnerErrorCode.mainThreadExecutionTimedOut
+  {
+    return ErrorPayload(code: "RUNNER_TIMEOUT", message: nativeError.localizedDescription)
+  }
+  return ErrorPayload(message: "\(error)")
+}
+
 struct SnapshotRect: Codable {
   let x: Double
   let y: Double

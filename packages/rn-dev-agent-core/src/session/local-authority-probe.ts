@@ -427,7 +427,24 @@ export function createLocalAuthorityProbe(
       const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
         headers: { authorization: `Bearer ${capability}` },
       });
-      for (const key of ['instanceId', 'sessionId', 'claimEpoch', 'deviceId', 'appId']) {
+      if (health.ok !== true) {
+        const reason =
+          typeof health.reason === 'string' && health.reason.trim()
+            ? `: ${health.reason.trim()}`
+            : '';
+        throw new SessionAuthorityError(
+          'RUNNER_OWNERSHIP_MISMATCH',
+          `runner health is not operational${reason}`,
+        );
+      }
+      for (const key of [
+        'instanceId',
+        'sessionId',
+        'claimEpoch',
+        'deviceId',
+        'appId',
+        'protocolVersion',
+      ]) {
         if (health[key] !== runner[key]) {
           throw new SessionAuthorityError(
             'RUNNER_OWNERSHIP_MISMATCH',
@@ -435,7 +452,20 @@ export function createLocalAuthorityProbe(
           );
         }
       }
-      return { axis, identity: identity({ health, pid, processBirth }) };
+      return {
+        axis,
+        identity: identity({
+          port,
+          pid,
+          processBirth,
+          instanceId: runner.instanceId,
+          sessionId: runner.sessionId,
+          claimEpoch: runner.claimEpoch,
+          deviceId: runner.deviceId,
+          appId: runner.appId,
+          protocolVersion: runner.protocolVersion,
+        }),
+      };
     }
 
     if (axis === 'O') {

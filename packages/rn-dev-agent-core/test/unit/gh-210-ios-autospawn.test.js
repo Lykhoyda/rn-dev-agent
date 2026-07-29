@@ -68,6 +68,23 @@ test('#210 ensureRunnerForCommand: dead+prebuilt → spawns, re-verifies alive �
   assert.deepEqual(r, { ok: true });
 });
 
+test('#210 ensureRunnerForCommand: attach-only reaches the native runner spawn contract', async () => {
+  let n = 0;
+  let observedOptions;
+  const r = await ensureRunnerForCommand('U', 'com.x', {
+    probe: async () => (n++ === 0 ? { liveness: 'dead' } : { liveness: 'alive' }),
+    ensure: async (_deviceId, _bundleId, options) => {
+      observedOptions = options;
+    },
+    prebuilt: () => true,
+    adopt: () => {},
+    attachOnly: true,
+  });
+
+  assert.deepEqual(r, { ok: true });
+  assert.deepEqual(observedOptions, { attachOnly: true });
+});
+
 test('#210 ensureRunnerForCommand: dead+NOT prebuilt → actionable error (no spawn)', async () => {
   let spawned = 0;
   const r = await ensureRunnerForCommand('U', 'com.x', {

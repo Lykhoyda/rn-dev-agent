@@ -3771,6 +3771,7 @@ test('copied adapter accepts build identity only from the package-local session 
     const adapterPath = join(integrationRoot, 'rn-session-adapter.cjs');
     const outputPath = join(root, 'record.json');
     const completionPath = join(root, 'completion.json');
+    const startupPath = join(root, 'startup.json');
     const sessionCliPath = join(root, 'rn-session.cjs');
     mkdirSync(integrationRoot, { recursive: true });
     mkdirSync(binRoot, { recursive: true });
@@ -3793,9 +3794,15 @@ test('copied adapter accepts build identity only from the package-local session 
       "#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.ADAPTER_RECORD,JSON.stringify({args:process.argv.slice(2),iosPort:process.env.RCT_METRO_PORT,androidPort:process.env.ORG_GRADLE_PROJECT_reactNativeDevServerPort,expoProxy:process.env.EXPO_PACKAGER_PROXY_URL,session:process.env.RN_DEV_AGENT_SESSION_ID}))\n",
     );
     chmodSync(fakeNpx, 0o755);
+    const fakeXcrun = join(binRoot, 'xcrun');
+    writeFileSync(
+      fakeXcrun,
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){if(process.env.ADAPTER_STARTUP_FAIL==='1'){process.stderr.write('launch refused\\n');process.exit(4);}fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
+    );
+    chmodSync(fakeXcrun, 0o755);
     writeFileSync(
       sessionCliPath,
-      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:'build-token-ios'}));}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:'build-token-ios',simulator:true}));}else{if(!fs.existsSync(process.env.ADAPTER_STARTUP))process.exit(9);fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
 
     const result = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -3806,6 +3813,7 @@ test('copied adapter accepts build identity only from the package-local session 
         PATH: `${binRoot}:${process.env.PATH}`,
         ADAPTER_RECORD: outputPath,
         ADAPTER_COMPLETION: completionPath,
+        ADAPTER_STARTUP: startupPath,
         RN_DEV_AGENT_SESSION_BUILD_JSON: JSON.stringify({
           platform: 'ios',
           deviceId: 'foreign-device',
@@ -3829,7 +3837,33 @@ test('copied adapter accepts build identity only from the package-local session 
       args: ['complete-build', 'ios', 'build-token-ios'],
       session: 'session-ios',
     });
+    assert.deepEqual(JSON.parse(readFileSync(startupPath, 'utf8')), [
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      'session-ios-device',
+      'dev.example',
+      '--initialUrl',
+      'http://127.0.0.1:8341',
+    ]);
     assert.match(result.stdout, /"receipt":true/);
+
+    rmSync(completionPath);
+    const failedStartup = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binRoot}:${process.env.PATH}`,
+        ADAPTER_RECORD: outputPath,
+        ADAPTER_COMPLETION: completionPath,
+        ADAPTER_STARTUP: startupPath,
+        ADAPTER_STARTUP_FAIL: '1',
+      },
+    });
+    assert.notEqual(failedStartup.status, 0);
+    assert.match(failedStartup.stderr, /DEV_CLIENT_STARTUP_UNCONFIRMED: launch refused/);
+    assert.equal(existsSync(completionPath), false);
 
     const manifest = JSON.parse(
       readFileSync(join(integrationRoot, 'rn-session-integration.json'), 'utf8'),
@@ -3852,6 +3886,7 @@ test('copied adapter accepts build identity only from the package-local session 
         PATH: `${binRoot}:${process.env.PATH}`,
         ADAPTER_RECORD: outputPath,
         ADAPTER_COMPLETION: completionPath,
+        ADAPTER_STARTUP: startupPath,
       },
     });
     assert.notEqual(conflicting.status, 0);

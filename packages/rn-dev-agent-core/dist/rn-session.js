@@ -434,6 +434,7 @@ async function main() {
                 metroPort: Number(status.bindings.metroPort),
                 sessionId: status.sessionId,
                 buildToken,
+                ...(platform === 'ios' ? { simulator: true } : {}),
                 ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
             })}\n`);
             return;

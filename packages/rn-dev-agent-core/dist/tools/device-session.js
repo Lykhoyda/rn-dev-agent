@@ -222,6 +222,7 @@ export function createDeviceSnapshotHandler(deps = {}) {
                     // runner artifact and pay the cold rebuild (mid-flow refuses fast).
                     const ready = await ensureRunnerForCommand(deviceId, appId, {
                         allowArtifactRebuild: true,
+                        attachOnly: args.attachOnly === true,
                     });
                     if (!ready.ok) {
                         // GH #382: a failed start may have left a pending artifact note —
@@ -235,12 +236,14 @@ export function createDeviceSnapshotHandler(deps = {}) {
                     upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
                     // A bare simctl launch foregrounds a running PID without relaunch —
                     // safe whether or not attachOnly; ignore errors (app may be frontmost).
-                    await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
-                        timeout: 10_000,
-                        encoding: 'utf8',
-                    }).catch(() => {
-                        /* already frontmost is OK */
-                    });
+                    if (!args.attachOnly) {
+                        await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
+                            timeout: 10_000,
+                            encoding: 'utf8',
+                        }).catch(() => {
+                            /* already frontmost is OK */
+                        });
+                    }
                 }
                 else {
                     // GH #418: open may invalidate stale runner APKs + Gradle-rebuild.

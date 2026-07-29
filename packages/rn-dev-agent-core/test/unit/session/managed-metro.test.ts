@@ -445,6 +445,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
     calls[0]?.env?.RN_DEV_AGENT_METRO_CHILD_ENVIRONMENT ?? '{}',
   ) as NodeJS.ProcessEnv;
   assert.equal(childEnvironment.RCT_METRO_PORT, '8341');
+  assert.equal(childEnvironment.EXPO_UNSTABLE_HEADLESS, '1');
   assert.equal(childEnvironment.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
   assert.equal(childEnvironment.RN_DEV_AGENT_REGISTRY_PATH, undefined);
   assert.equal(childEnvironment.RN_DEV_AGENT_METRO_CONTENT_ROOT, '/app');

@@ -202,7 +202,7 @@ extension RnFastRunnerTests {
       commandJournal.record(commandId: probe?.commandId, command: probe?.command, ok: response.ok, body: body)
       return (httpResponse(status: 200, body: String(decoding: body, as: UTF8.self)), command.command == .shutdown)
     } catch {
-      let response = Response(ok: false, error: ErrorPayload(message: "\(error)"))
+      let response = Response(ok: false, error: runnerErrorPayload(error))
       let body = encodeBody(response)
       commandJournal.record(commandId: probe?.commandId, command: probe?.command, ok: false, body: body)
       return (httpResponse(status: 500, body: String(decoding: body, as: UTF8.self)), false)

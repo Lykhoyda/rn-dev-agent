@@ -1204,6 +1204,34 @@ test('runner transitions and idempotent Observe starts probe their exact axes', 
   assert.ok(calls.includes('postflight:O'));
 });
 
+test('runner close remains authoritative after managed Metro is already absent', async () => {
+  const { runtime, calls, status } = fixture();
+  status.bindings.metro = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('device_snapshot', async () => {
+    status.bindings.runner = null;
+    status.authorityVersion += 1;
+    return okResult({ closed: true });
+  })({ action: 'close' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:D', 'preflight:R'],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('postflight:')),
+    ['postflight:C', 'postflight:S', 'postflight:I', 'postflight:D'],
+  );
+});
+
 test('iOS hard reset resolves its runner transition after session argument binding', async () => {
   const { runtime, registry, calls, status } = fixture();
   status.bindings.bundle.targetId = 'old-target';

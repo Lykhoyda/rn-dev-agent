@@ -5,13 +5,16 @@ import { createBuildLaunchPlan } from '../../../dist/session/build-adapter.js';
 const iosSession = {
   platform: 'ios',
   deviceId: '00000000-0000-0000-0000-000000000001',
+  appId: 'dev.example.ios',
   metroPort: 8341,
   sessionId: 'session-ios',
+  simulator: true,
 };
 
 const androidSession = {
   platform: 'android',
   deviceId: 'emulator-5582',
+  appId: 'dev.example.android',
   metroPort: 8342,
   sessionId: 'session-android',
 };
@@ -50,6 +53,19 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
     RN_DEV_AGENT_SESSION_ID: 'session-ios',
     EXPO_PACKAGER_PROXY_URL: 'http://127.0.0.1:8341',
   });
+  assert.deepEqual(plan.postInstall, {
+    command: [
+      'xcrun',
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      iosSession.deviceId,
+      iosSession.appId,
+      '--initialUrl',
+      'http://127.0.0.1:8341',
+    ],
+    timeoutMs: 30_000,
+  });
 });
 
 test('Expo Android emulator launches through its exact host Metro proxy', () => {
@@ -72,6 +88,7 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
     RN_DEV_AGENT_SESSION_ID: 'session-android',
     EXPO_PACKAGER_PROXY_URL: 'http://10.0.2.2:8342',
   });
+  assert.equal(plan.postInstall, undefined);
 });
 
 test('Expo removes a matching port, retains no-bundler, and refuses a conflicting port', () => {
@@ -130,6 +147,16 @@ test('Expo Android physical device requires an explicit exact Dev Client endpoin
   });
 
   assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://192.0.2.10:8342');
+});
+
+test('Expo iOS physical device keeps the supported Expo launch path', () => {
+  const plan = createBuildLaunchPlan({
+    platform: 'ios',
+    command: ['expo', 'run:ios'],
+    session: { ...iosSession, simulator: false },
+  });
+
+  assert.equal(plan.postInstall, undefined);
 });
 
 test('bare React Native iOS uses UDID and external managed Metro', () => {

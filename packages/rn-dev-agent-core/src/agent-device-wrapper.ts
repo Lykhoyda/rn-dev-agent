@@ -831,12 +831,13 @@ export interface EnsureRunnerDeps {
   ensure?: (
     deviceId: string,
     bundleId: string,
-    opts?: { forceLocalBuild?: boolean },
+    opts?: { forceLocalBuild?: boolean; attachOnly?: boolean },
   ) => Promise<void>;
   prebuilt?: () => boolean;
   adopt?: (deviceId: string | undefined) => void;
   /** GH #418: open-path only — permits DerivedData invalidation + cold rebuild. */
   allowArtifactRebuild?: boolean;
+  attachOnly?: boolean;
   /** GH #418: test seams for the rebuild tier. */
   invalidateArtifact?: () => void;
   reap?: () => Promise<void>;
@@ -911,7 +912,10 @@ async function rebuildStaleRunnerArtifact(
     // GH #382 (Codex P1): force a source rebuild — a stale prebuilt artifact must
     // not be re-selected here, or the cold rebuild that heals the command surface
     // never runs.
-    await ensure(deviceId, bundleId, { forceLocalBuild: true });
+    await ensure(deviceId, bundleId, {
+      forceLocalBuild: true,
+      ...(deps.attachOnly === true ? { attachOnly: true } : {}),
+    });
   } finally {
     release();
   }
@@ -993,7 +997,11 @@ export async function ensureRunnerForCommand(
     return { ok: false, message: decision.message };
   }
 
-  await ensure(decision.action === 'spawn' ? decision.deviceId : deviceId!, bundleId);
+  await ensure(
+    decision.action === 'spawn' ? decision.deviceId : deviceId!,
+    bundleId,
+    deps.attachOnly === true ? { attachOnly: true } : {},
+  );
   const after = await probe();
   if (after.liveness === 'alive') {
     if (
@@ -1066,7 +1074,7 @@ export async function ensureFastRunner(
   deviceId: string,
   bundleId: string,
   // GH #382 (Codex P1): recovery forces a source rebuild by bypassing prebuilt.
-  opts: { forceLocalBuild?: boolean } = {},
+  opts: { forceLocalBuild?: boolean; attachOnly?: boolean } = {},
 ): Promise<void> {
   // M7/Phase-109: probe tri-state liveness instead of the PID-only
   // isFastRunnerAvailable(). A runner whose PID is alive but whose HTTP server

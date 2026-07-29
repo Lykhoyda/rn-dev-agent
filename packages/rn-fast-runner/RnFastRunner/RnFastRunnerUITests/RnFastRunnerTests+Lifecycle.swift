@@ -3,6 +3,17 @@ import XCTest
 import AppKit
 #endif
 
+func runnerAttachOnlyTargetIsRunning(_ state: XCUIApplication.State) -> Bool {
+  switch state {
+  case .runningForeground, .runningBackground, .runningBackgroundSuspended:
+    return true
+  case .unknown, .notRunning:
+    return false
+  @unknown default:
+    return false
+  }
+}
+
 func runnerPngData(for image: RunnerImage) -> Data? {
 #if canImport(UIKit)
   return image.pngData()
@@ -22,6 +33,45 @@ func runnerCGImage(from image: RunnerImage) -> CGImage? {
 }
 
 extension RnFastRunnerTests {
+  private func observedProcessIdentifier(_ target: XCUIApplication) -> Int? {
+    let selector = NSSelectorFromString("processID")
+    guard target.responds(to: selector) else { return nil }
+    return (target.value(forKey: "processID") as? NSNumber)?.intValue
+  }
+
+  func activateAttachOnlyTarget(bundleId: String) throws -> XCUIApplication {
+    let target = XCUIApplication(bundleIdentifier: bundleId)
+    guard runnerAttachOnlyTargetIsRunning(target.state),
+          let processBefore = observedProcessIdentifier(target),
+          processBefore > 0
+    else {
+      throw NSError(
+        domain: RunnerErrorDomain.general,
+        code: RunnerErrorCode.attachOnlyTargetUnavailable,
+        userInfo: [
+          NSLocalizedDescriptionKey:
+            "RUNNER_OWNERSHIP_MISMATCH: attach-only target '\(bundleId)' is not running"
+        ]
+      )
+    }
+    target.activate()
+    let processAfter = observedProcessIdentifier(target)
+    guard runnerAttachOnlyTargetIsRunning(target.state), processAfter == processBefore else {
+      if let processAfter, processAfter != processBefore, runnerAttachOnlyTargetIsRunning(target.state) {
+        target.terminate()
+      }
+      throw NSError(
+        domain: RunnerErrorDomain.general,
+        code: RunnerErrorCode.attachOnlyTargetUnavailable,
+        userInfo: [
+          NSLocalizedDescriptionKey:
+            "RUNNER_OWNERSHIP_MISMATCH: attach-only target changed during activation"
+        ]
+      )
+    }
+    return target
+  }
+
   func screenshotRoot(app: XCUIApplication) -> XCUIElement {
 #if os(macOS)
     let windows = app.windows.allElementsBoundByIndex

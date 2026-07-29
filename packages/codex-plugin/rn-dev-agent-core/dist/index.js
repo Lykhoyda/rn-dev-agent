@@ -20904,6 +20904,7 @@ __export(rn_fast_runner_client_exports, {
   _setRunnerStateForTest: () => _setRunnerStateForTest,
   acquireRunnerRebuildLock: () => acquireRunnerRebuildLock,
   adoptPersistedFastRunnerState: () => adoptPersistedFastRunnerState,
+  buildRunnerAttachOnlyEnv: () => buildRunnerAttachOnlyEnv,
   buildRunnerAuthorityEnv: () => buildRunnerAuthorityEnv,
   buildRunnerPortEnv: () => buildRunnerPortEnv,
   buildRunnerTestFaultEnv: () => buildRunnerTestFaultEnv,
@@ -21249,6 +21250,13 @@ function buildRunnerPortEnv(port) {
     TEST_RUNNER_RN_FAST_RUNNER_PORT: value
   };
 }
+function buildRunnerAttachOnlyEnv(attachOnly) {
+  const value = attachOnly ? "1" : "0";
+  return {
+    RN_RUNNER_ATTACH_ONLY: value,
+    TEST_RUNNER_RN_RUNNER_ATTACH_ONLY: value
+  };
+}
 function buildRunnerTestFaultEnv(env) {
   const value = env.TEST_RUNNER_RN_FAST_RUNNER_TEST_FAULT ?? env.RN_FAST_RUNNER_TEST_FAULT;
   if (!value)
@@ -21324,6 +21332,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
         ...process.env,
         ...buildRunnerPortEnv(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
+        ...buildRunnerAttachOnlyEnv(opts.attachOnly === true),
         ...buildRunnerQuiescenceEnv(process.env),
         ...buildRunnerAuthorityEnv(authority),
         ...buildRunnerTargetEnv(deviceId, bundleId),
@@ -21848,6 +21857,43 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
   }
   return failResult(trigger === "main-thread-timeout" ? "RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation." : "RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.", "RUNNER_TIMEOUT", { runnerTimeoutRecovery });
 }
+async function containRunnerTimeout(command, message, authorityBefore = captureFastRunnerCommandAuthority()) {
+  runnerPoisoned = true;
+  poisonHolders++;
+  let reapDisposition;
+  try {
+    if (authorityBefore && runnerState?.pid === authorityBefore.pid) {
+      poisonReap ??= reapStaleFastRunner();
+      await poisonReap;
+      reapDisposition = "reaped";
+    } else {
+      reapDisposition = runnerState ? "replacement-preserved" : "already-absent";
+    }
+  } finally {
+    poisonHolders--;
+    if (poisonHolders <= 0) {
+      poisonHolders = 0;
+      poisonReap = null;
+      runnerPoisoned = false;
+    }
+  }
+  return failResult(message, "RUNNER_TIMEOUT", {
+    runnerTimeoutRecovery: {
+      trigger: "main-thread-timeout",
+      command: String(command),
+      poisoned: true,
+      reaped: reapDisposition === "reaped",
+      reapDisposition,
+      runner: {
+        before: authorityBefore,
+        afterReapPid: runnerState?.pid ?? null,
+        stateCleared: runnerState === null,
+        nextMutationRequiresRespawn: runnerState === null
+      },
+      containmentOrder: ["poison", "reap", "result"]
+    }
+  });
+}
 function hasRunnerTimeoutRecovery(result) {
   try {
     const envelope = JSON.parse(result.content[0]?.text ?? "{}");
@@ -22078,6 +22124,9 @@ async function runIOS(args) {
   if (!resp.ok) {
     const message = resp.error?.message ?? "runner returned !ok with no error";
     const code = resp.error?.code;
+    if (code === "RUNNER_TIMEOUT") {
+      return args.command === "type" ? containTypeTimeout(args) : containRunnerTimeout(args.command, message);
+    }
     if (args.command === "type" && typeof message === "string" && message.includes("main thread execution timed out")) {
       return containTypeTimeout(args);
     }
@@ -24661,7 +24710,10 @@ async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
     if (plugin !== null)
       budget.recordRebuild(plugin);
     const ensure = deps.ensure ?? ensureFastRunner;
-    await ensure(deviceId, bundleId, { forceLocalBuild: true });
+    await ensure(deviceId, bundleId, {
+      forceLocalBuild: true,
+      ...deps.attachOnly === true ? { attachOnly: true } : {}
+    });
   } finally {
     release();
   }
@@ -24710,7 +24762,7 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     }
     return { ok: false, message: decision.message };
   }
-  await ensure(decision.action === "spawn" ? decision.deviceId : deviceId, bundleId);
+  await ensure(decision.action === "spawn" ? decision.deviceId : deviceId, bundleId, deps.attachOnly === true ? { attachOnly: true } : {});
   const after = await probe();
   if (after.liveness === "alive") {
     if (first.staleReason && (PROTOCOL_STALE_REASONS.has(first.staleReason) || first.staleReason === "authority-mismatch")) {
@@ -28738,8 +28790,8 @@ function createAuthorityGate(runtime, dependencies) {
             before: ["C", "S", "I", "M", "D"],
             after: ["C", "S", "I", "M", "D", "R"]
           } : {
-            before: ["C", "S", "I", "M", "D", "R"],
-            after: ["C", "S", "I", "M", "D"]
+            before: ["C", "S", "I", "D", "R"],
+            after: ["C", "S", "I", "D"]
           } : tool === "observe" ? args.action === "stop" ? {
             before: ["C", "S", "O"],
             after: ["C", "S"]
@@ -31061,7 +31113,8 @@ function createDeviceSnapshotHandler(deps = {}) {
       try {
         if (lockPlatform === "ios") {
           const ready = await ensureRunnerForCommand(deviceId, appId, {
-            allowArtifactRebuild: true
+            allowArtifactRebuild: true,
+            attachOnly: args.attachOnly === true
           });
           if (!ready.ok) {
             consumePendingFastRunnerArtifactNote();
@@ -31069,11 +31122,13 @@ function createDeviceSnapshotHandler(deps = {}) {
             return failResult(ready.message, ready.code ?? "RN_FAST_RUNNER_DOWN");
           }
           upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
-          await execFile13("xcrun", ["simctl", "launch", deviceId, appId], {
-            timeout: 1e4,
-            encoding: "utf8"
-          }).catch(() => {
-          });
+          if (!args.attachOnly) {
+            await execFile13("xcrun", ["simctl", "launch", deviceId, appId], {
+              timeout: 1e4,
+              encoding: "utf8"
+            }).catch(() => {
+            });
+          }
         } else {
           await startAndroidRunnerFn(deviceId, appId);
           upgradeNote = consumePendingAndroidUpgradeNote();
@@ -56037,10 +56092,24 @@ function createBuildLaunchPlan(input) {
     RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
     ...kind === "expo" ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}
   };
+  const postInstall = kind === "expo" && input.platform === "ios" && input.session.simulator === true ? {
+    command: [
+      "xcrun",
+      "simctl",
+      "launch",
+      "--terminate-running-process",
+      input.session.deviceId,
+      input.session.appId ?? conflict("appId is required for simulator Dev Client startup"),
+      "--initialUrl",
+      managedMetroProxyUrl(input.session)
+    ],
+    timeoutMs: 3e4
+  } : void 0;
   return {
     mode: "session",
     command,
-    env
+    env,
+    ...postInstall ? { postInstall } : {}
   };
 }
 
@@ -60843,7 +60912,7 @@ function managedMetroProxyUrl(binding) {
 }
 let expoProxyUrl = null;
 if (session) {
-  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string') {
+  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
     process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete\n');
     process.exit(2);
   }
@@ -60889,6 +60958,42 @@ if (child.error) {
   process.exit(1);
 }
 if (child.status !== 0) process.exit(child.status === null ? 1 : child.status);
+if (session && platform === 'ios' && expoProxyUrl && session.simulator === true) {
+  const installed = spawnSync('xcrun', ['simctl', 'get_app_container', session.deviceId, session.appId, 'app'], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
+    process.stderr.write('DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven\n');
+    process.exit(2);
+  }
+  process.stdout.write(
+    'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
+    ' with --initialUrl ' + expoProxyUrl + '\n'
+  );
+  const startup = spawnSync('xcrun', [
+    'simctl',
+    'launch',
+    '--terminate-running-process',
+    session.deviceId,
+    session.appId,
+    '--initialUrl',
+    expoProxyUrl,
+  ], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (startup.error || startup.status !== 0) {
+    const detail = startup.error?.message || String(startup.stderr).trim() || 'simulator launch failed';
+    process.stderr.write('DEV_CLIENT_STARTUP_UNCONFIRMED: ' + detail + '\n');
+    process.exit(2);
+  }
+  process.stdout.write(String(startup.stdout));
+}
 if (session) {
   const [major, minor] = process.versions.node.split('.').map(Number);
   const sqliteFlag = (major === 22 && minor >= 5) || (major === 23 && minor < 6)
@@ -61930,6 +62035,9 @@ function createSessionHandler(runtime, dependencies = {}) {
         const status2 = registry2.getSessionStatus(session.sessionId);
         if (!status2) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before managed Metro cleanup");
+        }
+        if (status2.bindings.runner) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "stop_metro requires device_snapshot action=close before releasing active runner authority");
         }
         const metro2 = status2.bindings.metroCleanup ?? status2.bindings.metro;
         if (!metro2) {
@@ -78323,12 +78431,36 @@ function createLocalAuthorityProbe(dependencies) {
       const health = await fetchJson(`http://127.0.0.1:${port}/health`, {
         headers: { authorization: `Bearer ${capability}` }
       });
-      for (const key of ["instanceId", "sessionId", "claimEpoch", "deviceId", "appId"]) {
+      if (health.ok !== true) {
+        const reason = typeof health.reason === "string" && health.reason.trim() ? `: ${health.reason.trim()}` : "";
+        throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", `runner health is not operational${reason}`);
+      }
+      for (const key of [
+        "instanceId",
+        "sessionId",
+        "claimEpoch",
+        "deviceId",
+        "appId",
+        "protocolVersion"
+      ]) {
         if (health[key] !== runner[key]) {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", `runner ${key} no longer matches the session binding`);
         }
       }
-      return { axis, identity: identity({ health, pid, processBirth }) };
+      return {
+        axis,
+        identity: identity({
+          port,
+          pid,
+          processBirth,
+          instanceId: runner.instanceId,
+          sessionId: runner.sessionId,
+          claimEpoch: runner.claimEpoch,
+          deviceId: runner.deviceId,
+          appId: runner.appId,
+          protocolVersion: runner.protocolVersion
+        })
+      };
     }
     if (axis === "O") {
       const observe2 = objectBinding(status, "observe");

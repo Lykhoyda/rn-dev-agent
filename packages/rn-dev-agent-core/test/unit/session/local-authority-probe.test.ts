@@ -61,6 +61,94 @@ test('runner authority rejects a dead or PID-reused bound process before health 
   assert.equal(healthProbed, false);
 });
 
+test('runner authority identity excludes mutable health diagnostics and array ordering', async () => {
+  const runner = {
+    platform: 'ios',
+    port: 9100,
+    pid: 123,
+    processBirth: 'runner-birth',
+    capability: 'runner-capability',
+    instanceId: 'runner-instance',
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    deviceId: 'SIM-A',
+    appId: 'dev.example',
+    protocolVersion: 4,
+  };
+  let health = {
+    ok: true,
+    commands: ['snapshot', 'tap'],
+    capabilities: ['HONEST_HITTABLE', 'SCREEN_STATIC'],
+    instanceId: runner.instanceId,
+    sessionId: runner.sessionId,
+    claimEpoch: runner.claimEpoch,
+    deviceId: runner.deviceId,
+    appId: runner.appId,
+    protocolVersion: runner.protocolVersion,
+  };
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      inspectOwner: () => 'match',
+      fetchJson: async () => health,
+    }),
+  );
+  const status = statusWith({ runner });
+
+  const before = await probe({ axis: 'R', phase: 'preflight', status });
+  health = {
+    protocolVersion: runner.protocolVersion,
+    appId: runner.appId,
+    deviceId: runner.deviceId,
+    claimEpoch: runner.claimEpoch,
+    sessionId: runner.sessionId,
+    instanceId: runner.instanceId,
+    capabilities: ['SCREEN_STATIC', 'HONEST_HITTABLE'],
+    commands: ['tap', 'snapshot'],
+    ok: true,
+  };
+  const after = await probe({ axis: 'R', phase: 'postflight', status });
+
+  assert.equal(before.identity, after.identity);
+});
+
+test('runner authority reports wedged health as a typed ownership mismatch', async () => {
+  const runner = {
+    port: 9100,
+    pid: 123,
+    processBirth: 'runner-birth',
+    capability: 'runner-capability',
+    instanceId: 'runner-instance',
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    deviceId: 'SIM-A',
+    appId: 'dev.example',
+    protocolVersion: 4,
+  };
+  const probe = createLocalAuthorityProbe(
+    dependencies({
+      inspectOwner: () => 'match',
+      fetchJson: async () => ({
+        ok: false,
+        reason: 'wedged',
+        instanceId: runner.instanceId,
+        sessionId: runner.sessionId,
+        claimEpoch: runner.claimEpoch,
+        deviceId: runner.deviceId,
+        appId: runner.appId,
+        protocolVersion: runner.protocolVersion,
+      }),
+    }),
+  );
+
+  await assert.rejects(
+    () => probe({ axis: 'R', phase: 'postflight', status: statusWith({ runner }) }),
+    (error) =>
+      error instanceof SessionAuthorityError &&
+      error.code === 'RUNNER_OWNERSHIP_MISMATCH' &&
+      /wedged/.test(error.message),
+  );
+});
+
 test('bundle probe normalizes CDP transport failure to optional bundle unavailability', async () => {
   const probe = createLocalAuthorityProbe(
     dependencies({
