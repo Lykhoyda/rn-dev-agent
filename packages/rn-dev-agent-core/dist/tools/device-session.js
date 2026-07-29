@@ -56,10 +56,8 @@ export function deviceBusyMessage(deviceId, holder) {
         `Close that session or target a different simulator.`);
 }
 /**
- * B112 (D641): check whether a given bundleId is currently running on the
- * exact selected device. iOS uses that simulator UDID with `simctl spawn`;
- * Android uses that adb serial with `adb shell pidof`. Missing identity refuses
- * instead of consulting the ambiguous `booted` alias.
+ * Check app liveness on the exact selected device; never use an ambiguous
+ * simulator or adb target.
  */
 export async function isAppRunning(platform, bundleId, probes, deviceId) {
     const p = (platform ?? 'ios').toLowerCase();
@@ -234,8 +232,8 @@ export function createDeviceSnapshotHandler(deps = {}) {
                     // GH #382: an upgrade note wins; otherwise surface the artifact note
                     // (e.g. "downloaded prebuilt runner (~4 MB)").
                     upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
-                    // A bare simctl launch foregrounds a running PID without relaunch —
-                    // safe whether or not attachOnly; ignore errors (app may be frontmost).
+                    // Full-open foregrounding may be best-effort; attach-only activation
+                    // is performed by XCTest under target process-identity checks.
                     if (!args.attachOnly) {
                         await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
                             timeout: 10_000,
