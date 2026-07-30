@@ -9,7 +9,11 @@ import {
 } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
-import { createMaestroRunHandler } from './maestro-run.js';
+import {
+  createMaestroRunHandler,
+  nestedMaestroAuthorityCallbacks,
+  type MaestroRunArgs,
+} from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
@@ -23,7 +27,7 @@ export interface LockE2eTestArgs {
 }
 
 export interface LockE2eTestDeps {
-  maestroRun?: (args: Record<string, unknown>) => Promise<ToolResult>;
+  maestroRun?: (args: MaestroRunArgs) => Promise<ToolResult>;
   loadAction?: typeof loadAction;
   readActionFile?: (path: string) => string;
   getGitInfo?: (projectRoot: string) => { sha: string | null; dirty: boolean };
@@ -89,12 +93,13 @@ export async function lockE2eTestCore(
   const session = getSession();
   const platform = (session?.platform as 'ios' | 'android' | undefined) ?? undefined;
 
-  const runArgs: Record<string, unknown> = {
+  const runArgs: MaestroRunArgs = {
     flowPath: action.filePath,
     platform,
     ...(session?.deviceId ? { deviceId: session.deviceId } : {}),
+    ...nestedMaestroAuthorityCallbacks(args),
   };
-  if (resolvedParams) runArgs['params'] = resolvedParams;
+  if (resolvedParams) runArgs.params = resolvedParams;
 
   const result = await maestroRun(runArgs);
   const { passed, output } = readPassed(result);

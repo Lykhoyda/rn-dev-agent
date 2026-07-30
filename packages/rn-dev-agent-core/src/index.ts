@@ -177,7 +177,10 @@ import { buildMirrorTargetResolver } from './observability/mirror/target.js';
 import { createMirrorSource } from './observability/mirror/sources.js';
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
-import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
+import {
+  createRunE2eSuiteHandler,
+  type RunE2eSuiteArgs,
+} from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
@@ -3571,11 +3574,12 @@ const e2eCsrfToken = makeCsrfToken();
 const projectRootFor = (): string =>
   findProjectRoot({ bundleId: getActiveSession()?.appId }) ?? process.cwd();
 
-const triggerE2eRun = async (pattern?: string): Promise<unknown> => {
+const triggerE2eRun = async (args: RunE2eSuiteArgs): Promise<unknown> => {
   const L = arbiter.tryAcquire('flow', 'cdp_run_e2e_suite');
   if (!L.ok) return { ok: false, error: 'a flow is already running', code: L.code };
   try {
-    const r = await e2eSuiteHandler({ pattern, projectRoot: projectRootFor() });
+    args.projectRoot ??= projectRootFor();
+    const r = await e2eSuiteHandler(args);
     const env = JSON.parse(r.content[0].text) as {
       ok?: boolean;
       data?: { runId?: string | null; verdict?: string | null };
@@ -3603,8 +3607,8 @@ const observeRunActionHandler = authorityGate.wrap(
   runActionHandler as (...args: unknown[]) => Promise<unknown>,
 );
 const observeTriggerRun = authorityGate.wrap('cdp_run_e2e_suite', async (...raw: unknown[]) => {
-  const args = (raw[0] ?? {}) as { pattern?: string };
-  return okResult(await triggerE2eRun(args.pattern));
+  const args = (raw[0] ?? {}) as RunE2eSuiteArgs;
+  return okResult(await triggerE2eRun(args));
 });
 const gatedObserveState = (
   tool: string,

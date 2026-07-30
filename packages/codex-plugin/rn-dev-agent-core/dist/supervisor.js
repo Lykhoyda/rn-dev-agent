@@ -17583,12 +17583,22 @@ function authorityProfileFor(tool, args = {}) {
       liveBundleProbe: storageMutation
     };
   }
+  if (tool === "cdp_lock_e2e_test" || tool === "cdp_run_e2e_suite") {
+    const profile2 = profiles.get(tool);
+    return {
+      ...profile2,
+      axes: profile2.axes.filter((axis) => axis !== "A"),
+      managedOrigin: true,
+      managedRunnerPark: true
+    };
+  }
   if (tool === "maestro_run" || tool === "maestro_test_all") {
     return {
       kind: "authoritative",
       axes: ["C", "S", "I", "M", "D", "R"],
       postflightAxes: ["C", "S", "I", "M", "D"],
       managedOrigin: true,
+      managedRunnerPark: true,
       mutation: true,
       liveBundleProbe: false
     };
@@ -17739,6 +17749,7 @@ var init_tool_profiles = __esm({
       axes: ["C", "S", "I", "M", "D", "R"],
       optionalAxes: ["B"],
       managedOrigin: true,
+      managedRunnerPark: true,
       mutation: true,
       liveBundleProbe: true
     });
@@ -18525,7 +18536,7 @@ function createAuthorityGate(runtime, dependencies) {
             }
           });
         }
-        if (tool === "maestro_run" || tool === "maestro_test_all" || tool === "cdp_run_action") {
+        if (profile.managedRunnerPark) {
           Object.defineProperty(args, managedRunnerPark, {
             configurable: true,
             value: async () => {
@@ -18795,6 +18806,14 @@ function assembleMaestroArgs(baseArgs, paramArgs) {
     return baseArgs;
   return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
 }
+function nestedMaestroAuthorityCallbacks(args) {
+  return {
+    claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
+    completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
+  };
+}
 function commandName(command) {
   if (typeof command === "string")
     return command;
@@ -18986,9 +19005,10 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(strictRefusal, "ENGINE_PIN_MISMATCH");
     }
     try {
-      const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? (() => claimManagedNativeOriginAuthority(args));
-      const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
-      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? (() => relaunchManagedNativeOriginApp(args));
+      const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+      const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+      const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
+      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         const remainingTimeout = flowDeadline - now();
         if (remainingTimeout <= 0) {
@@ -19005,7 +19025,7 @@ function createMaestroRunHandler(deps = {}) {
       }, claimOrigin, completeOrigin, relaunchManagedApp), {
         platform,
         deviceId: requestedDeviceId,
-        completeRunnerPark: args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args))
+        completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark
       });
       const stdout = stageResults.map((result) => result.stdout).join("\n");
       const stderr = stageResults.map((result) => result.stderr).join("\n");
@@ -79739,10 +79759,11 @@ async function lockE2eTestCore(args, deps = {}) {
   const runArgs = {
     flowPath: action.filePath,
     platform,
-    ...session?.deviceId ? { deviceId: session.deviceId } : {}
+    ...session?.deviceId ? { deviceId: session.deviceId } : {},
+    ...nestedMaestroAuthorityCallbacks(args)
   };
   if (resolvedParams)
-    runArgs["params"] = resolvedParams;
+    runArgs.params = resolvedParams;
   const result = await maestroRun(runArgs);
   const { passed, output } = readPassed(result);
   if (!passed) {
@@ -80030,6 +80051,7 @@ async function runE2eSuiteCore(args, deps = {}) {
   const platform = session?.platform ?? "ios";
   const deviceId = args.deviceId ?? session?.deviceId ?? null;
   const git = getGit(projectRoot);
+  const maestroAuthority = nestedMaestroAuthorityCallbacks(args);
   let metroReloaded = false;
   if (deps.runReload) {
     try {
@@ -80059,7 +80081,9 @@ async function runE2eSuiteCore(args, deps = {}) {
       const result2 = await maestroRun({
         flowPath: locked.filePath,
         platform,
-        params: resolved.params
+        ...deviceId ? { deviceId } : {},
+        params: resolved.params,
+        ...maestroAuthority
       });
       const { passed: passed2, output: output2 } = readMaestro(result2);
       const safeOutput = redactSecrets(output2, secretValuesFor(config2, resolved.params));
@@ -80076,7 +80100,9 @@ async function runE2eSuiteCore(args, deps = {}) {
     const t0 = now().getTime();
     const result = await maestroRun({
       flowPath: locked.filePath,
-      platform
+      platform,
+      ...deviceId ? { deviceId } : {},
+      ...maestroAuthority
     });
     const { passed, output } = readMaestro(result);
     results.push(classifyFlowResult({
@@ -82491,12 +82517,13 @@ var init_index = __esm({
     }, e2eSuiteHandler);
     e2eCsrfToken = makeCsrfToken();
     projectRootFor = () => findProjectRoot({ bundleId: getActiveSession()?.appId }) ?? process.cwd();
-    triggerE2eRun = async (pattern) => {
+    triggerE2eRun = async (args) => {
       const L = arbiter.tryAcquire("flow", "cdp_run_e2e_suite");
       if (!L.ok)
         return { ok: false, error: "a flow is already running", code: L.code };
       try {
-        const r = await e2eSuiteHandler({ pattern, projectRoot: projectRootFor() });
+        args.projectRoot ??= projectRootFor();
+        const r = await e2eSuiteHandler(args);
         const env = JSON.parse(r.content[0].text);
         recorder.push({
           type: "e2e-done",
@@ -82518,7 +82545,7 @@ var init_index = __esm({
     observeRunActionHandler = authorityGate.wrap("cdp_run_action", runActionHandler);
     observeTriggerRun = authorityGate.wrap("cdp_run_e2e_suite", async (...raw) => {
       const args = raw[0] ?? {};
-      return okResult(await triggerE2eRun(args.pattern));
+      return okResult(await triggerE2eRun(args));
     });
     gatedObserveState = (tool, handler, args) => authorityGate.wrap(tool, handler)(args);
     setObserveE2eDeps({

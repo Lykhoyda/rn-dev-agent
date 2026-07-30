@@ -102,7 +102,7 @@ export function assembleMaestroArgs(baseArgs: string[], paramArgs: string[]): st
   return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
 }
 
-interface MaestroRunArgs {
+export interface MaestroRunArgs {
   flowPath?: string;
   inlineYaml?: string;
   platform?: 'ios' | 'android';
@@ -125,6 +125,23 @@ interface MaestroRunArgs {
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
   completeRunnerPark?: () => Promise<void>;
+}
+
+export interface MaestroAuthorityCallbacks {
+  claimNativeOrigin: () => Promise<void>;
+  completeNativeOrigin: (targetExpected: boolean) => Promise<void>;
+  relaunchManagedApp: () => Promise<void>;
+  completeRunnerPark: () => Promise<void>;
+}
+
+export function nestedMaestroAuthorityCallbacks(args: object): MaestroAuthorityCallbacks {
+  return {
+    claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
+    completeNativeOrigin: (targetExpected) =>
+      completeManagedNativeOriginAuthority(args, targetExpected),
+    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+  };
 }
 
 interface AuthorityStage {
@@ -484,18 +501,15 @@ export function createMaestroRunHandler(
       // logs routinely exceeds Node's 1MB execFile default, which would kill
       // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
       // run as a failure.
+      const managedAuthority = nestedMaestroAuthorityCallbacks(args);
       const claimOrigin =
-        args.claimNativeOrigin ??
-        deps.claimNativeOrigin ??
-        (() => claimManagedNativeOriginAuthority(args));
+        args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
       const completeOrigin =
         args.completeNativeOrigin ??
         deps.completeNativeOrigin ??
-        ((targetExpected: boolean) => completeManagedNativeOriginAuthority(args, targetExpected));
+        managedAuthority.completeNativeOrigin;
       const relaunchManagedApp =
-        args.relaunchManagedApp ??
-        deps.relaunchManagedApp ??
-        (() => relaunchManagedNativeOriginApp(args));
+        args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const stageResults = await parkFlow(
         () =>
           executeMaestroAuthorityStages(
@@ -526,7 +540,7 @@ export function createMaestroRunHandler(
           platform,
           deviceId: requestedDeviceId,
           completeRunnerPark:
-            args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args)),
+            args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
         },
       );
       const stdout = stageResults.map((result) => result.stdout).join('\n');

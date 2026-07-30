@@ -139,6 +139,14 @@ test('param-needing action + config with values → frozen (maestroRun receives 
     assert.ok(capturedArgs !== null, 'maestroRun should have been called');
     assert.deepEqual(capturedArgs.params, { EMAIL: 'test@example.com' });
     assert.equal(capturedArgs.deviceId, 'udid');
+    for (const callback of [
+      'claimNativeOrigin',
+      'completeNativeOrigin',
+      'relaunchManagedApp',
+      'completeRunnerPark',
+    ]) {
+      assert.equal(typeof capturedArgs[callback], 'function');
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

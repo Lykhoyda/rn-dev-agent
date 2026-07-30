@@ -94,7 +94,7 @@ import { buildMirrorTargetResolver } from './observability/mirror/target.js';
 import { createMirrorSource } from './observability/mirror/sources.js';
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
-import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
+import { createRunE2eSuiteHandler, } from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
@@ -2635,12 +2635,13 @@ const e2eCsrfToken = makeCsrfToken();
 // sibling RN repo can't hijack findProjectRoot()'s heuristic scan (which would
 // empty the Regression actions list and make the suite discover zero tests).
 const projectRootFor = () => findProjectRoot({ bundleId: getActiveSession()?.appId }) ?? process.cwd();
-const triggerE2eRun = async (pattern) => {
+const triggerE2eRun = async (args) => {
     const L = arbiter.tryAcquire('flow', 'cdp_run_e2e_suite');
     if (!L.ok)
         return { ok: false, error: 'a flow is already running', code: L.code };
     try {
-        const r = await e2eSuiteHandler({ pattern, projectRoot: projectRootFor() });
+        args.projectRoot ??= projectRootFor();
+        const r = await e2eSuiteHandler(args);
         const env = JSON.parse(r.content[0].text);
         recorder.push({
             type: 'e2e-done',
@@ -2663,7 +2664,7 @@ const runActionHandler = createRunActionHandler({
 const observeRunActionHandler = authorityGate.wrap('cdp_run_action', runActionHandler);
 const observeTriggerRun = authorityGate.wrap('cdp_run_e2e_suite', async (...raw) => {
     const args = (raw[0] ?? {});
-    return okResult(await triggerE2eRun(args.pattern));
+    return okResult(await triggerE2eRun(args));
 });
 const gatedObserveState = (tool, handler, args) => authorityGate.wrap(tool, handler)(args);
 setObserveE2eDeps({

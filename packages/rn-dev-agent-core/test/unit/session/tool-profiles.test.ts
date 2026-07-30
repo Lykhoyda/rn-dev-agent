@@ -54,6 +54,9 @@ test('device_find click and lifecycle tools use mutation-aware origin authority'
     assert.equal(profile.axes.includes('A'), false);
     assert.equal(profile.managedOrigin, true);
   }
+  for (const tool of ['maestro_run', 'maestro_test_all']) {
+    assert.equal(authorityProfileFor(tool).managedRunnerPark, true);
+  }
   const storageReset = authorityProfileFor('device_reset_state', { storageKeys: ['token'] });
   assert.equal(storageReset.axes.includes('B'), true);
   assert.equal(storageReset.postflightAxes?.includes('B'), false);
@@ -84,6 +87,9 @@ test('hybrid execution separates required and optional bundle authority', () => 
     assert.equal(profile.axes.includes('B'), true);
     assert.equal(profile.axes.includes('R'), true);
   }
+  const suite = authorityProfileFor('cdp_run_e2e_suite');
+  assert.equal(suite.managedOrigin, true);
+  assert.equal(suite.managedRunnerPark, true);
   const action = authorityProfileFor('cdp_run_action');
   assert.equal(action.axes.includes('B'), false);
   assert.equal(action.axes.includes('A'), false);
@@ -98,10 +104,11 @@ test('lock and live navigation paths receive exact mutation authority', () => {
     'S',
     'I',
     'M',
-    'A',
     'D',
     'R',
   ]);
+  assert.equal(authorityProfileFor('cdp_lock_e2e_test').managedOrigin, true);
+  assert.equal(authorityProfileFor('cdp_lock_e2e_test').managedRunnerPark, true);
   assert.deepEqual(authorityProfileFor('cdp_nav_graph', { action: 'read' }).axes, ['C', 'S']);
   assert.deepEqual(authorityProfileFor('cdp_nav_graph', { action: 'navigate' }).axes, ['C', 'S']);
   for (const action of ['scan', 'go']) {

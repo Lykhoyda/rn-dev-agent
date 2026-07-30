@@ -57,6 +57,14 @@ export function assembleMaestroArgs(baseArgs, paramArgs) {
         return baseArgs;
     return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
 }
+export function nestedMaestroAuthorityCallbacks(args) {
+    return {
+        claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
+        completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+        relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+    };
+}
 export class MaestroStageExecutionError extends Error {
     completedResults;
     stageError;
@@ -321,15 +329,12 @@ export function createMaestroRunHandler(deps = {}) {
             // logs routinely exceeds Node's 1MB execFile default, which would kill
             // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
             // run as a failure.
-            const claimOrigin = args.claimNativeOrigin ??
-                deps.claimNativeOrigin ??
-                (() => claimManagedNativeOriginAuthority(args));
+            const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+            const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
             const completeOrigin = args.completeNativeOrigin ??
                 deps.completeNativeOrigin ??
-                ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
-            const relaunchManagedApp = args.relaunchManagedApp ??
-                deps.relaunchManagedApp ??
-                (() => relaunchManagedNativeOriginApp(args));
+                managedAuthority.completeNativeOrigin;
+            const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
             const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
                 const remainingTimeout = flowDeadline - now();
                 if (remainingTimeout <= 0) {
@@ -346,7 +351,7 @@ export function createMaestroRunHandler(deps = {}) {
             }, claimOrigin, completeOrigin, relaunchManagedApp), {
                 platform,
                 deviceId: requestedDeviceId,
-                completeRunnerPark: args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args)),
+                completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
             });
             const stdout = stageResults.map((result) => result.stdout).join('\n');
             const stderr = stageResults.map((result) => result.stderr).join('\n');

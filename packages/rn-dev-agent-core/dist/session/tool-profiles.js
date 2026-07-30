@@ -131,6 +131,7 @@ add(optionalHybridMutation, {
     axes: ['C', 'S', 'I', 'M', 'D', 'R'],
     optionalAxes: ['B'],
     managedOrigin: true,
+    managedRunnerPark: true,
     mutation: true,
     liveBundleProbe: true,
 });
@@ -205,12 +206,22 @@ export function authorityProfileFor(tool, args = {}) {
             liveBundleProbe: storageMutation,
         };
     }
+    if (tool === 'cdp_lock_e2e_test' || tool === 'cdp_run_e2e_suite') {
+        const profile = profiles.get(tool);
+        return {
+            ...profile,
+            axes: profile.axes.filter((axis) => axis !== 'A'),
+            managedOrigin: true,
+            managedRunnerPark: true,
+        };
+    }
     if (tool === 'maestro_run' || tool === 'maestro_test_all') {
         return {
             kind: 'authoritative',
             axes: ['C', 'S', 'I', 'M', 'D', 'R'],
             postflightAxes: ['C', 'S', 'I', 'M', 'D'],
             managedOrigin: true,
+            managedRunnerPark: true,
             mutation: true,
             liveBundleProbe: false,
         };

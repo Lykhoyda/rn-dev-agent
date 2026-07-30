@@ -10357,6 +10357,7 @@ var init_tool_profiles = __esm({
       axes: ["C", "S", "I", "M", "D", "R"],
       optionalAxes: ["B"],
       managedOrigin: true,
+      managedRunnerPark: true,
       mutation: true,
       liveBundleProbe: true
     });
