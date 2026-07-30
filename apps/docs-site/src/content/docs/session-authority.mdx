@@ -70,7 +70,7 @@ If marker signing is unavailable, Metro may emit an unsigned `unavailable` marke
 
 All published tools have an exhaustive profile. Session-bound arguments omitted by legacy callers are filled only from the current session; a conflicting platform, device, app, port, or target returns a named authority error.
 
-Native runner reads and mutations use the exact install, Metro, device, and capability-authenticated runner identities, then prove that the bound app and device still appear on the authority-bound Metro's live target list. This origin check does not require a live CDP debugger seat. CDP reads and mutations additionally require the exact signed bundle target.
+Native runner reads and mutations use the exact install, Metro, device, and capability-authenticated runner identities, then prove that the bound app and device still appear on the authority-bound Metro's live target list. Cached native evidence can be consumed later only while its platform-specific runner and app-to-Metro origin remain live and authoritative. This origin check does not require a live CDP debugger seat. CDP reads and mutations additionally require the exact signed bundle target.
 
 Runner identity is immutable across an operation: process birth, endpoint capability, instance, session, claim epoch, device, app, and protocol must keep matching the binding. Operational health is checked separately and must report `ok: true`; transient health fields do not redefine identity. On iOS, `attachOnly: true` also requires an already-running target and preserves its process identity while activating it, otherwise the runner fails closed.
 
