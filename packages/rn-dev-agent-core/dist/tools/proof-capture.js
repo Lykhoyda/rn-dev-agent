@@ -120,6 +120,22 @@ export const proofCaptureInputSchema = z.discriminatedUnion('action', [
     sessionActionSchema('discard'),
     sessionActionSchema('contract'),
 ]);
+const proofGateBoundIdentityKeys = [
+    'platform',
+    'deviceId',
+    'appId',
+    'bundleId',
+    'metroPort',
+];
+function proofActionPayload(unparsedArgs) {
+    if (!unparsedArgs || typeof unparsedArgs !== 'object' || Array.isArray(unparsedArgs)) {
+        return unparsedArgs;
+    }
+    const payload = { ...unparsedArgs };
+    for (const key of proofGateBoundIdentityKeys)
+        delete payload[key];
+    return payload;
+}
 const PROOF_VIDEO_TAIL_TOLERANCE_MS = 2_000;
 export function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
     if (timestamps.length !== steps.length)
@@ -989,7 +1005,7 @@ export function createProofCaptureHandler(deps) {
         return { evidence, reasons: [...new Set(reasons)] };
     };
     return async (unparsedArgs) => {
-        const parsed = proofCaptureInputSchema.safeParse(unparsedArgs);
+        const parsed = proofCaptureInputSchema.safeParse(proofActionPayload(unparsedArgs));
         if (!parsed.success) {
             const action = unparsedArgs?.action;
             const reason = action === 'finalize' ? 'EVIDENCE_REVIEW_INVALID' : 'INVALID_PROOF_INPUT';

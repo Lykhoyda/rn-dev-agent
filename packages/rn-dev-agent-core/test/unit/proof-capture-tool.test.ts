@@ -30,6 +30,7 @@ import {
   type ProofCaptureDeps,
   type ProofReadiness,
 } from '../../dist/tools/proof-capture.js';
+import { createAuthorityGate } from '../../dist/session/authority-gate.js';
 import type { MediaValidationResult } from '../../dist/tools/proof-media.js';
 import type { MediaProcess, MediaValidationInput } from '../../dist/tools/proof-media.js';
 import type { DeviceRecordArgs } from '../../dist/tools/device-record.js';
@@ -799,6 +800,23 @@ test('strict action schemas reject unknown and cross-action fields', () => {
   assert.equal(proofCaptureInputSchema.safeParse(beginArgs()).success, true);
 });
 
+test('strict proof union counterfactual rejects all five gate-bound identity keys', () => {
+  const parsed = proofCaptureInputSchema.safeParse({
+    ...beginArgs(),
+    platform: 'ios',
+    deviceId: 'SIM-1',
+    appId: 'dev.rnproof.fixture',
+    bundleId: 'dev.rnproof.fixture',
+    metroPort: 8081,
+  });
+
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+  const issue = parsed.error.issues.find((candidate) => candidate.code === 'unrecognized_keys');
+  assert.ok(issue && issue.code === 'unrecognized_keys');
+  assert.deepEqual(issue.keys, ['platform', 'deviceId', 'appId', 'bundleId', 'metroPort']);
+});
+
 test('published proof schema is an object superset while handler schema stays branch-strict', () => {
   const published = proofCapturePublishedInputSchema.safeParse({
     action: 'status',
@@ -853,6 +871,158 @@ test('registered MCP proof surface preserves a complete begin_rehearsal payload'
 
   assert.equal(parsed.ok, true, JSON.stringify(parsed));
   assert.deepEqual(parsed.data, { stage: 'rehearsing', runId: 'run-42' });
+});
+
+async function createGateComposedProofSurface(t: TestContext) {
+  const projectRoot = await realpath(await mkdtemp(join(tmpdir(), 'proof-gate-surface-')));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const harness = createHarness(t, projectRoot);
+  const bindings: Record<string, unknown> = {
+    install: {
+      digest: 'install-test',
+      platform: 'ios',
+      deviceId: 'SIM-1',
+      appId: 'dev.rnproof.fixture',
+    },
+    metro: { instanceId: 'metro-test', port: 8081 },
+    bundle: {
+      targetId: 'target-test',
+      connectionGeneration: 1,
+      authorityScope: 'initial-bundle',
+      sourceFidelity: 'not-proven',
+    },
+    device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.rnproof.fixture' },
+    runner: { instanceId: 'runner-test' },
+    proof: null,
+  };
+  const status = {
+    available: true,
+    sessionId: 'session-test',
+    sourceKey: 'source-test',
+    worktreeKey: 'worktree-test',
+    appRootKey: 'app-test',
+    state: 'ready',
+    claimEpoch: 1,
+    authorityVersion: 2,
+    leaseUntilMs: Date.now() + 60_000,
+    source: { kind: 'git', appRoot: projectRoot },
+    bindings,
+    claims: [],
+    worker: { instanceId: 'worker-test', pid: 42, birthAvailable: true },
+  };
+  const replaceBindings = (
+    operation: {
+      operationId: string;
+      sessionId: string;
+      claimEpoch: number;
+      authorityVersion: number;
+    },
+    nextBindings: Record<string, unknown>,
+  ) => {
+    status.bindings = { ...status.bindings, ...nextBindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const registry = {
+    beginOperation: (
+      _session: unknown,
+      input: { operationId: string; tool: string; profile: string },
+    ) => ({
+      operationId: input.operationId,
+      sessionId: status.sessionId,
+      claimEpoch: status.claimEpoch,
+      authorityVersion: status.authorityVersion,
+    }),
+    verifyOperation: () => undefined,
+    runWithOperation: async (
+      _operation: unknown,
+      callback: () => Promise<unknown>,
+    ): Promise<unknown> => callback(),
+    replaceBindingsDuringOperation: (
+      operation: {
+        operationId: string;
+        sessionId: string;
+        claimEpoch: number;
+        authorityVersion: number;
+      },
+      input: { bindings: Record<string, unknown> },
+    ) => replaceBindings(operation, input.bindings),
+    endOperationWithBindings: (_operation: unknown, nextBindings: Record<string, unknown>) => {
+      status.bindings = { ...status.bindings, ...nextBindings };
+      status.authorityVersion += 1;
+    },
+    commitPlatformAuthorityReceipts: () => undefined,
+    endOperation: () => undefined,
+    cancelOperation: () => undefined,
+  };
+  const gate = createAuthorityGate(
+    {
+      requireAvailable: () => ({
+        registry,
+        session: { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
+      }),
+      status: () => status,
+    },
+    {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    },
+  );
+  const wrapped = gate.wrap('proof_capture', async (args) =>
+    harness.handler(args as ProofCaptureArgs),
+  );
+  const server = new McpServer({ name: 'proof-gate-surface-test', version: '1.0.0' });
+  server.tool(
+    'proof_capture',
+    'Strict proof capture gate-composition test surface.',
+    proofCapturePublishedInputSchema.shape,
+    async (args) => (await wrapped(args)) as ToolResult,
+  );
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'proof-gate-surface-client', version: '1.0.0' });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return { client, projectRoot, wrapped };
+}
+
+test('gate-composed MCP proof surface accepts verified bound identity for every proof profile', async (t) => {
+  const surface = await createGateComposedProofSurface(t);
+  const begun = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(surface.projectRoot),
+  });
+  const beginEnvelope = JSON.parse(begun.content[0]!.text as string);
+
+  assert.equal(beginEnvelope.ok, true, JSON.stringify(beginEnvelope));
+  assert.deepEqual(beginEnvelope.data, { stage: 'rehearsing', runId: 'run-42' });
+
+  const discarded = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: { action: 'discard' },
+  });
+  const discardEnvelope = JSON.parse(discarded.content[0]!.text as string);
+
+  assert.equal(discardEnvelope.ok, true, JSON.stringify(discardEnvelope));
+  assert.deepEqual(discardEnvelope.data, { stage: 'idle', discarded: true });
+});
+
+test('gate-composed proof handler rejects undeclared caller fields beyond bound identity', async (t) => {
+  const surface = await createGateComposedProofSurface(t);
+  const result = (await surface.wrapped({
+    ...beginArgs(surface.projectRoot),
+    untrustedField: true,
+  })) as ToolResult;
+  const parsed = envelope(result);
+
+  assert.equal(parsed.ok, false);
+  assert.deepEqual(parsed.meta, {
+    reasons: ['INVALID_PROOF_INPUT'],
+    stage: 'idle',
+    authoritative: false,
+  });
 });
 
 test('begin rejects root and artifact path attacks before monitor, recording, or file IO', async (t) => {

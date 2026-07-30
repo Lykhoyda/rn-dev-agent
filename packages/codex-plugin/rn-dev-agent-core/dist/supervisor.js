@@ -73889,6 +73889,15 @@ import { execFileSync as execFileSync13 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync12, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync29, realpathSync as realpathSync10, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename6, dirname as dirname19, extname, isAbsolute as isAbsolute7, join as join41, relative as relative5, resolve as resolve10, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
+function proofActionPayload(unparsedArgs) {
+  if (!unparsedArgs || typeof unparsedArgs !== "object" || Array.isArray(unparsedArgs)) {
+    return unparsedArgs;
+  }
+  const payload = { ...unparsedArgs };
+  for (const key of proofGateBoundIdentityKeys)
+    delete payload[key];
+  return payload;
+}
 function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   if (timestamps.length !== steps.length)
     return ["SCREENSHOT_TIMESTAMPS_INVALID"];
@@ -74604,7 +74613,7 @@ function createProofCaptureHandler(deps) {
     return { evidence, reasons: [...new Set(reasons)] };
   };
   return async (unparsedArgs) => {
-    const parsed = proofCaptureInputSchema.safeParse(unparsedArgs);
+    const parsed = proofCaptureInputSchema.safeParse(proofActionPayload(unparsedArgs));
     if (!parsed.success) {
       const action = unparsedArgs?.action;
       const reason = action === "finalize" ? "EVIDENCE_REVIEW_INVALID" : "INVALID_PROOF_INPUT";
@@ -75133,7 +75142,7 @@ function createProofCaptureHandler(deps) {
     return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
   };
 }
-var absolutePathSchema, beginRehearsalSchema, sessionActionSchema, validateSchema, finalizeSchema, proofCapturePublishedInputSchema, proofCaptureInputSchema, PROOF_VIDEO_TAIL_TOLERANCE_MS, readinessSchema, proofWorkerStartup;
+var absolutePathSchema, beginRehearsalSchema, sessionActionSchema, validateSchema, finalizeSchema, proofCapturePublishedInputSchema, proofCaptureInputSchema, proofGateBoundIdentityKeys, PROOF_VIDEO_TAIL_TOLERANCE_MS, readinessSchema, proofWorkerStartup;
 var init_proof_capture2 = __esm({
   "packages/rn-dev-agent-core/dist/tools/proof-capture.js"() {
     "use strict";
@@ -75209,6 +75218,13 @@ var init_proof_capture2 = __esm({
       sessionActionSchema("discard"),
       sessionActionSchema("contract")
     ]);
+    proofGateBoundIdentityKeys = [
+      "platform",
+      "deviceId",
+      "appId",
+      "bundleId",
+      "metroPort"
+    ];
     PROOF_VIDEO_TAIL_TOLERANCE_MS = 2e3;
     readinessSchema = external_exports.object({
       cdpAttached: external_exports.boolean(),

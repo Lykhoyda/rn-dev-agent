@@ -182,6 +182,23 @@ export const proofCaptureInputSchema = z.discriminatedUnion('action', [
 export type ProofCaptureArgs = z.infer<typeof proofCaptureInputSchema>;
 type BeginRehearsalArgs = z.infer<typeof beginRehearsalSchema>;
 
+const proofGateBoundIdentityKeys = [
+  'platform',
+  'deviceId',
+  'appId',
+  'bundleId',
+  'metroPort',
+] as const;
+
+function proofActionPayload(unparsedArgs: unknown): unknown {
+  if (!unparsedArgs || typeof unparsedArgs !== 'object' || Array.isArray(unparsedArgs)) {
+    return unparsedArgs;
+  }
+  const payload = { ...(unparsedArgs as Record<string, unknown>) };
+  for (const key of proofGateBoundIdentityKeys) delete payload[key];
+  return payload;
+}
+
 export interface ProofReadiness {
   cdpAttached: boolean;
   helpersAttached: boolean;
@@ -983,7 +1000,7 @@ export function writeProofReceiptAtomic(path: string, receipt: FinalProofReceipt
 
 export function createProofCaptureHandler(
   deps: ProofCaptureDeps,
-): (args: ProofCaptureArgs) => Promise<ToolResult> {
+): (args: unknown) => Promise<ToolResult> {
   let session: Session | null = null;
   const authorityFailureCode = (error: unknown): string =>
     /^([A-Z][A-Z0-9_]+):/.exec(error instanceof Error ? error.message : String(error))?.[1] ??
@@ -1318,8 +1335,8 @@ export function createProofCaptureHandler(
     return { evidence, reasons: [...new Set(reasons)] };
   };
 
-  return async (unparsedArgs: ProofCaptureArgs): Promise<ToolResult> => {
-    const parsed = proofCaptureInputSchema.safeParse(unparsedArgs);
+  return async (unparsedArgs: unknown): Promise<ToolResult> => {
+    const parsed = proofCaptureInputSchema.safeParse(proofActionPayload(unparsedArgs));
     if (!parsed.success) {
       const action = (unparsedArgs as { action?: unknown })?.action;
       const reason = action === 'finalize' ? 'EVIDENCE_REVIEW_INVALID' : 'INVALID_PROOF_INPUT';
