@@ -17917,6 +17917,22 @@ function requireDeviceTransition(status, args) {
     }
   }
 }
+function requireRetainedRunnerOwnership(registry2, status) {
+  const runner = status.bindings.runner;
+  const device = status.bindings.device;
+  if (!runner)
+    return;
+  const platform = runner.platform;
+  const deviceId = runner.deviceId;
+  const port = runner.port;
+  if (platform !== "ios" && platform !== "android" || typeof deviceId !== "string" || typeof port !== "number" || !Number.isSafeInteger(port) || runner.sessionId !== status.sessionId || runner.claimEpoch !== status.claimEpoch || typeof runner.instanceId !== "string" || typeof runner.capability !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || device?.platform !== platform || device.deviceId !== deviceId || device.appId !== runner.appId) {
+    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "retained runner cleanup claim no longer matches the authenticated binding");
+  }
+  const claim = registry2.getClaim("runner", `${platform}:${deviceId}:${String(port)}`);
+  if (claim?.sessionId !== status.sessionId || claim.claimEpoch !== status.claimEpoch) {
+    throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "retained runner cleanup claim no longer matches the authenticated binding");
+  }
+}
 function bindExactArgument(args, field2, expected, code) {
   if (expected === void 0 || expected === null || expected === "")
     return;
@@ -18183,6 +18199,7 @@ function createAuthorityGate(runtime, dependencies) {
           let runtimeTargetChanged = false;
           const initialAuthorityVersion = status.authorityVersion;
           const gateCommitsProof = tool === "proof_capture" && args.action === "begin_rehearsal";
+          const retainsRunnerCleanupAuthority = tool === "device_snapshot" && args.action === "close" && Boolean(status.bindings.runner);
           bindSessionArguments(status, profile, args);
           if (tool === "device_snapshot")
             requireDeviceTransition(status, args);
@@ -18193,12 +18210,7 @@ function createAuthorityGate(runtime, dependencies) {
             before: ["C", "S", "I", "M", "D"],
             after: ["C", "S", "I", "M", "D", "R"]
           } : {
-            before: [
-              "C",
-              "S",
-              "D",
-              ...status.bindings.runner ? ["R"] : []
-            ],
+            before: ["C", "S", "D"],
             after: ["C", "S", "D"]
           } : tool === "observe" ? args.action === "stop" ? {
             before: ["C", "S", "O"],
@@ -18217,6 +18229,9 @@ function createAuthorityGate(runtime, dependencies) {
             profile: `transition:${transitionAxes.before.join("")}>${transitionAxes.after.join("")}`
           };
           operation2 = tool === "rn_session" && args.action === "cancel_handoff" ? registry3.beginHandoffCancellationOperation(available.session, operationInput) : registry3.beginOperation(available.session, operationInput);
+          if (retainsRunnerCleanupAuthority) {
+            requireRetainedRunnerOwnership(registry3, status);
+          }
           const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
           registry3.verifyOperation(operation2);
           const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
@@ -20957,7 +20972,7 @@ function createDeviceSnapshotHandler(deps = {}) {
   });
   const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
   const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
-  const stopAndroidRunnerFn = deps.stopAndroidRunner ?? stopAndroidRunner;
+  const reapAndroidRunner = deps.reapAndroidRunner ?? reapActiveAndroidRunner;
   return async (args) => {
     const action = args.action ?? "snapshot";
     if (action === "open") {
@@ -21047,7 +21062,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         if (lockPlatform === "ios")
           await stopIosRunner(deviceId);
         else
-          await stopAndroidRunnerFn(deviceId);
+          await reapAndroidRunner(deviceId);
         releaseDeviceLockForSession();
         consumePendingAndroidUpgradeNote();
         const msg3 = err instanceof Error ? err.message : String(err);
@@ -21079,7 +21094,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         if (lockPlatform === "ios")
           await stopIosRunner(deviceId);
         else
-          await stopAndroidRunnerFn(deviceId);
+          await reapAndroidRunner(deviceId);
         clearActiveSession();
         releaseDeviceLockForSession();
         const message = error2 instanceof Error ? error2.message : String(error2);

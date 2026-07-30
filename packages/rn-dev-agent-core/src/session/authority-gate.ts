@@ -285,6 +285,42 @@ function requireDeviceTransition(status: SessionStatus, args: Record<string, unk
   }
 }
 
+function requireRetainedRunnerOwnership(registry: SessionRegistry, status: SessionStatus): void {
+  const runner = status.bindings.runner as Record<string, unknown> | undefined;
+  const device = status.bindings.device as Record<string, unknown> | undefined;
+  if (!runner) return;
+  const platform = runner.platform;
+  const deviceId = runner.deviceId;
+  const port = runner.port;
+  if (
+    (platform !== 'ios' && platform !== 'android') ||
+    typeof deviceId !== 'string' ||
+    typeof port !== 'number' ||
+    !Number.isSafeInteger(port) ||
+    runner.sessionId !== status.sessionId ||
+    runner.claimEpoch !== status.claimEpoch ||
+    typeof runner.instanceId !== 'string' ||
+    typeof runner.capability !== 'string' ||
+    typeof runner.pid !== 'number' ||
+    typeof runner.processBirth !== 'string' ||
+    device?.platform !== platform ||
+    device.deviceId !== deviceId ||
+    device.appId !== runner.appId
+  ) {
+    throw new SessionAuthorityError(
+      'RUNNER_OWNERSHIP_MISMATCH',
+      'retained runner cleanup claim no longer matches the authenticated binding',
+    );
+  }
+  const claim = registry.getClaim('runner', `${platform}:${deviceId}:${String(port)}`);
+  if (claim?.sessionId !== status.sessionId || claim.claimEpoch !== status.claimEpoch) {
+    throw new SessionAuthorityError(
+      'RUNNER_OWNERSHIP_MISMATCH',
+      'retained runner cleanup claim no longer matches the authenticated binding',
+    );
+  }
+}
+
 function bindExactArgument(
   args: Record<string, unknown>,
   field: string,
@@ -704,6 +740,10 @@ export function createAuthorityGate(
             let runtimeTargetChanged = false;
             const initialAuthorityVersion = status.authorityVersion;
             const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
+            const retainsRunnerCleanupAuthority =
+              tool === 'device_snapshot' &&
+              args.action === 'close' &&
+              Boolean(status.bindings.runner);
             bindSessionArguments(status, profile, args);
             if (tool === 'device_snapshot') requireDeviceTransition(status, args);
             if (gateCommitsProof && status.bindings.proof) {
@@ -720,12 +760,7 @@ export function createAuthorityGate(
                       after: ['C', 'S', 'I', 'M', 'D', 'R'] as AuthorityAxis[],
                     }
                   : {
-                      before: [
-                        'C',
-                        'S',
-                        'D',
-                        ...(status.bindings.runner ? (['R'] as const) : []),
-                      ] as AuthorityAxis[],
+                      before: ['C', 'S', 'D'] as AuthorityAxis[],
                       after: ['C', 'S', 'D'] as AuthorityAxis[],
                     }
                 : tool === 'observe'
@@ -756,6 +791,9 @@ export function createAuthorityGate(
               tool === 'rn_session' && args.action === 'cancel_handoff'
                 ? registry.beginHandoffCancellationOperation(available.session, operationInput)
                 : registry.beginOperation(available.session, operationInput);
+            if (retainsRunnerCleanupAuthority) {
+              requireRetainedRunnerOwnership(registry, status);
+            }
             const before = await Promise.all(
               transitionAxes.before.map((axis) =>
                 dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),

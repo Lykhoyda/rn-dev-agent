@@ -64,6 +64,10 @@ function fixture() {
         authorityVersion: 9,
       };
     },
+    getClaim: (type, key) => {
+      calls.push(`claim:${type}:${key}`);
+      return status.claims.find((claim) => claim.type === type && claim.key === key) ?? null;
+    },
     verifyOperation: () => calls.push('cas'),
     runWithOperation: async (_operation, callback) => callback(),
     commitPlatformAuthorityReceipts: () => calls.push('commit-receipts'),
@@ -1442,12 +1446,34 @@ test('runner transitions and idempotent Observe starts probe their exact axes', 
   assert.ok(calls.includes('postflight:O'));
 });
 
-test('runner close remains authoritative after managed Metro is already absent', async () => {
+test('runner close authenticates dead retained ownership after runtime loss', async () => {
   const { runtime, calls, status } = fixture();
   status.bindings.install = null;
   status.bindings.metro = null;
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    appId: 'dev.example',
+    port: 9100,
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    instanceId: 'runner',
+    capability: 'capability',
+    pid: 42,
+    processBirth: 'process-birth',
+  };
+  status.claims = [
+    {
+      type: 'runner',
+      key: 'ios:device:9100',
+      sessionId: 'session-a',
+      claimEpoch: 4,
+      leaseUntilMs: 1000,
+    },
+  ];
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis, phase }) => {
+      if (axis === 'R') throw new Error('dead runner must not receive a live probe');
       calls.push(`${phase}:${axis}`);
       return { axis, identity: `${axis}-identity` };
     },
@@ -1461,14 +1487,44 @@ test('runner close remains authoritative after managed Metro is already absent',
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
+  assert.ok(calls.includes('claim:runner:ios:device:9100'));
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:D', 'preflight:R'],
+    ['preflight:C', 'preflight:S', 'preflight:D'],
   );
   assert.deepEqual(
     calls.filter((call) => call.startsWith('postflight:')),
     ['postflight:C', 'postflight:S', 'postflight:D'],
   );
+});
+
+test('runner close rejects a retained binding without its cleanup claim', async () => {
+  const { runtime, status } = fixture();
+  let dispatched = false;
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    appId: 'dev.example',
+    port: 9100,
+    sessionId: 'session-a',
+    claimEpoch: 4,
+    instanceId: 'runner',
+    capability: 'capability',
+    pid: 42,
+    processBirth: 'process-birth',
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('device_snapshot', async () => {
+    dispatched = true;
+    return okResult({ closed: true });
+  })({ action: 'close' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'RUNNER_OWNERSHIP_MISMATCH');
+  assert.equal(dispatched, false);
 });
 
 test('runner close is idempotent after timeout containment released its binding', async () => {

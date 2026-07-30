@@ -162,6 +162,34 @@ function requireDeviceTransition(status, args) {
         }
     }
 }
+function requireRetainedRunnerOwnership(registry, status) {
+    const runner = status.bindings.runner;
+    const device = status.bindings.device;
+    if (!runner)
+        return;
+    const platform = runner.platform;
+    const deviceId = runner.deviceId;
+    const port = runner.port;
+    if ((platform !== 'ios' && platform !== 'android') ||
+        typeof deviceId !== 'string' ||
+        typeof port !== 'number' ||
+        !Number.isSafeInteger(port) ||
+        runner.sessionId !== status.sessionId ||
+        runner.claimEpoch !== status.claimEpoch ||
+        typeof runner.instanceId !== 'string' ||
+        typeof runner.capability !== 'string' ||
+        typeof runner.pid !== 'number' ||
+        typeof runner.processBirth !== 'string' ||
+        device?.platform !== platform ||
+        device.deviceId !== deviceId ||
+        device.appId !== runner.appId) {
+        throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'retained runner cleanup claim no longer matches the authenticated binding');
+    }
+    const claim = registry.getClaim('runner', `${platform}:${deviceId}:${String(port)}`);
+    if (claim?.sessionId !== status.sessionId || claim.claimEpoch !== status.claimEpoch) {
+        throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'retained runner cleanup claim no longer matches the authenticated binding');
+    }
+}
 function bindExactArgument(args, field, expected, code) {
     if (expected === undefined || expected === null || expected === '')
         return;
@@ -489,6 +517,9 @@ export function createAuthorityGate(runtime, dependencies) {
                     let runtimeTargetChanged = false;
                     const initialAuthorityVersion = status.authorityVersion;
                     const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
+                    const retainsRunnerCleanupAuthority = tool === 'device_snapshot' &&
+                        args.action === 'close' &&
+                        Boolean(status.bindings.runner);
                     bindSessionArguments(status, profile, args);
                     if (tool === 'device_snapshot')
                         requireDeviceTransition(status, args);
@@ -502,12 +533,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                 after: ['C', 'S', 'I', 'M', 'D', 'R'],
                             }
                             : {
-                                before: [
-                                    'C',
-                                    'S',
-                                    'D',
-                                    ...(status.bindings.runner ? ['R'] : []),
-                                ],
+                                before: ['C', 'S', 'D'],
                                 after: ['C', 'S', 'D'],
                             }
                         : tool === 'observe'
@@ -538,6 +564,9 @@ export function createAuthorityGate(runtime, dependencies) {
                         tool === 'rn_session' && args.action === 'cancel_handoff'
                             ? registry.beginHandoffCancellationOperation(available.session, operationInput)
                             : registry.beginOperation(available.session, operationInput);
+                    if (retainsRunnerCleanupAuthority) {
+                        requireRetainedRunnerOwnership(registry, status);
+                    }
                     const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                     registry.verifyOperation(operation);
                     const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));

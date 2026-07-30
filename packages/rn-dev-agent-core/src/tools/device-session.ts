@@ -212,7 +212,7 @@ interface DeviceSnapshotDependencies {
   resetIosRunnerRebuildBudget?: () => void;
   ensureIosRunner?: typeof ensureRunnerForCommand;
   stopIosRunner?: typeof stopFastRunner;
-  stopAndroidRunner?: typeof stopAndroidRunner;
+  reapAndroidRunner?: typeof reapActiveAndroidRunner;
 }
 
 export function createDeviceSnapshotHandler(
@@ -240,7 +240,7 @@ export function createDeviceSnapshotHandler(
     });
   const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
   const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
-  const stopAndroidRunnerFn = deps.stopAndroidRunner ?? stopAndroidRunner;
+  const reapAndroidRunner = deps.reapAndroidRunner ?? reapActiveAndroidRunner;
   return async (args) => {
     const action = args.action ?? 'snapshot';
 
@@ -402,7 +402,7 @@ export function createDeviceSnapshotHandler(
         }
       } catch (err) {
         if (lockPlatform === 'ios') await stopIosRunner(deviceId);
-        else await stopAndroidRunnerFn(deviceId);
+        else await reapAndroidRunner(deviceId);
         releaseDeviceLockForSession();
         // GH #383: startAndroidRunner may have set a pending upgrade note (reap
         // on protocol mismatch) before throwing for an unrelated reason (adb
@@ -442,7 +442,7 @@ export function createDeviceSnapshotHandler(
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error) {
         if (lockPlatform === 'ios') await stopIosRunner(deviceId);
-        else await stopAndroidRunnerFn(deviceId);
+        else await reapAndroidRunner(deviceId);
         clearActiveSession();
         releaseDeviceLockForSession();
         const message = error instanceof Error ? error.message : String(error);

@@ -175,8 +175,8 @@ test('GH-588 final Android validation: launcher failure is not masked as runner-
       calls.push('launch');
       throw new Error('launcher exited 251');
     },
-    stopAndroidRunner: async () => {
-      calls.push('stop');
+    reapAndroidRunner: async () => {
+      calls.push('reap');
     },
   });
 
@@ -187,7 +187,7 @@ test('GH-588 final Android validation: launcher failure is not masked as runner-
     assert.equal(body.ok, false);
     assert.equal(body.code, 'APP_LAUNCH_FAILED');
     assert.match(body.error!, /launcher exited 251/);
-    assert.deepEqual(calls, ['start', 'launch', 'stop']);
+    assert.deepEqual(calls, ['start', 'launch', 'reap']);
   } finally {
     cleanup();
   }
@@ -214,8 +214,8 @@ test('GH-588 final Android validation: readiness failure reaps the started runne
         isError: true,
       };
     },
-    stopAndroidRunner: async () => {
-      calls.push('stop');
+    reapAndroidRunner: async () => {
+      calls.push('reap');
     },
   });
 
@@ -225,7 +225,7 @@ test('GH-588 final Android validation: readiness failure reaps the started runne
     );
     assert.equal(body.ok, false);
     assert.equal(body.code, 'RN_ANDROID_RUNNER_DOWN');
-    assert.deepEqual(calls, ['start', 'launch', 'ui', 'stop']);
+    assert.deepEqual(calls, ['start', 'launch', 'ui', 'reap']);
   } finally {
     cleanup();
   }
@@ -241,8 +241,8 @@ test('GH-588 final Android validation: genuine runner startup failure remains ru
     launchAndroidApp: async () => {
       throw new Error('must not launch after runner failure');
     },
-    stopAndroidRunner: async () => {
-      calls.push('stop');
+    reapAndroidRunner: async () => {
+      calls.push('reap');
     },
   });
 
@@ -253,7 +253,7 @@ test('GH-588 final Android validation: genuine runner startup failure remains ru
     assert.equal(body.ok, false);
     assert.equal(body.code, 'RN_ANDROID_RUNNER_DOWN');
     assert.match(body.error!, /instrumentation exited before readiness/);
-    assert.deepEqual(calls, ['start', 'stop']);
+    assert.deepEqual(calls, ['start', 'reap']);
   } finally {
     cleanup();
   }
