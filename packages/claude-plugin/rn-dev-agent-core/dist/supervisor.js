@@ -13140,6 +13140,19 @@ function snapshotEvidenceAuthorityIsValid(receipt2, platform) {
     return snapshotAuthorityIsValid(receipt2, platform);
   return Boolean(receipt2.platform === platform && receipt2.sessionId !== null && receipt2.claimEpoch !== null && receipt2.sourceKey !== null && receipt2.worktreeKey !== null && receipt2.appRootKey !== null && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && snapshotAuthorityProvider?.validateEvidence?.(receipt2));
 }
+async function validateCachedSnapshotEvidenceAuthority(platform) {
+  const snapshot = snapshotCache.get(platform);
+  if (!snapshot || dirtySnapshotPlatforms.has(platform) || !snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)) {
+    return false;
+  }
+  if (snapshot.authorityReceipt.sessionId === null)
+    return true;
+  const [hasLiveRunner, hasLiveOrigin] = await Promise.all([
+    snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt),
+    snapshotAuthorityProvider?.validateOrigin?.(snapshot.authorityReceipt)
+  ]);
+  return hasLiveRunner === true && hasLiveOrigin === true;
+}
 function getCachedSnapshotEvidence(platform) {
   const snapshot = snapshotCache.get(platform);
   return snapshot && !dirtySnapshotPlatforms.has(platform) && snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform) ? snapshot : void 0;
@@ -81386,6 +81399,36 @@ var init_index = __esm({
         } catch {
           return false;
         }
+      },
+      validateOrigin: async (receipt2) => {
+        try {
+          const { registry: registry2, session } = authorityRuntime.requireOperational();
+          const probe = registry2.getPlatformAuthorityProbe(session, String(receipt2.platform), {
+            ...receipt2
+          });
+          const status = registry2.getSessionStatus(session.sessionId);
+          if (!probe || !status || probe.platform !== "ios" && probe.platform !== "android") {
+            return false;
+          }
+          await localAuthorityProbe({
+            axis: "A",
+            phase: "preflight",
+            status: {
+              ...status,
+              bindings: {
+                ...status.bindings,
+                device: {
+                  platform: probe.platform,
+                  deviceId: probe.deviceId,
+                  appId: probe.appId
+                }
+              }
+            }
+          });
+          return true;
+        } catch {
+          return false;
+        }
       }
     });
     localAuthorityProbe = createLocalAuthorityProbe({
@@ -82228,7 +82271,9 @@ var init_index = __esm({
       elements: external_exports.array(external_exports.string()).optional().describe("List of testIDs or labels to check on both platforms. Optional if scanDir is provided."),
       scanDir: external_exports.string().optional().describe('Directory to scan for testID="..." props in .tsx/.jsx/.ts/.js files. Auto-discovers elements. Merges with elements[] if both provided.'),
       matchBy: external_exports.enum(["testID", "label", "any"]).default("any").describe("Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)")
-    }, createCrossPlatformVerifyHandler());
+    }, createCrossPlatformVerifyHandler({
+      validateAuthority: validateCachedSnapshotEvidenceAuthority
+    }));
     trackedTool("cdp_open_devtools", 'Report the React Native DevTools frontend URL for the live app + start a multiplexer proxy so DevTools can coexist with the MCP session on RN < 0.85 (RN >= 0.85 uses native multi-debugger). The proxy auto-resumes across reconnects. Returns { devtoolsUrl, inspectorWsUrl, hermesWsUrl, mode: "native" | "proxy-active", proxyPort, supportsMultipleDebuggers, rnVersion, guidance }.', {}, createOpenDevToolsHandler(getClient));
     trackedTool("cdp_metro_events", "Read Metro reporter events (bundle_build_started, bundle_build_done, bundle_build_failed, reloads) captured since the MCP connected. The MetroEventsClient attaches a second WebSocket alongside CDP, giving push-based visibility into bundler state \u2014 watch for build errors without having to read console.error. Returns { eventsConnected, lastBuild, buildErrors, events, count }. Pass `clearErrors: true` to reset the build-error counter.", {
       limit: external_exports.number().int().min(1).max(100).default(20).describe("Max entries to return (default 20, max 100)"),

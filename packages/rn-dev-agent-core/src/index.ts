@@ -110,6 +110,7 @@ import {
   getActiveSession,
   markSnapshotDirty,
   setSnapshotAuthorityProvider,
+  validateCachedSnapshotEvidenceAuthority,
 } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
@@ -476,6 +477,36 @@ setSnapshotAuthorityProvider({
         return health.ok === true && androidHealthMatchesAuthority(health, probe);
       }
       return false;
+    } catch {
+      return false;
+    }
+  },
+  validateOrigin: async (receipt) => {
+    try {
+      const { registry, session } = authorityRuntime.requireOperational();
+      const probe = registry.getPlatformAuthorityProbe(session, String(receipt.platform), {
+        ...receipt,
+      });
+      const status = registry.getSessionStatus(session.sessionId);
+      if (!probe || !status || (probe.platform !== 'ios' && probe.platform !== 'android')) {
+        return false;
+      }
+      await localAuthorityProbe({
+        axis: 'A',
+        phase: 'preflight',
+        status: {
+          ...status,
+          bindings: {
+            ...status.bindings,
+            device: {
+              platform: probe.platform,
+              deviceId: probe.deviceId,
+              appId: probe.appId,
+            },
+          },
+        },
+      });
+      return true;
     } catch {
       return false;
     }
@@ -3043,7 +3074,9 @@ trackedTool(
         'Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)',
       ),
   },
-  createCrossPlatformVerifyHandler(),
+  createCrossPlatformVerifyHandler({
+    validateAuthority: validateCachedSnapshotEvidenceAuthority,
+  }),
 );
 
 trackedTool(

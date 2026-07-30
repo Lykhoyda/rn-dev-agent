@@ -65,7 +65,7 @@ import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
 import { setForeignGateUdidProvider, foreignFlowGate, foreignGateUdid, } from './lifecycle/foreign-flow-gate.js';
 import { getIosRuntimeMajorForUdid } from './domain/blind-probe-gate.js';
-import { getActiveSession, markSnapshotDirty, setSnapshotAuthorityProvider, } from './agent-device-wrapper.js';
+import { getActiveSession, markSnapshotDirty, setSnapshotAuthorityProvider, validateCachedSnapshotEvidenceAuthority, } from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -358,6 +358,37 @@ setSnapshotAuthorityProvider({
                 return health.ok === true && androidHealthMatchesAuthority(health, probe);
             }
             return false;
+        }
+        catch {
+            return false;
+        }
+    },
+    validateOrigin: async (receipt) => {
+        try {
+            const { registry, session } = authorityRuntime.requireOperational();
+            const probe = registry.getPlatformAuthorityProbe(session, String(receipt.platform), {
+                ...receipt,
+            });
+            const status = registry.getSessionStatus(session.sessionId);
+            if (!probe || !status || (probe.platform !== 'ios' && probe.platform !== 'android')) {
+                return false;
+            }
+            await localAuthorityProbe({
+                axis: 'A',
+                phase: 'preflight',
+                status: {
+                    ...status,
+                    bindings: {
+                        ...status.bindings,
+                        device: {
+                            platform: probe.platform,
+                            deviceId: probe.deviceId,
+                            appId: probe.appId,
+                        },
+                    },
+                },
+            });
+            return true;
         }
         catch {
             return false;
@@ -2249,7 +2280,9 @@ trackedTool('cross_platform_verify', 'Compare UI elements across iOS and Android
         .enum(['testID', 'label', 'any'])
         .default('any')
         .describe('Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)'),
-}, createCrossPlatformVerifyHandler());
+}, createCrossPlatformVerifyHandler({
+    validateAuthority: validateCachedSnapshotEvidenceAuthority,
+}));
 trackedTool('cdp_open_devtools', 'Report the React Native DevTools frontend URL for the live app + start a multiplexer proxy so DevTools can coexist with the MCP session on RN < 0.85 (RN >= 0.85 uses native multi-debugger). The proxy auto-resumes across reconnects. Returns { devtoolsUrl, inspectorWsUrl, hermesWsUrl, mode: "native" | "proxy-active", proxyPort, supportsMultipleDebuggers, rnVersion, guidance }.', {}, createOpenDevToolsHandler(getClient));
 trackedTool('cdp_metro_events', 'Read Metro reporter events (bundle_build_started, bundle_build_done, bundle_build_failed, reloads) captured since the MCP connected. The MetroEventsClient attaches a second WebSocket alongside CDP, giving push-based visibility into bundler state — watch for build errors without having to read console.error. Returns { eventsConnected, lastBuild, buildErrors, events, count }. Pass `clearErrors: true` to reset the build-error counter.', {
     limit: z

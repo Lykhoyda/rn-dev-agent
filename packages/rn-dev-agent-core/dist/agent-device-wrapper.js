@@ -180,6 +180,21 @@ export async function validateCachedSnapshotAuthority(platform) {
         return true;
     return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
 }
+export async function validateCachedSnapshotEvidenceAuthority(platform) {
+    const snapshot = snapshotCache.get(platform);
+    if (!snapshot ||
+        dirtySnapshotPlatforms.has(platform) ||
+        !snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)) {
+        return false;
+    }
+    if (snapshot.authorityReceipt.sessionId === null)
+        return true;
+    const [hasLiveRunner, hasLiveOrigin] = await Promise.all([
+        snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt),
+        snapshotAuthorityProvider?.validateOrigin?.(snapshot.authorityReceipt),
+    ]);
+    return hasLiveRunner === true && hasLiveOrigin === true;
+}
 export function getCachedSnapshotEvidence(platform) {
     const snapshot = snapshotCache.get(platform);
     return snapshot &&

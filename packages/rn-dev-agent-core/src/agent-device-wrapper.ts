@@ -181,6 +181,7 @@ let snapshotAuthorityProvider: {
   validate: (receipt: SnapshotAuthorityReceipt) => boolean;
   validateEvidence?: (receipt: SnapshotAuthorityReceipt) => boolean;
   validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+  validateOrigin?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
 } | null = null;
 
 export interface SnapshotAuthorityReceipt {
@@ -211,6 +212,7 @@ export function setSnapshotAuthorityProvider(
     validate: (receipt: SnapshotAuthorityReceipt) => boolean;
     validateEvidence?: (receipt: SnapshotAuthorityReceipt) => boolean;
     validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+    validateOrigin?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
   } | null,
 ): void {
   snapshotAuthorityProvider = provider;
@@ -299,6 +301,23 @@ export async function validateCachedSnapshotAuthority(platform: string): Promise
   if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)) return false;
   if (snapshot.authorityReceipt.sessionId === null) return true;
   return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
+}
+
+export async function validateCachedSnapshotEvidenceAuthority(platform: string): Promise<boolean> {
+  const snapshot = snapshotCache.get(platform);
+  if (
+    !snapshot ||
+    dirtySnapshotPlatforms.has(platform) ||
+    !snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
+  ) {
+    return false;
+  }
+  if (snapshot.authorityReceipt.sessionId === null) return true;
+  const [hasLiveRunner, hasLiveOrigin] = await Promise.all([
+    snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt),
+    snapshotAuthorityProvider?.validateOrigin?.(snapshot.authorityReceipt),
+  ]);
+  return hasLiveRunner === true && hasLiveOrigin === true;
 }
 
 export function getCachedSnapshotEvidence(platform: string): CachedSnapshot | undefined {
