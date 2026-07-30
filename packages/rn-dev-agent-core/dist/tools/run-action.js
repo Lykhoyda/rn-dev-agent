@@ -40,7 +40,7 @@ import { SessionAuthorityError } from '../session/registry.js';
 import { isExactPresent, runCdpReplay, firstReplayTestId, } from './cdp-replay-dispatch.js';
 import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
 import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
-import { claimManagedNativeOriginAuthority, completeManagedRunnerParkAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
+import { claimManagedNativeOriginAuthority, completeManagedRunnerParkAuthority, completeManagedNativeOriginAuthority, relaunchManagedNativeOriginApp, } from '../session/authority-gate.js';
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
  * RunRecord telemetry) and a `ToolErrorCode` (for the failResult
@@ -206,6 +206,9 @@ export function createRunActionHandler(deps = {}) {
     const blindProbeContext = deps.blindProbeContext ?? (async () => null);
     const targetContext = deps.targetContext ?? (() => null);
     const claimBundleAuthority = deps.claimBundleAuthority ?? (async () => true);
+    const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
+    const completeNativeOrigin = deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority;
+    const relaunchManagedApp = deps.relaunchManagedApp ?? relaunchManagedNativeOriginApp;
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -390,8 +393,9 @@ export function createRunActionHandler(deps = {}) {
                 deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
-                claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-                completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+                claimNativeOrigin: () => claimNativeOrigin(args),
+                completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+                relaunchManagedApp: () => relaunchManagedApp(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
             });
             const firstAttemptMs = Date.now() - tBeforeFirst;
@@ -701,8 +705,9 @@ export function createRunActionHandler(deps = {}) {
                 deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
-                claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-                completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+                claimNativeOrigin: () => claimNativeOrigin(args),
+                completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+                relaunchManagedApp: () => relaunchManagedApp(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
             });
             const retryMs = Date.now() - tBeforeRetry;

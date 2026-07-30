@@ -3083,15 +3083,6 @@ function ensureValue(flag, value) {
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
 }
-function removeValue(flag, value) {
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
-    if (command[index + 1] !== value) {
-      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
-      process.exit(2);
-    }
-    command.splice(index, 2);
-  }
-}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
@@ -3128,7 +3119,7 @@ if (session) {
   const subcommand = command[offset + 1];
   if (executable === 'expo' && subcommand === 'run:' + platform) {
     ensureValue('--device', session.deviceId);
-    removeValue('--port', String(session.metroPort));
+    ensureValue('--port', String(session.metroPort));
     ensureFlag('--no-bundler');
     expoProxyUrl = managedMetroProxyUrl(session);
   } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {

@@ -24,6 +24,13 @@ export async function completeManagedNativeOriginAuthority(args, targetExpected)
     }
     await authority.complete(targetExpected);
 }
+export async function relaunchManagedNativeOriginApp(args) {
+    const authority = args[managedNativeOrigin];
+    if (!authority) {
+        throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin relaunch authority is unavailable');
+    }
+    await authority.relaunch();
+}
 export async function completeManagedRunnerParkAuthority(args) {
     const complete = args[managedRunnerPark];
     if (!complete) {
@@ -842,6 +849,18 @@ export function createAuthorityGate(runtime, dependencies) {
                         configurable: true,
                         value: {
                             claim: claimOrigin,
+                            relaunch: async () => {
+                                const currentStatus = runtime.status();
+                                if (!currentStatus.available) {
+                                    throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                                }
+                                registry.verifyOperation(operation);
+                                if (!dependencies.relaunchBoundRuntime) {
+                                    throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin relaunch is unavailable');
+                                }
+                                await dependencies.relaunchBoundRuntime(currentStatus);
+                                registry.verifyOperation(operation);
+                            },
                             complete: async (targetExpected) => {
                                 managedOriginCompleted = true;
                                 managedOriginCompletedWithTarget = targetExpected;

@@ -3882,7 +3882,7 @@ test('copied adapter accepts build identity only from the package-local session 
 
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(readFileSync(outputPath, 'utf8')), {
-      args: ['expo', 'run:ios', '--device', 'session-ios-device', '--no-bundler'],
+      args: ['expo', 'run:ios', '--device', 'session-ios-device', '--port', '8341', '--no-bundler'],
       androidPort: '8341',
       expoProxy: 'http://127.0.0.1:8341',
       iosPort: '8341',

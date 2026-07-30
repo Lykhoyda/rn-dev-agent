@@ -201,13 +201,21 @@ async function readEvidenceHead(socketPath: string): Promise<Record<string, unkn
 async function bindForeignDefaultMetro(): Promise<{
   close: () => Promise<void>;
   owned: boolean;
+  requests: Array<{ at: string; requestLine: string }>;
 }> {
   if (metroListenerPid(8081)) {
-    return { owned: false, close: async () => {} };
+    return { owned: false, requests: [], close: async () => {} };
   }
+  const requests: Array<{ at: string; requestLine: string }> = [];
   const server = createServer((socket) => {
     socket.on('error', () => {});
-    socket.end('HTTP/1.1 200 OK\r\nContent-Length: 23\r\n\r\npackager-status:running');
+    socket.once('data', (chunk) => {
+      requests.push({
+        at: new Date().toISOString(),
+        requestLine: String(chunk).split(/\r?\n/, 1)[0]!.slice(0, 256),
+      });
+      socket.end('HTTP/1.1 200 OK\r\nContent-Length: 23\r\n\r\npackager-status:running');
+    });
   });
   const owned = await new Promise<boolean>((resolveOwned, reject) => {
     server.once('error', (error: NodeJS.ErrnoException) => {
@@ -218,10 +226,46 @@ async function bindForeignDefaultMetro(): Promise<{
   });
   return {
     owned,
+    requests,
     close: async () => {
       if (!owned || !server.listening) return;
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
     },
+  };
+}
+
+function monitorForeignControl(
+  pid: number,
+  birth: NonNullable<ReturnType<typeof readProcessBirth>>,
+): {
+  assertUnchanged: () => void;
+  stop: () => void;
+} {
+  const samples: Array<{
+    at: string;
+    pid: number | undefined;
+    birth: string | null;
+  }> = [];
+  const sample = (): void => {
+    const observedPid = metroListenerPid(8081);
+    samples.push({
+      at: new Date().toISOString(),
+      pid: observedPid,
+      birth: observedPid ? (readProcessBirth(observedPid)?.token ?? null) : null,
+    });
+  };
+  sample();
+  const timer = setInterval(sample, 250);
+  timer.unref();
+  return {
+    assertUnchanged: () => {
+      assert.equal(
+        samples.every((entry) => entry.pid === pid && entry.birth === birth.token),
+        true,
+        JSON.stringify(samples),
+      );
+    },
+    stop: () => clearInterval(timer),
   };
 }
 
@@ -275,6 +319,7 @@ test(
     const foreignMetro = await bindForeignDefaultMetro();
     let foreignPid: number | undefined;
     let foreignBirth: ReturnType<typeof readProcessBirth>;
+    let foreignMonitor: ReturnType<typeof monitorForeignControl> | undefined;
     let simulatorId: string | undefined;
     let binding: ManagedMetroBinding | undefined;
     let client: CDPClient | undefined;
@@ -289,6 +334,12 @@ test(
       );
       foreignBirth = readProcessBirth(foreignPid);
       assert.ok(foreignBirth);
+      assert.equal(
+        foreignMetro.owned,
+        true,
+        'exact-device acceptance requires an observable default-port control listener and never replaces an ambient foreign Metro',
+      );
+      foreignMonitor = monitorForeignControl(foreignPid, foreignBirth);
       cpSync(fixtureRoot, root, { recursive: true });
       writeFileSync(join(root, '.gitignore'), 'node_modules/\nios/\n.expo/\n.rn-agent/runtime/\n');
       writeFileSync(
@@ -842,6 +893,8 @@ async function writeMarker(buildGeneration) {
 
       assert.equal(metroListenerPid(8081), foreignPid);
       assert.equal(readProcessBirth(foreignPid)?.token, foreignBirth.token);
+      assert.deepEqual(foreignMetro.requests, [], JSON.stringify(foreignMetro.requests));
+      foreignMonitor.assertUnchanged();
       if (evidencePath) {
         writeFileSync(
           evidencePath,
@@ -882,6 +935,8 @@ async function writeMarker(buildGeneration) {
       assert.equal(restoredPackage.scripts?.android, 'expo run:android');
       assert.equal(metroListenerPid(8081), foreignPid);
       assert.equal(readProcessBirth(foreignPid)?.token, foreignBirth.token);
+      assert.deepEqual(foreignMetro.requests, [], JSON.stringify(foreignMetro.requests));
+      foreignMonitor.assertUnchanged();
     } finally {
       if (diagnosticsDir) {
         preserveAppProcesses('teardown');
@@ -952,9 +1007,12 @@ async function writeMarker(buildGeneration) {
           )}\n`,
         );
       }
+      foreignMonitor?.stop();
       if (foreignPid && foreignBirth) {
         assert.equal(metroListenerPid(8081), foreignPid);
         assert.equal(readProcessBirth(foreignPid)?.token, foreignBirth.token);
+        assert.deepEqual(foreignMetro.requests, [], JSON.stringify(foreignMetro.requests));
+        foreignMonitor?.assertUnchanged();
       }
       await foreignMetro.close();
       rmSync(root, { force: true, recursive: true });

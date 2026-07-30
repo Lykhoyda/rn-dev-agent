@@ -35,7 +35,12 @@ function assertPackageIntegrationInactive(bindings, action) {
         'handoffCleanup',
     ].filter((binding) => bindings[binding] != null);
     if (activeBindings.length > 0) {
-        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `${action} requires releasing active ${activeBindings.join(', ')} authority`);
+        const guidance = action === 'apply_integration' &&
+            activeBindings.length === 1 &&
+            activeBindings[0] === 'observe'
+            ? '; run observe action "stop" for this session, then retry apply_integration'
+            : '';
+        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `${action} requires releasing active ${activeBindings.join(', ')} authority${guidance}`);
     }
 }
 async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2_000) {

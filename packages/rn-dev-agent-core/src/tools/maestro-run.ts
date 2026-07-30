@@ -122,6 +122,7 @@ interface MaestroRunArgs {
   params?: Record<string, string>;
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+  relaunchManagedApp?: () => Promise<void>;
   completeRunnerPark?: () => Promise<void>;
 }
 
@@ -203,6 +204,7 @@ export async function executeMaestroAuthorityStages<T>(
   executeStage: (commands: readonly unknown[]) => Promise<T>,
   claimOrigin: () => Promise<void>,
   completeOrigin: (targetExpected: boolean) => Promise<void>,
+  relaunchManagedApp?: () => Promise<void>,
 ): Promise<T[]> {
   const plan = planMaestroAuthorityStages(commands);
   const results: T[] = [];
@@ -210,6 +212,13 @@ export async function executeMaestroAuthorityStages<T>(
     if (stage.requiresOrigin) await claimOrigin();
     try {
       results.push(await executeStage(stage.commands));
+      if (
+        relaunchManagedApp &&
+        stage.commands.length === 1 &&
+        commandName(stage.commands[0]) === 'launchApp'
+      ) {
+        await relaunchManagedApp();
+      }
     } catch (error) {
       await completeOrigin(false);
       throw new MaestroStageExecutionError(results, error);
@@ -260,6 +269,7 @@ export interface MaestroRunDeps {
   parkFlow?: typeof runFlowParked;
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+  relaunchManagedApp?: () => Promise<void>;
   now?: () => number;
   execFile?: (
     file: string,
@@ -485,6 +495,7 @@ export function createMaestroRunHandler(
         args.completeNativeOrigin ??
         deps.completeNativeOrigin ??
         ((targetExpected: boolean) => completeManagedNativeOriginAuthority(args, targetExpected));
+      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp;
       const stageResults = await parkFlow(
         () =>
           executeMaestroAuthorityStages(
@@ -509,6 +520,7 @@ export function createMaestroRunHandler(
             },
             claimOrigin,
             completeOrigin,
+            relaunchManagedApp,
           ),
         {
           platform,

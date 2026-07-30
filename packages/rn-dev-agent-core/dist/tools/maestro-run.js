@@ -117,7 +117,7 @@ export function planMaestroAuthorityStages(commands) {
     flushPending();
     return { stages, targetExpected };
 }
-export async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin) {
+export async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp) {
     const plan = planMaestroAuthorityStages(commands);
     const results = [];
     for (const stage of plan.stages) {
@@ -125,6 +125,11 @@ export async function executeMaestroAuthorityStages(commands, executeStage, clai
             await claimOrigin();
         try {
             results.push(await executeStage(stage.commands));
+            if (relaunchManagedApp &&
+                stage.commands.length === 1 &&
+                commandName(stage.commands[0]) === 'launchApp') {
+                await relaunchManagedApp();
+            }
         }
         catch (error) {
             await completeOrigin(false);
@@ -324,6 +329,7 @@ export function createMaestroRunHandler(deps = {}) {
             const completeOrigin = args.completeNativeOrigin ??
                 deps.completeNativeOrigin ??
                 ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
+            const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp;
             const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
                 const remainingTimeout = flowDeadline - now();
                 if (remainingTimeout <= 0) {
@@ -337,7 +343,7 @@ export function createMaestroRunHandler(deps = {}) {
                     encoding: 'utf8',
                     maxBuffer: 10 * 1024 * 1024,
                 });
-            }, claimOrigin, completeOrigin), {
+            }, claimOrigin, completeOrigin, relaunchManagedApp), {
                 platform,
                 deviceId: requestedDeviceId,
                 completeRunnerPark: args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args)),

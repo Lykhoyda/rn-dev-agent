@@ -7,6 +7,9 @@ import { pathToFileURL } from 'node:url';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import Ajv from 'ajv';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StrictProofMonitor, type ProofObservation } from '../../dist/domain/proof-capture.js';
 import { instrumentStartupSource, STARTUP_INTEGRITY_SYMBOL } from '../../dist/startup-integrity.js';
 import {
@@ -824,15 +827,32 @@ test('published proof schema is an object superset while handler schema stays br
   ]);
 });
 
-test('trackedTool preserves raw-shape registration and uses published object schema for proof', async () => {
-  const source = await readFile(resolve(CORE_ROOT, 'src/index.ts'), 'utf8');
-  const start = source.indexOf('function trackedTool(');
-  const end = source.indexOf('\n}\n\nasync function pinSessionDevClient', start) + 2;
-  const trackedToolSource = source.slice(start, end);
-  assert.match(trackedToolSource, /schema instanceof z\.ZodType/);
-  assert.match(trackedToolSource, /server\.tool\(/);
-  assert.match(trackedToolSource, /server\.registerTool\(/);
-  assert.match(source, /proofCapturePublishedInputSchema,\s*proofCaptureHandler/);
+test('registered MCP proof surface preserves a complete begin_rehearsal payload', async (t) => {
+  const harness = createHarness(t);
+  const server = new McpServer({ name: 'proof-surface-test', version: '1.0.0' });
+  server.tool(
+    'proof_capture',
+    'Strict proof capture test surface.',
+    proofCapturePublishedInputSchema.shape,
+    harness.handler,
+  );
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'proof-surface-client', version: '1.0.0' });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  const result = await client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(),
+  });
+  const parsed = JSON.parse(result.content[0]!.text as string);
+
+  assert.equal(parsed.ok, true, JSON.stringify(parsed));
+  assert.deepEqual(parsed.data, { stage: 'rehearsing', runId: 'run-42' });
 });
 
 test('begin rejects root and artifact path attacks before monitor, recording, or file IO', async (t) => {

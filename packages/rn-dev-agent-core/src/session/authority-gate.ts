@@ -31,6 +31,7 @@ interface AuthorityGateRuntime {
 interface AuthorityGateDependencies {
   probe(input: AuthorityProbeInput): Promise<AuthorityObservation>;
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
+  relaunchBoundRuntime?(status: SessionStatus): Promise<void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
 }
 
@@ -43,6 +44,7 @@ type AuthorityAwareArgs = Record<string, unknown> & {
   [managedNativeOrigin]?: {
     claim(): Promise<void>;
     complete(targetExpected: boolean): Promise<void>;
+    relaunch(): Promise<void>;
   };
   [managedRunnerPark]?: () => Promise<void>;
 };
@@ -74,6 +76,17 @@ export async function completeManagedNativeOriginAuthority(
     );
   }
   await authority.complete(targetExpected);
+}
+
+export async function relaunchManagedNativeOriginApp(args: object): Promise<void> {
+  const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError(
+      'METRO_ORIGIN_MISMATCH',
+      'managed native origin relaunch authority is unavailable',
+    );
+  }
+  await authority.relaunch();
 }
 
 export async function completeManagedRunnerParkAuthority(args: object): Promise<void> {
@@ -1098,6 +1111,21 @@ export function createAuthorityGate(
               configurable: true,
               value: {
                 claim: claimOrigin,
+                relaunch: async () => {
+                  const currentStatus = runtime.status();
+                  if (!currentStatus.available) {
+                    throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                  }
+                  registry!.verifyOperation(operation!);
+                  if (!dependencies.relaunchBoundRuntime) {
+                    throw new SessionAuthorityError(
+                      'METRO_ORIGIN_MISMATCH',
+                      'managed native origin relaunch is unavailable',
+                    );
+                  }
+                  await dependencies.relaunchBoundRuntime(currentStatus);
+                  registry!.verifyOperation(operation!);
+                },
                 complete: async (targetExpected: boolean) => {
                   managedOriginCompleted = true;
                   managedOriginCompletedWithTarget = targetExpected;

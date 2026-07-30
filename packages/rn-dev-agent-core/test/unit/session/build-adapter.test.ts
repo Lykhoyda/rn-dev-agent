@@ -45,6 +45,8 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
     'Debug',
     '--device',
     iosSession.deviceId,
+    '--port',
+    '8341',
     '--no-bundler',
   ]);
   assert.deepEqual(plan.env, {
@@ -80,6 +82,8 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
     'run:android',
     '--device',
     androidSession.deviceId,
+    '--port',
+    '8342',
     '--no-bundler',
   ]);
   assert.deepEqual(plan.env, {
@@ -91,7 +95,7 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
   assert.equal(plan.postInstall, undefined);
 });
 
-test('Expo removes a matching port, retains no-bundler, and refuses a conflicting port', () => {
+test('Expo binds its headless health probe to managed Metro and refuses a conflicting port', () => {
   const matching = createBuildLaunchPlan({
     platform: 'ios',
     command: ['expo', 'run:ios', '--port', '8341', '--no-bundler'],
@@ -101,6 +105,8 @@ test('Expo removes a matching port, retains no-bundler, and refuses a conflictin
   assert.deepEqual(matching.command, [
     'expo',
     'run:ios',
+    '--port',
+    '8341',
     '--no-bundler',
     '--device',
     iosSession.deviceId,

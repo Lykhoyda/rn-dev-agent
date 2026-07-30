@@ -2405,6 +2405,44 @@ test('integration application rejects active runtime authority', async () => {
   }
 });
 
+test('integration application identifies the supported Observe release action', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-observe-'));
+  try {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ scripts: { ios: 'expo run:ios', android: 'expo run:android' } }),
+    );
+    writeFileSync(join(root, 'metro.config.js'), 'module.exports = {};\n');
+    const status = {
+      sessionId: 'session-a',
+      source: { appRoot: root },
+      bindings: { observe: { port: 7396 } },
+    };
+    const handler = createSessionHandler({
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => assert.fail('active Observe authority must not be changed'),
+        },
+        session: { sessionId: 'session-a', claimEpoch: 1 },
+      }),
+    });
+
+    const result = await handler({ action: 'apply_integration', confirmed: true });
+    const resultEnvelope = JSON.parse(result.content[0]!.text);
+
+    assert.equal(result.isError, true);
+    assert.match(
+      resultEnvelope.error,
+      /run observe action "stop" for this session, then retry apply_integration/,
+    );
+    assert.equal(existsSync(join(root, '.rn-agent')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('integration application resumes from its durable installation phase', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-apply-resume-'));
   try {

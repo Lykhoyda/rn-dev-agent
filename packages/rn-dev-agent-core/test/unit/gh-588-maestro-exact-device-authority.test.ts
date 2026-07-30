@@ -56,10 +56,14 @@ test('lifecycle stages re-prove origin before subsequent UI mutation', async () 
     async (targetExpected) => {
       calls.push(`complete:${targetExpected}`);
     },
+    async () => {
+      calls.push('relaunch:managed');
+    },
   );
 
   assert.deepEqual(calls, [
     'execute:launchApp',
+    'relaunch:managed',
     'claim',
     'execute:tapOn',
     'execute:stopApp',
@@ -532,6 +536,84 @@ test('cdp_run_action persists a verified direct report identity on success', asy
   const record = project.readSidecar('demo').runHistory.at(-1);
   assert.equal(record.status, 'pass');
   assert.equal(record.deviceId, EXACT, 'RunRecord must use the verified direct report identity');
+});
+
+test('cdp_run_action restores managed Metro attachment after launchApp before replay', async () => {
+  project.seedAction(
+    'managed-replay',
+    [
+      `appId: ${APP_ID}`,
+      '---',
+      '# id: managed-replay',
+      '# intent: replay against managed Metro',
+      '# tags: [fixture]',
+      '# mutates: false',
+      '# status: active',
+      '- launchApp',
+      '- tapOn:',
+      '    id: "fab-create-task"',
+      '',
+    ].join('\n'),
+  );
+  let attachedToManagedMetro = true;
+  const calls: string[] = [];
+  const maestroRun = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    execFile: async (_file, args) => {
+      const flowPath = args.find((argument) => argument.endsWith('.yaml'));
+      assert.ok(flowPath);
+      const flow = readFileSync(flowPath, 'utf8');
+      if (flow.includes('launchApp')) {
+        calls.push('runner-launch');
+        attachedToManagedMetro = false;
+      } else {
+        calls.push('runner-ui');
+        assert.equal(attachedToManagedMetro, true);
+      }
+      return { stdout: runnerLog(EXACT), stderr: '' };
+    },
+  });
+  const handler = createRunActionHandler({
+    maestroRun,
+    targetContext: () => ({ platform: 'ios', deviceId: EXACT, appId: APP_ID }),
+    blindProbeContext: async () => ({ deviceId: EXACT, iosRuntimeMajor: 26 }),
+    claimNativeOrigin: async () => {
+      calls.push('claim-origin');
+      assert.equal(attachedToManagedMetro, true);
+    },
+    completeNativeOrigin: async (_args, targetExpected) => {
+      calls.push(`complete-origin:${targetExpected}`);
+    },
+    relaunchManagedApp: async () => {
+      calls.push('relaunch-managed');
+      attachedToManagedMetro = true;
+    },
+  });
+
+  const result = await handler({
+    actionId: 'managed-replay',
+    projectRoot: project.root,
+    platform: 'ios',
+    autoRepair: false,
+    blindProbeMode: 'forbid',
+  });
+
+  assert.equal(envelope(result).ok, true, result.content[0]!.text);
+  assert.deepEqual(calls, [
+    'runner-launch',
+    'relaunch-managed',
+    'claim-origin',
+    'runner-ui',
+    'complete-origin:true',
+  ]);
 });
 
 test('cdp_run_action persists the direct wrong device and never requested metadata', async () => {

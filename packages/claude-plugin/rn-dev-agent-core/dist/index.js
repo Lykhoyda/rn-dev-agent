@@ -28489,6 +28489,13 @@ async function completeManagedNativeOriginAuthority(args, targetExpected) {
   }
   await authority.complete(targetExpected);
 }
+async function relaunchManagedNativeOriginApp(args) {
+  const authority = args[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin relaunch authority is unavailable");
+  }
+  await authority.relaunch();
+}
 async function completeManagedRunnerParkAuthority(args) {
   const complete = args[managedRunnerPark];
   if (!complete) {
@@ -29175,6 +29182,18 @@ function createAuthorityGate(runtime, dependencies) {
             configurable: true,
             value: {
               claim: claimOrigin,
+              relaunch: async () => {
+                const currentStatus = runtime.status();
+                if (!currentStatus.available) {
+                  throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                }
+                registry2.verifyOperation(operation);
+                if (!dependencies.relaunchBoundRuntime) {
+                  throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin relaunch is unavailable");
+                }
+                await dependencies.relaunchBoundRuntime(currentStatus);
+                registry2.verifyOperation(operation);
+              },
               complete: async (targetExpected) => {
                 managedOriginCompleted = true;
                 managedOriginCompletedWithTarget = targetExpected;
@@ -29516,7 +29535,7 @@ function planMaestroAuthorityStages(commands) {
   flushPending();
   return { stages, targetExpected };
 }
-async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin) {
+async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp) {
   const plan = planMaestroAuthorityStages(commands);
   const results = [];
   for (const stage of plan.stages) {
@@ -29524,6 +29543,9 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       await claimOrigin();
     try {
       results.push(await executeStage(stage.commands));
+      if (relaunchManagedApp && stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
+        await relaunchManagedApp();
+      }
     } catch (error2) {
       await completeOrigin(false);
       throw new MaestroStageExecutionError(results, error2);
@@ -29659,6 +29681,7 @@ function createMaestroRunHandler(deps = {}) {
     try {
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? (() => claimManagedNativeOriginAuthority(args));
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
+      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         const remainingTimeout = flowDeadline - now();
         if (remainingTimeout <= 0) {
@@ -29672,7 +29695,7 @@ function createMaestroRunHandler(deps = {}) {
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
         });
-      }, claimOrigin, completeOrigin), {
+      }, claimOrigin, completeOrigin, relaunchManagedApp), {
         platform,
         deviceId: requestedDeviceId,
         completeRunnerPark: args.completeRunnerPark ?? (() => completeManagedRunnerParkAuthority(args))
@@ -56214,13 +56237,6 @@ function ensureFlag(command, flag) {
   if (!command.includes(flag))
     command.push(flag);
 }
-function removeValue(command, flag, value) {
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
-    if (command[index + 1] !== value)
-      conflict(flag);
-    command.splice(index, 2);
-  }
-}
 function managedMetroProxyUrl(session) {
   if (session.platform === "ios") {
     return `http://127.0.0.1:${session.metroPort}`;
@@ -56271,7 +56287,7 @@ function createBuildLaunchPlan(input) {
   }
   if (kind === "expo") {
     ensureValue(command, "--device", input.session.deviceId);
-    removeValue(command, "--port", String(input.session.metroPort));
+    ensureValue(command, "--port", String(input.session.metroPort));
     ensureFlag(command, "--no-bundler");
   } else if (kind === "bare-ios") {
     ensureValue(command, "--udid", input.session.deviceId);
@@ -61294,15 +61310,6 @@ function ensureValue(flag, value) {
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
 }
-function removeValue(flag, value) {
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
-    if (command[index + 1] !== value) {
-      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: ' + flag + ' contradicts the active session\n');
-      process.exit(2);
-    }
-    command.splice(index, 2);
-  }
-}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
@@ -61339,7 +61346,7 @@ if (session) {
   const subcommand = command[offset + 1];
   if (executable === 'expo' && subcommand === 'run:' + platform) {
     ensureValue('--device', session.deviceId);
-    removeValue('--port', String(session.metroPort));
+    ensureValue('--port', String(session.metroPort));
     ensureFlag('--no-bundler');
     expoProxyUrl = managedMetroProxyUrl(session);
   } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
@@ -62203,7 +62210,8 @@ function assertPackageIntegrationInactive(bindings, action) {
     "handoffCleanup"
   ].filter((binding) => bindings[binding] != null);
   if (activeBindings.length > 0) {
-    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${action} requires releasing active ${activeBindings.join(", ")} authority`);
+    const guidance = action === "apply_integration" && activeBindings.length === 1 && activeBindings[0] === "observe" ? '; run observe action "stop" for this session, then retry apply_integration' : "";
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${action} requires releasing active ${activeBindings.join(", ")} authority${guidance}`);
   }
 }
 async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2e3) {
@@ -67783,6 +67791,9 @@ function createRunActionHandler(deps = {}) {
   const blindProbeContext2 = deps.blindProbeContext ?? (async () => null);
   const targetContext = deps.targetContext ?? (() => null);
   const claimBundleAuthority = deps.claimBundleAuthority ?? (async () => true);
+  const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
+  const completeNativeOrigin = deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority;
+  const relaunchManagedApp = deps.relaunchManagedApp ?? relaunchManagedNativeOriginApp;
   return async (args) => {
     if (!args.actionId || typeof args.actionId !== "string") {
       return failResult("cdp_run_action requires actionId", "BAD_FILENAME");
@@ -67912,8 +67923,9 @@ function createRunActionHandler(deps = {}) {
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,
-        claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-        completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+        claimNativeOrigin: () => claimNativeOrigin(args),
+        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        relaunchManagedApp: () => relaunchManagedApp(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
       });
       const firstAttemptMs = Date.now() - tBeforeFirst;
@@ -68170,8 +68182,9 @@ function createRunActionHandler(deps = {}) {
         deviceId: maestroDeviceId,
         timeoutMs,
         params: args.params,
-        claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
-        completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+        claimNativeOrigin: () => claimNativeOrigin(args),
+        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+        relaunchManagedApp: () => relaunchManagedApp(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
       });
       const retryMs = Date.now() - tBeforeRetry;
@@ -79206,6 +79219,7 @@ var localAuthorityProbe = createLocalAuthorityProbe({
 var authorityGate = createAuthorityGate(authorityRuntime, {
   probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
   refreshRuntimeBinding: rebindSessionRuntime,
+  relaunchBoundRuntime: relaunchSessionRuntime,
   onRunnerReleased: async (runner) => {
     if (runner.platform !== "ios")
       return;
@@ -79344,11 +79358,7 @@ function trackedTool(name, desc, schema, handler) {
     }
     return result;
   };
-  if (schema instanceof external_exports.ZodType) {
-    server2.registerTool(name, { description: desc, inputSchema: schema }, wrapped);
-  } else {
-    server2.tool(name, desc, schema, wrapped);
-  }
+  server2.tool(name, desc, schema, wrapped);
 }
 async function pinSessionDevClient(status, options) {
   const device = status.bindings.device;
@@ -79410,36 +79420,7 @@ async function pinSessionDevClient(status, options) {
       }
     },
     connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-      let exactClient = getClient();
-      if (exactClient.metroPort !== metroPort) {
-        await exactClient.disconnect();
-        exactClient = createClient(metroPort);
-        setClient(exactClient);
-      }
-      const listed = await exactClient.listTargets(metroPort);
-      if (listed.port !== metroPort) {
-        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port");
-      }
-      const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, { platform, bundleId: appId }));
-      const exactCandidates = await filterTargetsForExactDevice({ platform, deviceId, targets: sessionCandidates }, { execute: execFileP });
-      if (exactCandidates.length !== 1) {
-        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
-      }
-      await exactClient.autoConnect(metroPort, {
-        platform,
-        bundleId: appId,
-        targetId: exactCandidates[0].id
-      });
-      const target = exactClient.connectedTarget;
-      if (!target || exactClient.metroPort !== metroPort || !targetMatchesSession(target, { platform, bundleId: appId })) {
-        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");
-      }
-      await proveTargetDeviceAssociation({ platform, deviceId, targetDeviceName: target.deviceName }, { execute: execFileP });
-      return {
-        targetId: target.id,
-        connectionGeneration: exactClient.connectionGeneration,
-        deviceId
-      };
+      return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15e3);
     },
     readMarker: async () => {
       const result = await getClient().evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
@@ -79449,6 +79430,101 @@ async function pinSessionDevClient(status, options) {
       return parsed?.status === "signed" && parsed.marker ? { status: "signed", marker: parsed.marker } : null;
     }
   });
+}
+async function connectExactSessionTarget(input, timeoutMs) {
+  let exactClient = getClient();
+  if (exactClient.metroPort !== input.metroPort) {
+    await exactClient.disconnect();
+    exactClient = createClient(input.metroPort);
+    setClient(exactClient);
+  }
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  do {
+    try {
+      const listed = await exactClient.listTargets(input.metroPort);
+      if (listed.port !== input.metroPort) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port");
+      }
+      const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, {
+        platform: input.platform,
+        bundleId: input.appId
+      }));
+      const exactCandidates = await filterTargetsForExactDevice({
+        platform: input.platform,
+        deviceId: input.deviceId,
+        targets: sessionCandidates
+      }, { execute: execFileP });
+      if (exactCandidates.length !== 1) {
+        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+      }
+      await exactClient.autoConnect(input.metroPort, {
+        platform: input.platform,
+        bundleId: input.appId,
+        targetId: exactCandidates[0].id
+      });
+      const target = exactClient.connectedTarget;
+      if (!target || exactClient.metroPort !== input.metroPort || !targetMatchesSession(target, {
+        platform: input.platform,
+        bundleId: input.appId
+      })) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");
+      }
+      await proveTargetDeviceAssociation({
+        platform: input.platform,
+        deviceId: input.deviceId,
+        targetDeviceName: target.deviceName
+      }, { execute: execFileP });
+      return {
+        targetId: target.id,
+        connectionGeneration: exactClient.connectionGeneration,
+        deviceId: input.deviceId
+      };
+    } catch (error2) {
+      lastError = error2;
+    }
+    if (Date.now() < deadline) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    }
+  } while (Date.now() < deadline);
+  throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch", { cause: lastError });
+}
+async function relaunchSessionRuntime(status) {
+  const device = status.bindings.device;
+  const metro = status.bindings.metro;
+  const install = status.bindings.install;
+  const platform = device.platform;
+  const deviceId = device.deviceId;
+  const appId = device.appId;
+  const metroPort = metro.port;
+  if (platform !== "ios" && platform !== "android" || typeof deviceId !== "string" || typeof appId !== "string" || !Number.isSafeInteger(metroPort)) {
+    throw new Error("METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete");
+  }
+  const current = getClient();
+  await current.disconnect();
+  setClient(createClient(Number(metroPort)));
+  if (platform === "ios") {
+    await execFileP("xcrun", [
+      "simctl",
+      "launch",
+      "--terminate-running-process",
+      deviceId,
+      appId,
+      "--initialUrl",
+      `http://127.0.0.1:${String(metroPort)}`
+    ]);
+  } else {
+    const devClientUrl = typeof install.devClientUrl === "string" ? install.devClientUrl : typeof device.devClientUrl === "string" ? device.devClientUrl : null;
+    if (!devClientUrl) {
+      throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
+    }
+    await execFileP("adb", [
+      ...androidDeeplinkCommandArgs(devClientUrl, void 0, deviceId),
+      "-p",
+      appId
+    ]);
+  }
+  await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, 15e3);
 }
 async function rebindSessionRuntime(status) {
   const device = status.bindings.device;
@@ -80159,7 +80235,7 @@ var proofCaptureHandler = createProofCaptureHandler({
   writeReceipt: writeProofReceiptAtomic,
   removeArtifact: (path) => rmSync11(path, { force: true })
 });
-trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCapturePublishedInputSchema, proofCaptureHandler);
+trackedTool("proof_capture", "Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.", proofCapturePublishedInputSchema.shape, proofCaptureHandler);
 trackedTool("device_record", "Record the exact authority-bound device for proof capture. Start validates that the claimed device is currently available and always forwards its literal identifier.", {
   action: external_exports.enum(["start", "stop", "status"]).describe("start: begin recording. stop: finalize and save (all active recordings). status: list active recordings."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),

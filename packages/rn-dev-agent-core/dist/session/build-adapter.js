@@ -15,13 +15,6 @@ function ensureFlag(command, flag) {
     if (!command.includes(flag))
         command.push(flag);
 }
-function removeValue(command, flag, value) {
-    for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
-        if (command[index + 1] !== value)
-            conflict(flag);
-        command.splice(index, 2);
-    }
-}
 function managedMetroProxyUrl(session) {
     if (session.platform === 'ios') {
         return `http://127.0.0.1:${session.metroPort}`;
@@ -74,7 +67,7 @@ export function createBuildLaunchPlan(input) {
     }
     if (kind === 'expo') {
         ensureValue(command, '--device', input.session.deviceId);
-        removeValue(command, '--port', String(input.session.metroPort));
+        ensureValue(command, '--port', String(input.session.metroPort));
         ensureFlag(command, '--no-bundler');
     }
     else if (kind === 'bare-ios') {

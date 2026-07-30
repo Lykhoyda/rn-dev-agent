@@ -527,6 +527,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
   probe: async ({ axis, phase, status, tool, args }) =>
     localAuthorityProbe({ axis, phase, status, tool, args }),
   refreshRuntimeBinding: rebindSessionRuntime,
+  relaunchBoundRuntime: relaunchSessionRuntime,
   onRunnerReleased: async (runner) => {
     if (runner.platform !== 'ios') return;
     const deviceId = typeof runner.deviceId === 'string' ? runner.deviceId : undefined;
@@ -683,7 +684,7 @@ const liveDeps = buildLiveDeps({
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function trackedTool(name: string, desc: string, schema: any, handler: any): void {
+function trackedTool(name: string, desc: string, schema: z.ZodRawShape, handler: any): void {
   const base = instrumentTool(
     name,
     authorityGate.wrap(
@@ -733,15 +734,7 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
     }
     return result;
   };
-  if (schema instanceof z.ZodType) {
-    server.registerTool(
-      name,
-      { description: desc, inputSchema: schema },
-      wrapped as typeof handler,
-    );
-  } else {
-    server.tool(name, desc, schema, wrapped as typeof handler);
-  }
+  server.tool(name, desc, schema, wrapped as typeof handler);
 }
 
 async function pinSessionDevClient(status: SessionStatus, options: { force: boolean }) {
@@ -818,54 +811,7 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
         }
       },
       connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-        let exactClient = getClient();
-        if (exactClient.metroPort !== metroPort) {
-          await exactClient.disconnect();
-          exactClient = createClient(metroPort);
-          setClient(exactClient);
-        }
-        const listed = await exactClient.listTargets(metroPort);
-        if (listed.port !== metroPort) {
-          throw new Error(
-            'CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port',
-          );
-        }
-        const sessionCandidates = listed.targets.filter((candidate) =>
-          targetMatchesSession(candidate, { platform, bundleId: appId }),
-        );
-        const exactCandidates = await filterTargetsForExactDevice(
-          { platform, deviceId, targets: sessionCandidates },
-          { execute: execFileP },
-        );
-        if (exactCandidates.length !== 1) {
-          throw new Error(
-            `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
-          );
-        }
-        await exactClient.autoConnect(metroPort, {
-          platform,
-          bundleId: appId,
-          targetId: exactCandidates[0]!.id,
-        });
-        const target = exactClient.connectedTarget;
-        if (
-          !target ||
-          exactClient.metroPort !== metroPort ||
-          !targetMatchesSession(target, { platform, bundleId: appId })
-        ) {
-          throw new Error(
-            'CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro',
-          );
-        }
-        await proveTargetDeviceAssociation(
-          { platform, deviceId, targetDeviceName: target.deviceName },
-          { execute: execFileP },
-        );
-        return {
-          targetId: target.id,
-          connectionGeneration: exactClient.connectionGeneration,
-          deviceId,
-        };
+        return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
       },
       readMarker: async () => {
         const result = await getClient().evaluate(
@@ -881,6 +827,152 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
           : null;
       },
     },
+  );
+}
+
+async function connectExactSessionTarget(
+  input: {
+    metroPort: number;
+    platform: 'ios' | 'android';
+    appId: string;
+    deviceId: string;
+  },
+  timeoutMs: number,
+): Promise<{ targetId: string; connectionGeneration: number; deviceId: string }> {
+  let exactClient = getClient();
+  if (exactClient.metroPort !== input.metroPort) {
+    await exactClient.disconnect();
+    exactClient = createClient(input.metroPort);
+    setClient(exactClient);
+  }
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  do {
+    try {
+      const listed = await exactClient.listTargets(input.metroPort);
+      if (listed.port !== input.metroPort) {
+        throw new Error(
+          'CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port',
+        );
+      }
+      const sessionCandidates = listed.targets.filter((candidate) =>
+        targetMatchesSession(candidate, {
+          platform: input.platform,
+          bundleId: input.appId,
+        }),
+      );
+      const exactCandidates = await filterTargetsForExactDevice(
+        {
+          platform: input.platform,
+          deviceId: input.deviceId,
+          targets: sessionCandidates,
+        },
+        { execute: execFileP },
+      );
+      if (exactCandidates.length !== 1) {
+        throw new Error(
+          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        );
+      }
+      await exactClient.autoConnect(input.metroPort, {
+        platform: input.platform,
+        bundleId: input.appId,
+        targetId: exactCandidates[0]!.id,
+      });
+      const target = exactClient.connectedTarget;
+      if (
+        !target ||
+        exactClient.metroPort !== input.metroPort ||
+        !targetMatchesSession(target, {
+          platform: input.platform,
+          bundleId: input.appId,
+        })
+      ) {
+        throw new Error(
+          'CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro',
+        );
+      }
+      await proveTargetDeviceAssociation(
+        {
+          platform: input.platform,
+          deviceId: input.deviceId,
+          targetDeviceName: target.deviceName,
+        },
+        { execute: execFileP },
+      );
+      return {
+        targetId: target.id,
+        connectionGeneration: exactClient.connectionGeneration,
+        deviceId: input.deviceId,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+    if (Date.now() < deadline) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    }
+  } while (Date.now() < deadline);
+  throw new Error(
+    'CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch',
+    { cause: lastError },
+  );
+}
+
+async function relaunchSessionRuntime(status: SessionStatus): Promise<void> {
+  const device = status.bindings.device as {
+    platform?: unknown;
+    deviceId?: unknown;
+    appId?: unknown;
+    devClientUrl?: unknown;
+  };
+  const metro = status.bindings.metro as { port?: unknown };
+  const install = status.bindings.install as { devClientUrl?: unknown };
+  const platform = device.platform;
+  const deviceId = device.deviceId;
+  const appId = device.appId;
+  const metroPort = metro.port;
+  if (
+    (platform !== 'ios' && platform !== 'android') ||
+    typeof deviceId !== 'string' ||
+    typeof appId !== 'string' ||
+    !Number.isSafeInteger(metroPort)
+  ) {
+    throw new Error('METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete');
+  }
+  const current = getClient();
+  await current.disconnect();
+  setClient(createClient(Number(metroPort)));
+  if (platform === 'ios') {
+    await execFileP('xcrun', [
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      deviceId,
+      appId,
+      '--initialUrl',
+      `http://127.0.0.1:${String(metroPort)}`,
+    ]);
+  } else {
+    const devClientUrl =
+      typeof install.devClientUrl === 'string'
+        ? install.devClientUrl
+        : typeof device.devClientUrl === 'string'
+          ? device.devClientUrl
+          : null;
+    if (!devClientUrl) {
+      throw new Error(
+        'DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL',
+      );
+    }
+    await execFileP('adb', [
+      ...androidDeeplinkCommandArgs(devClientUrl, undefined, deviceId),
+      '-p',
+      appId,
+    ]);
+  }
+  await connectExactSessionTarget(
+    { metroPort: Number(metroPort), platform, appId, deviceId },
+    15_000,
   );
 }
 
@@ -2544,7 +2636,7 @@ const proofCaptureHandler = createProofCaptureHandler({
 trackedTool(
   'proof_capture',
   'Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.',
-  proofCapturePublishedInputSchema,
+  proofCapturePublishedInputSchema.shape,
   proofCaptureHandler,
 );
 

@@ -35,13 +35,6 @@ function ensureFlag(command: string[], flag: string): void {
   if (!command.includes(flag)) command.push(flag);
 }
 
-function removeValue(command: string[], flag: string, value: string): void {
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag)) {
-    if (command[index + 1] !== value) conflict(flag);
-    command.splice(index, 2);
-  }
-}
-
 function managedMetroProxyUrl(session: SessionBuildBinding): string {
   if (session.platform === 'ios') {
     return `http://127.0.0.1:${session.metroPort}`;
@@ -106,7 +99,7 @@ export function createBuildLaunchPlan(input: {
 
   if (kind === 'expo') {
     ensureValue(command, '--device', input.session.deviceId);
-    removeValue(command, '--port', String(input.session.metroPort));
+    ensureValue(command, '--port', String(input.session.metroPort));
     ensureFlag(command, '--no-bundler');
   } else if (kind === 'bare-ios') {
     ensureValue(command, '--udid', input.session.deviceId);
