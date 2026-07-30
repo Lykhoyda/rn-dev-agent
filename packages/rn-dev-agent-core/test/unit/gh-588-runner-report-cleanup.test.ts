@@ -52,6 +52,7 @@ function handlerWriting(exit: 'zero' | 'nonzero', seen: { dir?: string }, flowDe
     parkFlow: async (run: () => Promise<unknown>) => run(),
     claimNativeOrigin: async () => {},
     completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
     execFile: async (_file: string, args: string[]) => {
       const dir = reportDirFrom(args);
       seen.dir = dir;
