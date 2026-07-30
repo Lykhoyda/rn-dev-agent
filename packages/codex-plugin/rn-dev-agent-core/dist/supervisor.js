@@ -21059,15 +21059,22 @@ function createDeviceSnapshotHandler(deps = {}) {
           reactNativeUiReady = deps.probeReactNativeUi ? await deps.probeReactNativeUi("android", deviceId, appId).catch(() => false) : null;
         }
       } catch (err) {
-        if (lockPlatform === "ios")
-          await stopIosRunner(deviceId);
-        else
-          await reapAndroidRunner(deviceId);
-        releaseDeviceLockForSession();
+        let cleanupFailure;
+        try {
+          if (lockPlatform === "ios")
+            await stopIosRunner(deviceId);
+          else
+            await reapAndroidRunner(deviceId);
+        } catch (cleanupErr) {
+          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        } finally {
+          releaseDeviceLockForSession();
+        }
         consumePendingAndroidUpgradeNote();
-        const msg3 = err instanceof Error ? err.message : String(err);
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        const msg3 = cleanupFailure ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}` : rawMsg;
         if (err instanceof AndroidAppLaunchError) {
-          return failResult(err.message, "APP_LAUNCH_FAILED");
+          return failResult(msg3, "APP_LAUNCH_FAILED");
         }
         if (msg3.startsWith("RUNNER_COMMANDS_STALE")) {
           return failResult(msg3, "RUNNER_COMMANDS_STALE");
@@ -21091,14 +21098,21 @@ function createDeviceSnapshotHandler(deps = {}) {
       try {
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error2) {
-        if (lockPlatform === "ios")
-          await stopIosRunner(deviceId);
-        else
-          await reapAndroidRunner(deviceId);
-        clearActiveSession();
-        releaseDeviceLockForSession();
-        const message = error2 instanceof Error ? error2.message : String(error2);
-        const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? "RUNNER_OWNERSHIP_MISMATCH";
+        let cleanupFailure;
+        try {
+          if (lockPlatform === "ios")
+            await stopIosRunner(deviceId);
+          else
+            await reapAndroidRunner(deviceId);
+        } catch (cleanupErr) {
+          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        } finally {
+          clearActiveSession();
+          releaseDeviceLockForSession();
+        }
+        const rawMessage = error2 instanceof Error ? error2.message : String(error2);
+        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? "RUNNER_OWNERSHIP_MISMATCH";
+        const message = cleanupFailure ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}` : rawMessage;
         return failResult(message, code);
       }
       resetWedgeRecoveryCounter();

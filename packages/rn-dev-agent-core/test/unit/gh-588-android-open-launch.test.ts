@@ -8,7 +8,7 @@ import {
   reopenSessionForRecovery,
   releaseDeviceLockForSession,
 } from '../../dist/tools/device-session.js';
-import { clearActiveSession } from '../../dist/agent-device-wrapper.js';
+import { clearActiveSession, getActiveSession } from '../../dist/agent-device-wrapper.js';
 import { okResult } from '../../dist/utils.js';
 
 const SERIAL = 'emulator-5560';
@@ -226,6 +226,109 @@ test('GH-588 final Android validation: readiness failure reaps the started runne
     assert.equal(body.ok, false);
     assert.equal(body.code, 'RN_ANDROID_RUNNER_DOWN');
     assert.deepEqual(calls, ['start', 'launch', 'ui', 'reap']);
+  } finally {
+    cleanup();
+  }
+});
+
+function workingOpenDeps() {
+  return {
+    startAndroidRunner: async () => {},
+    launchAndroidApp: async () => {},
+    probeAndroidUi: async () => okResult({ nodes: [] }),
+    probeReactNativeUi: async () => true,
+  };
+}
+
+test('android reaper throw on open failure still releases the lock and reports both causes', async () => {
+  const handler = createDeviceSnapshotHandler({
+    startAndroidRunner: async () => {},
+    launchAndroidApp: async () => {
+      throw new Error('launcher exited 251');
+    },
+    reapAndroidRunner: async () => {
+      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${SERIAL}`);
+    },
+  });
+  const reopenHandler = createDeviceSnapshotHandler(workingOpenDeps());
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'APP_LAUNCH_FAILED');
+    assert.match(body.error!, /launcher exited 251/);
+    assert.match(body.error!, /RUNNER_CLEANUP_UNCONFIRMED/);
+    assert.equal(getActiveSession(), null);
+
+    const reopened = envelope(
+      await reopenHandler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(reopened.ok, true, `lock must be reacquirable, got: ${reopened.error}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('bind failure reaps the runner, clears session state, and releases the lock', async () => {
+  const calls: string[] = [];
+  const handler = createDeviceSnapshotHandler({
+    ...workingOpenDeps(),
+    bindRunner: async () => {
+      throw new Error('RUNNER_OWNERSHIP_MISMATCH: durable claim lost');
+    },
+    reapAndroidRunner: async () => {
+      calls.push('reap');
+    },
+  });
+  const reopenHandler = createDeviceSnapshotHandler(workingOpenDeps());
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'RUNNER_OWNERSHIP_MISMATCH');
+    assert.match(body.error!, /durable claim lost/);
+    assert.deepEqual(calls, ['reap']);
+    assert.equal(getActiveSession(), null);
+
+    const reopened = envelope(
+      await reopenHandler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(reopened.ok, true, `lock must be reacquirable, got: ${reopened.error}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('android reaper throw on bind failure still clears session state and releases the lock', async () => {
+  const handler = createDeviceSnapshotHandler({
+    ...workingOpenDeps(),
+    bindRunner: async () => {
+      throw new Error('RUNNER_OWNERSHIP_MISMATCH: durable claim lost');
+    },
+    reapAndroidRunner: async () => {
+      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${SERIAL}`);
+    },
+  });
+  const reopenHandler = createDeviceSnapshotHandler(workingOpenDeps());
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'RUNNER_OWNERSHIP_MISMATCH');
+    assert.match(body.error!, /durable claim lost/);
+    assert.match(body.error!, /RUNNER_CLEANUP_UNCONFIRMED/);
+    assert.equal(getActiveSession(), null);
+
+    const reopened = envelope(
+      await reopenHandler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(reopened.ok, true, `lock must be reacquirable, got: ${reopened.error}`);
   } finally {
     cleanup();
   }

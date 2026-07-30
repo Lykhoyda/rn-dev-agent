@@ -401,17 +401,26 @@ export function createDeviceSnapshotHandler(
             : null;
         }
       } catch (err) {
-        if (lockPlatform === 'ios') await stopIosRunner(deviceId);
-        else await reapAndroidRunner(deviceId);
-        releaseDeviceLockForSession();
+        let cleanupFailure: string | undefined;
+        try {
+          if (lockPlatform === 'ios') await stopIosRunner(deviceId);
+          else await reapAndroidRunner(deviceId);
+        } catch (cleanupErr) {
+          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        } finally {
+          releaseDeviceLockForSession();
+        }
         // GH #383: startAndroidRunner may have set a pending upgrade note (reap
         // on protocol mismatch) before throwing for an unrelated reason (adb
         // forward race, exit-before-ready, spawn error). Discard it here so it
         // doesn't leak onto the next successful Android result.
         consumePendingAndroidUpgradeNote();
-        const msg = err instanceof Error ? err.message : String(err);
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        const msg = cleanupFailure
+          ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}`
+          : rawMsg;
         if (err instanceof AndroidAppLaunchError) {
-          return failResult(err.message, 'APP_LAUNCH_FAILED');
+          return failResult(msg, 'APP_LAUNCH_FAILED');
         }
         // GH #418: even the open-path rebuild couldn't produce a runner with
         // the required commands — the checkout itself is suspect.
@@ -441,12 +450,21 @@ export function createDeviceSnapshotHandler(
       try {
         await deps.bindRunner?.(lockPlatform, deviceId, appId);
       } catch (error) {
-        if (lockPlatform === 'ios') await stopIosRunner(deviceId);
-        else await reapAndroidRunner(deviceId);
-        clearActiveSession();
-        releaseDeviceLockForSession();
-        const message = error instanceof Error ? error.message : String(error);
-        const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
+        let cleanupFailure: string | undefined;
+        try {
+          if (lockPlatform === 'ios') await stopIosRunner(deviceId);
+          else await reapAndroidRunner(deviceId);
+        } catch (cleanupErr) {
+          cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        } finally {
+          clearActiveSession();
+          releaseDeviceLockForSession();
+        }
+        const rawMessage = error instanceof Error ? error.message : String(error);
+        const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
+        const message = cleanupFailure
+          ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}`
+          : rawMessage;
         return failResult(message, code as ToolErrorCode);
       }
 
