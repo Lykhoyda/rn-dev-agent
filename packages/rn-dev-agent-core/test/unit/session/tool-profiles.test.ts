@@ -99,14 +99,7 @@ test('hybrid execution separates required and optional bundle authority', () => 
 });
 
 test('lock and live navigation paths receive exact mutation authority', () => {
-  assert.deepEqual(authorityProfileFor('cdp_lock_e2e_test').axes, [
-    'C',
-    'S',
-    'I',
-    'M',
-    'D',
-    'R',
-  ]);
+  assert.deepEqual(authorityProfileFor('cdp_lock_e2e_test').axes, ['C', 'S', 'I', 'M', 'D', 'R']);
   assert.equal(authorityProfileFor('cdp_lock_e2e_test').managedOrigin, true);
   assert.equal(authorityProfileFor('cdp_lock_e2e_test').managedRunnerPark, true);
   assert.deepEqual(authorityProfileFor('cdp_nav_graph', { action: 'read' }).axes, ['C', 'S']);

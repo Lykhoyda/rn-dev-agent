@@ -177,10 +177,7 @@ import { buildMirrorTargetResolver } from './observability/mirror/target.js';
 import { createMirrorSource } from './observability/mirror/sources.js';
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
-import {
-  createRunE2eSuiteHandler,
-  type RunE2eSuiteArgs,
-} from './tools/run-e2e-suite.js';
+import { createRunE2eSuiteHandler, type RunE2eSuiteArgs } from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';

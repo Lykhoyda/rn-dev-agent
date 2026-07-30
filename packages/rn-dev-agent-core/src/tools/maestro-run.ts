@@ -539,8 +539,7 @@ export function createMaestroRunHandler(
         {
           platform,
           deviceId: requestedDeviceId,
-          completeRunnerPark:
-            args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
+          completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
         },
       );
       const stdout = stageResults.map((result) => result.stdout).join('\n');

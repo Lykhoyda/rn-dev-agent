@@ -74,7 +74,7 @@ Native runner reads and mutations use the exact install, Metro, device, and capa
 
 Runner identity is immutable across an operation: process birth, endpoint capability, instance, session, claim epoch, device, app, and protocol must keep matching the binding. Operational health is checked separately and must report `ok: true`; transient health fields do not redefine identity. On iOS, `attachOnly: true` also requires an already-running target and preserves its process identity while activating it, otherwise the runner fails closed.
 
-Maestro-backed flows, including `cdp_run_action` replay attempts, transactionally park the bound native runner before dispatch. Once parked, runner authority is deliberately absent from postflight and receipt axes even when replay is refused, so a stale runner binding cannot survive the attempt.
+Maestro-backed flows, including action replay, E2E lock, and E2E suite paths, transactionally park the bound native runner before dispatch. A `launchApp` stage is then followed by a managed relaunch of the exact bound app against the session's allocated Metro port; replay continues only after that exact device target re-registers. Nested replay paths inherit the same authority callbacks, so they cannot fall back to an ambient Metro. Once parked, runner authority is deliberately absent from postflight and receipt axes even when replay is refused, so a stale runner binding cannot survive the attempt.
 
 Every successful authoritative call receives a preflight/postflight authority receipt. If an axis changes during the handler, the outer result becomes `AUTHORITY_LOST_DURING_OPERATION`; a handler's apparent PASS is never preserved.
 
