@@ -74,10 +74,36 @@ test('OS-scoped device tools do not require a live app origin or runner', () => 
   assert.equal(permissionGrant.mutation, true);
 
   const recordingStatus = authorityProfileFor('device_record', { action: 'status' });
-  assert.deepEqual(recordingStatus.axes, ['C', 'S', 'I', 'D']);
+  assert.deepEqual(recordingStatus.axes, ['C', 'S', 'D']);
   assert.equal(recordingStatus.sessionIdentity, true);
   assert.equal(recordingStatus.mutation, false);
-  assert.equal(authorityProfileFor('device_record', { action: 'stop' }).mutation, true);
+  const recordingStop = authorityProfileFor('device_record', { action: 'stop' });
+  assert.deepEqual(recordingStop.axes, ['C', 'S', 'D']);
+  assert.equal(recordingStop.mutation, true);
+  assert.deepEqual(authorityProfileFor('device_record', { action: 'start' }).axes, [
+    'C',
+    'S',
+    'I',
+    'D',
+  ]);
+});
+
+test('proof discard keeps cleanup authority after runtime loss', () => {
+  const discard = authorityProfileFor('proof_capture', { action: 'discard' });
+
+  assert.deepEqual(discard.axes, ['C', 'S', 'D', 'P']);
+  assert.deepEqual(discard.postflightAxes, ['C', 'S', 'D']);
+  assert.equal(discard.liveBundleProbe, false);
+  assert.deepEqual(authorityProfileFor('proof_capture', { action: 'finalize' }).axes, [
+    'C',
+    'S',
+    'I',
+    'M',
+    'B',
+    'D',
+    'R',
+    'P',
+  ]);
 });
 
 test('hybrid execution separates required and optional bundle authority', () => {

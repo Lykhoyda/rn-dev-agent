@@ -28257,11 +28257,21 @@ function authorityProfileFor(tool, args = {}) {
     };
   }
   if (tool === "device_record") {
+    const cleanup = args.action === "stop" || args.action === "status";
     return {
       kind: "authoritative",
-      axes: ["C", "S", "I", "D"],
+      axes: cleanup ? ["C", "S", "D"] : ["C", "S", "I", "D"],
       sessionIdentity: true,
       mutation: args.action !== "status",
+      liveBundleProbe: false
+    };
+  }
+  if (tool === "proof_capture" && args.action === "discard") {
+    return {
+      kind: "authoritative",
+      axes: ["C", "S", "D", "P"],
+      postflightAxes: ["C", "S", "D"],
+      mutation: true,
       liveBundleProbe: false
     };
   }
@@ -28853,6 +28863,8 @@ function createAuthorityGate(runtime, dependencies) {
         let operation2 = null;
         let registry3 = null;
         let retainProofCleanupFence2 = false;
+        let beganProofRehearsal = false;
+        let publishedProofBinding = false;
         try {
           const available = runtime.requireAvailable();
           registry3 = available.registry;
@@ -28874,8 +28886,13 @@ function createAuthorityGate(runtime, dependencies) {
             before: ["C", "S", "I", "M", "D"],
             after: ["C", "S", "I", "M", "D", "R"]
           } : {
-            before: ["C", "S", "I", "D"],
-            after: ["C", "S", "I", "D"]
+            before: [
+              "C",
+              "S",
+              "D",
+              ...status.bindings.runner ? ["R"] : []
+            ],
+            after: ["C", "S", "D"]
           } : tool === "observe" ? args.action === "stop" ? {
             before: ["C", "S", "O"],
             after: ["C", "S"]
@@ -28908,6 +28925,7 @@ function createAuthorityGate(runtime, dependencies) {
             }
             return addMeta2(result, { authoritative: false });
           }
+          beganProofRehearsal = gateCommitsProof;
           if (tool === "rn_session" && args.action === "release") {
             operation2 = null;
             return addMeta2(result, {
@@ -28964,22 +28982,10 @@ function createAuthorityGate(runtime, dependencies) {
             const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
             if (envelope.ok !== true)
               return result;
-            try {
-              operation2 = registry3.replaceBindingsDuringOperation(operation2, {
-                bindings: { proof: { runId } }
-              });
-            } catch (bindingError) {
-              try {
-                const rollback = await handler({ action: "discard" });
-                if (!proofDiscardConfirmed(rollback)) {
-                  throw new Error("PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected");
-                }
-              } catch (rollbackError) {
-                retainProofCleanupFence2 = operation2 !== null;
-                throw new AggregateError([bindingError, rollbackError], "PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed after binding rejection");
-              }
-              throw bindingError;
-            }
+            operation2 = registry3.replaceBindingsDuringOperation(operation2, {
+              bindings: { proof: { runId } }
+            });
+            publishedProofBinding = true;
             const proofStatus = runtime.status();
             if (!proofStatus.available) {
               throw new SessionAuthorityError(proofStatus.code, proofStatus.reason);
@@ -28993,6 +28999,25 @@ function createAuthorityGate(runtime, dependencies) {
             authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after)
           });
         } catch (error2) {
+          if (beganProofRehearsal) {
+            try {
+              const rollback = await handler({ action: "discard" });
+              if (!proofDiscardConfirmed(rollback)) {
+                throw new Error("PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected");
+              }
+              if (publishedProofBinding) {
+                if (!registry3 || !operation2) {
+                  throw new Error("PROOF_AUTHORITY_MISMATCH: proof registry was lost");
+                }
+                registry3.verifyOperation(operation2);
+                registry3.endOperationWithBindings(operation2, { proof: null });
+                operation2 = null;
+              }
+            } catch (rollbackError) {
+              retainProofCleanupFence2 = operation2 !== null;
+              return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed"));
+            }
+          }
           return authorityFailure(error2);
         } finally {
           if (registry3 && operation2 && !retainProofCleanupFence2) {
@@ -31193,6 +31218,7 @@ function createDeviceSnapshotHandler(deps = {}) {
   });
   const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
   const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
+  const stopAndroidRunnerFn = deps.stopAndroidRunner ?? stopAndroidRunner;
   return async (args) => {
     const action = args.action ?? "snapshot";
     if (action === "open") {
@@ -31281,6 +31307,8 @@ function createDeviceSnapshotHandler(deps = {}) {
       } catch (err) {
         if (lockPlatform === "ios")
           await stopIosRunner(deviceId);
+        else
+          await stopAndroidRunnerFn(deviceId);
         releaseDeviceLockForSession();
         consumePendingAndroidUpgradeNote();
         const msg3 = err instanceof Error ? err.message : String(err);
@@ -31312,7 +31340,7 @@ function createDeviceSnapshotHandler(deps = {}) {
         if (lockPlatform === "ios")
           await stopIosRunner(deviceId);
         else
-          await stopAndroidRunner(deviceId);
+          await stopAndroidRunnerFn(deviceId);
         clearActiveSession();
         releaseDeviceLockForSession();
         const message = error2 instanceof Error ? error2.message : String(error2);

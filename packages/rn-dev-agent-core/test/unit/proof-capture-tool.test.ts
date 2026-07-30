@@ -873,7 +873,10 @@ test('registered MCP proof surface preserves a complete begin_rehearsal payload'
   assert.deepEqual(parsed.data, { stage: 'rehearsing', runId: 'run-42' });
 });
 
-async function createGateComposedProofSurface(t: TestContext) {
+async function createGateComposedProofSurface(
+  t: TestContext,
+  options: { failFirstBeginPostflight?: boolean } = {},
+) {
   const projectRoot = await realpath(await mkdtemp(join(tmpdir(), 'proof-gate-surface-')));
   t.after(() => rm(projectRoot, { recursive: true, force: true }));
   const harness = createHarness(t, projectRoot);
@@ -955,6 +958,7 @@ async function createGateComposedProofSurface(t: TestContext) {
     endOperation: () => undefined,
     cancelOperation: () => undefined,
   };
+  let failFirstBeginPostflight = options.failFirstBeginPostflight === true;
   const gate = createAuthorityGate(
     {
       requireAvailable: () => ({
@@ -964,7 +968,19 @@ async function createGateComposedProofSurface(t: TestContext) {
       status: () => status,
     },
     {
-      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+      probe: async ({ axis, phase, tool, args }) => {
+        if (
+          failFirstBeginPostflight &&
+          phase === 'postflight' &&
+          axis === 'D' &&
+          tool === 'proof_capture' &&
+          args.action === 'begin_rehearsal'
+        ) {
+          failFirstBeginPostflight = false;
+          return { axis, identity: 'foreign-device' };
+        }
+        return { axis, identity: `${axis}-identity` };
+      },
     },
   );
   const wrapped = gate.wrap('proof_capture', async (args) =>
@@ -985,7 +1001,7 @@ async function createGateComposedProofSurface(t: TestContext) {
   });
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  return { client, projectRoot, wrapped };
+  return { client, projectRoot, status, wrapped };
 }
 
 test('gate-composed MCP proof surface accepts verified bound identity for every proof profile', async (t) => {
@@ -999,6 +1015,10 @@ test('gate-composed MCP proof surface accepts verified bound identity for every 
   assert.equal(beginEnvelope.ok, true, JSON.stringify(beginEnvelope));
   assert.deepEqual(beginEnvelope.data, { stage: 'rehearsing', runId: 'run-42' });
 
+  surface.status.bindings.install = null;
+  surface.status.bindings.metro = null;
+  surface.status.bindings.bundle = null;
+  surface.status.bindings.runner = null;
   const discarded = await surface.client.callTool({
     name: 'proof_capture',
     arguments: { action: 'discard' },
@@ -1007,6 +1027,35 @@ test('gate-composed MCP proof surface accepts verified bound identity for every 
 
   assert.equal(discardEnvelope.ok, true, JSON.stringify(discardEnvelope));
   assert.deepEqual(discardEnvelope.data, { stage: 'idle', discarded: true });
+});
+
+test('failed gate-composed proof begin rolls back the real proof controller', async (t) => {
+  const surface = await createGateComposedProofSurface(t, {
+    failFirstBeginPostflight: true,
+  });
+  const rejected = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(surface.projectRoot),
+  });
+  const rejectedEnvelope = JSON.parse(rejected.content[0]!.text as string);
+
+  assert.equal(rejectedEnvelope.ok, false);
+  assert.equal(rejectedEnvelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(surface.status.bindings.proof, null);
+
+  const retried = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(surface.projectRoot),
+  });
+  const retriedEnvelope = JSON.parse(retried.content[0]!.text as string);
+
+  assert.equal(retriedEnvelope.ok, true, JSON.stringify(retriedEnvelope));
+  assert.deepEqual(retriedEnvelope.data, { stage: 'rehearsing', runId: 'run-42' });
+  const discarded = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: { action: 'discard' },
+  });
+  assert.equal(JSON.parse(discarded.content[0]!.text as string).ok, true);
 });
 
 test('gate-composed proof handler rejects undeclared caller fields beyond bound identity', async (t) => {

@@ -166,10 +166,17 @@ test('GH-588 final Android validation: attach-only does not accept an unrelated 
 });
 
 test('GH-588 final Android validation: launcher failure is not masked as runner-down', async () => {
+  const calls: string[] = [];
   const handler = createDeviceSnapshotHandler({
-    startAndroidRunner: async () => undefined,
+    startAndroidRunner: async () => {
+      calls.push('start');
+    },
     launchAndroidApp: async () => {
+      calls.push('launch');
       throw new Error('launcher exited 251');
+    },
+    stopAndroidRunner: async () => {
+      calls.push('stop');
     },
   });
 
@@ -180,18 +187,62 @@ test('GH-588 final Android validation: launcher failure is not masked as runner-
     assert.equal(body.ok, false);
     assert.equal(body.code, 'APP_LAUNCH_FAILED');
     assert.match(body.error!, /launcher exited 251/);
+    assert.deepEqual(calls, ['start', 'launch', 'stop']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('GH-588 final Android validation: readiness failure reaps the started runner', async () => {
+  const calls: string[] = [];
+  const handler = createDeviceSnapshotHandler({
+    startAndroidRunner: async () => {
+      calls.push('start');
+    },
+    launchAndroidApp: async () => {
+      calls.push('launch');
+    },
+    probeAndroidUi: async () => {
+      calls.push('ui');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ ok: false, code: 'ANDROID_UI_NOT_READY', error: 'not ready' }),
+          },
+        ],
+        isError: true,
+      };
+    },
+    stopAndroidRunner: async () => {
+      calls.push('stop');
+    },
+  });
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'RN_ANDROID_RUNNER_DOWN');
+    assert.deepEqual(calls, ['start', 'launch', 'ui', 'stop']);
   } finally {
     cleanup();
   }
 });
 
 test('GH-588 final Android validation: genuine runner startup failure remains runner-down', async () => {
+  const calls: string[] = [];
   const handler = createDeviceSnapshotHandler({
     startAndroidRunner: async () => {
+      calls.push('start');
       throw new Error('instrumentation exited before readiness');
     },
     launchAndroidApp: async () => {
       throw new Error('must not launch after runner failure');
+    },
+    stopAndroidRunner: async () => {
+      calls.push('stop');
     },
   });
 
@@ -202,6 +253,7 @@ test('GH-588 final Android validation: genuine runner startup failure remains ru
     assert.equal(body.ok, false);
     assert.equal(body.code, 'RN_ANDROID_RUNNER_DOWN');
     assert.match(body.error!, /instrumentation exited before readiness/);
+    assert.deepEqual(calls, ['start', 'stop']);
   } finally {
     cleanup();
   }

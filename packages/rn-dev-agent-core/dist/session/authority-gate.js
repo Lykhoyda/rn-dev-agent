@@ -476,6 +476,8 @@ export function createAuthorityGate(runtime, dependencies) {
                 let operation = null;
                 let registry = null;
                 let retainProofCleanupFence = false;
+                let beganProofRehearsal = false;
+                let publishedProofBinding = false;
                 try {
                     const available = runtime.requireAvailable();
                     registry = available.registry;
@@ -500,8 +502,13 @@ export function createAuthorityGate(runtime, dependencies) {
                                 after: ['C', 'S', 'I', 'M', 'D', 'R'],
                             }
                             : {
-                                before: ['C', 'S', 'I', 'D'],
-                                after: ['C', 'S', 'I', 'D'],
+                                before: [
+                                    'C',
+                                    'S',
+                                    'D',
+                                    ...(status.bindings.runner ? ['R'] : []),
+                                ],
+                                after: ['C', 'S', 'D'],
                             }
                         : tool === 'observe'
                             ? args.action === 'stop'
@@ -546,6 +553,7 @@ export function createAuthorityGate(runtime, dependencies) {
                         }
                         return addMeta(result, { authoritative: false });
                     }
+                    beganProofRehearsal = gateCommitsProof;
                     if (tool === 'rn_session' && args.action === 'release') {
                         operation = null;
                         return addMeta(result, {
@@ -603,24 +611,10 @@ export function createAuthorityGate(runtime, dependencies) {
                         const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
                         if (envelope.ok !== true)
                             return result;
-                        try {
-                            operation = registry.replaceBindingsDuringOperation(operation, {
-                                bindings: { proof: { runId } },
-                            });
-                        }
-                        catch (bindingError) {
-                            try {
-                                const rollback = await handler({ action: 'discard' });
-                                if (!proofDiscardConfirmed(rollback)) {
-                                    throw new Error('PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected');
-                                }
-                            }
-                            catch (rollbackError) {
-                                retainProofCleanupFence = operation !== null;
-                                throw new AggregateError([bindingError, rollbackError], 'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed after binding rejection');
-                            }
-                            throw bindingError;
-                        }
+                        operation = registry.replaceBindingsDuringOperation(operation, {
+                            bindings: { proof: { runId } },
+                        });
+                        publishedProofBinding = true;
                         const proofStatus = runtime.status();
                         if (!proofStatus.available) {
                             throw new SessionAuthorityError(proofStatus.code, proofStatus.reason);
@@ -635,6 +629,26 @@ export function createAuthorityGate(runtime, dependencies) {
                     });
                 }
                 catch (error) {
+                    if (beganProofRehearsal) {
+                        try {
+                            const rollback = await handler({ action: 'discard' });
+                            if (!proofDiscardConfirmed(rollback)) {
+                                throw new Error('PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected');
+                            }
+                            if (publishedProofBinding) {
+                                if (!registry || !operation) {
+                                    throw new Error('PROOF_AUTHORITY_MISMATCH: proof registry was lost');
+                                }
+                                registry.verifyOperation(operation);
+                                registry.endOperationWithBindings(operation, { proof: null });
+                                operation = null;
+                            }
+                        }
+                        catch (rollbackError) {
+                            retainProofCleanupFence = operation !== null;
+                            return authorityFailure(new AggregateError([error, rollbackError], 'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed'));
+                        }
+                    }
                     return authorityFailure(error);
                 }
                 finally {

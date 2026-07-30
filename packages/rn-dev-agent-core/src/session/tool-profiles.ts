@@ -215,11 +215,21 @@ export function authorityProfileFor(
     };
   }
   if (tool === 'device_record') {
+    const cleanup = args.action === 'stop' || args.action === 'status';
     return {
       kind: 'authoritative',
-      axes: ['C', 'S', 'I', 'D'],
+      axes: cleanup ? ['C', 'S', 'D'] : ['C', 'S', 'I', 'D'],
       sessionIdentity: true,
       mutation: args.action !== 'status',
+      liveBundleProbe: false,
+    };
+  }
+  if (tool === 'proof_capture' && args.action === 'discard') {
+    return {
+      kind: 'authoritative',
+      axes: ['C', 'S', 'D', 'P'],
+      postflightAxes: ['C', 'S', 'D'],
+      mutation: true,
       liveBundleProbe: false,
     };
   }

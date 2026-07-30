@@ -1169,6 +1169,29 @@ test('failed proof binding discards the rehearsal state created by the handler',
   assert.equal(status.bindings.proof, null);
 });
 
+test('failed proof postflight discards the rehearsal state created by the handler', async () => {
+  const { runtime, status } = fixture();
+  const actions: string[] = [];
+  status.bindings.proof = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => ({
+      axis,
+      identity: phase === 'postflight' && axis === 'D' ? 'foreign-device' : `${axis}-identity`,
+    }),
+  });
+
+  const result = await gate.wrap('proof_capture', async (args: { action: string }) => {
+    actions.push(args.action);
+    return okResult(args.action === 'discard' ? { discarded: true } : { rehearsing: true });
+  })({ action: 'begin_rehearsal', runId: 'proof-new' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.deepEqual(actions, ['begin_rehearsal', 'discard']);
+  assert.equal(status.bindings.proof, null);
+});
+
 test('failed rehearsal rollback retains its operation fence', async () => {
   const { calls, runtime, registry, status } = fixture();
   status.bindings.proof = null;
@@ -1220,6 +1243,62 @@ test('proof discard retains its durable binding when in-memory cleanup is absent
 
   assert.equal(envelope.code, 'PROOF_AUTHORITY_MISMATCH');
   assert.deepEqual(status.bindings.proof, { runId: 'proof' });
+});
+
+test('proof discard remains authoritative after runtime and install loss', async () => {
+  const { runtime, status, calls } = fixture();
+  status.bindings.install = null;
+  status.bindings.metro = null;
+  status.bindings.bundle = null;
+  status.bindings.runner = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('proof_capture', async () => okResult({ discarded: true }))({
+    action: 'discard',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(status.bindings.proof, null);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S', 'preflight:D', 'preflight:P'],
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('postflight:')),
+    ['postflight:C', 'postflight:S', 'postflight:D'],
+  );
+});
+
+test('recorder cleanup remains authoritative after install loss', async () => {
+  for (const action of ['status', 'stop'] as const) {
+    const { runtime, status, calls } = fixture();
+    status.bindings.install = null;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis, phase }) => {
+        calls.push(`${phase}:${axis}`);
+        return { axis, identity: `${axis}-identity` };
+      },
+    });
+
+    const result = await gate.wrap('device_record', async () => okResult({ action }))({ action });
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.ok, true);
+    assert.deepEqual(
+      calls.filter((call) => call.startsWith('preflight:')),
+      ['preflight:C', 'preflight:S', 'preflight:D'],
+    );
+    assert.deepEqual(
+      calls.filter((call) => call.startsWith('postflight:')),
+      ['postflight:C', 'postflight:S', 'postflight:D'],
+    );
+  }
 });
 
 test('handoff cancellation requires controller authority and runs as a fenced transition', async () => {
@@ -1365,6 +1444,7 @@ test('runner transitions and idempotent Observe starts probe their exact axes', 
 
 test('runner close remains authoritative after managed Metro is already absent', async () => {
   const { runtime, calls, status } = fixture();
+  status.bindings.install = null;
   status.bindings.metro = null;
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis, phase }) => {
@@ -1383,11 +1463,11 @@ test('runner close remains authoritative after managed Metro is already absent',
   assert.equal(envelope.ok, true);
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:D'],
+    ['preflight:C', 'preflight:S', 'preflight:D', 'preflight:R'],
   );
   assert.deepEqual(
     calls.filter((call) => call.startsWith('postflight:')),
-    ['postflight:C', 'postflight:S', 'postflight:I', 'postflight:D'],
+    ['postflight:C', 'postflight:S', 'postflight:D'],
   );
 });
 
@@ -1411,11 +1491,11 @@ test('runner close is idempotent after timeout containment released its binding'
   assert.equal(status.authorityVersion, 9);
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:D'],
+    ['preflight:C', 'preflight:S', 'preflight:D'],
   );
   assert.deepEqual(
     calls.filter((call) => call.startsWith('postflight:')),
-    ['postflight:C', 'postflight:S', 'postflight:I', 'postflight:D'],
+    ['postflight:C', 'postflight:S', 'postflight:D'],
   );
 });
 

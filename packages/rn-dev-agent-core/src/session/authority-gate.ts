@@ -691,6 +691,8 @@ export function createAuthorityGate(
           let operation: OperationRef | null = null;
           let registry: SessionRegistry | null = null;
           let retainProofCleanupFence = false;
+          let beganProofRehearsal = false;
+          let publishedProofBinding = false;
           try {
             const available = runtime.requireAvailable();
             registry = available.registry;
@@ -718,8 +720,13 @@ export function createAuthorityGate(
                       after: ['C', 'S', 'I', 'M', 'D', 'R'] as AuthorityAxis[],
                     }
                   : {
-                      before: ['C', 'S', 'I', 'D'] as AuthorityAxis[],
-                      after: ['C', 'S', 'I', 'D'] as AuthorityAxis[],
+                      before: [
+                        'C',
+                        'S',
+                        'D',
+                        ...(status.bindings.runner ? (['R'] as const) : []),
+                      ] as AuthorityAxis[],
+                      after: ['C', 'S', 'D'] as AuthorityAxis[],
                     }
                 : tool === 'observe'
                   ? args.action === 'stop'
@@ -771,6 +778,7 @@ export function createAuthorityGate(
               }
               return addMeta(result, { authoritative: false });
             }
+            beganProofRehearsal = gateCommitsProof;
             if (tool === 'rn_session' && args.action === 'release') {
               operation = null;
               return addMeta(result, {
@@ -856,25 +864,10 @@ export function createAuthorityGate(
                 ok?: boolean;
               };
               if (envelope.ok !== true) return result;
-              try {
-                operation = registry.replaceBindingsDuringOperation(operation, {
-                  bindings: { proof: { runId } },
-                });
-              } catch (bindingError) {
-                try {
-                  const rollback = await handler({ action: 'discard' });
-                  if (!proofDiscardConfirmed(rollback)) {
-                    throw new Error('PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected');
-                  }
-                } catch (rollbackError) {
-                  retainProofCleanupFence = operation !== null;
-                  throw new AggregateError(
-                    [bindingError, rollbackError],
-                    'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed after binding rejection',
-                  );
-                }
-                throw bindingError;
-              }
+              operation = registry.replaceBindingsDuringOperation(operation, {
+                bindings: { proof: { runId } },
+              });
+              publishedProofBinding = true;
               const proofStatus = runtime.status();
               if (!proofStatus.available) {
                 throw new SessionAuthorityError(proofStatus.code, proofStatus.reason);
@@ -887,6 +880,30 @@ export function createAuthorityGate(
               authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after),
             });
           } catch (error) {
+            if (beganProofRehearsal) {
+              try {
+                const rollback = await handler({ action: 'discard' });
+                if (!proofDiscardConfirmed(rollback)) {
+                  throw new Error('PROOF_AUTHORITY_MISMATCH: rehearsal rollback was rejected');
+                }
+                if (publishedProofBinding) {
+                  if (!registry || !operation) {
+                    throw new Error('PROOF_AUTHORITY_MISMATCH: proof registry was lost');
+                  }
+                  registry.verifyOperation(operation);
+                  registry.endOperationWithBindings(operation, { proof: null });
+                  operation = null;
+                }
+              } catch (rollbackError) {
+                retainProofCleanupFence = operation !== null;
+                return authorityFailure(
+                  new AggregateError(
+                    [error, rollbackError],
+                    'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed',
+                  ),
+                );
+              }
+            }
             return authorityFailure(error);
           } finally {
             if (registry && operation && !retainProofCleanupFence) {
