@@ -1123,23 +1123,33 @@ function respond(requestPath, responsePath) {
   removeOptional(requestPath);
 }
 
+function publishReady(record) {
+  const readyPath = path.join(controlPath, 'ready');
+  const temporaryPath = path.join(controlPath, 'ready.' + process.pid + '.tmp');
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(record), {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    fs.renameSync(temporaryPath, readyPath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {}
+    throw error;
+  }
+}
+
 async function run() {
   assertBoundDirectory();
   while (!fs.existsSync(path.join(controlPath, 'monitor-ready'))) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  fs.writeFileSync(
-    path.join(controlPath, 'ready'),
-    JSON.stringify({
-      lifecycleCapability: binding.lifecycleCapability,
-      ok: true,
-      pid: process.pid,
-    }),
-    {
-      flag: 'wx',
-      mode: 0o600,
-    },
-  );
+  publishReady({
+    lifecycleCapability: binding.lifecycleCapability,
+    ok: true,
+    pid: process.pid,
+  });
   while (!fs.existsSync(path.join(controlPath, 'stop'))) {
     for (const entry of fs.readdirSync(controlPath)) {
       if (!entry.endsWith('.request')) continue;
@@ -1153,14 +1163,10 @@ async function run() {
 
 run().catch((error) => {
   try {
-    fs.writeFileSync(
-      path.join(controlPath, 'ready'),
-      JSON.stringify({
-        ok: false,
-        message: error instanceof Error ? error.message : String(error),
-      }),
-      { flag: 'wx', mode: 0o600 },
-    );
+    publishReady({
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    });
   } catch {}
   process.exitCode = 1;
 });

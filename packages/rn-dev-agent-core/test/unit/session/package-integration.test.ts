@@ -3784,6 +3784,40 @@ test('confirmed restoration rejects a manifest Metro path outside the app root',
   }
 });
 
+test('bound-directory startup does not expose a partial readiness record', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-bound-directory-ready-'));
+  const preloadPath = join(root, 'delay-ready-write.cjs');
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  writeFileSync(
+    preloadPath,
+    `const fs = require('node:fs');
+const path = require('node:path');
+const writeFileSync = fs.writeFileSync;
+fs.writeFileSync = function(file, data, options) {
+  if (path.basename(String(file)) === 'ready') {
+    writeFileSync(file, '', { ...options, flag: 'wx' });
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    return writeFileSync(file, data, { ...options, flag: 'w' });
+  }
+  return writeFileSync(file, data, options);
+};
+`,
+    { mode: 0o600 },
+  );
+  process.env.NODE_OPTIONS = `--require=${JSON.stringify(preloadPath)}`;
+
+  let directory;
+  try {
+    directory = openBoundDirectory(root);
+    assert.equal(directory.closed, false);
+  } finally {
+    if (directory) closeBoundDirectory(directory);
+    if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previousNodeOptions;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('copied adapter accepts build identity only from the package-local session CLI', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-adapter-'));
   try {
