@@ -29543,7 +29543,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       await claimOrigin();
     try {
       results.push(await executeStage(stage.commands));
-      if (relaunchManagedApp && stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
+      if (stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
         await relaunchManagedApp();
       }
     } catch (error2) {
@@ -29681,7 +29681,7 @@ function createMaestroRunHandler(deps = {}) {
     try {
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? (() => claimManagedNativeOriginAuthority(args));
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
-      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp;
+      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? (() => relaunchManagedNativeOriginApp(args));
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         const remainingTimeout = flowDeadline - now();
         if (remainingTimeout <= 0) {
@@ -75185,7 +75185,7 @@ function createMaestroTestAllHandler() {
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
           });
-        }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected)), {
+        }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected), () => relaunchManagedNativeOriginApp(args)), {
           platform,
           deviceId: requestedDeviceId,
           completeRunnerPark: () => completeManagedRunnerParkAuthority(args)

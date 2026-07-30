@@ -18,7 +18,7 @@ import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../r
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
-import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
+import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, relaunchManagedNativeOriginApp, } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 const defaultExecFile = promisify(execFileCb);
 /**
@@ -125,9 +125,7 @@ export async function executeMaestroAuthorityStages(commands, executeStage, clai
             await claimOrigin();
         try {
             results.push(await executeStage(stage.commands));
-            if (relaunchManagedApp &&
-                stage.commands.length === 1 &&
-                commandName(stage.commands[0]) === 'launchApp') {
+            if (stage.commands.length === 1 && commandName(stage.commands[0]) === 'launchApp') {
                 await relaunchManagedApp();
             }
         }
@@ -329,7 +327,9 @@ export function createMaestroRunHandler(deps = {}) {
             const completeOrigin = args.completeNativeOrigin ??
                 deps.completeNativeOrigin ??
                 ((targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected));
-            const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp;
+            const relaunchManagedApp = args.relaunchManagedApp ??
+                deps.relaunchManagedApp ??
+                (() => relaunchManagedNativeOriginApp(args));
             const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
                 const remainingTimeout = flowDeadline - now();
                 if (remainingTimeout <= 0) {

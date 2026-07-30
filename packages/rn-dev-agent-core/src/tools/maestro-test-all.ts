@@ -43,6 +43,7 @@ import {
   completeManagedRunnerParkAuthority,
   claimManagedNativeOriginAuthority,
   completeManagedNativeOriginAuthority,
+  relaunchManagedNativeOriginApp,
 } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 
@@ -259,6 +260,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
               },
               () => claimManagedNativeOriginAuthority(args),
               (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
+              () => relaunchManagedNativeOriginApp(args),
             ),
           {
             platform,

@@ -52,6 +52,7 @@ import {
   completeManagedRunnerParkAuthority,
   claimManagedNativeOriginAuthority,
   completeManagedNativeOriginAuthority,
+  relaunchManagedNativeOriginApp,
 } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 
@@ -204,7 +205,7 @@ export async function executeMaestroAuthorityStages<T>(
   executeStage: (commands: readonly unknown[]) => Promise<T>,
   claimOrigin: () => Promise<void>,
   completeOrigin: (targetExpected: boolean) => Promise<void>,
-  relaunchManagedApp?: () => Promise<void>,
+  relaunchManagedApp: () => Promise<void>,
 ): Promise<T[]> {
   const plan = planMaestroAuthorityStages(commands);
   const results: T[] = [];
@@ -212,11 +213,7 @@ export async function executeMaestroAuthorityStages<T>(
     if (stage.requiresOrigin) await claimOrigin();
     try {
       results.push(await executeStage(stage.commands));
-      if (
-        relaunchManagedApp &&
-        stage.commands.length === 1 &&
-        commandName(stage.commands[0]) === 'launchApp'
-      ) {
+      if (stage.commands.length === 1 && commandName(stage.commands[0]) === 'launchApp') {
         await relaunchManagedApp();
       }
     } catch (error) {
@@ -495,7 +492,10 @@ export function createMaestroRunHandler(
         args.completeNativeOrigin ??
         deps.completeNativeOrigin ??
         ((targetExpected: boolean) => completeManagedNativeOriginAuthority(args, targetExpected));
-      const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp;
+      const relaunchManagedApp =
+        args.relaunchManagedApp ??
+        deps.relaunchManagedApp ??
+        (() => relaunchManagedNativeOriginApp(args));
       const stageResults = await parkFlow(
         () =>
           executeMaestroAuthorityStages(

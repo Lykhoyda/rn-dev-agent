@@ -100,6 +100,9 @@ test('failed lifecycle stages invalidate target authority before propagating fai
       async (targetExpected) => {
         calls.push(`complete:${targetExpected}`);
       },
+      async () => {
+        calls.push('relaunch');
+      },
     ),
     /runner failed/,
   );
@@ -121,6 +124,9 @@ test('failed grouped UI stages invalidate target authority after partial dispatc
       },
       async (targetExpected) => {
         calls.push(`complete:${targetExpected}`);
+      },
+      async () => {
+        calls.push('relaunch');
       },
     ),
     /later command failed/,
@@ -181,6 +187,7 @@ test('staged execution shares one flow timeout budget', async () => {
     parkFlow: async (run) => run(),
     claimNativeOrigin: async () => undefined,
     completeNativeOrigin: async () => undefined,
+    relaunchManagedApp: async () => undefined,
     now: () => now,
     execFile: async (_file, _args, options) => {
       timeouts.push(options.timeout);
@@ -364,6 +371,7 @@ test('real maestro_run path forwards active UDID and accepts only matching direc
     parkFlow: async (run) => run(),
     claimNativeOrigin: async () => {},
     completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
     execFile: async (_file, args) => {
       argv = args;
       return { stdout: runnerLog(EXACT), stderr: '' };
@@ -395,6 +403,7 @@ test('an explicit deviceId matching the session in a different case is not a mis
     parkFlow: async (run) => run(),
     claimNativeOrigin: async () => {},
     completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
     execFile: async () => ({ stdout: runnerLog(EXACT), stderr: '' }),
   });
   const result = await handler({
