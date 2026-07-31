@@ -3827,6 +3827,7 @@ test('copied adapter accepts build identity only from the package-local session 
     const outputPath = join(root, 'record.json');
     const completionPath = join(root, 'completion.json');
     const startupPath = join(root, 'startup.json');
+    const abortPath = join(root, 'abort.jsonl');
     const sessionCliPath = join(root, 'rn-session.cjs');
     mkdirSync(integrationRoot, { recursive: true });
     mkdirSync(binRoot, { recursive: true });
@@ -3857,7 +3858,7 @@ test('copied adapter accepts build identity only from the package-local session 
     chmodSync(fakeXcrun, 0o755);
     writeFileSync(
       sessionCliPath,
-      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:'build-token-ios',simulator:true}));}else{if(!fs.existsSync(process.env.ADAPTER_STARTUP))process.exit(9);fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:'build-token-ios',simulator:true}));}else if(args[0]==='abort-build'){fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{if(!fs.existsSync(process.env.ADAPTER_STARTUP))process.exit(9);fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
 
     const result = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -3869,6 +3870,7 @@ test('copied adapter accepts build identity only from the package-local session 
         ADAPTER_RECORD: outputPath,
         ADAPTER_COMPLETION: completionPath,
         ADAPTER_STARTUP: startupPath,
+        ADAPTER_ABORT: abortPath,
         RN_DEV_AGENT_SESSION_BUILD_JSON: JSON.stringify({
           platform: 'ios',
           deviceId: 'foreign-device',
@@ -3882,7 +3884,7 @@ test('copied adapter accepts build identity only from the package-local session 
 
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(readFileSync(outputPath, 'utf8')), {
-      args: ['expo', 'run:ios', '--device', 'session-ios-device', '--port', '8341', '--no-bundler'],
+      args: ['expo', 'run:ios', '--device', 'session-ios-device', '--no-bundler'],
       androidPort: '8341',
       expoProxy: 'http://127.0.0.1:8341',
       iosPort: '8341',
@@ -3902,6 +3904,7 @@ test('copied adapter accepts build identity only from the package-local session 
       'http://127.0.0.1:8341',
     ]);
     assert.match(result.stdout, /"receipt":true/);
+    assert.equal(existsSync(abortPath), false);
 
     rmSync(completionPath);
     const failedStartup = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -3913,13 +3916,22 @@ test('copied adapter accepts build identity only from the package-local session 
         ADAPTER_RECORD: outputPath,
         ADAPTER_COMPLETION: completionPath,
         ADAPTER_STARTUP: startupPath,
+        ADAPTER_ABORT: abortPath,
         ADAPTER_STARTUP_FAIL: '1',
       },
     });
     assert.notEqual(failedStartup.status, 0);
     assert.match(failedStartup.stderr, /DEV_CLIENT_STARTUP_UNCONFIRMED: launch refused/);
     assert.equal(existsSync(completionPath), false);
+    assert.deepEqual(
+      readFileSync(abortPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+      [{ args: ['abort-build', 'ios', 'build-token-ios'], session: 'session-ios' }],
+    );
 
+    rmSync(abortPath);
     const manifest = JSON.parse(
       readFileSync(join(integrationRoot, 'rn-session-integration.json'), 'utf8'),
     );
@@ -3942,10 +3954,149 @@ test('copied adapter accepts build identity only from the package-local session 
         ADAPTER_RECORD: outputPath,
         ADAPTER_COMPLETION: completionPath,
         ADAPTER_STARTUP: startupPath,
+        ADAPTER_ABORT: abortPath,
       },
     });
     assert.notEqual(conflicting.status, 0);
     assert.match(conflicting.stderr, /SESSION_BUILD_IDENTITY_CONFLICT/);
+    assert.deepEqual(
+      readFileSync(abortPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+      [{ args: ['abort-build', 'ios', 'build-token-ios'], session: 'session-ios' }],
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('copied adapter aborts pending build authority on every pre-completion failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-adapter-abort-'));
+  try {
+    const integrationRoot = join(root, '.rn-agent', 'integration');
+    const binRoot = join(root, 'bin');
+    const adapterPath = join(integrationRoot, 'rn-session-adapter.cjs');
+    const outputPath = join(root, 'record.json');
+    const completionPath = join(root, 'completion.json');
+    const startupPath = join(root, 'startup.json');
+    const abortPath = join(root, 'abort.jsonl');
+    const sessionCliPath = join(root, 'rn-session.cjs');
+    mkdirSync(integrationRoot, { recursive: true });
+    mkdirSync(binRoot, { recursive: true });
+    writeFileSync(adapterPath, renderProjectAdapter(), { mode: 0o755 });
+    writeFileSync(
+      join(integrationRoot, 'rn-session-integration.json'),
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        sessionCli: sessionCliPath,
+        originalScripts: {
+          ios: ['npx', 'expo', 'run:ios'],
+          android: ['npx', 'expo', 'run:android'],
+        },
+      }),
+    );
+    writeFileSync(
+      join(binRoot, 'npx'),
+      "#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.ADAPTER_RECORD,JSON.stringify({args:process.argv.slice(2),expoProxy:process.env.EXPO_PACKAGER_PROXY_URL}));if(process.env.ADAPTER_BUILD_SIGNAL==='1'){process.kill(process.pid,'SIGKILL');}if(process.env.ADAPTER_BUILD_FAIL==='1'){process.stderr.write('CommandError: --port and --no-bundler are mutually exclusive arguments\\n');process.exit(Number(process.env.ADAPTER_BUILD_EXIT??'1'));}\n",
+    );
+    chmodSync(join(binRoot, 'npx'), 0o755);
+    writeFileSync(
+      join(binRoot, 'xcrun'),
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
+    );
+    chmodSync(join(binRoot, 'xcrun'), 0o755);
+    writeFileSync(
+      sessionCliPath,
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){const platform=args[1];process.stdout.write(JSON.stringify(platform==='ios'?{platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:'build-token-ios',simulator:true}:{platform:'android',deviceId:'emulator-5582',appId:'dev.example.android',metroPort:8342,sessionId:'session-android',buildToken:'build-token-android'}));}else if(args[0]==='abort-build'){if(process.env.ADAPTER_ABORT_FAIL==='1'){process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: build abort capability is stale or foreign\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
+    );
+    const environment = {
+      ...process.env,
+      PATH: `${binRoot}:${process.env.PATH}`,
+      ADAPTER_RECORD: outputPath,
+      ADAPTER_COMPLETION: completionPath,
+      ADAPTER_STARTUP: startupPath,
+      ADAPTER_ABORT: abortPath,
+    };
+    const readAbortCalls = () =>
+      readFileSync(abortPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+
+    const rejected = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...environment, ADAPTER_BUILD_FAIL: '1' },
+    });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, /--port and --no-bundler are mutually exclusive arguments/);
+    assert.match(rejected.stderr, /native command failed before build completion/);
+    assert.match(rejected.stderr, /pending build authority released/);
+    assert.deepEqual(readAbortCalls(), [
+      { args: ['abort-build', 'ios', 'build-token-ios'], session: 'session-ios' },
+    ]);
+    assert.equal(existsSync(completionPath), false);
+    assert.equal(existsSync(startupPath), false);
+
+    rmSync(abortPath);
+    const exitPreserved = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...environment, ADAPTER_BUILD_FAIL: '1', ADAPTER_BUILD_EXIT: '42' },
+    });
+    assert.equal(exitPreserved.status, 42);
+    assert.equal(readAbortCalls().length, 1);
+
+    rmSync(abortPath);
+    const signalled = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...environment, ADAPTER_BUILD_SIGNAL: '1' },
+    });
+    assert.equal(signalled.status, 1);
+    assert.match(signalled.stderr, /native command terminated by signal SIGKILL/);
+    assert.equal(readAbortCalls().length, 1);
+    assert.equal(existsSync(completionPath), false);
+
+    const abortRefused = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...environment, ADAPTER_BUILD_FAIL: '1', ADAPTER_ABORT_FAIL: '1' },
+    });
+    assert.equal(abortRefused.status, 1);
+    assert.match(
+      abortRefused.stderr,
+      /native command failed before build completion/,
+      'original failure must be retained',
+    );
+    assert.match(
+      abortRefused.stderr,
+      /pending build abort also failed: SESSION_BUILD_IDENTITY_CONFLICT: build abort capability is stale or foreign/,
+    );
+    assert.doesNotMatch(abortRefused.stderr, /pending build authority released/);
+
+    rmSync(abortPath, { force: true });
+    const androidSuccess = spawnSync(process.execPath, [adapterPath, 'android'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: environment,
+    });
+    assert.equal(androidSuccess.status, 0, androidSuccess.stderr);
+    assert.equal(JSON.parse(readFileSync(outputPath, 'utf8')).expoProxy, 'http://10.0.2.2:8342');
+    assert.deepEqual(JSON.parse(readFileSync(outputPath, 'utf8')).args, [
+      'expo',
+      'run:android',
+      '--device',
+      'emulator-5582',
+      '--no-bundler',
+    ]);
+    assert.deepEqual(JSON.parse(readFileSync(completionPath, 'utf8')), {
+      args: ['complete-build', 'android', 'build-token-android'],
+      session: 'session-android',
+    });
+    assert.equal(existsSync(abortPath), false, 'a completed build must never be aborted');
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

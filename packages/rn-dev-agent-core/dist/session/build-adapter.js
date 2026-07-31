@@ -15,6 +15,22 @@ function ensureFlag(command, flag) {
     if (!command.includes(flag))
         command.push(flag);
 }
+// Expo CLI rejects --port with --no-bundler; the managed port travels via env and --initialUrl.
+function removeManagedPortFlag(command, value) {
+    for (let index = 0; index < command.length;) {
+        const part = command[index];
+        const separator = part.indexOf('=');
+        const flag = separator >= 0 ? part.slice(0, separator) : part;
+        if (flag !== '--port' && flag !== '-p') {
+            index += 1;
+            continue;
+        }
+        const supplied = separator >= 0 ? part.slice(separator + 1) : command[index + 1];
+        if (supplied !== value)
+            conflict('--port');
+        command.splice(index, separator >= 0 ? 1 : 2);
+    }
+}
 function managedMetroProxyUrl(session) {
     if (session.platform === 'ios') {
         return `http://127.0.0.1:${session.metroPort}`;
@@ -67,7 +83,7 @@ export function createBuildLaunchPlan(input) {
     }
     if (kind === 'expo') {
         ensureValue(command, '--device', input.session.deviceId);
-        ensureValue(command, '--port', String(input.session.metroPort));
+        removeManagedPortFlag(command, String(input.session.metroPort));
         ensureFlag(command, '--no-bundler');
     }
     else if (kind === 'bare-ios') {

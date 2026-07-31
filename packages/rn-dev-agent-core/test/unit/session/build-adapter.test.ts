@@ -45,8 +45,6 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
     'Debug',
     '--device',
     iosSession.deviceId,
-    '--port',
-    '8341',
     '--no-bundler',
   ]);
   assert.deepEqual(plan.env, {
@@ -82,8 +80,6 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
     'run:android',
     '--device',
     androidSession.deviceId,
-    '--port',
-    '8342',
     '--no-bundler',
   ]);
   assert.deepEqual(plan.env, {
@@ -95,31 +91,33 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
   assert.equal(plan.postInstall, undefined);
 });
 
-test('Expo binds its headless health probe to managed Metro and refuses a conflicting port', () => {
-  const matching = createBuildLaunchPlan({
-    platform: 'ios',
-    command: ['expo', 'run:ios', '--port', '8341', '--no-bundler'],
-    session: iosSession,
-  });
+test('Expo never receives --port alongside --no-bundler and refuses a conflicting port', () => {
+  for (const portArgs of [['--port', '8341'], ['--port=8341'], ['-p', '8341'], ['-p=8341']]) {
+    const matching = createBuildLaunchPlan({
+      platform: 'ios',
+      command: ['expo', 'run:ios', ...portArgs, '--no-bundler'],
+      session: iosSession,
+    });
 
-  assert.deepEqual(matching.command, [
-    'expo',
-    'run:ios',
-    '--port',
-    '8341',
-    '--no-bundler',
-    '--device',
-    iosSession.deviceId,
-  ]);
-  assert.throws(
-    () =>
-      createBuildLaunchPlan({
-        platform: 'ios',
-        command: ['expo', 'run:ios', '--port', '8081'],
-        session: iosSession,
-      }),
-    /SESSION_BUILD_IDENTITY_CONFLICT/,
-  );
+    assert.deepEqual(matching.command, [
+      'expo',
+      'run:ios',
+      '--no-bundler',
+      '--device',
+      iosSession.deviceId,
+    ]);
+  }
+  for (const conflicting of [['--port', '8081'], ['--port=8081'], ['-p', '8081']]) {
+    assert.throws(
+      () =>
+        createBuildLaunchPlan({
+          platform: 'ios',
+          command: ['expo', 'run:ios', ...conflicting],
+          session: iosSession,
+        }),
+      /SESSION_BUILD_IDENTITY_CONFLICT/,
+    );
+  }
   assert.throws(
     () =>
       createBuildLaunchPlan({

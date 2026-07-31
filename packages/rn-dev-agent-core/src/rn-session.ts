@@ -691,6 +691,45 @@ async function main(): Promise<void> {
       process.stdout.write(`${JSON.stringify(receipt)}\n`);
       return;
     }
+    if (command === 'abort-build') {
+      const platform = process.argv[3];
+      const buildToken = process.argv[4];
+      if ((platform !== 'ios' && platform !== 'android') || typeof buildToken !== 'string') {
+        throw new SessionAuthorityError(
+          'SESSION_BUILD_IDENTITY_CONFLICT',
+          'aborting a build requires the exact platform and build capability',
+        );
+      }
+      const pending = status.bindings.pendingBuild as
+        | { buildToken?: unknown; platform?: unknown; buildGeneration?: unknown }
+        | null
+        | undefined;
+      if (!pending) {
+        process.stdout.write(`${JSON.stringify({ aborted: false, alreadyClear: true })}\n`);
+        return;
+      }
+      if (pending.buildToken !== buildToken || pending.platform !== platform) {
+        throw new SessionAuthorityError(
+          'SESSION_BUILD_IDENTITY_CONFLICT',
+          'build abort capability is stale or foreign',
+        );
+      }
+      status.registry.updateBindings(
+        { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
+        {
+          expectedAuthorityVersion: status.authorityVersion,
+          bindings: { pendingBuild: null },
+        },
+      );
+      process.stdout.write(
+        `${JSON.stringify({
+          aborted: true,
+          platform,
+          buildGeneration: pending.buildGeneration,
+        })}\n`,
+      );
+      return;
+    }
     if (command === 'release') {
       const epoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
       if (process.env.RN_DEV_AGENT_SESSION_ID !== status.sessionId || epoch !== status.claimEpoch) {
